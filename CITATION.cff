@@ -1,0 +1,32 @@
+cff-version: 1.2.0
+title: "LiouScope: Multi-Diagnostic Relaxation Analysis for Open Quantum Lattice Systems"
+message: "If you use this software, please cite it as below."
+type: software
+authors:
+  - name: "Coworker Research"
+version: "0.2.0"
+date-released: "2026-04-17"
+license: Apache-2.0
+repository-code: "https://github.com/coworker-research/liouscope"
+abstract: >-
+  LiouScope is an open-source diagnostic framework for time-homogeneous
+  Markovian open quantum systems described by Gorini-Kossakowski-Sudarshan-
+  Lindblad (GKSL) generators. It quantifies when and why the Liouvillian gap
+  fails as a relaxation-time predictor, providing twenty diagnostics (D1-D20)
+  organised in six layers (Spectral, Non-normality, Relaxation, Uncertainty,
+  Classification, Governance) and a twelve-class mechanism taxonomy A1-A12.
+keywords:
+  - open quantum systems
+  - Lindblad
+  - Liouvillian gap
+  - Mpemba effect
+  - non-normal dynamics
+  - pseudospectrum
+  - quantum relaxation
+preferred-citation:
+  type: article
+  authors:
+    - name: "Coworker Research"
+  title: "Beyond the Liouvillian Gap: Multi-Diagnostic Relaxation Analysis for Open Quantum Lattice Systems"
+  year: 2026
+  url: "https://arxiv.org/abs/coworker-research/liouscope"

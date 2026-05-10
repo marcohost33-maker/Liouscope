@@ -1,0 +1,53 @@
+{
+  "@context": "https://doi.org/10.5063/schema/codemeta-2.0",
+  "@type": "SoftwareSourceCode",
+  "name": "LiouScope",
+  "version": "0.2.0",
+  "description": "Multi-diagnostic relaxation analysis for open quantum lattice systems. Implements twenty diagnostics D1-D20 and a twelve-class mechanism taxonomy A1-A12 covering Mori-Shirai overlap, Liouvillian skin effect, symmetrized gap, quantum Mpemba effect, and phantom relaxation.",
+  "license": "https://spdx.org/licenses/Apache-2.0",
+  "codeRepository": "https://github.com/coworker-research/liouscope",
+  "programmingLanguage": "Python",
+  "operatingSystem": "Linux, macOS, Windows",
+  "developmentStatus": "active",
+  "keywords": [
+    "open quantum systems",
+    "Lindblad",
+    "Liouvillian gap",
+    "Mpemba effect",
+    "non-normal dynamics",
+    "pseudospectrum",
+    "quantum relaxation"
+  ],
+  "author": [
+    {
+      "@type": "Organization",
+      "name": "Coworker Research"
+    }
+  ],
+  "datePublished": "2026-04-17",
+  "softwareRequirements": [
+    {
+      "@type": "SoftwareApplication",
+      "identifier": "python",
+      "name": "Python",
+      "version": ">=3.10"
+    },
+    {
+      "@type": "SoftwareApplication",
+      "identifier": "numpy",
+      "name": "NumPy",
+      "version": ">=1.24"
+    },
+    {
+      "@type": "SoftwareApplication",
+      "identifier": "scipy",
+      "name": "SciPy",
+      "version": ">=1.10"
+    }
+  ],
+  "referencePublication": {
+    "@type": "ScholarlyArticle",
+    "name": "Beyond the Liouvillian Gap: Multi-Diagnostic Relaxation Analysis for Open Quantum Lattice Systems",
+    "datePublished": "2026"
+  }
+}

@@ -1,0 +1,84 @@
+"""Reproduce the V1-V5 numerical summary table from the paper.
+
+Run::
+
+    python benchmarks/reproduce_paper.py
+
+Emits a deterministic SHA-256 hash of the result table when given a fixed
+seed; rerunning on the same platform must produce the same hash.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import sys
+import time
+from pathlib import Path
+
+import numpy as np
+
+import liouscope as ls
+from liouscope.examples import all_systems
+
+OUT_DIR = Path(__file__).resolve().parent / "output"
+
+
+def main(seed: int = 42, bootstrap_B: int = 100) -> int:
+    OUT_DIR.mkdir(exist_ok=True)
+    ls.seed_everything(seed)
+    rows: list[dict] = []
+    t_total = time.perf_counter()
+    for sys_obj in all_systems():
+        t0 = time.perf_counter()
+        report = ls.diagnose(
+            sys_obj.L,
+            rho_initial=sys_obj.rho_initial,
+            bootstrap_B=bootstrap_B,
+            seed=seed,
+            include_mpemba=True,
+        )
+        dt = time.perf_counter() - t0
+        rows.append({
+            "name": sys_obj.name,
+            "dim": sys_obj.L.shape[0],
+            "delta": round(report.spectral.gap, 6),
+            "delta_s": round(report.spectral.gns_gap, 6),
+            "kms": round(report.spectral.kms_gap, 6),
+            "petermann_max": round(report.nonnorm.petermann_max, 6),
+            "kreiss": round(report.nonnorm.kreiss, 6),
+            "model": report.relaxation.aicc_model,
+            "beta_D": round(float(report.relaxation.beta_D), 6),
+            "a_class": report.classification.a_class,
+            "f_family": report.classification.f_family,
+            "verdict": report.classification.verdict,
+            "tier": report.classification.tier,
+            "confidence": round(report.classification.confidence, 3),
+            "wall_seconds": round(dt, 3),
+        })
+        print(f"  {sys_obj.name:<22} {dt:6.2f}s  "
+              f"Delta={report.spectral.gap:.4f}  "
+              f"a={report.classification.a_class:>3}  "
+              f"verdict={report.classification.verdict}")
+
+    elapsed = time.perf_counter() - t_total
+    print(f"\nTotal wall time: {elapsed:.2f}s")
+
+    out_path = OUT_DIR / "reproduce_paper.json"
+    payload = {
+        "framework_version": ls.__version__,
+        "taxonomy_version": ls.TAXONOMY_VERSION,
+        "schema_version": ls.DIAGNOSTIC_SCHEMA_VERSION,
+        "seed": seed,
+        "rows": rows,
+    }
+    out_path.write_text(json.dumps(payload, sort_keys=True, indent=2))
+    digest = hashlib.sha256(
+        json.dumps(payload, sort_keys=True).encode()
+    ).hexdigest()
+    print(f"SHA-256: {digest}")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
