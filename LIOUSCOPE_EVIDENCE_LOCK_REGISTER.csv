@@ -1,0 +1,31 @@
+id,gate,artifact,status,kind,evidence,version,notes
+G01,P0,LICENSE,PASS,license,LICENSE,Apache-2.0,SPDX-conformant
+G02,P0,Citation metadata,PASS,fair4rs,CITATION.cff,1.2.0,GitHub-supported citation
+G03,P0,codemeta,PASS,fair4rs,codemeta.json,2.0,schema.org/SoftwareSourceCode
+G04,P0,README,PASS,fair4rs,README.md,0.2.0,Quickstart + QuTiP cross-check
+G05,P0,CHANGELOG,PASS,fair4rs,CHANGELOG.md,1.1.0,Keep-a-Changelog format
+G06,P0,Security policy,PASS,security,SECURITY.md,1.0,Coordinated disclosure
+G07,P0,Reproducibility policy,PASS,fair4rs,REPRODUCIBILITY.md,1.0,SHA-256 run-id stability
+G08,P0,Contribution policy,PASS,fair4rs,CONTRIBUTING.md,1.0,Development setup + anchor gate
+G09,P0,Manifest schema,PASS,fair4rs,MANIFEST_SCHEMA.json,1.2.0,JSON-Schema-2020-12
+G10,P0,Anchor regressions,PASS,correctness,tests/test_anchors.py,A-N,19/19 tests
+G11,P0,CI matrix,PASS,quality,.github/workflows/ci.yml,3.10-3.13,ruff + mypy + pytest-cov >= 80
+G12,P0,PyPI Trusted Publishing,PASS,supply-chain,.github/workflows/pypi.yml,OIDC,id-token write
+G13,P0,Dependency review,PASS,security,.github/workflows/dependency-review.yml,v4,Fail-on high severity
+G14,P0,OpenSSF Scorecard,PASS,security,.github/workflows/scorecard.yml,v2,Weekly + on push
+G15,P0,Test suite,PASS,quality,tests/,145/145,88.01% coverage
+G16,P0,Paper reproduction,PASS,fair4rs,benchmarks/reproduce_paper.py,0.2.0,Deterministic SHA-256
+G17,P0,Figure pipeline,PASS,fair4rs,figures/generate_all.py,0.2.0,3 PDFs emitted
+G18,P0,QuTiP cross-check,PASS,correctness,tests/test_anchors.py::test_qutip_*,0.2.0,1e-16 atol
+G19,P0,Sparse path certificate,PASS,correctness,src/liouscope/sparse/chi1.py,1.1.1,chi_1 lower bound
+G20,P0,Zhou D24 post-submission,PASS,canonical,src/liouscope/_zhou.py,0.2.1,Opt-in import
+G21,P0,Taxonomy version stamping,PASS,canonical,src/liouscope/_consts.py,A1-A12-v3.1,On every result
+G22,P0,Schema version stamping,PASS,canonical,src/liouscope/_consts.py,D1-D24-Übersicht-v3-2026-04-24,On every result
+G23,P1,GitHub release tag,OPEN,release,tag v0.2.0,pending,Triggers PyPI publish workflow
+G24,P1,PyPI publication,OPEN,release,pypi.org/p/liouscope,pending,Trusted Publishing
+G25,P1,Zenodo DOI,OPEN,archival,zenodo.org,pending,Auto-DOI on GitHub Release
+G26,P1,SWHID,OPEN,archival,archive.softwareheritage.org,pending,ISO/IEC 18670:2025
+G27,P1,ReadTheDocs,OPEN,docs,readthedocs.io,pending,Optional
+G28,P2,N >= 9 sparse benchmark,OPEN,future-work,benchmarks/,NR-27,KPZ vs diffusive distinction
+G29,P2,GPU path,OPEN,future-work,roadmap,v0.3.0,Out of scope for v0.2.x
+G30,P2,Tensor-network back-end,OPEN,future-work,roadmap,v0.3.x,LPTN/tDMRG

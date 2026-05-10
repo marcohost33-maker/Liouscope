@@ -9,6 +9,17 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Added
 - `liouscope._zhou`: Zhou universal mixing-time predictor (D24) as an opt-in
   diagnostic. Frozen `ZhouPredictorResult` dataclass.
+- Evidence Pack v1.2 materialised in-repo: `SECURITY.md`,
+  `REPRODUCIBILITY.md`, `LIOUSCOPE_EVIDENCE_LOCK_REGISTER.csv`,
+  `LIOUSCOPE_RELEASE_EVIDENCE_MANIFEST.yaml`.
+- FAIR4RS gates: persistent identifier policy, reproducibility policy,
+  archival deferral notes (SWHID ISO/IEC 18670:2025, Zenodo DOI).
+- Security gates: OpenSSF Scorecard workflow
+  (`.github/workflows/scorecard.yml`), GitHub Dependency Review action
+  (`.github/workflows/dependency-review.yml`).
+- Supply-chain hardening in `pypi.yml`: pyproject validation via
+  `validate-pyproject`, `twine check` step, TestPyPI gate via
+  `workflow_dispatch`, environment-scoped Trusted Publishing.
 
 ## [0.2.0] -- 2026-04-17
 

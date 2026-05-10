@@ -133,6 +133,26 @@ version, dependency versions, seed, and quality tier. Use
 }
 ```
 
+`CITATION.cff` and `codemeta.json` provide machine-readable metadata for
+GitHub citation and FAIR4RS-compliant indexers.
+
+## Evidence and release gates
+
+`LIOUSCOPE_EVIDENCE_LOCK_REGISTER.csv` and
+`LIOUSCOPE_RELEASE_EVIDENCE_MANIFEST.yaml` enumerate the FAIR4RS, security
+and reproducibility gates. The current status is:
+
+- **P0 evidence lock**: PASS
+- **Engineering release-ready**: PASS
+- **Public release final**: OPEN (pending GitHub release tag + PyPI Trusted
+  Publishing run)
+- **Citable archival release**: OPEN (pending Zenodo DOI + Software
+  Heritage SWHID per ISO/IEC 18670:2025)
+
+See `SECURITY.md` for the disclosure policy, `REPRODUCIBILITY.md` for the
+SHA-256 run-id contract and pinned versions, and `CONTRIBUTING.md` for the
+development workflow.
+
 ## License
 
 Apache-2.0. See `LICENSE`.

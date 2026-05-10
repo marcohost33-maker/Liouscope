@@ -1,0 +1,79 @@
+manifest_version: "1.2.0"
+project: LiouScope
+package_canonical: "0.2.0"
+post_submission_tooling: "0.2.1"
+
+taxonomy_version: "A1-A12-v3.1"
+diagnostic_schema_version: "D1-D24-Übersicht-v3-2026-04-24"
+
+evidence_pack:
+  version: "1.2.0"
+  date: "2026-05-10"
+  register: LIOUSCOPE_EVIDENCE_LOCK_REGISTER.csv
+
+fair4rs:
+  citation: CITATION.cff
+  codemeta: codemeta.json
+  license: LICENSE
+  license_spdx: Apache-2.0
+  readme: README.md
+  reproducibility: REPRODUCIBILITY.md
+  changelog: CHANGELOG.md
+  contributing: CONTRIBUTING.md
+  manifest_schema: MANIFEST_SCHEMA.json
+
+security:
+  policy: SECURITY.md
+  openssf_scorecard: .github/workflows/scorecard.yml
+  dependency_review: .github/workflows/dependency-review.yml
+
+supply_chain:
+  pypi_trusted_publishing: .github/workflows/pypi.yml
+  twine_check: enabled
+  testpypi_gate: enabled
+  pyproject_validation: enabled
+
+ci:
+  workflow: .github/workflows/ci.yml
+  python_versions: ["3.10", "3.11", "3.12", "3.13"]
+  coverage_target: 80
+  current_coverage: 88.01
+
+correctness_anchors:
+  count: 14
+  ids: [A, B, C, D, E, F, G, H, I, J, K, L, M, N]
+  regression_gate: tests/test_anchors.py
+  current_status: PASS
+
+archival:
+  swhid:
+    status: deferred
+    target: archive.softwareheritage.org
+    standard: "ISO/IEC 18670:2025"
+  zenodo_doi:
+    status: deferred
+    target: zenodo.org
+    note: "Enable via GitHub--Zenodo integration on tagged release"
+
+release_state:
+  p0_evidence_lock: PASS
+  engineering_release_ready: PASS
+  public_release_final: OPEN
+  citable_archival_release: OPEN
+
+verification_commands:
+  install: "pip install -e .[dev,qutip]"
+  test: "pytest --cov=liouscope --cov-fail-under=80"
+  anchors: "pytest tests/test_anchors.py"
+  reproduce_paper: "python benchmarks/reproduce_paper.py"
+  figures: "python figures/generate_all.py"
+  lint: "ruff check src/ tests/"
+
+deterministic_outputs:
+  reproduce_paper_sha256:
+    "20104ea1180307a60eadf5df294a76815133255a263a7e3062db72dc514f5cc7"
+  reference_environment:
+    python: "3.11.15"
+    numpy: "2.4.4"
+    scipy: "1.17.1"
+    platform: "Linux x86_64"
