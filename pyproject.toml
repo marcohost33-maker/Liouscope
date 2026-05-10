@@ -1,0 +1,129 @@
+[build-system]
+requires = ["setuptools>=75.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "liouscope"
+version = "0.2.0"
+description = "Multi-diagnostic relaxation analysis for open quantum lattice systems"
+readme = "README.md"
+license = { text = "Apache-2.0" }
+requires-python = ">=3.10"
+authors = [
+    { name = "Coworker Research" },
+]
+keywords = [
+    "open quantum systems",
+    "lindblad",
+    "liouvillian",
+    "mpemba",
+    "non-normal",
+    "pseudospectrum",
+    "relaxation",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: Apache Software License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Scientific/Engineering :: Physics",
+    "Typing :: Typed",
+]
+dependencies = [
+    "numpy>=1.24",
+    "scipy>=1.10",
+]
+
+[project.optional-dependencies]
+qutip = ["qutip>=4.7"]
+figures = ["matplotlib>=3.7"]
+dev = [
+    "pytest>=8",
+    "pytest-cov>=4",
+    "ruff>=0.5",
+    "mypy>=1.10",
+    "hypothesis>=6.100",
+    "build>=1.2",
+]
+
+[project.urls]
+Homepage = "https://github.com/coworker-research/liouscope"
+Repository = "https://github.com/coworker-research/liouscope"
+Issues = "https://github.com/coworker-research/liouscope/issues"
+
+[tool.setuptools]
+include-package-data = true
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+liouscope = ["py.typed", "MANIFEST_SCHEMA.json"]
+
+[tool.pytest.ini_options]
+minversion = "8.0"
+addopts = "-ra --strict-markers"
+testpaths = ["tests"]
+markers = [
+    "slow: marks tests that take significant time (deselect with -m 'not slow')",
+    "qutip: tests that require qutip to be installed",
+]
+
+[tool.coverage.run]
+branch = true
+source = ["src/liouscope"]
+omit = [
+    "src/liouscope/_version.py",
+    "src/liouscope/examples.py",
+]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "raise NotImplementedError",
+    "if TYPE_CHECKING:",
+    "if __name__ == .__main__.:",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "N", "B", "UP", "C4", "SIM", "RUF"]
+ignore = [
+    "E741",   # ambiguous variable name (l, I, etc.) -- physics convention
+    "N802",   # uppercase test function names (anchor regressions A-N)
+    "N803",   # uppercase argument names (H, L matrices)
+    "N806",   # uppercase locals (G, L_super, etc.)
+    "N815",   # mixedCase dataclass fields (beta_D, bootstrap_B)
+    "B905",   # zip strict -- 3.10+ default is correct
+    "B028",   # warnings.warn stacklevel
+    "RUF003", # ambiguous unicode in comments (Übersicht in spec refs)
+    "RUF001", # ambiguous unicode in string literals
+    "RUF013", # implicit Optional in tests
+    "SIM117", # nested with statements
+    "UP015",  # mode='rt' verbose
+    "RUF046", # int(round()) -- explicit safety on numpy scalars
+    "RUF059", # SVD unpacking discards
+    "F841",   # locally unused assignment in tests
+    "E501",   # long lines in error messages
+    "SIM108", # explicit if/else over ternary (readability)
+]
+
+[tool.mypy]
+python_version = "3.10"
+warn_return_any = true
+warn_unused_configs = true
+strict_equality = true
+disallow_untyped_defs = false
+files = ["src/liouscope"]
+
+[[tool.mypy.overrides]]
+module = ["scipy.*", "qutip.*", "matplotlib.*"]
+ignore_missing_imports = true

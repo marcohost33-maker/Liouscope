@@ -1,0 +1,41 @@
+name: CI
+
+on:
+  push:
+    branches: [main, "claude/**"]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest]
+        python-version: ["3.10", "3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install package
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .[dev,qutip]
+      - name: Lint
+        run: ruff check src tests
+      - name: Type check
+        run: mypy src/liouscope
+        continue-on-error: true
+      - name: Run anchor regressions (must pass)
+        run: pytest tests/test_anchors.py -v
+      - name: Run full test suite
+        run: pytest --cov=liouscope --cov-report=xml --cov-fail-under=80 -v
+      - name: Upload coverage
+        if: matrix.python-version == '3.12'
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-xml
+          path: coverage.xml

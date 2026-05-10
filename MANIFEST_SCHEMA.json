@@ -1,0 +1,54 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/coworker-research/liouscope/MANIFEST_SCHEMA.json",
+  "title": "LiouScope Run Manifest",
+  "description": "Reproducibility manifest emitted on every diagnose() invocation.",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "framework_version",
+    "taxonomy_version",
+    "diagnostic_schema_version",
+    "run_id",
+    "timestamp",
+    "python_version",
+    "platform",
+    "numpy_version",
+    "scipy_version",
+    "seed",
+    "quality_label"
+  ],
+  "properties": {
+    "schema_version": { "type": "string", "const": "1.2.0" },
+    "framework_version": { "type": "string" },
+    "taxonomy_version": { "type": "string", "const": "A1-A12-v3.1" },
+    "diagnostic_schema_version": {
+      "type": "string",
+      "const": "D1-D24-Übersicht-v3-2026-04-24"
+    },
+    "run_id": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$",
+      "description": "SHA-256 hash deterministically derived from input parameters."
+    },
+    "timestamp": { "type": "string", "format": "date-time" },
+    "python_version": { "type": "string" },
+    "platform": { "type": "string" },
+    "numpy_version": { "type": "string" },
+    "scipy_version": { "type": "string" },
+    "seed": { "type": "integer", "minimum": 0 },
+    "solver_path": {
+      "type": "string",
+      "enum": ["dense", "sparse_arpack"]
+    },
+    "quality_label": {
+      "type": "string",
+      "enum": ["exploratory", "moderate", "stable"]
+    },
+    "input_hash": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    }
+  },
+  "additionalProperties": false
+}
