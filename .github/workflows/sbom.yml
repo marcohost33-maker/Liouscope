@@ -37,7 +37,7 @@ jobs:
           retention-days: 90
       - name: Attach to release (if event is release)
         if: github.event_name == 'release'
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           files: |
             sbom.cdx.json
