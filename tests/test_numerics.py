@@ -88,3 +88,20 @@ def test_resolvent_norm_small():
     # ||(zI - A)^{-1}|| with z = 0: max 1/|z - lambda| = max 1/lambda = 1
     norm = resolvent_norm(A, 0.0 + 0.0j)
     assert abs(norm - 1.0) < 0.5  # loose tolerance for power-iteration fallback
+
+
+def test_resolvent_norm_sparse_path_matches_dense(rng):
+    """Exercise the n > 128 sparse path and cross-check against the dense
+    SVD on a moderate-size random Liouvillian-like matrix."""
+    n = 160
+    A = rng.standard_normal((n, n)) + 1j * rng.standard_normal((n, n))
+    # Make the matrix safely invertible at z=5 by shifting eigenvalues away.
+    A -= 10.0 * np.eye(n, dtype=complex)
+    z = 5.0 + 0.0j
+    sparse_norm = resolvent_norm(A, z)
+    # Dense reference
+    dense_inv = np.linalg.solve(z * np.eye(n, dtype=complex) - A, np.eye(n, dtype=complex))
+    import scipy.linalg as sla
+    dense_norm = float(sla.svdvals(dense_inv)[0])
+    rel = abs(sparse_norm - dense_norm) / max(dense_norm, 1.0e-12)
+    assert rel < 5.0e-2, f"sparse={sparse_norm}, dense={dense_norm}"

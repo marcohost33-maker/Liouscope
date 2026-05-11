@@ -1,0 +1,88 @@
+name: Bug report
+description: Report a defect in LiouScope (numerical, API, or correctness).
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for filing a bug report. **If the defect could compromise reproducibility
+        of published results, please use the private security disclosure channel
+        described in `SECURITY.md` instead.**
+
+  - type: input
+    id: liouscope-version
+    attributes:
+      label: LiouScope version
+      placeholder: "0.2.0"
+    validations:
+      required: true
+
+  - type: input
+    id: python-version
+    attributes:
+      label: Python version
+      placeholder: "3.11.15"
+    validations:
+      required: true
+
+  - type: input
+    id: numpy-version
+    attributes:
+      label: NumPy version
+      placeholder: "2.4.4"
+    validations:
+      required: true
+
+  - type: input
+    id: scipy-version
+    attributes:
+      label: SciPy version
+      placeholder: "1.17.1"
+    validations:
+      required: true
+
+  - type: textarea
+    id: description
+    attributes:
+      label: Description
+      description: What is wrong? Include the relevant diagnostic IDs (D1-D24) and anchor letters (A-N) where applicable.
+    validations:
+      required: true
+
+  - type: textarea
+    id: repro
+    attributes:
+      label: Minimal reproduction
+      description: A short Python snippet that reproduces the issue.
+      render: python
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected vs observed
+    validations:
+      required: true
+
+  - type: input
+    id: run-id
+    attributes:
+      label: Run ID (from `report.governance.run_id` if available)
+
+  - type: checkboxes
+    id: anchor-check
+    attributes:
+      label: Correctness anchors potentially affected
+      options:
+        - label: "A. Column-stacking (order='F')"
+        - label: "B. GNS Gram form"
+        - label: "C. Alicki adjoint direction"
+        - label: "D. Eigensolver (zgeev vs eigh)"
+        - label: "E. SuperLU resolvent"
+        - label: "F. AICc model selection"
+        - label: "G/H. Statistics (bootstrap/N_eff)"
+        - label: "I. Conjugate-pair LEP detection"
+        - label: "J. supp-check"
+        - label: "K. HS vs pi-adjoint"
+        - label: "L/M/N. Versioning / D11 vs D11b / D24"

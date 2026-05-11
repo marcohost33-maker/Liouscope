@@ -1,15 +1,126 @@
 manifest_version: "1.2.0"
+manifest_revision: "1.3"
 project: LiouScope
+project_repo: "https://github.com/coworker-research/liouscope"
 package_canonical: "0.2.0"
 post_submission_tooling: "0.2.1"
+date: "2026-05-10"
+status: "P0_EVIDENCE_LOCK_PASS_WITH_EXTERNAL_RELEASE_OPEN"
+language: "de-CH+en"
 
 taxonomy_version: "A1-A12-v3.1"
 diagnostic_schema_version: "D1-D24-Übersicht-v3-2026-04-24"
+
+upstream_drive_evidence_pack:
+  drive_id: "19fS59kyGIA_RdiVC8cv6MFfKR30sJmD0"
+  title: "LIOUSCOPE_RELEASE_EVIDENCE_PACK_v1_2.zip"
+  fetched_size_bytes: 7772
+  fetched_sha256: "6f4b04438c308e9c7d2dfbbcd2ced74b1959b631e84832cb7e4a709bc528da22"
+  spec_sha256: "a4c5a85f59b674db4cacfb1f886812a221906e25c28e3ad3fb323c8a89d20eaa"
+  spec_match: false
+  notes: >
+    Local-fetch SHA differs from the spec hash recorded in reaction #38. One
+    inflate-block failed during base64 transit (the CSV register did not
+    extract); other Drive Pack files extracted cleanly and are mirrored in
+    this repository.
+
+canonical_report:
+  title: "LiouScope Konsolidierter Gesamtbericht v2.0 FINAL 2026-05-10"
+  drive_id: "1N9ldvg8_taUL07xSnQbgdLpTbMLVHkL_"
+  parent_folder: "0Meta 4 (1qxm446NOzlEhPHdvWx0OZQ0RXmqckb5g)"
+  modified_utc: "2026-05-10T19:23:43Z"
+  size_bytes: 297614
+  sha256: "bb72e449d11bb94874655ac3253a34dec4b90d4a83c5e869aa1a61a29d19a847"
+  hash_status: VERIFIED
+  duplicate_drive_id: "1QbIpRWd5pNTEXrzFiG_yPCyLCIN_U9uj"
+  duplicate_recommendation: "Mark as ARCHIVE_COPY or DUPLICATE_DO_NOT_USE in 0Liou+"
+
+canon_lock:
+  package_canon: "v0.2.0"
+  post_submission_tooling: "v0.2.1 / Zhou D24"
+  core_scope: "finite-dimensional time-homogeneous GKSL/QMS"
+  public_release_status: "OPEN_PENDING_EXTERNAL_EVIDENCE"
+
+diagnostic_lock:
+  D2: "GNS-Gap"
+  D2b: "KMS-Gap"
+  D3: "Oscillating-Mode Gap"
+  D11: "Bohr-AP-Check"
+  D11b: "Resolvent Peak R_lb,max"
+  D24: "Zhou universal mixing-time predictor"
+  lee_bound: "Separate Cross-Project-Erweiterung; not canonical D24"
+
+taxonomy_lock:
+  A1: "Asymptotic-gap-controlled"
+  A2: "Sym-gap-corrected transient"
+  A3: "Overlap/eigenvector-amplified"
+  A4: "Skin-affected"
+  A5: "Metastable plateau"
+  A6: "Accelerated-decay / operator-spreading"
+  A7: "Weak-dissipation singular"
+  A8: "Oscillatory-transient"
+  A9: "Prethermalization-affected"
+  A10: "Phantom-relaxation"
+  A11: "Non-normal Mpemba"
+  A12: "Mixed / unresolved"
 
 evidence_pack:
   version: "1.2.0"
   date: "2026-05-10"
   register: LIOUSCOPE_EVIDENCE_LOCK_REGISTER.csv
+  drive_attestation: LIOUSCOPE_DRIVE_ATTESTATION.csv
+
+verified_drive_artifacts:
+  - role: canonical_report
+    title: "LiouScope Konsolidierter Gesamtbericht v2 0 FINAL 2026-05-10.pdf"
+    drive_id: "1N9ldvg8_taUL07xSnQbgdLpTbMLVHkL_"
+    sha256: "bb72e449d11bb94874655ac3253a34dec4b90d4a83c5e869aa1a61a29d19a847"
+    size_bytes: 297614
+    hash_status: VERIFIED
+  - role: meta4_survival_items
+    title: "5_RESULTS_SURVIVAL_ITEMS.md"
+    drive_id: "1-YW06CtFaijw44GL6wdRXFQPMp7F7Nsm"
+    sha256: "2b939926c6cd95d02de424ba99c7cb91c5afaac4cde4412322b9f8e4abb6f6c1"
+    size_bytes: 7088
+    hash_status: VERIFIED
+  - role: drive_evidence_pack_v1_2_upstream
+    title: "LIOUSCOPE_RELEASE_EVIDENCE_PACK_v1_2.zip"
+    drive_id: "19fS59kyGIA_RdiVC8cv6MFfKR30sJmD0"
+    sha256: "6f4b04438c308e9c7d2dfbbcd2ced74b1959b631e84832cb7e4a709bc528da22"
+    size_bytes: 7772
+    hash_status: VERIFIED_DIFFERS_FROM_SPEC
+  - role: meta4_core
+    title: "1_META_CORE.md"
+    drive_id: "1bDS8-w1B9GQhUHp1P6qLFF2FjDr0llUq"
+    size_bytes: 13130
+    hash_status: METADATA_ONLY
+  - role: meta4_project_index
+    title: "2_PROJECT_INDEX.md"
+    drive_id: "1IZDUZkI37WgpnxTPw3HaUFGnloj7pfmQ"
+    size_bytes: 15798
+    hash_status: METADATA_ONLY
+  - role: meta4_frontmatter_schema
+    title: "schema.json"
+    drive_id: "1gj9rlszKKEATpTJf7S8eReDTgOCfpJSp"
+    size_bytes: 5583
+    hash_status: METADATA_ONLY
+  - role: meta4_frontmatter_validator
+    title: "validate.py"
+    drive_id: "1kH61LlGfTrovus44SnQYXV6mpG1NIy27"
+    size_bytes: 12320
+    hash_status: METADATA_ONLY
+  - role: t11_freeze_handoff
+    title: "HANDOFF_v3_liouscope_2026-04-22-T11.md"
+    drive_id: "1G_cnRco74Gi5gQ8bmIe3tQPwiYVebyBY"
+    hash_status: METADATA_ONLY
+  - role: t17_integration_code
+    title: "liouscope_integration.py"
+    drive_id: "1drf3C8hDFa17HWX7hxeSkEYHXDz_4hVU"
+    hash_status: METADATA_ONLY
+  - role: arxiv_v5_bundle
+    title: "liouscope_arxiv_v5.tar.gz"
+    drive_id: "1X_4b088VMtfrM2Wp-Uidn_pNM8u4JAix"
+    hash_status: METADATA_ONLY
 
 fair4rs:
   citation: CITATION.cff
@@ -20,12 +131,18 @@ fair4rs:
   reproducibility: REPRODUCIBILITY.md
   changelog: CHANGELOG.md
   contributing: CONTRIBUTING.md
+  code_of_conduct: CODE_OF_CONDUCT.md
   manifest_schema: MANIFEST_SCHEMA.json
+  release_checklist: LIOUSCOPE_RELEASE_CHECKLIST.md
 
 security:
   policy: SECURITY.md
   openssf_scorecard: .github/workflows/scorecard.yml
   dependency_review: .github/workflows/dependency-review.yml
+  codeql: .github/workflows/codeql.yml
+  dependabot: .github/dependabot.yml
+  sbom_cyclonedx: .github/workflows/sbom.yml
+  pre_commit_hooks: .pre-commit-config.yaml
 
 supply_chain:
   pypi_trusted_publishing: .github/workflows/pypi.yml
@@ -68,12 +185,78 @@ verification_commands:
   reproduce_paper: "python benchmarks/reproduce_paper.py"
   figures: "python figures/generate_all.py"
   lint: "ruff check src/ tests/"
+  validate_pyproject: "python -m validate_pyproject pyproject.toml"
 
 deterministic_outputs:
-  reproduce_paper_sha256:
-    "20104ea1180307a60eadf5df294a76815133255a263a7e3062db72dc514f5cc7"
+  reproduce_paper_sha256: "20104ea1180307a60eadf5df294a76815133255a263a7e3062db72dc514f5cc7"
   reference_environment:
     python: "3.11.15"
     numpy: "2.4.4"
     scipy: "1.17.1"
     platform: "Linux x86_64"
+
+best_practice_gates:
+  FAIR4RS:
+    status: PASS
+    minimum:
+      - persistent_identifier_per_release
+      - rich_metadata
+      - license
+      - citation_metadata
+      - retrievable_archive
+      - reproducibility_instructions
+  PyPI:
+    status: PASS_PENDING_RELEASE
+    minimum:
+      - pyproject_toml_valid
+      - sdist_and_wheel
+      - twine_check
+      - trusted_publisher_oidc
+      - testpypi_smoke_test
+      - pypi_url_if_claimed
+  Metadata:
+    status: PASS
+    minimum:
+      - CITATION.cff
+      - codemeta.json
+      - LICENSE
+      - README.md
+      - CHANGELOG.md
+      - REPRODUCIBILITY.md
+      - RELEASE_MANIFEST.yaml
+  Archive:
+    status: OPEN
+    minimum:
+      - github_release_tag
+      - zenodo_doi_if_claimed
+      - archive_checksum
+      - optional_swhid
+  Security:
+    status: PASS
+    minimum:
+      - minimal_github_actions_permissions
+      - pinned_actions
+      - dependency_review
+      - dependabot
+      - openssf_scorecard
+      - codeql
+      - sbom_cyclonedx
+
+claim_safety:
+  blocked_without_evidence:
+    - "public open-source released"
+    - "PyPI released"
+    - "Zenodo DOI available"
+    - "universal Delta_s < Delta"
+    - "thermodynamic-limit result"
+    - "verified MLSI/cMLSI"
+  allowed:
+    - "engineering release-ready"
+    - "peer-review pending"
+    - "public release pending evidence"
+    - "validated finite-size benchmark cases"
+
+next_p0:
+  - "Rename duplicate v2.0 FINAL PDF (1QbIpRWd5pNTEXrzFiG_yPCyLCIN_U9uj) in Drive as ARCHIVE_COPY or DUPLICATE_DO_NOT_USE"
+  - "Compute remaining raw SHA-256 for Drive artefacts (currently 3/10 verified)"
+  - "Run public-release gate: tag v0.2.0 -> trigger pypi.yml + sbom.yml -> Zenodo DOI auto-mint"

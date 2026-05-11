@@ -3,12 +3,15 @@
   "@type": "SoftwareSourceCode",
   "name": "LiouScope",
   "version": "0.2.0",
-  "description": "Multi-diagnostic relaxation analysis for open quantum lattice systems. Implements twenty diagnostics D1-D20 and a twelve-class mechanism taxonomy A1-A12 covering Mori-Shirai overlap, Liouvillian skin effect, symmetrized gap, quantum Mpemba effect, and phantom relaxation.",
+  "description": "Multi-diagnostic relaxation analysis for finite-dimensional time-homogeneous Markovian open quantum lattice systems. Implements twenty diagnostics D1-D20 and a twelve-class mechanism taxonomy A1-A12 covering Mori-Shirai overlap, Liouvillian skin effect, symmetrized gap, quantum Mpemba effect, and phantom relaxation.",
   "license": "https://spdx.org/licenses/Apache-2.0",
   "codeRepository": "https://github.com/coworker-research/liouscope",
+  "issueTracker": "https://github.com/coworker-research/liouscope/issues",
   "programmingLanguage": "Python",
+  "runtimePlatform": "Python >=3.10",
   "operatingSystem": "Linux, macOS, Windows",
   "developmentStatus": "active",
+  "identifier": "TODO-ZENODO-DOI",
   "keywords": [
     "open quantum systems",
     "Lindblad",
@@ -16,15 +19,16 @@
     "Mpemba effect",
     "non-normal dynamics",
     "pseudospectrum",
-    "quantum relaxation"
+    "quantum relaxation",
+    "reproducibility"
   ],
   "author": [
     {
       "@type": "Organization",
-      "name": "Coworker Research"
+      "name": "Coworker Research / Coworkerz"
     }
   ],
-  "datePublished": "2026-04-17",
+  "datePublished": "2026-05-10",
   "softwareRequirements": [
     {
       "@type": "SoftwareApplication",

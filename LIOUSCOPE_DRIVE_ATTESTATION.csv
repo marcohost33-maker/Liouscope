@@ -1,0 +1,12 @@
+drive_id,title,role,parent_folder,size_bytes,modified_utc,sha256,hash_status,notes
+1N9ldvg8_taUL07xSnQbgdLpTbMLVHkL_,LiouScope Konsolidierter Gesamtbericht v2 0 FINAL 2026-05-10.pdf,canonical-report,0Meta 4 (1qxm446NOzlEhPHdvWx0OZQ0RXmqckb5g),297614,2026-05-10T19:23:43Z,bb72e449d11bb94874655ac3253a34dec4b90d4a83c5e869aa1a61a29d19a847,VERIFIED,Drive-fetch SHA-256 computed locally
+1QbIpRWd5pNTEXrzFiG_yPCyLCIN_U9uj,LiouScope Konsolidierter Gesamtbericht v2 0 FINAL 2026-05-10.pdf,duplicate-archive,0Liou+ (1YYEtr73E7IjWfiN7KY9FqDXQjc485cji),297614,2026-05-10T19:22:57Z,,METADATA_ONLY,Duplicate to mark ARCHIVE_COPY or DUPLICATE_DO_NOT_USE per spec
+1bDS8-w1B9GQhUHp1P6qLFF2FjDr0llUq,1_META_CORE.md,governance,0Meta 4 (1qxm446NOzlEhPHdvWx0OZQ0RXmqckb5g),13130,2026-05-06T23:13:36Z,,METADATA_ONLY,Meta-Kern v3.0.2 content verified via Drive fetch
+1IZDUZkI37WgpnxTPw3HaUFGnloj7pfmQ,2_PROJECT_INDEX.md,governance,0Meta 4 (1qxm446NOzlEhPHdvWx0OZQ0RXmqckb5g),15798,2026-05-06T23:13:36Z,,METADATA_ONLY,Drive folder listing
+1-YW06CtFaijw44GL6wdRXFQPMp7F7Nsm,5_RESULTS_SURVIVAL_ITEMS.md,governance,0Meta 4 (1qxm446NOzlEhPHdvWx0OZQ0RXmqckb5g),7088,2026-05-06T23:13:36Z,2b939926c6cd95d02de424ba99c7cb91c5afaac4cde4412322b9f8e4abb6f6c1,VERIFIED,Drive-fetch SHA-256 computed locally
+1gj9rlszKKEATpTJf7S8eReDTgOCfpJSp,schema.json,governance,0Meta 4 (1qxm446NOzlEhPHdvWx0OZQ0RXmqckb5g),5583,2026-05-06T23:13:36Z,,METADATA_ONLY,YAML frontmatter schema v2.0
+1kH61LlGfTrovus44SnQYXV6mpG1NIy27,validate.py,governance,0Meta 4 (1qxm446NOzlEhPHdvWx0OZQ0RXmqckb5g),12320,2026-05-06T23:13:37Z,,METADATA_ONLY,VT-1..VT-6 frontmatter validation
+1G_cnRco74Gi5gQ8bmIe3tQPwiYVebyBY,HANDOFF_v3_liouscope_2026-04-22-T11.md,canonical-handoff,0Liou+ ancestor,unknown,2026-04-22T20:52:01Z,,METADATA_ONLY,T11 freeze handoff
+1drf3C8hDFa17HWX7hxeSkEYHXDz_4hVU,liouscope_integration.py,canonical-source,0Liou+ ancestor,unknown,2026-04-22T20:52:02Z,,METADATA_ONLY,T17 integration code
+1X_4b088VMtfrM2Wp-Uidn_pNM8u4JAix,liouscope_arxiv_v5.tar.gz,arxiv-bundle,Drive folder 1gh9ZGfxegL8TjHbKZGr_b6UXnmejExsK,unknown,2026-04-23T14:40:30Z,,METADATA_ONLY,arXiv v5 submission archive (~37 KB)
+19fS59kyGIA_RdiVC8cv6MFfKR30sJmD0,LIOUSCOPE_RELEASE_EVIDENCE_PACK_v1_2.zip,evidence-pack,0Liou+ (1YYEtr73E7IjWfiN7KY9FqDXQjc485cji),7772,2026-05-10T19:53:30Z,6f4b04438c308e9c7d2dfbbcd2ced74b1959b631e84832cb7e4a709bc528da22,VERIFIED_BUT_SPEC_MISMATCH,Local SHA != spec a4c5a85f...; one block failed inflation during transit

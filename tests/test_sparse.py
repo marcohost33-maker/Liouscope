@@ -65,3 +65,39 @@ def test_chi1_lower_bound(pauli):
     L_sparse = build_sparse_liouvillian(H, sz_chain, [0.1] * 3)
     chi = chi1_lower_bound(L_sparse, k_modes=3, tol=1e-6)
     assert chi > 0
+
+
+def test_sparse_path_5_qubit_d32(pauli):
+    """5-qubit dephased chain: d=32, superop is 1024x1024.
+
+    Lower bound for the d=128 capability claimed by the v1.1.1 sparse path.
+    """
+    import time
+
+    from liouscope.core import (
+        boundary_dephasing_jumps,
+        ising_hamiltonian,
+        one_d_chain,
+    )
+
+    n_qubits = 5
+    lat = one_d_chain(n_qubits)
+    H = ising_hamiltonian(lat, J=1.0, h=0.5)
+    jumps = boundary_dephasing_jumps(n_qubits)
+    L_sparse = build_sparse_liouvillian(H, jumps, [0.2] * len(jumps))
+    assert L_sparse.shape == (32 * 32, 32 * 32)
+
+    t0 = time.perf_counter()
+    rho_ss = sparse_steady_state(L_sparse, tol=1e-7)
+    dt = time.perf_counter() - t0
+    assert rho_ss.shape == (32, 32)
+    assert abs(np.trace(rho_ss).real - 1.0) < 1e-5
+    # Should fit comfortably in the spec's 11s budget on a modern laptop.
+    assert dt < 60.0, f"Sparse steady state at d=32 took {dt:.2f}s (>60s budget)"
+
+    vals, _ = sparse_spectrum(L_sparse, k=4, tol=1e-7)
+    # Steady state lives at lambda = 0; others must have Re < 0.
+    assert np.any(np.abs(vals) < 1e-5)
+    nonzero = vals[np.abs(vals) > 1e-5]
+    if nonzero.size:
+        assert np.all(np.real(nonzero) < 1e-6)

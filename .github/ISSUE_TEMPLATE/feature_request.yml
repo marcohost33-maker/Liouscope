@@ -1,0 +1,37 @@
+name: Feature request
+description: Suggest a new diagnostic, mechanism class, or API improvement.
+labels: [enhancement]
+body:
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: One-paragraph summary of the proposed feature.
+    validations:
+      required: true
+
+  - type: textarea
+    id: motivation
+    attributes:
+      label: Motivation and scientific scope
+      description: |
+        Reference the relevant Spec section, mechanism class (A1-A12), or
+        diagnostic family (D1-D24, F1-F5).
+    validations:
+      required: true
+
+  - type: textarea
+    id: api
+    attributes:
+      label: Proposed API
+      render: python
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+
+  - type: textarea
+    id: references
+    attributes:
+      label: References / DOIs

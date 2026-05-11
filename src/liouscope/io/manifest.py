@@ -77,7 +77,10 @@ def build_manifest(
         seed=seed,
         solver_path=solver_path,
         quality_label=_classify_quality(tier),
-        timestamp=datetime.datetime.utcnow().isoformat() + "Z",
+        timestamp=datetime.datetime.now(datetime.timezone.utc)
+        .replace(microsecond=0)
+        .isoformat()
+        .replace("+00:00", "Z"),
         input_hash=input_hash,
     )
 
