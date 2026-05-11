@@ -35,7 +35,7 @@ jobs:
         run: pytest --cov=liouscope --cov-report=xml --cov-fail-under=80 -v
       - name: Upload coverage
         if: matrix.python-version == '3.12'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: coverage-xml
           path: coverage.xml
