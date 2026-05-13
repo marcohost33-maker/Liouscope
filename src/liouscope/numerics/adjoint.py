@@ -12,44 +12,69 @@ the v2.0 audit:
   ``M_{L*} = M_L^H`` --- the conjugate transpose of the superoperator
   matrix of ``L``.
 
-* :func:`alicki_adjoint` -- the pi-weighted adjoint used to build the
-  symmetrised Liouvillian for the GNS gap (Mori-Shirai 2023 Eq. 8)::
+* :func:`alicki_adjoint` -- the pi-weighted Heisenberg-picture adjoint of
+  the Schrödinger Liouvillian used to build the symmetrised generator for
+  the GNS / KMS gaps. The general construction (column-stacking) is::
 
-      L_tilde*(A) = (rho_ss)^{-1} L(rho_ss A)        (operator form)
+      L_pi*  = G^{-1} L G
 
-  In column-stacking convention this becomes (anchor C, the critical T17
-  hardening bug)::
+  where the Gram matrix selects the metric:
 
-      M_{L_tilde*} = (rho_ss^{-1} (x) I) M_L (rho_ss (x) I)
+  ============  ===========================================
+  metric        Gram matrix G (column-stacking, real rho)
+  ============  ===========================================
+  ``"gns"``     ``G_GNS = rho_ss (x) I``
+  ``"kms"``     ``G_KMS = rho_ss^{1/2} (x) rho_ss^{1/2}``
+  ============  ===========================================
 
   **Direction matters.** Swapping the inverse to the right yields
   ``Delta_s / Delta > 1`` on boundary-driven systems, which is
-  physically impossible. Without this fix, Paper 1 would have shipped a
-  central false claim.
+  physically impossible (anchor C). Without this fix, Paper 1 would have
+  shipped a central false claim.
 """
 
 from __future__ import annotations
 
+from typing import Literal
+
 import numpy as np
+import scipy.linalg as sla
+
+GramKind = Literal["gns", "kms"]
 
 
 def hs_adjoint(L_super: np.ndarray) -> np.ndarray:
-    """Hilbert-Schmidt adjoint of a column-stacked superoperator.
-
-    Parameters
-    ----------
-    L_super
-        ``d^2 x d^2`` matrix representing ``L`` in column-stacking convention.
-
-    Returns
-    -------
-    np.ndarray
-        ``d^2 x d^2`` matrix representing ``L*`` in column-stacking convention.
-    """
+    """Hilbert-Schmidt adjoint of a column-stacked superoperator."""
     L_super = np.asarray(L_super)
     if L_super.ndim != 2 or L_super.shape[0] != L_super.shape[1]:
         raise ValueError(f"hs_adjoint expects a square matrix, got {L_super.shape}")
     return L_super.conj().T
+
+
+def gram_matrix(rho_steady: np.ndarray, metric: GramKind = "gns") -> np.ndarray:
+    """Return the column-stacking Gram matrix for the given inner product.
+
+    For the GNS metric ``<A,B>_GNS = Tr(A^dag B rho_ss)``::
+
+        G_GNS = rho_ss (x) I       (column stacking)
+
+    For the KMS metric ``<A,B>_KMS = Tr(rho_ss^{1/2} A^dag rho_ss^{1/2} B)``::
+
+        G_KMS = rho_ss^{1/2} (x) rho_ss^{1/2}.conj()
+
+    (The right factor is the conjugate of the square root because the inner
+    product is Hermitian and the second argument carries the conjugation in
+    the column-stacking convention used throughout the package.)
+    """
+    rho = np.asarray(rho_steady)
+    d = rho.shape[0]
+    eye_d = np.eye(d, dtype=complex)
+    if metric == "gns":
+        return np.kron(rho, eye_d)
+    if metric == "kms":
+        sqrt_rho = sla.sqrtm(rho).astype(complex)
+        return np.kron(sqrt_rho, sqrt_rho.conj())
+    raise ValueError(f"unknown metric {metric!r}; expected 'gns' or 'kms'")
 
 
 def alicki_adjoint(
@@ -57,15 +82,17 @@ def alicki_adjoint(
     rho_steady: np.ndarray,
     *,
     eps_reg: float = 1.0e-12,
+    metric: GramKind = "gns",
 ) -> np.ndarray:
-    """pi-weighted adjoint of the Liouvillian (Mori-Shirai 2023 Eq. 8).
+    """pi-weighted Heisenberg-picture adjoint with the chosen metric.
 
-    Anchor C. The correct direction in column-stacking convention is::
+    Returns ``G^{-1} L G`` where ``G`` is selected by :func:`gram_matrix`.
 
-        L_tilde* = (rho_ss^{-1} (x) I) L (rho_ss (x) I)
+    For the GNS metric this collapses to the column-stacking form
+    ``(rho_ss^{-1} (x) I) L (rho_ss (x) I)`` (anchor C).
 
-    Reversing this yields unphysical ``Delta_s > Delta`` on
-    Prosen-Znidaric boundary-driven cases (T17 hardening regression).
+    For the KMS metric the construction is
+    ``(rho_ss^{-1/2} (x) rho_ss^{-1/2}.conj()) L (rho_ss^{1/2} (x) rho_ss^{1/2}.conj())``.
     """
     L_super = np.asarray(L_super)
     rho = np.asarray(rho_steady)
@@ -76,14 +103,10 @@ def alicki_adjoint(
             f"expected L_super to be ({d * d}, {d * d})"
         )
 
-    # Regularise to avoid singularity in rho_ss^{-1}.
     rho_reg = rho + eps_reg * np.eye(d, dtype=rho.dtype)
-    rho_inv = np.linalg.inv(rho_reg)
-
-    eye_d = np.eye(d, dtype=L_super.dtype)
-    left = np.kron(rho_inv, eye_d)
-    right = np.kron(rho_reg, eye_d)
-    return left @ L_super @ right
+    G = gram_matrix(rho_reg, metric)
+    G_inv = sla.inv(G)
+    return G_inv @ L_super @ G
 
 
 def symmetrised_liouvillian(
@@ -91,20 +114,25 @@ def symmetrised_liouvillian(
     rho_steady: np.ndarray,
     *,
     eps_reg: float = 1.0e-12,
+    metric: GramKind = "gns",
 ) -> np.ndarray:
-    """Return the Mori-Shirai symmetrised generator in the Heisenberg picture.
+    """Return the Mori-Shirai-style symmetrised generator.
 
-    Construction::
+    Construction (Heisenberg picture)::
 
-        L_HS         = L^H               (Heisenberg-picture Liouvillian)
-        L_HS_pi_adj  = G^{-1} L G         (= alicki_adjoint, for real diag rho)
+        L_HS         = L^H
+        L_HS_pi_adj  = G^{-1} L G
         L_HS_sym     = ( L_HS + L_HS_pi_adj ) / 2
 
     Conjugating ``L_HS_sym`` by ``G^{1/2}`` yields a Hermitian matrix whose
     top eigenvalue is ~0 (corresponding to ``vec(I)`` -- trace preservation)
-    and whose second-largest eigenvalue gives the GNS gap ``Delta_s`` (D2).
+    and whose second-largest eigenvalue gives the symmetrised gap.
+
+    The ``metric`` keyword selects the Gram matrix: ``"gns"`` reproduces the
+    Mori-Shirai 2023 GNS gap (D2); ``"kms"`` reproduces the Fagnola-Umanita
+    KMS gap (D2b).
     """
     L_super = np.asarray(L_super)
     L_HS = L_super.conj().T
-    L_HS_pi_adj = alicki_adjoint(L_super, rho_steady, eps_reg=eps_reg)
+    L_HS_pi_adj = alicki_adjoint(L_super, rho_steady, eps_reg=eps_reg, metric=metric)
     return 0.5 * (L_HS + L_HS_pi_adj)

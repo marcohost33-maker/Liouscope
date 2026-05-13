@@ -22,7 +22,7 @@ import scipy.linalg as sla
 from .._consts import EPS_GAP
 from .._types import SpectralResult
 from ..core.lindblad import steady_state
-from ..numerics.adjoint import symmetrised_liouvillian
+from ..numerics.adjoint import gram_matrix, symmetrised_liouvillian
 from ..numerics.linalg import eig_nonhermitian
 
 
@@ -42,53 +42,63 @@ def _gram_kms(rho: np.ndarray) -> np.ndarray:
 
 
 def _real_gap_from_symmetric(M: np.ndarray, *, atol: float = EPS_GAP) -> float:
-    """Return the second-largest real eigenvalue magnitude of a (numerically) Hermitian M.
+    """Return the symmetrised gap from the Hermitian-part eigenvalues of ``M``.
 
-    For a contractive ``L_sym`` the spectrum lives in ``Re(lambda) <= 0`` with
-    a zero corresponding to the steady state. The GNS gap is
-    ``Delta_s = -lambda_1`` where ``lambda_1`` is the second-largest real part.
+    ``M`` is the Gram-conjugated symmetrised generator. Mori-Shirai 2023
+    defines the symmetrised gap as the smallest decay rate, i.e. the
+    magnitude of the largest **negative** eigenvalue. For non-detailed-
+    balance systems ``M`` may have isolated **positive** eigenvalues
+    associated with transient GNS-norm amplification; these are not gaps
+    and must be filtered out before reporting.
     """
     M_sym = 0.5 * (M + M.conj().T)
     evals = np.linalg.eigvalsh(M_sym)
-    # Strip the zero eigenvalue
-    sorted_evals = np.sort(evals)[::-1]
-    # The largest should be ~0 (steady state); second-largest gives the gap.
-    if sorted_evals.size < 2:
+    sorted_desc = np.sort(evals)[::-1]
+    if sorted_desc.size < 2:
         return 0.0
-    # Filter eigenvalues within atol of zero to find the gap properly.
-    nonzero = sorted_evals[np.abs(sorted_evals) > atol]
-    if nonzero.size == 0:
+    # Closest-to-zero negative eigenvalue: that's the slowest decay direction.
+    negative = sorted_desc[sorted_desc < -atol]
+    if negative.size == 0:
         return 0.0
-    # nonzero[0] is the largest non-zero (least negative) eigenvalue.
-    return float(-nonzero[0])
+    return float(-negative[0])
+
+
+def _symmetrised_gap(
+    L_super: np.ndarray,
+    rho_steady: np.ndarray,
+    metric: str,
+) -> float:
+    """Common machinery for the GNS / KMS symmetrised gaps.
+
+    Builds the metric-specific symmetrised Heisenberg generator, conjugates
+    by ``G^{1/2}`` (which makes the result Hermitian) and returns the
+    second-largest non-zero eigenvalue with a sign flip.
+    """
+    rho_steady = np.asarray(rho_steady)
+    d = rho_steady.shape[0]
+    rho_reg = rho_steady + 1.0e-14 * np.eye(d, dtype=rho_steady.dtype)
+    L_sym = symmetrised_liouvillian(L_super, rho_reg, metric=metric)  # type: ignore[arg-type]
+    G = gram_matrix(rho_reg, metric)  # type: ignore[arg-type]
+    G_half = sla.sqrtm(G)
+    G_inv_half = sla.inv(G_half)
+    M = G_half @ L_sym @ G_inv_half
+    return _real_gap_from_symmetric(M)
 
 
 def gns_gap(L_super: np.ndarray, rho_steady: np.ndarray) -> float:
     """D2: symmetrised GNS gap using Mori-Shirai 2023 construction."""
-    rho_steady = np.asarray(rho_steady)
-    d = rho_steady.shape[0]
-    # Make rho positive-definite by adding a tiny regulariser (anchor J)
-    rho_reg = rho_steady + 1.0e-14 * np.eye(d, dtype=rho_steady.dtype)
-    L_sym = symmetrised_liouvillian(L_super, rho_reg)
-
-    G = _gram_gns(rho_reg)
-    G_half = sla.sqrtm(G)
-    G_inv_half = sla.inv(G_half)
-    M = G_half @ L_sym @ G_inv_half
-    return _real_gap_from_symmetric(M)
+    return _symmetrised_gap(L_super, rho_steady, metric="gns")
 
 
 def kms_gap(L_super: np.ndarray, rho_steady: np.ndarray) -> float:
-    """D2b: KMS-symmetrised gap (Fagnola JFA 2025, ``s = 1/2``)."""
-    rho_steady = np.asarray(rho_steady)
-    d = rho_steady.shape[0]
-    rho_reg = rho_steady + 1.0e-14 * np.eye(d, dtype=rho_steady.dtype)
-    L_sym = symmetrised_liouvillian(L_super, rho_reg)
-    G = _gram_kms(rho_reg)
-    G_half = sla.sqrtm(G)
-    G_inv_half = sla.inv(G_half)
-    M = G_half @ L_sym @ G_inv_half
-    return _real_gap_from_symmetric(M)
+    """D2b: KMS-symmetrised gap (Fagnola JFA 2025, ``s = 1/2``).
+
+    Uses the proper KMS Gram matrix ``G_KMS = rho_ss^{1/2} (x) rho_ss^{1/2}``
+    in **both** the pi-adjoint construction and the similarity conjugation,
+    so the result is genuinely the KMS-symmetrised gap rather than the
+    GNS-symmetrised generator viewed through the KMS metric.
+    """
+    return _symmetrised_gap(L_super, rho_steady, metric="kms")
 
 
 def liouvillian_gap(eigenvalues: np.ndarray, *, atol: float = EPS_GAP) -> float:

@@ -1,0 +1,202 @@
+# LiouScope Benchmark Manifest v1.0
+# Aligned with the Drive template:
+#   LIOUSCOPE_BENCHMARK_MANIFEST_TEMPLATE_v1.yaml (2026-05-13)
+# Reproducibility hooks:
+#   - run via ``python benchmarks/run.py BM-NNN``
+#   - SHA-256 of canonical output is recorded under ``reproduce.output_hash``
+#   - see ``LIOUSCOPE_RELEASE_EVIDENCE_MANIFEST.yaml`` for cross-cutting
+#     evidence gates (P0..P5)
+
+manifest_version: "1.0"
+date: "2026-05-13"
+package_canonical: "0.2.0"
+taxonomy_version: "A1-A12-v3.1"
+diagnostic_schema_version: "D1-D24-Übersicht-v3-2026-04-24"
+
+benchmarks:
+
+  - benchmark_id: "BM-001"
+    description: "Ising chain boundary dephasing -- Gap-Failure F1 / A3 demonstration"
+    model:
+      hamiltonian: "Ising"
+      formula: "H = -J sum_i sigma_x^i sigma_x^{i+1} + h sum_i sigma_z^i"
+      parameters:
+        J: 1.0
+        h: 1.0
+      builder: "liouscope.core.ising_hamiltonian"
+    dissipator:
+      family: "boundary_dephasing"
+      description: "sigma_z dephasing on sites 1 and N"
+      rates: [0.1]
+      builder: "liouscope.core.boundary_dephasing_jumps"
+    geometry:
+      type: "chain"
+      boundary: "open"
+      builder: "liouscope.core.one_d_chain"
+    system_size:
+      N: 8
+      hilbert_dim: 256
+      liouvillian_dim: 65536
+    numerical:
+      solver: "liouscope.sparse.sparse_steady_state"
+      eigensolver: "scipy.sparse.linalg.eigs"
+      precision: "complex128"
+      sparse_method: "shift-invert"
+      tolerances:
+        atol: 1.0e-12
+        rtol: 1.0e-10
+      seed: 42
+    expected_outputs:
+      gap: null
+      symmetrized_gap: null
+      mechanism_class: "A3"
+      f_family: "F1"
+      pipeline_layers: ["S", "N", "R"]
+    known_failure_modes:
+      - "near-degeneracy at h=1.0 (quantum critical point)"
+      - "sparse convergence slow for N > 10"
+    reproduce:
+      command: "python benchmarks/run.py BM-001"
+      output_hash: null
+    paper_reference:
+      figure: "Fig. 2a"
+      section: "Section IV"
+
+  - benchmark_id: "BM-002"
+    description: "XXZ Heisenberg chain -- scaling analysis"
+    model:
+      hamiltonian: "Heisenberg_XXZ"
+      formula: "H = sum_i (J_xy (S_x^i S_x^{i+1} + S_y^i S_y^{i+1}) + J_z S_z^i S_z^{i+1})"
+      parameters:
+        J_xy: 1.0
+        J_z: 0.5
+      builder: "liouscope.core.heisenberg_xxz_hamiltonian"
+    dissipator:
+      family: "boundary_driving"
+      description: "sigma_+ on site 1, sigma_- on site N"
+      rates: [0.5, 0.5]
+      builder: "custom (sigma_plus/sigma_minus on boundary sites)"
+    geometry:
+      type: "chain"
+      boundary: "open"
+      builder: "liouscope.core.one_d_chain"
+    system_size:
+      N_range: [4, 6, 8, 10, 12, 14]
+      hilbert_dim_range: [16, 64, 256, 1024, 4096, 16384]
+    numerical:
+      solver: "liouscope.sparse.sparse_steady_state"
+      eigensolver: "scipy.sparse.linalg.eigs"
+      precision: "complex128"
+      sparse_method: "shift-invert"
+      tolerances:
+        atol: 1.0e-12
+        rtol: 1.0e-10
+      seed: 42
+    expected_outputs:
+      scaling_exponent_alpha: 1.82
+      scaling_uncertainty: 1.37
+      ising_z3_excluded: true
+      kpz_diffusive_compatible: true
+    known_failure_modes:
+      - "z=3/2 vs z=2 distinction requires N >= 9 (NR-27)"
+      - "precision wall at d > 128 without sparse path"
+    reproduce:
+      command: "python benchmarks/run.py BM-002 --scaling"
+      output_hash: null
+    paper_reference:
+      figure: "Fig. 3"
+      section: "Section V"
+
+  - benchmark_id: "BM-003"
+    description: "Qutrit KMS-Gap validation -- Alicki adjoint correction (T17)"
+    model:
+      hamiltonian: "Qutrit_thermal"
+      formula: "H = diag(0, omega, 2*omega)"
+      parameters:
+        omega: 1.0
+        beta: 1.0
+      builder: "liouscope.examples.v1b_thermal_qutrit"
+    dissipator:
+      family: "thermal_detailed_balance"
+      description: "Thermal transitions 0<->1 and 1<->2 with KMS-balanced rates"
+      rates: [1.0, 0.368, 1.0, 0.368]
+    geometry:
+      type: "single_site"
+      boundary: "none"
+    system_size:
+      N: 1
+      hilbert_dim: 3
+      liouvillian_dim: 9
+    numerical:
+      solver: "liouscope.diagnose"
+      eigensolver: "scipy.linalg.eig (zgeev)"
+      precision: "complex128"
+      tolerances:
+        atol: 1.0e-14
+    expected_outputs:
+      gns_gap: 0.683940
+      kms_gap: 0.683940
+      kms_over_gns_ratio: 1.0
+      mechanism_class: "A11"
+      f_family: "F4"
+      note: >
+        At detailed balance the GNS and KMS gaps coincide by construction.
+        The 1.41 ratio cited in the v2.0 spec for the V1 qutrit reflects a
+        non-detailed-balance variant where the Hamiltonian generates
+        coherences. See BM-003b below for that variant.
+    known_failure_modes:
+      - "Alicki adjoint direction (rho vs rho^{-1}); T17 fix encoded in anchor C"
+      - "Population-only jump structure causes GNS and KMS to coincide"
+    reproduce:
+      command: "python benchmarks/run.py BM-003"
+      output_hash: "8c84d04c4c341d1f0e95e3e409f57079477f1c12668a9c63a4518eaa36dceadf"
+    paper_reference:
+      figure: "Fig. 1"
+      section: "Section III"
+
+  - benchmark_id: "BM-003b"
+    description: "Off-diagonal qutrit -- demonstrates KMS != GNS"
+    model:
+      hamiltonian: "Tri-diagonal qutrit"
+      formula: "H = [[0, 0.3, 0], [0.3, 1.0, 0.4], [0, 0.4, 2.5]]"
+    dissipator:
+      family: "non_detailed_balance_ladders"
+      description: "Six ladder operators with non-DB rates"
+      rates: [0.3, 0.05, 0.4, 0.07, 0.2, 0.04]
+    geometry:
+      type: "single_site"
+      boundary: "none"
+    system_size:
+      N: 1
+      hilbert_dim: 3
+      liouvillian_dim: 9
+    numerical:
+      solver: "liouscope.diagnose"
+      eigensolver: "scipy.linalg.eig (zgeev)"
+      precision: "complex128"
+    expected_outputs:
+      gap: 0.307327
+      gns_gap: 0.223989
+      kms_gap: 0.256865
+      kms_over_gns_ratio: 1.1468
+      note: "Off-diagonal H + non-DB jumps separate the GNS and KMS metrics."
+    known_failure_modes:
+      - "Symmetrised generator has isolated positive eigenvalues; the gap definition must filter for negative eigenvalues only"
+    reproduce:
+      command: "python benchmarks/run.py BM-003b"
+      output_hash: null
+    paper_reference:
+      figure: null
+      section: "Section III (extended)"
+
+template_fields_legend:
+  benchmark_id: "unique identifier BM-NNN"
+  model: "Hamiltonian family, formula, parameters, builder"
+  dissipator: "family, description, rates, builder"
+  geometry: "chain/ladder/hexagonal/single_site, boundary, builder"
+  system_size: "N, hilbert_dim, liouvillian_dim (or *_range for sweeps)"
+  numerical: "solver, eigensolver, precision, method, tolerances, seed"
+  expected_outputs: "gap values, mechanism class, F-family, pipeline layers"
+  known_failure_modes: "documented failure modes, NR references"
+  reproduce: "command to reproduce, expected output_hash (sha256)"
+  paper_reference: "figure/section in paper"

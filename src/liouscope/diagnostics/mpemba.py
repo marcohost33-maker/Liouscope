@@ -8,6 +8,17 @@ the system relaxes anomalously fast (Mpemba candidate).
 D20 -- :func:`expansion_alpha`. Scaling exponent of overlap coefficients
 ``|c_n|`` against the index n. Polynomial scaling ``Phi_n ~ exp(alpha L)``
 signals overlap-amplification (F1).
+
+.. caveat::
+
+    Strong quantum Mpemba effect is **highly sensitive to preparation
+    errors** (Mackinnon & Paternostro, New J. Phys. 28, 2026; NR-159). Even a
+    small deviation of the prepared state from the ``c_1 = 0`` direction
+    causes the asymptotic decay to revert to the gap-dominated rate. The
+    classifier therefore requires both an extremely small ``overlap_c1``
+    (below ``1e-5`` for high-confidence A11) **and** a clean initial-state
+    sensitivity score from :func:`liouscope.diagnostics.lep.initial_state_sensitivity`
+    before promoting a verdict to ``CONFIRMED``.
 """
 
 from __future__ import annotations

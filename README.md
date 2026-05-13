@@ -3,25 +3,36 @@
 **LiouScope: Beyond the Liouvillian Gap -- Multi-Diagnostic Relaxation Analysis
 for Open Quantum Lattice Systems.**
 
-Open-source diagnostic framework for time-homogeneous Markovian open quantum
-systems described by Gorini-Kossakowski-Sudarshan-Lindblad (GKSL) generators.
-LiouScope quantifies when and why the Liouvillian gap `Delta` fails as a
-relaxation-time predictor, providing twenty diagnostics, a twelve-class
-mechanism taxonomy, and a reproducibility manifest.
+Release-ready diagnostic framework for **finite-dimensional time-homogeneous
+Markovian** open quantum systems (**GKSL / QMS**, i.e. Gorini-Kossakowski-
+Sudarshan-Lindblad quantum Markov semigroups). LiouScope quantifies when and
+why the Liouvillian gap `Delta` fails as a relaxation-time predictor,
+providing twenty diagnostics, a twelve-class mechanism taxonomy, and a
+reproducibility manifest.
+
+> **Release status.** Engineering release-ready (P0 evidence lock PASS). The
+> public open-source release is pending: see `LIOUSCOPE_RELEASE_CHECKLIST.md`
+> for the remaining gates (GitHub release tag, PyPI Trusted Publishing,
+> Zenodo DOI, optional SWHID per ISO/IEC 18670:2025).
 
 ## What LiouScope does (and does not) do
 
 In scope:
-- Finite-dimensional Markovian quantum lattice systems in the GKSL framework.
+- Finite-dimensional Markovian quantum lattice systems in the GKSL / QMS
+  framework.
 - Relaxation and gap-failure diagnostics (twenty diagnostics, six layers).
 - Mechanism classification A1-A12 covering Mori-Shirai overlap, Liouvillian
   skin effect, symmetrised gap, quantum Mpemba effect and phantom relaxation.
 - Geometry-resolved benchmarking on four lattices (1D chain, 2D square,
   honeycomb, triangular) and four Hamiltonians (Ising, XY, Heisenberg-XXZ,
-  truncated Bose-Hubbard).
+  truncated Bose-Hubbard). Concrete entries are listed in
+  `LIOUSCOPE_BENCHMARK_MANIFEST.yaml` (BM-001..BM-003); run them via
+  `python benchmarks/run.py BM-001`.
 - Three dissipator families (bulk, boundary, engineered).
 
-Out of scope:
+Out of scope (deferred to roadmaps):
+- **Periodically-driven (Floquet) Liouvillians** -- planned as a separate
+  module (`liouscope_floquet`); see `ROADMAP_FLOQUET.md`.
 - Non-Markovian dynamics (no time-convolutionless or memory-kernel methods).
 - Floquet open dynamics.
 - Thermodynamic-limit theorems (LiouScope is a finite-size diagnostic).
@@ -112,6 +123,34 @@ print(f"Run ID (SHA-256 prefix)      = {report.governance.run_id[:16]}")
 | A10 | Phantom relaxation | F5 | Znidaric arXiv:2306.07876 (2023) |
 | A11 | Non-normal Mpemba | F4 | MDPI Entropy 27, 581 (2025) |
 | A12 | Mixed / unresolved | -- | -- |
+
+> **Caveat on A11 (quantum Mpemba).** Strong quantum Mpemba is sensitive to
+> preparation errors: small deviations from the ``c_1 = 0`` direction restore
+> the gap-dominated decay (Mackinnon & Paternostro, *New J. Phys.* **28**
+> (2026); NR-159 in `LIOUSCOPE_NEGATIVE_RESULTS_REGISTER.md`). The classifier
+> demotes an A11 verdict whenever the initial-state-sensitivity score from
+> `diagnostics.lep.initial_state_sensitivity` is too high.
+
+### Documents shipped in this repository
+
+| File | Purpose |
+|---|---|
+| `LIOUSCOPE_RELEASE_EVIDENCE_MANIFEST.yaml` | top-level evidence manifest v1.3 with canon locks and Drive attestations |
+| `LIOUSCOPE_EVIDENCE_LOCK_REGISTER.csv` | 30 P0/P1/P2 gates G01..G30 |
+| `LIOUSCOPE_DRIVE_ATTESTATION.csv` | Drive-IDs + raw SHA-256 of canonical Drive artefacts |
+| `LIOUSCOPE_RELEASE_CHECKLIST.md` | P0..P5 release-readiness checklist |
+| `LIOUSCOPE_BENCHMARK_MANIFEST.yaml` | concrete benchmark entries BM-001..BM-003 |
+| `LIOUSCOPE_NEGATIVE_RESULTS_REGISTER.md` | NR-001..NR-202 anti-regression log |
+| `ROADMAP_FLOQUET.md` | post-v0.2.0 Floquet roadmap |
+| `SECURITY.md` | coordinated disclosure |
+| `REPRODUCIBILITY.md` | SHA-256 run-id contract |
+| `CONTRIBUTING.md` | dev workflow |
+| `CODE_OF_CONDUCT.md` | Contributor Covenant 2.1 |
+
+The paper LaTeX source and the arXiv v5 bundle live on Drive in folder
+`0LS6` (`paper1_v10.tex`, `reproduce_paper.py`, `SUBMISSION_CHECKLIST.md`,
+`liouscope_arxiv_v5.tar.gz`); see the `verified_drive_artifacts` block in
+`LIOUSCOPE_RELEASE_EVIDENCE_MANIFEST.yaml`.
 
 ## Reproducibility
 

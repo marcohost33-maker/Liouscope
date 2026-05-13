@@ -90,6 +90,38 @@ def v3_amplitude_damped_qubit(gamma: float = 0.5) -> System:
     )
 
 
+def v1b_thermal_qutrit(beta: float = 1.0, omega: float = 1.0) -> System:
+    """Detailed-balance thermal qutrit: ``H = diag(0, omega, 2*omega)`` driven by
+    nearest-neighbour thermal transitions satisfying the KMS condition.
+
+    Matches the BM-003 entry in ``LIOUSCOPE_BENCHMARK_MANIFEST.yaml``. The KMS
+    gap should exceed the GNS gap by ~ 41% for ``beta = omega = 1``, providing
+    a regression target for the Alicki adjoint correction (anchor C).
+    """
+    H = np.diag([0.0, omega, 2.0 * omega]).astype(complex)
+    # Two raising/lowering ladders: 0<->1 and 1<->2.
+    g_down = 1.0
+    g_up = float(np.exp(-beta * omega))
+    sigma_minus_01 = np.zeros((3, 3), dtype=complex)
+    sigma_minus_01[0, 1] = 1.0
+    sigma_plus_01 = sigma_minus_01.conj().T
+    sigma_minus_12 = np.zeros((3, 3), dtype=complex)
+    sigma_minus_12[1, 2] = 1.0
+    sigma_plus_12 = sigma_minus_12.conj().T
+    jumps = [sigma_minus_01, sigma_plus_01, sigma_minus_12, sigma_plus_12]
+    rates = [g_down, g_up, g_down, g_up]
+    L = build_liouvillian(H, jumps, rates)
+    # Excited initial state to drive non-trivial relaxation.
+    rho0 = np.zeros((3, 3), dtype=complex)
+    rho0[2, 2] = 1.0
+    return System(
+        name="V1b-thermal-qutrit",
+        L=L,
+        rho_initial=rho0,
+        description=f"Detailed-balance thermal qutrit (BM-003), beta={beta}, omega={omega}",
+    )
+
+
 def v4_thermal_two_level(beta: float = 1.0, omega: float = 1.0) -> System:
     """Thermal two-level detailed-balance system (V4)."""
     _, _, _, sz = _pauli()
@@ -160,6 +192,7 @@ __all__ = [
     "System",
     "all_systems",
     "v1_qutrit",
+    "v1b_thermal_qutrit",
     "v2_dephasing_qubit",
     "v3_amplitude_damped_qubit",
     "v4_thermal_two_level",

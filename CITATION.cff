@@ -1,6 +1,8 @@
 cff-version: 1.2.0
-title: "LiouScope: Multi-Diagnostic Relaxation Analysis for Open Quantum Lattice Systems"
-message: "If you use this software, please cite it as below."
+title: "LiouScope: Beyond the Liouvillian Gap"
+message: >-
+  If you use this software, please cite it using the metadata from this file
+  together with the references block below.
 type: software
 authors:
   - name: "Coworker Research / Coworkerz"
@@ -10,27 +12,64 @@ license: Apache-2.0
 repository-code: "https://github.com/coworker-research/liouscope"
 url: "https://github.com/coworker-research/liouscope"
 abstract: >-
-  LiouScope is an open-source diagnostic framework for time-homogeneous
-  Markovian open quantum systems described by Gorini-Kossakowski-Sudarshan-
-  Lindblad (GKSL) generators. It quantifies when and why the Liouvillian gap
-  fails as a relaxation-time predictor, providing twenty diagnostics (D1-D20)
-  organised in six layers (Spectral, Non-normality, Relaxation, Uncertainty,
-  Classification, Governance) and a twelve-class mechanism taxonomy A1-A12.
+  LiouScope is a multi-diagnostic relaxation analysis framework for
+  finite-dimensional time-homogeneous Markovian open quantum lattice systems
+  (GKSL / QMS). It quantifies when and why the Liouvillian gap fails as a
+  relaxation-time predictor, providing twenty diagnostics (D1-D20) organised in
+  six layers S/N/R/U/C/G and a twelve-class mechanism taxonomy A1-A12.
 keywords:
   - open quantum systems
+  - Liouvillian
   - Lindblad
-  - Liouvillian gap
+  - GKSL
+  - QMS
+  - relaxation
+  - spectral gap
+  - non-normality
   - Mpemba effect
-  - non-normal dynamics
-  - pseudospectrum
-  - quantum relaxation
+  - quantum simulation
+  - reproducibility
 identifiers:
   - type: doi
     value: "TODO-ZENODO-DOI"
-    description: "Zenodo DOI for the archived software release, populated on first GitHub release."
+    description: "Zenodo DOI for the archived software release; populated on first GitHub release."
   - type: swh
     value: "TODO-SWHID"
-    description: "Software Heritage Identifier (ISO/IEC 18670:2025), populated after archive submission."
+    description: "Software Heritage Identifier (ISO/IEC 18670:2025); populated after archive submission."
+references:
+  - type: article
+    title: "Symmetrized Liouvillian Gap in Markovian Open Quantum Systems"
+    authors:
+      - family-names: Mori
+        given-names: Takashi
+      - family-names: Shirai
+        given-names: Tatsuhiko
+    journal: "Physical Review Letters"
+    volume: 130
+    pages: "230404"
+    year: 2023
+    doi: "10.1103/PhysRevLett.130.230404"
+  - type: article
+    title: "Universal Predictors for Mixing Time more than Liouvillian Gap"
+    authors:
+      - family-names: Zhou
+        given-names: Yi-Neng
+    year: 2026
+    url: "https://arxiv.org/abs/2601.06256"
+  - type: article
+    title: "Effective (Floquet) Lindblad generators from spectral unwinding"
+    authors:
+      - family-names: Dinc
+        given-names: "Goerkem D."
+      - family-names: Eckardt
+        given-names: "Andre"
+      - family-names: Schnell
+        given-names: "Alexander"
+    journal: "Physical Review A"
+    volume: 111
+    pages: "062216"
+    year: 2025
+    doi: "10.1103/x2qh-12gg"
 preferred-citation:
   type: article
   authors:
