@@ -68,6 +68,7 @@ def _gather_evidence(
     ev["trans_amplitude_ratio"] = float(transient.trans_amplitude_ratio)
     ev["lep_proximity"] = float(lep.lep_proximity)
     ev["gap_rate_consistency"] = float(lep.gap_rate_consistency)
+    ev["initial_state_sensitivity"] = float(lep.initial_state_sensitivity)
     ev["resolvent_peak"] = float(resolvent.resolvent_peak)
     ev["pseudospectral_radius"] = float(resolvent.pseudospectral_radius)
     if mpemba is not None:
@@ -76,14 +77,31 @@ def _gather_evidence(
     return ev
 
 
+# Initial-state-sensitivity threshold for the Mackinnon-Paternostro 2026
+# Mpemba-fragility demotion. Higher sensitivity == the speed-up evaporates
+# under preparation errors, so the A11 verdict is no longer trustworthy.
+MPEMBA_SENSITIVITY_THRESHOLD: float = 0.05
+
+
 def _pick_a_class(
     ev: dict[str, float],
     *,
     relaxation: RelaxationResult,
 ) -> tuple[str, str]:
-    """Return ``(a_class, f_family)`` based on evidence priorities."""
-    # F4 Mpemba check first (high salience for current literature risk)
+    """Return ``(a_class, f_family)`` based on evidence priorities.
+
+    A11 (non-normal Mpemba) demotion: Mackinnon & Paternostro
+    (New J. Phys. 28, 2026; NR-159) showed that the strong quantum Mpemba
+    effect collapses under small preparation errors. We therefore demote
+    an A11 verdict to A12 whenever the initial-state-sensitivity score
+    exceeds :data:`MPEMBA_SENSITIVITY_THRESHOLD`, even if ``c_1`` is below
+    the overlap threshold.
+    """
+    # F4 Mpemba check first (high salience for current literature risk).
     if ev.get("mpemba_overlap_c1", 1.0) < 1.0e-4:
+        if ev.get("initial_state_sensitivity", 0.0) > MPEMBA_SENSITIVITY_THRESHOLD:
+            # Fragile candidate -- demote to A12 (mixed / unresolved).
+            return "A12", "none"
         return "A11", "F4"
     # F5 phantom relaxation
     if ev["pseudospectral_radius"] > 2.0 * ev.get("gap_to_gns_ratio", 1.0) and ev["henrici_eta"] > 1.0:

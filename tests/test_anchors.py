@@ -17,10 +17,9 @@ from liouscope import (
     diagnose,
     steady_state,
 )
-from liouscope.diagnostics.spectral import _gram_gns
 from liouscope.fitting.aicc import aicc
 from liouscope.fitting.neff import estimate_neff_geyer
-from liouscope.numerics.adjoint import alicki_adjoint, hs_adjoint
+from liouscope.numerics.adjoint import alicki_adjoint, gram_matrix, hs_adjoint
 from liouscope.numerics.kronecker import unvec, vec
 from liouscope.numerics.linalg import eig_nonhermitian, support_check
 
@@ -49,13 +48,27 @@ def test_anchor_A_build_liouvillian_rejects_row_stacking():
         build_liouvillian(np.eye(2, dtype=complex), [], None, order="C")  # type: ignore[arg-type]
 
 
-# Anchor B: GNS Gram is rho_ss.T (x) I, NOT KMS form.
+# Anchor B: GNS Gram is rho_ss (x) I in column-stacking convention.
 def test_anchor_B_gns_gram_form():
     rho = np.diag([0.6, 0.3, 0.1]).astype(complex)
-    G = _gram_gns(rho)
-    # KMS gram would have rho^{1/2} on both sides.
-    G_expected = np.kron(rho.T, np.eye(3, dtype=complex))
+    G = gram_matrix(rho, metric="gns")
+    G_expected = np.kron(rho, np.eye(3, dtype=complex))
     np.testing.assert_allclose(G, G_expected, atol=1e-12)
+
+
+def test_anchor_B_kms_gram_distinct_from_gns():
+    """The KMS Gram matrix differs from the GNS Gram for non-uniform rho_ss."""
+    rho = np.diag([0.7, 0.2, 0.1]).astype(complex)
+    G_gns = gram_matrix(rho, metric="gns")
+    G_kms = gram_matrix(rho, metric="kms")
+    assert not np.allclose(G_gns, G_kms, atol=1e-9), (
+        "GNS and KMS Gram matrices must differ for non-trivial rho_ss"
+    )
+    # KMS Gram is sqrt(rho) (x) sqrt(rho).conj(); for real diagonal rho the
+    # two factors collapse to identical real-diagonal matrices.
+    sqrt_rho = np.diag(np.sqrt(np.diag(rho)).real).astype(complex)
+    G_kms_expected = np.kron(sqrt_rho, sqrt_rho.conj())
+    np.testing.assert_allclose(G_kms, G_kms_expected, atol=1e-12)
 
 
 # Anchor C: Alicki adjoint direction.
@@ -75,6 +88,18 @@ def test_anchor_C_alicki_direction_nontrivial_rho():
     assert not np.allclose(L_adj, expected_reversed, atol=1e-6), (
         "Forward and reversed Alicki adjoint must differ for non-trivial rho_ss; "
         "this is the T17 hardening regression."
+    )
+
+
+def test_anchor_C_alicki_kms_branch_differs_from_gns_on_coherences():
+    """KMS pi-adjoint differs from GNS pi-adjoint when L touches coherences."""
+    rho_ss = np.diag([0.7, 0.3]).astype(complex)
+    rng = np.random.default_rng(11)
+    L = rng.standard_normal((4, 4)) + 1j * rng.standard_normal((4, 4))
+    L_gns = alicki_adjoint(L, rho_ss, metric="gns")
+    L_kms = alicki_adjoint(L, rho_ss, metric="kms")
+    assert not np.allclose(L_gns, L_kms, atol=1e-9), (
+        "GNS and KMS pi-adjoints must differ for a generic L with non-trivial rho_ss"
     )
 
 

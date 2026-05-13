@@ -17,8 +17,8 @@
 PYTHON ?= python3
 PIP    ?= $(PYTHON) -m pip
 
-.PHONY: install test anchors lint typecheck reproduce figures build check-dist \
-        validate-pyproject precommit clean help
+.PHONY: install test anchors lint typecheck reproduce figures benchmarks build \
+        check-dist validate-pyproject precommit clean help
 
 help:
 	@grep -E '^[a-zA-Z_-]+:.*##' Makefile | awk -F'##' '{printf "  %-20s %s\n", $$1, $$2}'
@@ -40,6 +40,13 @@ typecheck: ## mypy src/liouscope
 
 reproduce: ## Run reproduce_paper benchmark
 	$(PYTHON) benchmarks/reproduce_paper.py
+
+benchmarks: ## Run every benchmark entry from LIOUSCOPE_BENCHMARK_MANIFEST.yaml
+	@mkdir -p benchmarks/output
+	@for bm in BM-001 BM-002 BM-003 BM-003b; do \
+		echo ">>> $$bm"; \
+		$(PYTHON) benchmarks/run.py $$bm --output benchmarks/output/$$bm.json || exit 1; \
+	done
 
 figures: ## Generate the three paper figures
 	$(PYTHON) -m figures.generate_all

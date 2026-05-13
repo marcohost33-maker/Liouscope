@@ -26,21 +26,6 @@ from ..numerics.adjoint import gram_matrix, symmetrised_liouvillian
 from ..numerics.linalg import eig_nonhermitian
 
 
-def _gram_gns(rho: np.ndarray) -> np.ndarray:
-    """``G_GNS = rho.T (x) I``. Anchor B."""
-    d = rho.shape[0]
-    eye = np.eye(d, dtype=rho.dtype)
-    return np.kron(rho.T, eye)
-
-
-def _gram_kms(rho: np.ndarray) -> np.ndarray:
-    """``G_KMS = rho^{1/2}.conj() (x) rho^{1/2}``."""
-    sqrt_rho = sla.sqrtm(rho)
-    if np.iscomplexobj(rho):
-        sqrt_rho = sqrt_rho.astype(complex)
-    return np.kron(sqrt_rho.conj(), sqrt_rho)
-
-
 def _real_gap_from_symmetric(M: np.ndarray, *, atol: float = EPS_GAP) -> float:
     """Return the symmetrised gap from the Hermitian-part eigenvalues of ``M``.
 

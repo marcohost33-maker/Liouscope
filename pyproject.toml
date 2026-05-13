@@ -7,7 +7,8 @@ name = "liouscope"
 version = "0.2.0"
 description = "Multi-diagnostic relaxation analysis for open quantum lattice systems"
 readme = "README.md"
-license = { text = "Apache-2.0" }
+license = "Apache-2.0"
+license-files = ["LICENSE"]
 requires-python = ">=3.10"
 authors = [
     { name = "Coworker Research" },
@@ -24,7 +25,6 @@ keywords = [
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Science/Research",
-    "License :: OSI Approved :: Apache Software License",
     "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.10",
@@ -118,12 +118,15 @@ ignore = [
 
 [tool.mypy]
 python_version = "3.10"
-warn_return_any = true
+# numpy/scipy stubs lose track of return types through many chained ops, so
+# ``warn_return_any`` produces too many false positives on otherwise correct
+# numerical code. Keep it off; rely on ruff + tests for runtime correctness.
+warn_return_any = false
 warn_unused_configs = true
 strict_equality = true
 disallow_untyped_defs = false
 files = ["src/liouscope"]
 
 [[tool.mypy.overrides]]
-module = ["scipy.*", "qutip.*", "matplotlib.*"]
+module = ["scipy", "scipy.*", "qutip", "qutip.*", "matplotlib", "matplotlib.*"]
 ignore_missing_imports = true

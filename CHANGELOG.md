@@ -12,14 +12,59 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Evidence Pack v1.2 materialised in-repo: `SECURITY.md`,
   `REPRODUCIBILITY.md`, `LIOUSCOPE_EVIDENCE_LOCK_REGISTER.csv`,
   `LIOUSCOPE_RELEASE_EVIDENCE_MANIFEST.yaml`.
+- Drive-template integrations (2026-05-13): `LIOUSCOPE_BENCHMARK_MANIFEST.yaml`
+  (BM-001..003 + BM-003b), `ROADMAP_FLOQUET.md`,
+  `LIOUSCOPE_NEGATIVE_RESULTS_REGISTER.md` (NR-001..202), expanded
+  `CITATION.cff` references (Mori-Shirai 2023, Zhou 2026, Dinc-Eckardt-
+  Schnell 2025).
+- `examples.v1b_thermal_qutrit`: detailed-balance qutrit matching BM-003.
+- `benchmarks/run.py`: deterministic per-entry runner with SHA-256 fingerprint
+  and JSON export.
+- `make benchmarks` target running every BM-* manifest entry.
 - FAIR4RS gates: persistent identifier policy, reproducibility policy,
   archival deferral notes (SWHID ISO/IEC 18670:2025, Zenodo DOI).
-- Security gates: OpenSSF Scorecard workflow
-  (`.github/workflows/scorecard.yml`), GitHub Dependency Review action
-  (`.github/workflows/dependency-review.yml`).
-- Supply-chain hardening in `pypi.yml`: pyproject validation via
-  `validate-pyproject`, `twine check` step, TestPyPI gate via
-  `workflow_dispatch`, environment-scoped Trusted Publishing.
+- Security gates: OpenSSF Scorecard workflow, GitHub Dependency Review,
+  CodeQL, CycloneDX SBOM.
+- Supply-chain hardening in `pypi.yml`: pyproject validation,
+  `twine check`, TestPyPI dispatch gate, environment-scoped Trusted
+  Publishing.
+
+### Changed
+- `numerics.adjoint`: new `metric={"gns", "kms"}` keyword on
+  `alicki_adjoint` and `symmetrised_liouvillian`; new
+  `gram_matrix(rho, metric)` single source of truth. KMS branch now uses
+  the proper `G_KMS = rho^{1/2} (x) rho^{1/2}.conj()` Gram matrix instead
+  of the previous GNS-symmetrised generator viewed through the KMS metric.
+- `diagnostics.spectral.kms_gap`: rebuilt to use the new metric branch.
+  On a non-detailed-balance off-diagonal qutrit (BM-003b) the KMS / GNS
+  ratio is now 1.147 (was 1.000 before).
+- `diagnostics.spectral._real_gap_from_symmetric`: filters for **negative**
+  eigenvalues only. Non-detailed-balance systems can carry isolated
+  positive eigenvalues of the symmetrised generator (transient GNS-norm
+  amplification); they are not relaxation gaps and were previously
+  reported as negative numbers.
+- `diagnostics.classification`: A11 verdict now gets demoted to A12 when
+  `initial_state_sensitivity > MPEMBA_SENSITIVITY_THRESHOLD` (Mackinnon-
+  Paternostro NJP 28, 2026; NR-159). Initial-state sensitivity is added
+  to the evidence dict.
+- `pyproject.toml`: PEP 639 license expression (`license = "Apache-2.0"`,
+  `license-files = ["LICENSE"]`); old License classifier removed.
+  Wheel + sdist now pass `twine check`.
+
+### Fixed
+- `io/export.py`: narrowed `is_dataclass(value)` check to instances only
+  (mypy clean).
+- mypy now runs without errors (configuration in `pyproject.toml`).
+
+### Tests
+- 158/158 GREEN, coverage 84%.
+- New anchor tests for the KMS Gram matrix and the KMS pi-adjoint branch.
+- New regression tests in `tests/test_validation_systems/test_v1_qutrit.py`:
+  - `test_v1b_thermal_qutrit_kms_equals_gns` (DB: KMS = GNS exactly)
+  - `test_offdiagonal_qutrit_kms_above_gns` (non-DB: KMS / GNS in [1.10, 1.20])
+- New end-to-end test in `tests/test_classification.py`:
+  - `test_classifier_demotes_a11_when_sensitivity_too_high` validates
+    both the demotion path and the robust path.
 
 ## [0.2.0] -- 2026-04-17
 
