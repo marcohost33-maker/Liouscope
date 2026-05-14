@@ -39,6 +39,7 @@ from ._types import (
     UncertaintyResult,
 )
 from ._version import __version__
+from .diagnostics.classification import MPEMBA_SENSITIVITY_THRESHOLD
 from .io.seed import seed_everything
 
 __all__ = [
@@ -47,6 +48,7 @@ __all__ = [
     "DIAGNOSTIC_SCHEMA_VERSION",
     "F_FAMILIES",
     "F_FAMILY_DESCRIPTIONS",
+    "MPEMBA_SENSITIVITY_THRESHOLD",
     "TAXONOMY_VERSION",
     "ClassificationResult",
     "DiagnosticReport",

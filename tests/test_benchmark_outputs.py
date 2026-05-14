@@ -2,8 +2,9 @@
 
 Each ``benchmarks/golden/BM-NNN.json`` snapshot was produced by
 ``python benchmarks/run.py BM-NNN``. The tests re-run the benchmark with
-the same seed and compare the resulting JSON byte-for-byte (after
-loading) against the golden file. Any drift means either:
+the same seed (writing through ``--output`` to a temp file, then loading
+the JSON directly so we are not parsing stdout) and compare the result
+against the golden file. Any drift means either:
 
   - a deliberate numerical change (then bump the golden file in the same
     PR as the code change), or
@@ -15,6 +16,7 @@ from __future__ import annotations
 import json
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -33,62 +35,94 @@ BENCHMARKS = ["BM-001", "BM-002", "BM-003", "BM-003b"]
 
 
 def _run_benchmark(bm_id: str) -> dict:
-    """Run ``benchmarks/run.py`` and extract the JSON payload.
+    """Re-run ``benchmarks/run.py`` and read the canonical JSON payload.
 
-    The runner writes "Running ...", then a pretty-printed JSON object,
-    then "SHA-256: <hash>" on the last non-empty line. We extract
-    everything between the first ``{`` and the ``SHA-256:`` line, which is
-    robust to nested JSON objects (multi-line ``"rows": [...]``).
+    Writes through ``--output`` to a temp file so we never have to parse
+    the runner's stdout (which mixes a "Running..." header with the JSON
+    body and a trailing ``SHA-256:`` marker).
     """
-    result = subprocess.run(
-        [sys.executable, str(RUNNER), bm_id],
-        capture_output=True,
-        text=True,
-        cwd=str(REPO_ROOT),
-        check=True,
-    )
-    lines = result.stdout.splitlines()
-    start = next(i for i, line in enumerate(lines) if line.strip().startswith("{"))
-    # The first line that starts with "SHA-256:" terminates the JSON block.
-    sha_idx = next(
-        (i for i in range(start, len(lines)) if lines[i].strip().startswith("SHA-256:")),
-        len(lines),
-    )
-    # The closing ``}`` is the last non-empty line before the SHA-256 marker.
-    end = next(
-        i for i in range(sha_idx - 1, start - 1, -1) if lines[i].strip() == "}"
-    )
-    return json.loads("\n".join(lines[start : end + 1]))
+    with tempfile.NamedTemporaryFile(
+        mode="w+", suffix=".json", delete=False, encoding="utf-8"
+    ) as fh:
+        out_path = Path(fh.name)
+    try:
+        proc = subprocess.run(
+            [sys.executable, str(RUNNER), bm_id, "--output", str(out_path)],
+            capture_output=True,
+            text=True,
+            cwd=str(REPO_ROOT),
+            check=False,
+        )
+        if proc.returncode != 0:
+            pytest.fail(
+                f"runner failed for {bm_id} (rc={proc.returncode}):\n"
+                f"--- stdout ---\n{proc.stdout[-2000:]}\n"
+                f"--- stderr ---\n{proc.stderr[-2000:]}\n"
+            )
+        return json.loads(out_path.read_text(encoding="utf-8"))
+    finally:
+        out_path.unlink(missing_ok=True)
 
 
-def _compare(observed: dict, golden: dict, path: str = "") -> None:
-    """Recursive deep-compare with per-numeric tolerance."""
-    assert isinstance(observed, type(golden)) or (
-        isinstance(observed, (int, float)) and isinstance(golden, (int, float))
-    ), f"type mismatch at {path}: {type(observed)} vs {type(golden)}"
+def _compare(observed, golden, path: str = "") -> None:
+    """Recursive deep-compare with per-numeric tolerance.
 
+    Note: bool is **not** treated as a numeric type even though
+    ``isinstance(True, int)`` is True in Python. This prevents
+    ``True``/``1`` and ``False``/``0`` from being silently accepted as
+    equivalent in the comparison.
+    """
+    # Bool first, before int, because bool is a subclass of int.
+    if isinstance(golden, bool) or isinstance(observed, bool):
+        assert isinstance(observed, bool) and isinstance(golden, bool), (
+            f"bool/int conflation at {path}: "
+            f"{type(observed).__name__} vs {type(golden).__name__}"
+        )
+        assert observed == golden, f"bool mismatch at {path}: {observed} vs {golden}"
+        return
     if isinstance(golden, dict):
+        assert isinstance(observed, dict), (
+            f"type mismatch at {path}: {type(observed).__name__} vs dict"
+        )
         assert set(observed) == set(golden), (
-            f"key set mismatch at {path}: "
-            f"{set(observed) ^ set(golden)}"
+            f"key set mismatch at {path}: {set(observed) ^ set(golden)}"
         )
         for k in golden:
             _compare(observed[k], golden[k], f"{path}.{k}" if path else k)
-    elif isinstance(golden, list):
+        return
+    if isinstance(golden, list):
+        assert isinstance(observed, list), (
+            f"type mismatch at {path}: {type(observed).__name__} vs list"
+        )
         assert len(observed) == len(golden), (
             f"length mismatch at {path}: {len(observed)} vs {len(golden)}"
         )
         for i, (o, g) in enumerate(zip(observed, golden, strict=True)):
             _compare(o, g, f"{path}[{i}]")
-    elif isinstance(golden, float):
-        assert abs(observed - golden) <= TOLERANCE, (
+        return
+    if isinstance(golden, float):
+        assert isinstance(observed, (int, float)) and not isinstance(observed, bool), (
+            f"type mismatch at {path}: {type(observed).__name__} vs float"
+        )
+        assert abs(float(observed) - golden) <= TOLERANCE, (
             f"float drift at {path}: {observed} vs golden {golden} "
             f"(|delta| > {TOLERANCE})"
         )
-    elif isinstance(golden, (int, str, bool)) or golden is None:
+        return
+    if isinstance(golden, int):
+        assert isinstance(observed, int) and not isinstance(observed, bool), (
+            f"type mismatch at {path}: {type(observed).__name__} vs int"
+        )
+        assert observed == golden, (
+            f"int mismatch at {path}: {observed} vs {golden}"
+        )
+        return
+    if isinstance(golden, str) or golden is None:
         assert observed == golden, (
             f"value mismatch at {path}: {observed!r} vs {golden!r}"
         )
+        return
+    pytest.fail(f"unsupported comparison type at {path}: {type(golden).__name__}")
 
 
 @pytest.mark.slow

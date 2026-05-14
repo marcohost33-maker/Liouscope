@@ -14,8 +14,14 @@ import sys
 from pathlib import Path
 
 # -- Path setup --------------------------------------------------------------
+# We rely on the package being pip-installed (editable or wheel). The
+# ``sys.path`` shim is kept only as a safety net for ad-hoc builds where
+# the user invokes ``sphinx-build docs/`` without ``pip install -e .``;
+# in CI and on ReadTheDocs the install always happens first.
 ROOT = Path(__file__).resolve().parent.parent
-sys.path.insert(0, str(ROOT / "src"))
+_src = ROOT / "src"
+if _src.is_dir() and str(_src) not in sys.path:
+    sys.path.insert(0, str(_src))
 
 # -- Project information -----------------------------------------------------
 project = "LiouScope"

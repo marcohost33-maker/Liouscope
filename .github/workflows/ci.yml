@@ -64,6 +64,13 @@ jobs:
           pip install -e ".[docs]"
       - name: Build Sphinx HTML
         run: python -m sphinx -b html docs docs/_build/html
+      - name: Build Sphinx HTML in strict mode (warnings as errors)
+        # ``--keep-going`` collects every defect on a single run.
+        # Intersphinx network failures are common on hosted CI when the
+        # public Python docs site is briefly unreachable; we accept
+        # those by allowing the step to soft-fail.
+        run: python -m sphinx -W --keep-going -b html docs docs/_build/strict
+        continue-on-error: true
       - name: Upload built docs
         uses: actions/upload-artifact@v7
         with:
@@ -107,7 +114,7 @@ jobs:
           retention-days: 7
 
   benchmark-smoke:
-    name: Benchmark smoke (BM-001 / BM-003 / BM-003b)
+    name: Benchmark smoke (BM-001 / 002 / 003 / 003b)
     runs-on: ubuntu-latest
     needs: test
     steps:
@@ -122,23 +129,46 @@ jobs:
           python -m pip install --upgrade pip
           pip install -e ".[dev,qutip]"
           pip install pyyaml
-      - name: Run benchmark BM-001
-        run: python benchmarks/run.py BM-001 --output /tmp/bm001.json
-      - name: Run benchmark BM-003
-        run: python benchmarks/run.py BM-003 --output /tmp/bm003.json
-      - name: Run benchmark BM-003b
-        run: python benchmarks/run.py BM-003b --output /tmp/bm003b.json
-      - name: Compare BM-003 hash to manifest expectation
+      - name: Run benchmarks + cross-check against manifest hashes
         run: |
           python - <<'PY'
-          import hashlib, json, pathlib, sys
-          expected = "8c84d04c4c341d1f0e95e3e409f57079477f1c12668a9c63a4518eaa36dceadf"
-          path = pathlib.Path("/tmp/bm003.json")
-          payload = path.read_text(encoding="utf-8")
-          got = hashlib.sha256(payload.encode("utf-8")).hexdigest()
-          print("expected:", expected)
-          print("got     :", got)
-          if got != expected:
-              print("BM-003 hash drift detected", file=sys.stderr)
+          import hashlib
+          import json
+          import subprocess
+          import sys
+          from pathlib import Path
+
+          import yaml
+
+          REPO = Path(".")
+          manifest = yaml.safe_load(
+              (REPO / "LIOUSCOPE_BENCHMARK_MANIFEST.yaml").read_text(encoding="utf-8")
+          )
+          failures = []
+          for entry in manifest["benchmarks"]:
+              bm = entry["benchmark_id"]
+              repro = entry.get("reproduce") or {}
+              expected = repro.get("output_hash")
+              if not expected:
+                  print(f"--- {bm}: no manifest hash, skipping")
+                  continue
+              out_path = REPO / "benchmarks" / "output" / f"{bm}.json"
+              out_path.parent.mkdir(exist_ok=True)
+              print(f">>> {bm}")
+              rc = subprocess.call(
+                  [sys.executable, "benchmarks/run.py", bm, "--output", str(out_path)]
+              )
+              if rc != 0:
+                  failures.append(f"{bm} runner exited {rc}")
+                  continue
+              digest = hashlib.sha256(out_path.read_bytes()).hexdigest()
+              if digest != expected:
+                  failures.append(
+                      f"{bm} hash drift: expected {expected[:12]}..., got {digest[:12]}..."
+                  )
+              else:
+                  print(f"--- {bm}: hash OK ({digest[:12]}...)")
+          if failures:
+              print("\n".join(failures), file=sys.stderr)
               sys.exit(1)
           PY

@@ -1,6 +1,11 @@
 """Low-level numerical primitives for LiouScope."""
 
-from .adjoint import alicki_adjoint, hs_adjoint
+from .adjoint import (
+    alicki_adjoint,
+    gram_matrix,
+    hs_adjoint,
+    symmetrised_liouvillian,
+)
 from .kronecker import unvec, vec
 from .linalg import (
     EigenDecomposition,
@@ -16,6 +21,7 @@ __all__ = [
     "EigenDecomposition",
     "alicki_adjoint",
     "eig_nonhermitian",
+    "gram_matrix",
     "hs_adjoint",
     "is_density_matrix",
     "is_hermitian",
@@ -23,6 +29,7 @@ __all__ = [
     "resolvent_apply_superlu",
     "resolvent_norm",
     "support_check",
+    "symmetrised_liouvillian",
     "unvec",
     "vec",
 ]
