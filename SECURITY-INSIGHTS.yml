@@ -16,7 +16,7 @@ project-lifecycle:
   status: active
   bug-fixes-only: false
   core-maintainers:
-    - "https://github.com/coworker-research"
+    - "https://github.com/marcohost33-maker"
   release-cycle: "https://github.com/marcohost33-maker/Liouscope/releases"
   release-process: |
     Releases follow Semantic Versioning. Each tagged release triggers the

@@ -76,4 +76,6 @@ preferred-citation:
     - name: "Coworker Research / Coworkerz"
   title: "Beyond the Liouvillian Gap: Multi-Diagnostic Relaxation Analysis for Open Quantum Lattice Systems"
   year: 2026
-  url: "https://arxiv.org/abs/marcohost33-maker/Liouscope"
+  # TODO: populate with the arXiv identifier once the v5 submission is
+  # indexed (currently shipped as ``liouscope_arxiv_v5.tar.gz`` on Drive).
+  notes: "arXiv identifier pending; bundle = liouscope_arxiv_v5.tar.gz"
