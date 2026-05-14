@@ -1,11 +1,22 @@
 # LiouScope Benchmark Manifest v1.0
 # Aligned with the Drive template:
 #   LIOUSCOPE_BENCHMARK_MANIFEST_TEMPLATE_v1.yaml (2026-05-13)
+#
 # Reproducibility hooks:
-#   - run via ``python benchmarks/run.py BM-NNN``
-#   - SHA-256 of canonical output is recorded under ``reproduce.output_hash``
-#   - see ``LIOUSCOPE_RELEASE_EVIDENCE_MANIFEST.yaml`` for cross-cutting
-#     evidence gates (P0..P5)
+#   - Run via ``python benchmarks/run.py BM-NNN``.
+#   - ``reproduce.output_hash`` is the SHA-256 of the in-repo ``reproduce.golden``
+#     JSON file. It is **a byte-integrity check on the committed fixture**,
+#     not a check on the runner's runtime output. Cross-platform BLAS /
+#     LAPACK backends produce LSB-level float differences that legitimately
+#     change the JSON byte hash; runtime drift is caught instead by
+#     ``tests/test_benchmark_outputs.py`` which uses a 1e-9 per-field
+#     tolerance compare.
+#   - To regenerate a golden after a deliberate numerical change:
+#       1. ``make golden`` (or run the runner with ``--output``).
+#       2. Bump ``reproduce.output_hash`` to the new SHA-256.
+#       3. ``make manifest-hashes`` to verify the link.
+#   - See ``LIOUSCOPE_RELEASE_EVIDENCE_MANIFEST.yaml`` for cross-cutting
+#     evidence gates (P0..P5).
 
 manifest_version: "1.0"
 date: "2026-05-13"

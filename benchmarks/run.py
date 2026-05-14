@@ -10,6 +10,18 @@ The runner only depends on the standard library plus NumPy + SciPy. If
 ``PyYAML`` is installed it is used to parse the manifest; otherwise a
 minimal ``yaml``-like loader runs against the well-known structure of the
 manifest file.
+
+.. caveat:: cross-platform float reproducibility
+
+    The ``SHA-256:`` line printed at the end of every run is a byte hash
+    of the canonical JSON. It is **bit-stable on the same machine** but
+    **not across BLAS / LAPACK backends** (OpenBLAS, MKL, Accelerate).
+    For runtime regression checks across CI runners use the per-field
+    tolerance compare in ``tests/test_benchmark_outputs.py`` (TOLERANCE
+    = 5e-6 by default) rather than comparing SHA-256 of the JSON output.
+    The manifest's ``reproduce.output_hash`` therefore points at the
+    in-repo golden file (which is byte-stable) and not at the runtime
+    output.
 """
 
 from __future__ import annotations
