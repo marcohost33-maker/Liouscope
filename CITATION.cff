@@ -9,8 +9,8 @@ authors:
 version: "0.2.0"
 date-released: "2026-05-10"
 license: Apache-2.0
-repository-code: "https://github.com/coworker-research/liouscope"
-url: "https://github.com/coworker-research/liouscope"
+repository-code: "https://github.com/marcohost33-maker/Liouscope"
+url: "https://github.com/marcohost33-maker/Liouscope"
 abstract: >-
   LiouScope is a multi-diagnostic relaxation analysis framework for
   finite-dimensional time-homogeneous Markovian open quantum lattice systems
@@ -76,4 +76,4 @@ preferred-citation:
     - name: "Coworker Research / Coworkerz"
   title: "Beyond the Liouvillian Gap: Multi-Diagnostic Relaxation Analysis for Open Quantum Lattice Systems"
   year: 2026
-  url: "https://arxiv.org/abs/coworker-research/liouscope"
+  url: "https://arxiv.org/abs/marcohost33-maker/Liouscope"

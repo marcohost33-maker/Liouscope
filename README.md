@@ -166,7 +166,7 @@ version, dependency versions, seed, and quality tier. Use
   title  = {LiouScope: Multi-Diagnostic Relaxation Analysis for Open Quantum Lattice Systems},
   author = {{Coworker Research}},
   year   = {2026},
-  url    = {https://github.com/coworker-research/liouscope},
+  url    = {https://github.com/marcohost33-maker/Liouscope},
   version = {0.2.0},
   license = {Apache-2.0}
 }

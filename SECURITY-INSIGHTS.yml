@@ -7,17 +7,17 @@ header:
   expiration-date: "2027-05-14T00:00:00Z"
   last-updated: "2026-05-14"
   last-reviewed: "2026-05-14"
-  project-url: "https://github.com/coworker-research/liouscope"
+  project-url: "https://github.com/marcohost33-maker/Liouscope"
   project-release: "0.2.0"
-  changelog: "https://github.com/coworker-research/liouscope/blob/main/CHANGELOG.md"
-  license: "https://github.com/coworker-research/liouscope/blob/main/LICENSE"
+  changelog: "https://github.com/marcohost33-maker/Liouscope/blob/main/CHANGELOG.md"
+  license: "https://github.com/marcohost33-maker/Liouscope/blob/main/LICENSE"
 
 project-lifecycle:
   status: active
   bug-fixes-only: false
   core-maintainers:
     - "https://github.com/coworker-research"
-  release-cycle: "https://github.com/coworker-research/liouscope/releases"
+  release-cycle: "https://github.com/marcohost33-maker/Liouscope/releases"
   release-process: |
     Releases follow Semantic Versioning. Each tagged release triggers the
     pypi.yml workflow which validates pyproject.toml, builds sdist and wheel,
@@ -27,26 +27,26 @@ project-lifecycle:
 contribution-policy:
   accepts-pull-requests: true
   accepts-automated-pull-requests: true
-  contributing-policy: "https://github.com/coworker-research/liouscope/blob/main/CONTRIBUTING.md"
-  code-of-conduct: "https://github.com/coworker-research/liouscope/blob/main/CODE_OF_CONDUCT.md"
+  contributing-policy: "https://github.com/marcohost33-maker/Liouscope/blob/main/CONTRIBUTING.md"
+  code-of-conduct: "https://github.com/marcohost33-maker/Liouscope/blob/main/CODE_OF_CONDUCT.md"
 
 distribution-points:
   - "https://pypi.org/project/liouscope/"
-  - "https://github.com/coworker-research/liouscope/releases"
+  - "https://github.com/marcohost33-maker/Liouscope/releases"
 
 documentation:
-  - "https://github.com/coworker-research/liouscope/blob/main/README.md"
-  - "https://github.com/coworker-research/liouscope/blob/main/REPRODUCIBILITY.md"
+  - "https://github.com/marcohost33-maker/Liouscope/blob/main/README.md"
+  - "https://github.com/marcohost33-maker/Liouscope/blob/main/REPRODUCIBILITY.md"
   - "https://liouscope.readthedocs.io"
 
 dependencies:
   third-party-packages: true
   dependencies-lists:
-    - "https://github.com/coworker-research/liouscope/blob/main/pyproject.toml"
+    - "https://github.com/marcohost33-maker/Liouscope/blob/main/pyproject.toml"
   sbom:
-    - sbom-file: "https://github.com/coworker-research/liouscope/releases/latest/download/sbom.cdx.json"
+    - sbom-file: "https://github.com/marcohost33-maker/Liouscope/releases/latest/download/sbom.cdx.json"
       sbom-format: CycloneDX
-      sbom-url: "https://github.com/coworker-research/liouscope/blob/main/.github/workflows/sbom.yml"
+      sbom-url: "https://github.com/marcohost33-maker/Liouscope/blob/main/.github/workflows/sbom.yml"
 
 security-artifacts:
   threat-model:
@@ -84,13 +84,13 @@ security-contacts:
     value: "see CITATION.cff maintainer email"
     primary: true
   - type: url
-    value: "https://github.com/coworker-research/liouscope/security/advisories/new"
+    value: "https://github.com/marcohost33-maker/Liouscope/security/advisories/new"
     primary: false
 
 vulnerability-reporting:
   accepts-vulnerability-reports: true
   email-contact: "see CITATION.cff maintainer email"
-  security-policy: "https://github.com/coworker-research/liouscope/blob/main/SECURITY.md"
+  security-policy: "https://github.com/marcohost33-maker/Liouscope/blob/main/SECURITY.md"
   bug-bounty-available: false
   in-scope:
     - public-facing-api

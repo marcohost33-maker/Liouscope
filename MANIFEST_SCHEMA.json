@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://github.com/coworker-research/liouscope/MANIFEST_SCHEMA.json",
+  "$id": "https://github.com/marcohost33-maker/Liouscope/MANIFEST_SCHEMA.json",
   "title": "LiouScope Run Manifest",
   "description": "Reproducibility manifest emitted on every diagnose() invocation.",
   "type": "object",

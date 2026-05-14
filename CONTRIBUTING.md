@@ -6,7 +6,7 @@ develop, test and submit changes to the project.
 ## Development setup
 
 ```bash
-git clone https://github.com/coworker-research/liouscope
+git clone https://github.com/marcohost33-maker/Liouscope
 cd liouscope
 python -m venv .venv
 source .venv/bin/activate

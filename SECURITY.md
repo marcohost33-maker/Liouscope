@@ -19,7 +19,7 @@ If you discover a security issue, **please do not open a public GitHub
 issue**. Instead, use one of the private channels:
 
 - GitHub Security Advisories: open a private advisory at
-  <https://github.com/coworker-research/liouscope/security/advisories/new>.
+  <https://github.com/marcohost33-maker/Liouscope/security/advisories/new>.
 - Email: report to the maintainer listed in `CITATION.cff` with the subject
   prefix `[liouscope-security]`.
 

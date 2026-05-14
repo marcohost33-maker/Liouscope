@@ -57,11 +57,11 @@ dev = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/coworker-research/liouscope"
-Repository = "https://github.com/coworker-research/liouscope"
-Issues = "https://github.com/coworker-research/liouscope/issues"
+Homepage = "https://github.com/marcohost33-maker/Liouscope"
+Repository = "https://github.com/marcohost33-maker/Liouscope"
+Issues = "https://github.com/marcohost33-maker/Liouscope/issues"
 Documentation = "https://liouscope.readthedocs.io"
-Changelog = "https://github.com/coworker-research/liouscope/blob/main/CHANGELOG.md"
+Changelog = "https://github.com/marcohost33-maker/Liouscope/blob/main/CHANGELOG.md"
 
 [project.scripts]
 liouscope = "liouscope.__main__:main"

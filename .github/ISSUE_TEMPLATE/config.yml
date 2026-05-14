@@ -1,8 +1,8 @@
 blank_issues_enabled: false
 contact_links:
   - name: Security disclosure
-    url: https://github.com/coworker-research/liouscope/security/advisories/new
+    url: https://github.com/marcohost33-maker/Liouscope/security/advisories/new
     about: Report a vulnerability privately (see SECURITY.md).
   - name: Discussions
-    url: https://github.com/coworker-research/liouscope/discussions
+    url: https://github.com/marcohost33-maker/Liouscope/discussions
     about: Ask questions about open quantum systems, mechanism classification, or usage patterns.
