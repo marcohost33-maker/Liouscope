@@ -1,0 +1,11 @@
+{
+  "a_class": "A2",
+  "benchmark_id": "BM-003b",
+  "f_family": "F3",
+  "gap": 0.3073265132707539,
+  "gns_gap": 0.22398862357346705,
+  "kms_gap": 0.25686511722583577,
+  "kms_over_gns": 1.1467775154285254,
+  "run_id": "5aa8e3bf89effbc8d737d034bc6ff7f10b85034af9f5a20d7fcc3e3a345b37f4",
+  "verdict": "NOT_EXCLUDED"
+}

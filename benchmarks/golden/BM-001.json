@@ -1,0 +1,7 @@
+{
+  "N": 5,
+  "benchmark_id": "BM-001",
+  "liouvillian_dim": 1024,
+  "trace_steady_state": 1.0,
+  "wall_seconds_omitted_for_determinism": true
+}

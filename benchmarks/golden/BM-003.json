@@ -1,0 +1,11 @@
+{
+  "a_class": "A11",
+  "benchmark_id": "BM-003",
+  "f_family": "F4",
+  "gap": 0.6839397205857212,
+  "gns_gap": 0.6839397205857212,
+  "kms_gap": 0.6839397205857211,
+  "kms_over_gns": 0.9999999999999999,
+  "run_id": "6ef6fc5cb04e816d751358325eef45182958cc1a9e421ceaa58544316c16fa1d",
+  "verdict": "CONFIRMED"
+}

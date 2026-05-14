@@ -1,7 +1,12 @@
-# LiouScope Release Checklist v1.3 (Drive-verified)
+# LiouScope Release Checklist v1.4 (Drive-verified)
 
 Aligned with `LIOUSCOPE_RELEASE_EVIDENCE_MANIFEST.yaml` v1.2.0 and the upstream
 Drive Evidence Pack v1.2 (Drive ID `19fS59kyGIA_RdiVC8cv6MFfKR30sJmD0`).
+
+Revision history: v1.3 (initial in-repo materialisation) -> v1.4 adds the
+Sphinx documentation, ReadTheDocs config, `.zenodo.json` archive metadata,
+the build smoke and benchmark smoke CI jobs, and the golden-output
+regression fixtures.
 
 ## P0 -- Evidence Lock
 
@@ -36,9 +41,16 @@ Drive Evidence Pack v1.2 (Drive ID `19fS59kyGIA_RdiVC8cv6MFfKR30sJmD0`).
 - [x] `LIOUSCOPE_EVIDENCE_LOCK_REGISTER.csv`.
 - [x] `LIOUSCOPE_DRIVE_ATTESTATION.csv`.
 - [x] CI matrix 3.10-3.13.
-- [x] `pytest` green (145/145).
-- [x] coverage >= 80% (current: 88.01%).
+- [x] `pytest` green (158/158).
+- [x] coverage >= 80% (current: 85.28%).
 - [x] `ruff check` clean.
+- [x] `mypy src/liouscope` clean (46 source files).
+- [x] Sphinx skeleton (`docs/`) + `.readthedocs.yaml`.
+- [x] `LIOUSCOPE_BENCHMARK_MANIFEST.yaml` with BM-001..BM-003b.
+- [x] `LIOUSCOPE_NEGATIVE_RESULTS_REGISTER.md` (NR-001..NR-202).
+- [x] `ROADMAP_FLOQUET.md`.
+- [x] `.zenodo.json` archive metadata.
+- [x] Benchmark golden outputs under `benchmarks/golden/`.
 
 ## P2 -- Package
 
@@ -47,6 +59,10 @@ Drive Evidence Pack v1.2 (Drive ID `19fS59kyGIA_RdiVC8cv6MFfKR30sJmD0`).
 - [x] `twine check dist/*` step in publish workflow.
 - [x] TestPyPI smoke gate via `workflow_dispatch`.
 - [x] PyPI Trusted Publisher (OIDC) configured.
+- [x] Build smoke + install smoke + benchmark smoke added to `ci.yml`
+      (catches packaging regressions on every PR).
+- [x] PEP 639 license expression (`license = "Apache-2.0"`,
+      `license-files = ["LICENSE"]`); `twine check` passes locally.
 - [ ] Final PyPI URL recorded (after first release).
 
 ## P3 -- Archival

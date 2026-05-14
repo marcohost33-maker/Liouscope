@@ -57,7 +57,14 @@ def _yaml_lite(text: str) -> dict:
     )
 
 
-def _bm_001(seed: int) -> dict:
+def _bm_001(seed: int, *, n_qubits: int = 5) -> dict:
+    """BM-001 Ising chain boundary dephasing.
+
+    The canonical manifest entry uses ``N = 8`` (Liouvillian dimension 65536);
+    for the golden-output regression fixture we fall back to ``N = 5``
+    (Liouvillian dimension 1024) so the CI smoke job finishes quickly. The
+    full N=8 run remains reachable via ``--n-qubits 8``.
+    """
     from liouscope.core import (
         boundary_dephasing_jumps,
         ising_hamiltonian,
@@ -65,19 +72,21 @@ def _bm_001(seed: int) -> dict:
     )
     from liouscope.sparse import build_sparse_liouvillian, sparse_steady_state
 
-    N = 8
-    lat = one_d_chain(N)
+    lat = one_d_chain(n_qubits)
     H = ising_hamiltonian(lat, J=1.0, h=1.0)
-    jumps = boundary_dephasing_jumps(N)
+    jumps = boundary_dephasing_jumps(n_qubits)
     L = build_sparse_liouvillian(H, jumps, [0.1] * len(jumps))
     t0 = time.perf_counter()
     rho_ss = sparse_steady_state(L, tol=1.0e-7)
     dt = time.perf_counter() - t0
     return {
         "benchmark_id": "BM-001",
-        "N": N,
+        "N": n_qubits,
         "liouvillian_dim": int(L.shape[0]),
-        "wall_seconds": round(dt, 3),
+        # Wall time is intentionally omitted from the returned dict so the
+        # golden fixture stays deterministic; we record only physics-level
+        # quantities here.
+        "wall_seconds_omitted_for_determinism": True,
         "trace_steady_state": float(np.real(np.trace(rho_ss))),
     }
 
@@ -105,9 +114,9 @@ def _bm_002(seed: int) -> dict:
         rows.append({
             "N": N,
             "liouvillian_dim": int(L.shape[0]),
-            "wall_seconds": round(dt, 3),
             "trace": float(np.real(np.trace(rho_ss))),
         })
+        _ = dt  # wall time intentionally not recorded in the JSON
     return {"benchmark_id": "BM-002", "rows": rows}
 
 

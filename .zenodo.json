@@ -1,0 +1,36 @@
+{
+  "title": "LiouScope: Multi-Diagnostic Relaxation Analysis for Open Quantum Lattice Systems",
+  "description": "Multi-diagnostic relaxation analysis framework for finite-dimensional time-homogeneous Markovian open quantum lattice systems (GKSL / QMS). Implements twenty diagnostics D1-D20 organised in six layers S/N/R/U/C/G and a twelve-class mechanism taxonomy A1-A12.",
+  "license": "Apache-2.0",
+  "upload_type": "software",
+  "access_right": "open",
+  "version": "0.2.0",
+  "language": "eng",
+  "keywords": [
+    "open quantum systems",
+    "Lindblad",
+    "GKSL",
+    "QMS",
+    "Liouvillian gap",
+    "Mpemba effect",
+    "non-normal dynamics",
+    "pseudospectrum",
+    "quantum relaxation",
+    "reproducibility",
+    "FAIR4RS"
+  ],
+  "creators": [
+    {
+      "name": "Coworker Research / Coworkerz",
+      "affiliation": "Coworker Research"
+    }
+  ],
+  "related_identifiers": [
+    {
+      "identifier": "https://github.com/coworker-research/liouscope",
+      "relation": "isSupplementTo",
+      "resource_type": "software"
+    }
+  ],
+  "communities": []
+}
