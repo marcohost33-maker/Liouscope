@@ -7,7 +7,7 @@ finite-dimensional time-homogeneous Markovian open quantum lattice systems
 relaxation-time predictor.
 
 This documentation is generated from the in-source docstrings plus the
-hand-written reference files in :ref:`reference`.
+hand-written reference files listed below.
 
 .. note::
 

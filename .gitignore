@@ -52,4 +52,8 @@ benchmarks/output/
 *.pickle
 *.npz
 
+# Sphinx (build output + autosummary stubs are regenerated on demand)
+docs/_build/
+docs/_autosummary/
+
 .ipynb_checkpoints/

@@ -6,9 +6,32 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased] -- v0.2.1 (post-submission tooling)
 
-### Added
-- `liouscope._zhou`: Zhou universal mixing-time predictor (D24) as an opt-in
-  diagnostic. Frozen `ZhouPredictorResult` dataclass.
+### Added (v1.4 batch -- 2026-05-14)
+- Sphinx documentation skeleton (`docs/`) with `conf.py`, `index.rst`,
+  `quickstart.rst`, `architecture.rst`, `api.rst`, `reproducibility.rst`,
+  `roadmap_floquet.rst` (the last one includes the top-level
+  `ROADMAP_FLOQUET.md` to prevent drift). `make docs` and
+  `make docs-strict` targets added; `.readthedocs.yaml` ready for
+  ReadTheDocs build.
+- `.zenodo.json`: explicit Zenodo metadata for the GitHub--Zenodo
+  auto-DOI mint.
+- CI hardening: new `build-smoke` job validates pyproject, runs
+  `python -m build`, `twine check`, installs the wheel into a clean
+  venv and imports `liouscope`; new `benchmark-smoke` job runs
+  BM-001 / BM-003 / BM-003b on every PR and cross-checks the BM-003
+  hash against the manifest.
+- Dependabot: grouped weekly updates (one PR for github-actions,
+  one for numpy/scipy, one for pytest/ruff/mypy/hypothesis/build/twine).
+- Benchmark golden fixtures under `benchmarks/golden/` for BM-001
+  (N=5 fast variant), BM-003 (DB qutrit), BM-003b (off-diag qutrit).
+  Manifest declares `reproduce.output_hash` and `reproduce.golden`
+  for each; `tests/test_benchmark_manifest_integrity.py` cross-checks
+  manifest hashes against actual file SHA-256.
+- `tests/test_benchmark_outputs.py` re-runs each BM-NNN entry and
+  deep-compares against the golden JSON with `TOLERANCE = 1e-9`.
+- `LIOUSCOPE_RELEASE_CHECKLIST.md` bumped to v1.4.
+
+### Added (v1.3 batch)
 - Evidence Pack v1.2 materialised in-repo: `SECURITY.md`,
   `REPRODUCIBILITY.md`, `LIOUSCOPE_EVIDENCE_LOCK_REGISTER.csv`,
   `LIOUSCOPE_RELEASE_EVIDENCE_MANIFEST.yaml`.

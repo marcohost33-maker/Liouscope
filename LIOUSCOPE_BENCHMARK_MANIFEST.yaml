@@ -34,9 +34,16 @@ benchmarks:
       boundary: "open"
       builder: "liouscope.core.one_d_chain"
     system_size:
-      N: 8
-      hilbert_dim: 256
-      liouvillian_dim: 65536
+      N_production: 8
+      hilbert_dim_production: 256
+      liouvillian_dim_production: 65536
+      N_golden_fixture: 5
+      hilbert_dim_golden_fixture: 32
+      liouvillian_dim_golden_fixture: 1024
+      note: >
+        ``benchmarks/run.py`` uses ``N=5`` by default to keep the CI
+        smoke job fast. Pass ``--n-qubits 8`` for the canonical
+        production setting recorded in this manifest.
     numerical:
       solver: "liouscope.sparse.sparse_steady_state"
       eigensolver: "scipy.sparse.linalg.eigs"
@@ -57,7 +64,8 @@ benchmarks:
       - "sparse convergence slow for N > 10"
     reproduce:
       command: "python benchmarks/run.py BM-001"
-      output_hash: null
+      golden: "benchmarks/golden/BM-001.json"
+      output_hash: "52112eb5929afcf41436ce94d15cd5045a2f0ceda164857309fa378ad7bddc56"
     paper_reference:
       figure: "Fig. 2a"
       section: "Section IV"
@@ -149,6 +157,7 @@ benchmarks:
       - "Population-only jump structure causes GNS and KMS to coincide"
     reproduce:
       command: "python benchmarks/run.py BM-003"
+      golden: "benchmarks/golden/BM-003.json"
       output_hash: "8c84d04c4c341d1f0e95e3e409f57079477f1c12668a9c63a4518eaa36dceadf"
     paper_reference:
       figure: "Fig. 1"
@@ -184,7 +193,8 @@ benchmarks:
       - "Symmetrised generator has isolated positive eigenvalues; the gap definition must filter for negative eigenvalues only"
     reproduce:
       command: "python benchmarks/run.py BM-003b"
-      output_hash: null
+      golden: "benchmarks/golden/BM-003b.json"
+      output_hash: "7922bac5882222aee92cb88a959dd6da1a102823322a743baacb9014a98e226b"
     paper_reference:
       figure: null
       section: "Section III (extended)"

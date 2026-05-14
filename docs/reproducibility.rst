@@ -9,13 +9,18 @@ contract is described in detail in the top-level ``REPRODUCIBILITY.md``.
 Locked versions
 ---------------
 
-================================ ===============================================
-String                           Constant
-================================ ===============================================
-``A1-A12-v3.1``                  :data:`liouscope.TAXONOMY_VERSION`
-``D1-D24-Übersicht-v3-2026-04-24`` :data:`liouscope.DIAGNOSTIC_SCHEMA_VERSION`
-``1.2.0``                        manifest schema (``MANIFEST_SCHEMA.json``)
-================================ ===============================================
+.. list-table::
+   :header-rows: 1
+   :widths: 40 60
+
+   * - String
+     - Constant
+   * - ``A1-A12-v3.1``
+     - :data:`liouscope.TAXONOMY_VERSION`
+   * - ``D1-D24-Übersicht-v3-2026-04-24``
+     - :data:`liouscope.DIAGNOSTIC_SCHEMA_VERSION`
+   * - ``1.2.0``
+     - manifest schema (``MANIFEST_SCHEMA.json``)
 
 Reproducing the paper's table
 -----------------------------

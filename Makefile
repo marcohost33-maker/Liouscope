@@ -17,8 +17,9 @@
 PYTHON ?= python3
 PIP    ?= $(PYTHON) -m pip
 
-.PHONY: install test anchors lint typecheck reproduce figures benchmarks build \
-        check-dist validate-pyproject precommit clean help
+.PHONY: install test anchors lint typecheck reproduce figures benchmarks golden \
+        manifest-hashes docs docs-strict build check-dist validate-pyproject \
+        precommit clean help
 
 help:
 	@grep -E '^[a-zA-Z_-]+:.*##' Makefile | awk -F'##' '{printf "  %-20s %s\n", $$1, $$2}'
@@ -47,6 +48,23 @@ benchmarks: ## Run every benchmark entry from LIOUSCOPE_BENCHMARK_MANIFEST.yaml
 		echo ">>> $$bm"; \
 		$(PYTHON) benchmarks/run.py $$bm --output benchmarks/output/$$bm.json || exit 1; \
 	done
+
+golden: ## Regenerate benchmarks/golden/*.json (commit alongside manifest hash updates)
+	@mkdir -p benchmarks/golden
+	@for bm in BM-001 BM-003 BM-003b; do \
+		echo ">>> golden $$bm"; \
+		$(PYTHON) benchmarks/run.py $$bm --output benchmarks/golden/$$bm.json || exit 1; \
+	done
+	@echo "Updated golden files. Now run 'make manifest-hashes' to verify SHA-256 in the manifest."
+
+manifest-hashes: ## Verify manifest output_hash matches the SHA-256 of each golden file
+	$(PYTHON) -m pytest tests/test_benchmark_manifest_integrity.py -v
+
+docs: ## Build the Sphinx HTML documentation
+	$(PYTHON) -m sphinx -b html docs docs/_build/html
+
+docs-strict: ## Build docs with warnings-as-errors (CI gate)
+	$(PYTHON) -m sphinx -W --keep-going -b html docs docs/_build/html
 
 figures: ## Generate the three paper figures
 	$(PYTHON) -m figures.generate_all
