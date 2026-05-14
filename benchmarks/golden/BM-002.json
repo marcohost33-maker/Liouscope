@@ -1,0 +1,20 @@
+{
+  "benchmark_id": "BM-002",
+  "rows": [
+    {
+      "N": 4,
+      "liouvillian_dim": 256,
+      "trace": 1.0
+    },
+    {
+      "N": 5,
+      "liouvillian_dim": 1024,
+      "trace": 1.0
+    },
+    {
+      "N": 6,
+      "liouvillian_dim": 4096,
+      "trace": 1.0
+    }
+  ]
+}

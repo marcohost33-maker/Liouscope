@@ -109,8 +109,9 @@ benchmarks:
       - "z=3/2 vs z=2 distinction requires N >= 9 (NR-27)"
       - "precision wall at d > 128 without sparse path"
     reproduce:
-      command: "python benchmarks/run.py BM-002 --scaling"
-      output_hash: null
+      command: "python benchmarks/run.py BM-002"
+      golden: "benchmarks/golden/BM-002.json"
+      output_hash: "7c05f1c685b9c27e1d835429ac4cab31fdafbdf5a6c65fa75923d98b7a5d0fae"
     paper_reference:
       figure: "Fig. 3"
       section: "Section V"

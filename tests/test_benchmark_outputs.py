@@ -29,10 +29,17 @@ RUNNER = REPO_ROOT / "benchmarks" / "run.py"
 # to catch any meaningful drift.
 TOLERANCE = 1.0e-9
 
-BENCHMARKS = ["BM-001", "BM-003", "BM-003b"]
+BENCHMARKS = ["BM-001", "BM-002", "BM-003", "BM-003b"]
 
 
 def _run_benchmark(bm_id: str) -> dict:
+    """Run ``benchmarks/run.py`` and extract the JSON payload.
+
+    The runner writes "Running ...", then a pretty-printed JSON object,
+    then "SHA-256: <hash>" on the last non-empty line. We extract
+    everything between the first ``{`` and the ``SHA-256:`` line, which is
+    robust to nested JSON objects (multi-line ``"rows": [...]``).
+    """
     result = subprocess.run(
         [sys.executable, str(RUNNER), bm_id],
         capture_output=True,
@@ -40,11 +47,17 @@ def _run_benchmark(bm_id: str) -> dict:
         cwd=str(REPO_ROOT),
         check=True,
     )
-    # The runner prints "Running ...", then the JSON, then "SHA-256: ...".
-    # Find the JSON block by looking for the opening brace.
     lines = result.stdout.splitlines()
     start = next(i for i, line in enumerate(lines) if line.strip().startswith("{"))
-    end = next(i for i in range(start, len(lines)) if lines[i].strip() == "}")
+    # The first line that starts with "SHA-256:" terminates the JSON block.
+    sha_idx = next(
+        (i for i in range(start, len(lines)) if lines[i].strip().startswith("SHA-256:")),
+        len(lines),
+    )
+    # The closing ``}`` is the last non-empty line before the SHA-256 marker.
+    end = next(
+        i for i in range(sha_idx - 1, start - 1, -1) if lines[i].strip() == "}"
+    )
     return json.loads("\n".join(lines[start : end + 1]))
 
 

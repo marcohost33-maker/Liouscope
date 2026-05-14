@@ -1,0 +1,101 @@
+# OpenSSF Security Insights file
+# https://github.com/ossf/security-insights-spec
+# Picked up automatically by OpenSSF Scorecard and similar tooling.
+
+header:
+  schema-version: "1.0.0"
+  expiration-date: "2027-05-14T00:00:00Z"
+  last-updated: "2026-05-14"
+  last-reviewed: "2026-05-14"
+  project-url: "https://github.com/coworker-research/liouscope"
+  project-release: "0.2.0"
+  changelog: "https://github.com/coworker-research/liouscope/blob/main/CHANGELOG.md"
+  license: "https://github.com/coworker-research/liouscope/blob/main/LICENSE"
+
+project-lifecycle:
+  status: active
+  bug-fixes-only: false
+  core-maintainers:
+    - "https://github.com/coworker-research"
+  release-cycle: "https://github.com/coworker-research/liouscope/releases"
+  release-process: |
+    Releases follow Semantic Versioning. Each tagged release triggers the
+    pypi.yml workflow which validates pyproject.toml, builds sdist and wheel,
+    runs twine check, and publishes to PyPI via Trusted Publishing (OIDC).
+    The Zenodo--GitHub integration mints a DOI on every published release.
+
+contribution-policy:
+  accepts-pull-requests: true
+  accepts-automated-pull-requests: true
+  contributing-policy: "https://github.com/coworker-research/liouscope/blob/main/CONTRIBUTING.md"
+  code-of-conduct: "https://github.com/coworker-research/liouscope/blob/main/CODE_OF_CONDUCT.md"
+
+distribution-points:
+  - "https://pypi.org/project/liouscope/"
+  - "https://github.com/coworker-research/liouscope/releases"
+
+documentation:
+  - "https://github.com/coworker-research/liouscope/blob/main/README.md"
+  - "https://github.com/coworker-research/liouscope/blob/main/REPRODUCIBILITY.md"
+  - "https://liouscope.readthedocs.io"
+
+dependencies:
+  third-party-packages: true
+  dependencies-lists:
+    - "https://github.com/coworker-research/liouscope/blob/main/pyproject.toml"
+  sbom:
+    - sbom-file: "https://github.com/coworker-research/liouscope/releases/latest/download/sbom.cdx.json"
+      sbom-format: CycloneDX
+      sbom-url: "https://github.com/coworker-research/liouscope/blob/main/.github/workflows/sbom.yml"
+
+security-artifacts:
+  threat-model:
+    threat-model-created: false
+  self-assessment:
+    self-assessment-created: false
+
+security-testing:
+  - tool-type: sca
+    tool-name: GitHub Dependency Review Action
+    integration:
+      ad-hoc: false
+      ci: true
+      before-release: true
+    tool-url: "https://github.com/actions/dependency-review-action"
+  - tool-type: sast
+    tool-name: CodeQL
+    integration:
+      ad-hoc: false
+      ci: true
+      before-release: true
+    tool-url: "https://github.com/github/codeql-action"
+  - tool-type: scorecard
+    tool-name: OpenSSF Scorecard
+    integration:
+      ad-hoc: false
+      ci: true
+      before-release: false
+    tool-url: "https://github.com/ossf/scorecard-action"
+
+security-assessments: []
+
+security-contacts:
+  - type: email
+    value: "see CITATION.cff maintainer email"
+    primary: true
+  - type: url
+    value: "https://github.com/coworker-research/liouscope/security/advisories/new"
+    primary: false
+
+vulnerability-reporting:
+  accepts-vulnerability-reports: true
+  email-contact: "see CITATION.cff maintainer email"
+  security-policy: "https://github.com/coworker-research/liouscope/blob/main/SECURITY.md"
+  bug-bounty-available: false
+  in-scope:
+    - public-facing-api
+    - dependency-supply-chain
+    - reproducibility-integrity
+  out-of-scope:
+    - mathematical-correctness-reports
+    - performance-issues

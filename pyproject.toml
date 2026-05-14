@@ -60,6 +60,11 @@ dev = [
 Homepage = "https://github.com/coworker-research/liouscope"
 Repository = "https://github.com/coworker-research/liouscope"
 Issues = "https://github.com/coworker-research/liouscope/issues"
+Documentation = "https://liouscope.readthedocs.io"
+Changelog = "https://github.com/coworker-research/liouscope/blob/main/CHANGELOG.md"
+
+[project.scripts]
+liouscope = "liouscope.__main__:main"
 
 [tool.setuptools]
 include-package-data = true
