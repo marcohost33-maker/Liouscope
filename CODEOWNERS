@@ -1,0 +1,22 @@
+# CODEOWNERS — defines automatic review-request routing.
+# Solo maintainer: all paths default to the repo owner.
+# See: https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/about-code-owners
+
+# Default owner for everything
+*                               @marcohost33-maker
+
+# Critical evidence files require explicit review on every change
+LIOUSCOPE_BENCHMARK_MANIFEST.yaml         @marcohost33-maker
+LIOUSCOPE_RELEASE_EVIDENCE_MANIFEST.yaml  @marcohost33-maker
+LIOUSCOPE_EVIDENCE_LOCK_REGISTER.csv      @marcohost33-maker
+LIOUSCOPE_NEGATIVE_RESULTS_REGISTER.md    @marcohost33-maker
+LIOUSCOPE_RELEASE_CHECKLIST.md            @marcohost33-maker
+LIOUSCOPE_DRIVE_ATTESTATION.csv           @marcohost33-maker
+
+# Golden benchmark fixtures are evidence — never silent updates
+benchmarks/golden/                        @marcohost33-maker
+
+# CI workflows + security policies
+.github/workflows/                        @marcohost33-maker
+SECURITY.md                                @marcohost33-maker
+SECURITY-INSIGHTS.yml                      @marcohost33-maker
