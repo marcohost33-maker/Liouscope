@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import math
 
+import numpy as np
 import pytest
 
 from liouscope._types import RelaxationResult
@@ -12,12 +13,14 @@ from liouscope.diagnostics.uncertainty import compute_uncertainty_layer
 def _mock_relaxation(lo: float = 0.95, hi: float = 1.05) -> RelaxationResult:
     """Build a minimal RelaxationResult with a chosen BCa interval."""
     return RelaxationResult(
+        von_neumann_entropy=0.0,
+        relative_entropy_curve=np.array([1.0, 0.5, 0.25]),
+        fidelity_curve=np.array([0.0, 0.5, 0.75]),
+        entanglement_asymmetry=None,
+        fits={},
+        aicc_model="exp",
         beta_D=1.0,
-        ci_beta=(0.92, 1.08),
         bca_ci_beta=(lo, hi),
-        d2b_beta=1.0,
-        bootstrap_B=200,
-        n_eff=1024.0,
     )
 
 
