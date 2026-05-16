@@ -6,6 +6,30 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased] -- v0.2.1 (post-submission tooling)
 
+### Added (v1.5 batch -- 2026-05-16)
+- Smoke tests for previously uncovered diagnostics/sparse modules:
+  - tests/test_transient.py (D14 trans-amplitude ratio, D15 kappa_trans,
+    numerical_abscissa, compute_transient_layer)
+  - tests/test_uncertainty.py (U0/U1/U2 layer aggregation, finite + non-finite
+    BCa CI, solver default + override, optional size residual, bootstrap_B
+    passthrough)
+  - tests/test_chi1.py (Petermann-factor lower bound, normal + non-normal
+    Liouvillians)
+  - tests/test_arnoldi.py (sparse_steady_state with unit trace + Hermiticity;
+    sparse_spectrum with descending Re(lambda) and slowest-mode at zero)
+- CODEOWNERS: governance routing for evidence files
+  (LIOUSCOPE_BENCHMARK_MANIFEST / RELEASE_EVIDENCE_MANIFEST /
+  EVIDENCE_LOCK_REGISTER / NEGATIVE_RESULTS_REGISTER /
+  RELEASE_CHECKLIST / DRIVE_ATTESTATION), the benchmark goldens, and
+  the .github/workflows + security policy files.
+
+### Fixed (v1.5 batch -- 2026-05-16)
+- tests/test_arnoldi.py: removed unused pytest import (ruff F401).
+- tests/test_uncertainty.py: rewrote the mock RelaxationResult to use the
+  actual dataclass fields (von_neumann_entropy, relative_entropy_curve,
+  fidelity_curve, entanglement_asymmetry, fits, aicc_model, beta_D,
+  bca_ci_beta) instead of invented ones.
+
 ### Added (v1.4 batch -- 2026-05-14)
 - Sphinx documentation skeleton (`docs/`) with `conf.py`, `index.rst`,
   `quickstart.rst`, `architecture.rst`, `api.rst`, `reproducibility.rst`,
