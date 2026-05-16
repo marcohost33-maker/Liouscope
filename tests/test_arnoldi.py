@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import numpy as np
-import pytest
 import scipy.sparse as sp
 
 from liouscope.sparse.arnoldi import sparse_spectrum, sparse_steady_state
