@@ -1,0 +1,4 @@
+# CODEOWNERS — default owner for all paths.
+# Layer 2 of branch-protection mitigation (Free-Tier; Server-Protection braucht GitHub Pro).
+# See Memory feedback: branch_protection_mitigation.
+* @marcohost33-maker
