@@ -1,0 +1,50 @@
+name: Feature request
+description: Suggest a new diagnostic, lattice, or fitting feature
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: motivation
+    attributes:
+      label: Motivation
+      description: |
+        What physics question or workflow does this feature address? Please cite the relevant
+        paper or preprint if applicable — LiouScope is intentionally conservative about adding
+        diagnostics that lack peer-reviewed grounding.
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed API or behaviour
+      description: |
+        Concrete sketch — function signature, manifest field, expected return type. Keep the
+        public surface in `liouscope/__init__.py` in mind.
+      render: python
+    validations:
+      required: true
+
+  - type: dropdown
+    id: layer
+    attributes:
+      label: Diagnostic layer (if applicable)
+      options:
+        - "S — Spectral"
+        - "N — Non-normality"
+        - "R — Relaxation"
+        - "U — Uncertainty"
+        - "C — Classification"
+        - "G — Governance"
+        - "(not a diagnostic)"
+    validations:
+      required: false
+
+  - type: textarea
+    id: anchors
+    attributes:
+      label: Validation / anchor proposal
+      description: |
+        How would we test this? Are there V1-V5 systems that exercise it, or do we need a new one?
+        Anchor tests (`tests/test_anchors.py`) lock numerical values — what should the anchor be?
+    validations:
+      required: false
