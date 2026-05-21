@@ -59,6 +59,8 @@ def compute_zhou_predictor(
                 mixing_time_upper=float("inf"),
                 epsilon=epsilon,
                 converged=False,
+                gap=0.0,
+                petermann_factor=float("nan"),
             )
         eigvals_nz = eigvals[nonzero]
         if gap is None:
@@ -82,6 +84,8 @@ def compute_zhou_predictor(
             mixing_time_upper=float("inf"),
             epsilon=epsilon,
             converged=False,
+            gap=float(gap),
+            petermann_factor=float(petermann_factor),
         )
 
     # Zhou predictor (simplified universal form):
@@ -94,6 +98,8 @@ def compute_zhou_predictor(
         mixing_time_upper=t_upper,
         epsilon=epsilon,
         converged=True,
+        gap=float(gap),
+        petermann_factor=float(petermann_factor),
     )
 
 
@@ -101,13 +107,19 @@ def mixing_time_upper_bound(result: ZhouPredictorResult, eps: float | None = Non
     """Return the upper bound, optionally rescaled to a different ``eps``.
 
     Allows reusing one predictor across multiple accuracy targets without
-    re-diagonalising.
+    re-diagonalising. Uses the stored gap to apply the analytic correction
+
+        t_upper(eps_new) = t_upper(eps_old) + log(eps_old / eps_new) / Delta
+
+    Requires the result to carry a positive ``gap`` (which the regular
+    :func:`compute_zhou_predictor` always sets); raises :class:`ValueError`
+    if the predictor did not converge.
     """
     if eps is None or eps == result.epsilon:
         return result.mixing_time_upper
-    # Rescale: the predictor depends logarithmically on eps.
-    base = result.mixing_time_upper * (result.epsilon / result.epsilon)  # noop
-    return float(base + np.log(result.epsilon / eps))
+    if not result.converged or not np.isfinite(result.gap) or result.gap <= 0.0:
+        raise ValueError("Cannot rescale: predictor did not converge with a finite, positive gap")
+    return float(result.mixing_time_upper + np.log(result.epsilon / eps) / result.gap)
 
 
 __all__ = ["compute_zhou_predictor", "mixing_time_upper_bound"]

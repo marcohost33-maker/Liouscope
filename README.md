@@ -44,27 +44,44 @@ LiouScope addresses this with three deliberate choices:
 
 ```bash
 pip install -e .                # editable install from this repository
-pytest -q                       # 18 test modules, target: all green
-python examples/quickstart.py   # 1D Heisenberg-XXZ chain demo
+pytest -q                       # full test suite, target: all green
+python examples/quickstart.py   # dephased-qubit demo with QuTiP cross-check
 ```
 
 ```python
+import numpy as np
 import liouscope as lp
 
-# Build a 1D XXZ chain with boundary dissipators
-lattice  = lp.core.lattice.Chain1D(L=8)
-H        = lp.core.hamiltonian.XXZ(lattice, J=1.0, Delta=0.5)
-jumps    = lp.core.jumps.boundary_dephasing(lattice, gamma=0.1)
+# Dephased qubit: H = (1/2) sigma_x, jump = sigma_z, gamma = 0.3
+sx = np.array([[0, 1], [1, 0]], dtype=complex)
+sz = np.array([[1, 0], [0, -1]], dtype=complex)
+L  = lp.build_liouvillian(0.5 * sx, jump_ops=[sz], rates=[0.3])
 
-# Construct the Liouvillian and run the six-layer diagnostic
-L        = lp.build_liouvillian(H, jumps)
-rho_ss   = lp.steady_state(L)
-report   = lp.diagnose(L, rho_ss, layers="all")
+plus  = np.array([1, 1], dtype=complex) / np.sqrt(2)
+rho_0 = np.outer(plus, plus.conj())
 
-# A12-class mechanism + uncertainty
-print(report.classification.mechanism)      # e.g. "A7_NonNormal_Transient"
-print(report.relaxation.tau_eff, "+/-",
-      report.relaxation.ci95)
+report = lp.diagnose(L, rho_initial=rho_0, bootstrap_B=100, seed=42)
+
+# A-class mechanism + 95% BCa CI on the fitted relaxation rate
+print(report.classification.a_class)         # e.g. "A1"
+print(report.relaxation.beta_D, "in",
+      report.relaxation.bca_ci_beta)         # (lo, hi)
+```
+
+The same example with a 1D lattice geometry:
+
+```python
+from liouscope.core import (
+    boundary_dephasing_jumps,
+    heisenberg_xxz_hamiltonian,
+    one_d_chain,
+)
+
+lattice = one_d_chain(n=3)                                # 3 qubits, open boundary
+H       = heisenberg_xxz_hamiltonian(lattice, J=1.0, Delta=0.5)
+jumps   = boundary_dephasing_jumps(lattice.n_sites)
+L       = lp.build_liouvillian(H, jumps, rates=[0.25] * len(jumps))
+report  = lp.diagnose(L, bootstrap_B=50, seed=42)
 ```
 
 ---
@@ -107,12 +124,12 @@ src/liouscope/
                     uncertainty, classification, mpemba, lep, resolvent)
   fitting/          GLS+AR(1), BCa bootstrap, AICc model selection
   io/               Run-manifest export, seed control
-  sparse.py         ARPACK shift-invert path (d up to 128)
+  sparse/           ARPACK shift-invert path (d up to 128)
   _zhou.py          Zhou universal mixing-time predictor (opt-in, D24)
 benchmarks/         Heisenberg scaling, paper-reproduction harness
 examples/           quickstart.py, jc_ep_sweep.py, qutrit_v1.py
 figures/            Fig1..Fig3 paper plot pipeline
-tests/              18 test modules incl. anchors, numerics, sparse, validation-systems
+tests/              anchors, numerics, sparse, classification, fitting, V1-V5 reference
 ```
 
 The repo follows the **src/-layout** convention; install editable with `pip install -e .` and
