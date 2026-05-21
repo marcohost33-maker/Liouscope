@@ -182,3 +182,5 @@ class ZhouPredictorResult:
     mixing_time_upper: float
     epsilon: float
     converged: bool
+    gap: float = float("nan")
+    petermann_factor: float = float("nan")
