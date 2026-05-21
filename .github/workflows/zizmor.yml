@@ -1,0 +1,46 @@
+# zizmor — static analysis for GitHub Actions workflows
+# Docs: https://docs.zizmor.sh + https://github.com/zizmorcore/zizmor-action
+name: Workflow Security Audit (zizmor)
+
+on:
+  push:
+    branches: ["main"]
+    paths:
+      - ".github/workflows/**"
+      - ".github/dependabot.yml"
+  pull_request:
+    paths:
+      - ".github/workflows/**"
+      - ".github/dependabot.yml"
+  schedule:
+    - cron: "13 6 * * 1"   # Mondays 06:13 UTC
+
+permissions: {}
+
+jobs:
+  zizmor:
+    name: zizmor workflow audit
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      security-events: write   # upload SARIF to Code Scanning
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+        with:
+          persist-credentials: false
+
+      - name: Run zizmor
+        uses: zizmorcore/zizmor-action@5f14fd08f7cf1cb1609c1e344975f152c7ee938d  # v0.5.6
+        with:
+          # Persona "regular" = production-grade rules; "auditor" would include
+          # advisory checks that may have higher false-positive rates.
+          persona: regular
+
+      - name: Upload SARIF
+        if: always()
+        uses: github/codeql-action/upload-sarif@f411752efdf656cb71aa17b755b22c890960da1d  # v3.35.5
+        with:
+          sarif_file: zizmor.sarif
+          category: zizmor
