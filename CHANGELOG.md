@@ -9,6 +9,28 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Added
 - `liouscope._zhou`: Zhou universal mixing-time predictor (D24) as an opt-in
   diagnostic. Frozen `ZhouPredictorResult` dataclass.
+- `liouscope.io.manifest_payload`: schema-compliant projection of a
+  `DiagnosticReport` that includes `schema_version`, `taxonomy_version`,
+  and `diagnostic_schema_version` as documented in `MANIFEST_SCHEMA.json`.
+- `liouscope.io.dump_manifest`: writes the manifest payload to a JSON file.
+- `liouscope.io.validate_manifest`: validates a manifest dict against
+  `MANIFEST_SCHEMA.json`. Uses `jsonschema` when available, falls back to a
+  built-in subset check otherwise.
+
+### Fixed
+- `liouscope.io.build_manifest` now uses timezone-aware
+  `datetime.datetime.now(UTC)`. The previous `datetime.utcnow()` call was
+  deprecated in Python 3.12 and slated for removal in 3.14.
+- `liouscope._zhou.mixing_time_upper_bound` rescaling formula. The previous
+  version contained a no-op (`epsilon / epsilon`) and dropped the `1/gap`
+  factor, returning incorrect mixing-time estimates for any `eps` other
+  than the original one. `ZhouPredictorResult` now carries the spectral
+  gap and Petermann factor used to build it so rescaling is well-defined.
+- README quickstart code now uses the actual public API
+  (`one_d_chain`, `heisenberg_xxz_hamiltonian`, `boundary_dephasing_jumps`,
+  `diagnose(L, rho_initial=...)`, `report.relaxation.beta_D`,
+  `report.relaxation.bca_ci_beta`) — the previous snippet referenced
+  symbols that did not exist (`Chain1D`, `XXZ`, `tau_eff`, `ci95`).
 
 ## [0.2.0] -- 2026-04-17
 
