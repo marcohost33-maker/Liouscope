@@ -7,7 +7,8 @@ authors:
 version: "0.2.0"
 date-released: "2026-04-17"
 license: Apache-2.0
-repository-code: "https://github.com/coworker-research/liouscope"
+repository-code: "https://github.com/marcohost33-maker/Liouscope"
+url: "https://github.com/marcohost33-maker/Liouscope"
 abstract: >-
   LiouScope is an open-source diagnostic framework for time-homogeneous
   Markovian open quantum systems described by Gorini-Kossakowski-Sudarshan-
@@ -24,9 +25,14 @@ keywords:
   - pseudospectrum
   - quantum relaxation
 preferred-citation:
-  type: article
+  type: software
   authors:
     - name: "Coworker Research"
-  title: "Beyond the Liouvillian Gap: Multi-Diagnostic Relaxation Analysis for Open Quantum Lattice Systems"
+  title: "LiouScope: Multi-Diagnostic Relaxation Analysis for Open Quantum Lattice Systems (v0.2.0)"
   year: 2026
-  url: "https://arxiv.org/abs/coworker-research/liouscope"
+  url: "https://github.com/marcohost33-maker/Liouscope"
+  notes: >-
+    Cite the software via this CITATION.cff. A methods paper / preprint
+    is forthcoming. Until then, please include the software version
+    (liouscope.__version__) and TAXONOMY_VERSION (A1-A12-v3.1) so the
+    mechanism labels are unambiguous.
