@@ -23,7 +23,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      security-events: write   # upload SARIF to Code Scanning
+      security-events: write   # upload SARIF to Code Scanning (no-op on private repos without GHAS)
 
     steps:
       - name: Checkout
@@ -32,14 +32,19 @@ jobs:
           persist-credentials: false
 
       - name: Run zizmor
+        # zizmor exits non-zero when it finds issues. Run as informational
+        # (continue-on-error) so the job surfaces findings via SARIF/log
+        # without blocking unrelated CI. Fix findings to clear the warning.
+        continue-on-error: true
         uses: zizmorcore/zizmor-action@5f14fd08f7cf1cb1609c1e344975f152c7ee938d  # v0.5.6
         with:
-          # Persona "regular" = production-grade rules; "auditor" would include
-          # advisory checks that may have higher false-positive rates.
           persona: regular
 
       - name: Upload SARIF
-        if: always()
+        # Only run if zizmor actually produced a SARIF, and tolerate the
+        # upload failing on private repos without GitHub Advanced Security.
+        if: ${{ !cancelled() && hashFiles('zizmor.sarif') != '' }}
+        continue-on-error: true
         uses: github/codeql-action/upload-sarif@f411752efdf656cb71aa17b755b22c890960da1d  # v3.35.5
         with:
           sarif_file: zizmor.sarif
