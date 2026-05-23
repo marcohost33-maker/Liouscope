@@ -36,6 +36,13 @@ jobs:
         # (continue-on-error) so the job surfaces findings via SARIF/log
         # without blocking unrelated CI. Fix findings to clear the warning.
         continue-on-error: true
+        env:
+          # [2026-05-23] Provide GH_TOKEN to authenticate zizmor's impostor-
+          # commit check API calls. Without this, the audit hits unauthenticated
+          # GitHub REST rate limits (60/h) and skips checks with 'fast path
+          # impostor check failed: request error while accessing GitHub API'.
+          # See docs.zizmor.sh + zizmorcore/zizmor#764 for context.
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         uses: zizmorcore/zizmor-action@5f14fd08f7cf1cb1609c1e344975f152c7ee938d  # v0.5.6
         with:
           persona: regular
