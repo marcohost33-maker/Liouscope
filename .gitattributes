@@ -1,0 +1,4 @@
+# Normalize line endings to LF in the repo. Prevents the CRLF churn that shows
+# up on Windows clones and stops CP-1252 control bytes (e.g. 0x97 em-dash) from
+# silently breaking UTF-8 tools like zizmor.
+* text=auto eol=lf
