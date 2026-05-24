@@ -1,4 +1,23 @@
-# Normalize line endings to LF in the repo. Prevents the CRLF churn that shows
-# up on Windows clones and stops CP-1252 control bytes (e.g. 0x97 em-dash) from
-# silently breaking UTF-8 tools like zizmor.
+# Line-ending + binary policy.
+# text=auto detects text and normalizes it to LF in the repo (kills the CRLF
+# churn that shows up on Windows clones); explicit eol for scripts that need a
+# fixed ending; binary markers so git never line-ending-munges non-text files.
+# Refs: https://git-scm.com/docs/gitattributes
+#       https://docs.github.com/en/get-started/git-basics/configuring-git-to-handle-line-endings
 * text=auto eol=lf
+
+# Windows scripts must keep CRLF (cmd.exe).
+*.bat  text eol=crlf
+*.cmd  text eol=crlf
+
+# Binary — never normalize.
+*.png   binary
+*.jpg   binary
+*.jpeg  binary
+*.gif   binary
+*.ico   binary
+*.webp  binary
+*.woff  binary
+*.woff2 binary
+*.pdf   binary
+*.zip   binary
