@@ -11,6 +11,8 @@ updates:
       time: "06:00"
       timezone: "Europe/Zurich"
     open-pull-requests-limit: 5
+    cooldown:
+      default-days: 7
     groups:
       actions-minor-and-patch:
         applies-to: version-updates
@@ -36,6 +38,8 @@ updates:
       time: "06:00"
       timezone: "Europe/Zurich"
     open-pull-requests-limit: 5
+    cooldown:
+      default-days: 7
     groups:
       python-minor-and-patch:
         applies-to: version-updates

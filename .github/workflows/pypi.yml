@@ -4,6 +4,8 @@ on:
   release:
     types: [published]
 
+permissions: {}
+
 jobs:
   build-and-publish:
     runs-on: ubuntu-latest
@@ -11,9 +13,12 @@ jobs:
       name: pypi
       url: https://pypi.org/p/liouscope
     permissions:
-      id-token: write
+      id-token: write   # Trusted Publishing to PyPI — required, do not remove
+      contents: read    # checkout the release tag
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+        with:
+          persist-credentials: false
       - name: Set up Python
         uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # v6.2.0
         with:
@@ -25,4 +30,4 @@ jobs:
       - name: Build sdist + wheel
         run: python -m build
       - name: Publish via Trusted Publishing
-        uses: pypa/gh-action-pypi-publish@6733eb7d741f0b11ec6a39b58540dab7590f9b7d  # v1.14.0
+        uses: pypa/gh-action-pypi-publish@cef221092ed1bacb1cc03d23a2d87d1d172e277b  # v1.14.0
