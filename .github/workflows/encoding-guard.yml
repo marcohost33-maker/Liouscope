@@ -1,0 +1,39 @@
+name: Encoding Guard
+
+on:
+  push:
+    paths: [".github/**"]
+  pull_request:
+    paths: [".github/**"]
+
+# Least privilege; the job only needs to read the checked-out tree.
+permissions: {}
+
+jobs:
+  utf8:
+    name: Reject invalid UTF-8 in .github
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+        with:
+          persist-credentials: false
+      - name: Validate UTF-8 (catches CP-1252 0x97 that silently breaks zizmor)
+        run: |
+          python3 - <<'PY'
+          import pathlib, sys
+          bad = []
+          for p in pathlib.Path(".github").rglob("*"):
+              if p.is_file():
+                  try:
+                      p.read_bytes().decode("utf-8")
+                  except UnicodeDecodeError as e:
+                      bad.append(f"{p}: {e}")
+          if bad:
+              print("::error::Invalid UTF-8 (e.g. CP-1252 0x97) found in .github/:")
+              for b in bad:
+                  print("  " + b)
+              sys.exit(1)
+          print("OK: all .github files are valid UTF-8.")
+          PY
