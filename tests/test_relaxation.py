@@ -6,12 +6,34 @@ import numpy as np
 
 from liouscope import build_liouvillian
 from liouscope.diagnostics.relaxation import (
+    _beta_from_params,
+    _beta_index,
     compute_relaxation_layer,
     entanglement_asymmetry,
     fidelity,
     relative_entropy,
     von_neumann_entropy,
 )
+
+
+def test_beta_index_matches_beta_from_params():
+    # Invariante: die BCa-CI wird auf cis[_beta_index] genommen und MUSS denselben
+    # Parameter beschreiben wie der Punktschaetzer _beta_from_params.
+    cases = {
+        "M0": np.array([2.0, 0.5]),
+        "M1": np.array([2.0, 0.5, 0.1]),
+        "M3a": np.array([2.0, 0.3, 0.7]),
+        "M3b": np.array([2.0, 0.4]),
+        "M2_beta2_smaller": np.array([1.0, 0.8, 0.5, 0.3]),  # beta2 < beta1
+        "M2_beta1_smaller": np.array([1.0, 0.3, 0.5, 0.8]),  # beta1 < beta2
+    }
+    for key, p in cases.items():
+        model = "M2" if key.startswith("M2") else key
+        idx = _beta_index(model, p)
+        assert float(p[idx]) == _beta_from_params(model, p)
+    # M2 picks the index of the actual minimum
+    assert _beta_index("M2", cases["M2_beta2_smaller"]) == 3
+    assert _beta_index("M2", cases["M2_beta1_smaller"]) == 1
 
 
 def test_d5_vne_zero_for_pure_state(pauli):
