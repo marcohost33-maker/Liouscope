@@ -170,6 +170,24 @@ def _beta_from_params(model_name: str, params: np.ndarray) -> float:
     return float("nan")
 
 
+def _beta_index(model_name: str, params: np.ndarray) -> int:
+    """Index in ``params`` of the value that :func:`_beta_from_params` returns.
+
+    The BCa CI is taken on ``cis[beta_index]`` and MUST describe the same
+    parameter as the point estimate ``beta_D``. For M2 (stretched
+    bi-exponential) ``beta_D = min(beta1, beta2)``, so the index depends on the
+    fitted params -- not a fixed constant. Previously M2 was hardcoded to index
+    1 (beta1), so when beta2 < beta1 the reported CI described a different
+    parameter than the point estimate.
+    """
+    if model_name == "M3a":
+        return 2
+    if model_name == "M2":
+        return 1 if float(params[1]) <= float(params[3]) else 3
+    # M0, M1, M3b (and fallback): beta sits at index 1
+    return 1
+
+
 def compute_relaxation_layer(
     L_super: np.ndarray,
     *,
@@ -227,7 +245,7 @@ def compute_relaxation_layer(
             if t_grid.size <= 60:
                 jk = _jackknife(winner_fn, t_grid, rel_entropy, theta_hat, None)
             cis = bca_ci(samples, theta_hat, jackknife_estimates=jk)
-            beta_idx = {"M0": 1, "M1": 1, "M3a": 2, "M3b": 1, "M2": 1}[winner]
+            beta_idx = _beta_index(winner, fits[winner].params)
             bca_lo, bca_hi = float(cis[beta_idx, 0]), float(cis[beta_idx, 1])
         except (ValueError, RuntimeError, np.linalg.LinAlgError):
             pass
