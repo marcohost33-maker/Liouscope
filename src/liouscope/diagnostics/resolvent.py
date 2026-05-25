@@ -23,7 +23,7 @@ def resolvent_peak_curve(
     L_super: np.ndarray,
     sigma: float = 1.0e-3,
     *,
-    n_omega: int = 200,
+    n_omega: int = 201,  # ungerade -> das Default-Gitter enthaelt omega=0 (Peak-Lage)
 ) -> tuple[np.ndarray, np.ndarray]:
     """Compute the resolvent norm profile along ``omega`` at fixed ``sigma``.
 
