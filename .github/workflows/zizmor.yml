@@ -32,10 +32,7 @@ jobs:
           persist-credentials: false
 
       - name: Run zizmor
-        # zizmor exits non-zero when it finds issues. Run as informational
-        # (continue-on-error) so the job surfaces findings via SARIF/log
-        # without blocking unrelated CI. Fix findings to clear the warning.
-        continue-on-error: true
+        # zizmor exits non-zero bei Findings -> dieser Step GATET die CI (rot = blockt merge).
         env:
           # [2026-05-23] Provide GH_TOKEN to authenticate zizmor's impostor-
           # commit check API calls. Without this, the audit hits unauthenticated
@@ -46,13 +43,8 @@ jobs:
         uses: zizmorcore/zizmor-action@5f14fd08f7cf1cb1609c1e344975f152c7ee938d  # v0.5.6
         with:
           persona: regular
+          # privates Repo ohne GHAS: kein Action-internes Code-Scanning-Upload (wirft sonst
+          # "Resource not accessible"). Stattdessen Findings als inline-Annotationen.
+          advanced-security: false
+          annotations: true
 
-      - name: Upload SARIF
-        # Only run if zizmor actually produced a SARIF, and tolerate the
-        # upload failing on private repos without GitHub Advanced Security.
-        if: ${{ !cancelled() && hashFiles('zizmor.sarif') != '' }}
-        continue-on-error: true
-        uses: github/codeql-action/upload-sarif@7211b7c8077ea37d8641b6271f6a365a22a5fbfa  # v4.36.0
-        with:
-          sarif_file: zizmor.sarif
-          category: zizmor
