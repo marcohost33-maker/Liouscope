@@ -40,7 +40,7 @@ def _to_jsonable(value: Any) -> Any:
 def dump_report(report: DiagnosticReport, path: str | Path) -> None:
     """Serialise a :class:`DiagnosticReport` to JSON at ``path``."""
     obj = _to_jsonable(report)
-    Path(path).write_text(json.dumps(obj, indent=2))
+    Path(path).write_text(json.dumps(obj, indent=2), encoding="utf-8")
 
 
 def load_report(path: str | Path) -> dict[str, Any]:
@@ -49,4 +49,4 @@ def load_report(path: str | Path) -> dict[str, Any]:
     The result is not converted back into the original dataclass tree; it is
     intended for downstream consumption (CI artefacts, plotting).
     """
-    return json.loads(Path(path).read_text())
+    return json.loads(Path(path).read_text(encoding="utf-8"))

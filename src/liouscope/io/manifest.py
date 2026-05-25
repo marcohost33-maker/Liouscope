@@ -129,7 +129,7 @@ def manifest_payload(report: DiagnosticReport) -> dict[str, Any]:
 
 def dump_manifest(report: DiagnosticReport, path: str | Path) -> None:
     """Write the schema-compliant manifest JSON for ``report`` to ``path``."""
-    Path(path).write_text(json.dumps(manifest_payload(report), indent=2, sort_keys=True))
+    Path(path).write_text(json.dumps(manifest_payload(report), indent=2, sort_keys=True), encoding="utf-8")
 
 
 def validate_manifest(payload: dict[str, Any]) -> None:
@@ -186,7 +186,7 @@ def validate_manifest(payload: dict[str, Any]) -> None:
         return
     schema_path = Path(__file__).resolve().parents[3] / "MANIFEST_SCHEMA.json"
     if schema_path.is_file():
-        schema = json.loads(schema_path.read_text())
+        schema = json.loads(schema_path.read_text(encoding="utf-8"))
         jsonschema.validate(instance=payload, schema=schema)
 
 
