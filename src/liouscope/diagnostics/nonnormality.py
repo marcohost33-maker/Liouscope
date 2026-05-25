@@ -79,7 +79,7 @@ def kreiss_constant(
     L_super: np.ndarray,
     *,
     n_sigma: int = 24,
-    n_omega: int = 24,
+    n_omega: int = 25,  # ungerade -> das Default-Gitter enthaelt omega=0 (Peak-Lage)
 ) -> float:
     """Kreiss constant via Mitchell 2020 grid search.
 
@@ -97,6 +97,8 @@ def kreiss_constant(
     omega_max = max(1.0, float(np.max(np.abs(np.imag(eigvals)))) + 1.0)
 
     sigmas = np.geomspace(sigma_lo, sigma_hi, n_sigma)
+    # Default n_omega ist ungerade -> Gitter enthaelt omega=0 (wo der sup oft sitzt;
+    # ein gerades Gitter springt 0 ueber). Explizite n_omega bleiben respektiert.
     omegas = np.linspace(-omega_max, omega_max, n_omega)
     n = L_super.shape[0]
     eye = np.eye(n, dtype=complex)
