@@ -105,8 +105,10 @@ python examples/quickstart.py  # smoke run
 - Do update `CHANGELOG.md` on feature merge.
 - Do reference the KANON anchor (`RESEARCH-LIOUSCOPE`) and
   `claim_status:pending` for new diagnostics until anchors confirm them.
-- Do reference `[[memory:liouscope_data_loss_2026_05_16]]` in PR bodies for
-  any branch / history-touching operation as a reminder of the disaster.
+- For any branch / history-touching operation, reference the 2026-05-16
+  data-loss incident in the PR body as a reminder of why Backup-First
+  exists (the backup-triple recovered ~20 files after an unverified
+  branch-delete + GH-GC).
 
 ## When stuck
 
@@ -115,14 +117,6 @@ python examples/quickstart.py  # smoke run
 - See `CHANGELOG.md` for what shipped in each version.
 - See `MANIFEST_SCHEMA.json` for the run-manifest contract (v1.2.0).
 - See `tests/test_anchors.py` for the canonical reference behaviour.
-
-## Coworkerz-specific anchors
-
-- KANON: `C:\Users\marco\OneDrive\Desktop\Vero\Meta\KANON\KANON_APPS.yaml`
-  (section `RESEARCH-LIOUSCOPE`)
-- Memory: `C:\Users\marco\.claude\projects\C--Users-marco\memory\MEMORY.md`
-- Recovery backup: `C:\Users\marco\OneDrive\Desktop\Vero\Liouscope_Backup_2026-05-16\`
-- Rollout plan: `C:\Users\marco\OneDrive\Desktop\Vero\Vero Pläne\2026-05-23_agents-md-cross-repo-rollout-plan.md`
 
 ---
 
