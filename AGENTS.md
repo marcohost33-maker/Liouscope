@@ -1,0 +1,156 @@
+---
+name: liouscope-agents-md
+description: AI coding agent instructions for LiouScope (open quantum lattice diagnostics)
+version: "1.1"
+last_updated: 2026-05-28
+priority_when_in_conflict: 1
+---
+
+# AGENTS.md — LiouScope
+
+> AI Coding Agent Instructions. Tool-agnostic format per
+> [agents.md](https://agents.md/) (Linux Foundation AAIF standard, Dec 2025).
+> Read by Codex, Cursor, Goose and others. Claude Code does not read AGENTS.md
+> natively (issue anthropics/claude-code#6235); see `CLAUDE.md` which imports
+> this file via `@AGENTS.md`. Coworkerz convention: AGENTS.md is the
+> single-source-of-truth; `CLAUDE.md` is the thin import layer.
+
+> **Priority when working agreements conflict:** lower number wins.
+> §1 (working agreements) > §2 (conventions) > §3 (don't/do) > §4 (when stuck).
+
+## Project context
+
+- **Stack:** Python >=3.10 (CI matrix 3.10/3.11/3.12/3.13), pytest, ruff, mypy,
+  NumPy / SciPy, optional QuTiP cross-checks.
+- **Purpose:** Multi-diagnostic relaxation analysis for open quantum lattice
+  systems (GKSL / Lindblad). Twenty diagnostics D1-D20 in six layers + twelve
+  mechanism classes A1-A12. Replaces single-number "decay rate" with a
+  layered, auditable `DiagnosticReport`.
+- **Version:** 0.2.0 (see `pyproject.toml`)
+- **Taxonomy version:** `A1-A12-v3.1`
+- **Manifest schema:** `MANIFEST_SCHEMA.json` v1.2.0 (SHA-256-stable run manifests)
+- **License:** Apache-2.0
+- **Visibility:** PRIVATE (marcohost33-maker/Liouscope)
+- **KANON anchor:** `RESEARCH-LIOUSCOPE` in `Vero/Meta/KANON/KANON_APPS.yaml`
+
+## Repository layout
+
+```
+src/liouscope/            # main package
+tests/                    # pytest suite (~18 test modules)
+  └── test_anchors.py      # anchor regressions — must pass on every CI run
+examples/                 # quickstart + tutorial scripts
+benchmarks/               # performance / reproducibility scripts
+figures/                  # generated diagnostic plots
+MANIFEST_SCHEMA.json      # contract for run manifests (v1.2.0)
+CITATION.cff              # DOI / academic citation
+codemeta.json             # CodeMeta 3.0 metadata
+.github/workflows/
+  ├── ci.yml              # test + lint + mypy + anchor regressions (required)
+  ├── scorecard.yml       # OpenSSF Scorecard (private-repo guarded)
+  ├── encoding-guard.yml  # UTF-8 / line-ending guard
+  ├── zizmor.yml          # workflow security audit (SHA-pinned actions)
+  └── pypi.yml            # release publication template
+```
+
+## Build / test commands
+
+```bash
+python -m venv .venv
+source .venv/bin/activate     # or .venv\Scripts\activate on Windows
+pip install -e .[dev,qutip]
+pytest -q                      # full suite
+pytest tests/test_anchors.py -v   # anchor regressions only (CI gate)
+ruff check src tests
+mypy src/liouscope             # currently continue-on-error in CI
+python examples/quickstart.py  # smoke run
+```
+
+## Working agreements
+
+1. **Branch protection: Tier-2 active.** `main` requires `ci.yml` jobs green
+   (4 required status checks across the Python matrix, strict=true). PRs only.
+2. **Backup-First on destructive ops.** Loss-of-history incident 2026-05-16
+   wiped ~20 files via unverified branch-delete + GH-GC. Backup-Triple is the
+   recovery anchor in `Vero/Liouscope_Backup_2026-05-16/`. Before any
+   `git push --force`, branch delete, or ref-PATCH: capture pre-SHA via
+   `gh api repos/.../git/refs/heads/...`, run the op, verify post-SHA.
+3. **Anchor regressions are sacred.** `tests/test_anchors.py` pins the
+   reference behaviour of D1-D20 on canonical fixtures. If anchors must
+   change, do it in a dedicated PR with the physics rationale in the body,
+   not as a side-effect of an unrelated change.
+4. **SHA-pin all GitHub Actions.** Welle G established the gold-standard:
+   every action reference is `@<full-sha>  # vX.Y.Z`. Dependabot is on a
+   cooldown to avoid PR-spam.
+5. **Reproducibility.** Manifest seeds, library versions, lattice geometry
+   are recorded automatically; do not bypass the manifest writer.
+6. **Reality-Anchor.** Prefer "anchors pass (verified <date>)" over
+   "diagnostics implemented". No claims without code-belege.
+7. **Plain paths in code-blocks** for file references (no markdown links —
+   `code-block` paths are clickable in CLI; markdown links are not).
+
+## Conventions
+
+- **Imports:** absolute from `liouscope`, no `..` traversal.
+- **Numerical libraries:** prefer `numpy`/`scipy`; `qutip` is an optional
+  extra used for cross-checks, not a core runtime dependency.
+- **Plots:** matplotlib only, no interactive backends in CI; save to
+  `figures/` if persisted.
+- **Citations:** changes touching results or methodology must update
+  `CITATION.cff` and the relevant `MANIFEST_SCHEMA` version if the run
+  manifest contract changes.
+- **Docs:** README is the public surface; deep methodology in module
+  docstrings.
+
+## Don't
+
+- Don't merge without all 4 Python-matrix `ci.yml` jobs green.
+- Don't use `--no-verify`, `--no-gpg-sign`, `--force` without explicit User1 OK.
+- Don't bump `MANIFEST_SCHEMA` version without simultaneously updating
+  consuming code paths and adding a backward-compat note in `CHANGELOG.md`.
+- Don't introduce a "single decay rate" API surface — it contradicts the
+  library's core thesis ("no single number").
+- Don't leak `GITHUB_TOKEN` or signing keys in logs.
+
+## Do
+
+- Do run `pytest -q` + `ruff check` before pushing.
+- Do update `CHANGELOG.md` on feature merge.
+- Do reference the KANON anchor (`RESEARCH-LIOUSCOPE`) and
+  `claim_status:pending` for new diagnostics until anchors confirm them.
+- For any branch / history-touching operation, reference the 2026-05-16
+  data-loss incident in the PR body as a reminder of why Backup-First
+  exists (the backup-triple recovered ~20 files after an unverified
+  branch-delete + GH-GC).
+
+## When stuck
+
+- See `README.md` "Why LiouScope" for the design philosophy
+  (no-single-number, explicit uncertainty, auditable manifests).
+- See `CHANGELOG.md` for what shipped in each version.
+- See `MANIFEST_SCHEMA.json` for the run-manifest contract (v1.2.0).
+- See `tests/test_anchors.py` for the canonical reference behaviour.
+- **Escalate after 3 failed attempts at the same step** — stop and ask in a PR
+  draft or issue instead of looping.
+
+## Definition of Done
+
+A change is "done" only when **all** of the following hold:
+
+| # | Check | Exit-Code / Evidence |
+|---|---|---|
+| 1 | `pytest -q` runs cleanly | exit 0 |
+| 2 | `pytest tests/test_anchors.py -v` (anchor regressions) green | exit 0 |
+| 3 | `ruff check src tests` passes | exit 0 |
+| 4 | All 4 matrix jobs `test (ubuntu-latest, 3.10..3.13)` green on PR | required-status checks |
+| 5 | If methodology/results touched: `CITATION.cff` updated | PR diff |
+| 6 | If run-manifest contract touched: `MANIFEST_SCHEMA.json` version bumped + `CHANGELOG.md` migration note | PR diff |
+| 7 | `CHANGELOG.md` updated | PR diff |
+| 8 | PR body contains Summary + Test plan checklist | manual review |
+
+A PR that misses any of 1-8 is not "ready". Anchor regressions (item 2) are
+the sacred gate — never merge with them red, even if the change is unrelated.
+
+---
+
+*Tier-1 rollout 2026-05-28 (v1.0 → v1.1 hardening). Format spec: <https://agents.md/>.*
