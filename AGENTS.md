@@ -1,9 +1,22 @@
+---
+name: liouscope-agents-md
+description: AI coding agent instructions for LiouScope (open quantum lattice diagnostics)
+version: "1.1"
+last_updated: 2026-05-28
+priority_when_in_conflict: 1
+---
+
 # AGENTS.md — LiouScope
 
 > AI Coding Agent Instructions. Tool-agnostic format per
 > [agents.md](https://agents.md/) (Linux Foundation AAIF standard, Dec 2025).
-> Read by Codex, Claude Code, Cursor, Goose and others. Coworkerz convention:
-> AGENTS.md is primary across all repos.
+> Read by Codex, Cursor, Goose and others. Claude Code does not read AGENTS.md
+> natively (issue anthropics/claude-code#6235); see `CLAUDE.md` which imports
+> this file via `@AGENTS.md`. Coworkerz convention: AGENTS.md is the
+> single-source-of-truth; `CLAUDE.md` is the thin import layer.
+
+> **Priority when working agreements conflict:** lower number wins.
+> §1 (working agreements) > §2 (conventions) > §3 (don't/do) > §4 (when stuck).
 
 ## Project context
 
@@ -117,7 +130,27 @@ python examples/quickstart.py  # smoke run
 - See `CHANGELOG.md` for what shipped in each version.
 - See `MANIFEST_SCHEMA.json` for the run-manifest contract (v1.2.0).
 - See `tests/test_anchors.py` for the canonical reference behaviour.
+- **Escalate after 3 failed attempts at the same step** — stop and ask in a PR
+  draft or issue instead of looping.
+
+## Definition of Done
+
+A change is "done" only when **all** of the following hold:
+
+| # | Check | Exit-Code / Evidence |
+|---|---|---|
+| 1 | `pytest -q` runs cleanly | exit 0 |
+| 2 | `pytest tests/test_anchors.py -v` (anchor regressions) green | exit 0 |
+| 3 | `ruff check src tests` passes | exit 0 |
+| 4 | All 4 matrix jobs `test (ubuntu-latest, 3.10..3.13)` green on PR | required-status checks |
+| 5 | If methodology/results touched: `CITATION.cff` updated | PR diff |
+| 6 | If run-manifest contract touched: `MANIFEST_SCHEMA.json` version bumped + `CHANGELOG.md` migration note | PR diff |
+| 7 | `CHANGELOG.md` updated | PR diff |
+| 8 | PR body contains Summary + Test plan checklist | manual review |
+
+A PR that misses any of 1-8 is not "ready". Anchor regressions (item 2) are
+the sacred gate — never merge with them red, even if the change is unrelated.
 
 ---
 
-*Tier-1 rollout 2026-05-28. Format spec: <https://agents.md/>.*
+*Tier-1 rollout 2026-05-28 (v1.0 → v1.1 hardening). Format spec: <https://agents.md/>.*
