@@ -9,6 +9,24 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Added
 - `liouscope._zhou`: Zhou universal mixing-time predictor (D24) as an opt-in
   diagnostic. Frozen `ZhouPredictorResult` dataclass.
+
+### Changed
+- `MANIFEST_SCHEMA.json` moved from the repo root into
+  `src/liouscope/MANIFEST_SCHEMA.json`. `pyproject.toml` already listed it
+  under `[tool.setuptools.package-data]`, but the file was not actually at
+  that path, so wheels built from PyPI shipped without it. The schema is
+  now correctly bundled (verified by inspecting the wheel) and loaded via
+  `importlib.resources` so the lookup works under editable, wheel and
+  zipfile installs.
+- `validate_manifest` now uses a cached
+  `jsonschema.Draft202012Validator` (per the python-jsonschema performance
+  guidance) instead of the autodetecting `jsonschema.validate` convenience
+  wrapper. The bundled schema declares `draft/2020-12`, so this is the
+  matching validator class.
+- `_utc_now_iso()` uses the idiomatic `isoformat(timespec="microseconds").replace("+00:00", "Z")`
+  pattern. Pinning `timespec` guarantees a fixed-width 27-character
+  timestamp string on every call, eliminating the case where
+  zero-microsecond timestamps would lose the fractional component.
 - `liouscope.io.manifest_payload`: schema-compliant projection of a
   `DiagnosticReport` that includes `schema_version`, `taxonomy_version`,
   and `diagnostic_schema_version` as documented in `MANIFEST_SCHEMA.json`.

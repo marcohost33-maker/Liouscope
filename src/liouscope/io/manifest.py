@@ -7,6 +7,8 @@ import hashlib
 import json
 import platform
 import sys
+from functools import lru_cache
+from importlib import resources
 from pathlib import Path
 from typing import Any
 
@@ -61,17 +63,21 @@ def make_run_id(input_hash: str, seed: int, framework_version: str) -> str:
 
 
 def _utc_now_iso() -> str:
-    """Timezone-aware UTC timestamp.
+    """Deterministic timezone-aware UTC timestamp.
 
-    ``datetime.utcnow()`` is deprecated in 3.12 and slated for removal in
-    3.14. We format ``now(tz=utc)`` and rewrite the trailing ``+00:00``
-    offset to the canonical ``Z`` suffix so manifest hashes stay stable.
+    ``datetime.utcnow()`` is deprecated in 3.12 and removed in 3.14. We
+    use ``now(tz=utc)``, pin ``timespec="microseconds"`` so the string
+    length is identical on every call, and rewrite the trailing
+    ``+00:00`` offset to the canonical ``Z`` suffix (RFC 3339 / ISO 8601
+    "Zulu" form) so manifest hashes stay stable across platforms.
+
+    ``datetime.timezone.utc`` is used rather than ``datetime.UTC`` because
+    the latter only exists in Python 3.11+; the package supports 3.10.
     """
     return (
         datetime.datetime.now(datetime.timezone.utc)
-        .replace(tzinfo=None)
-        .isoformat()
-        + "Z"
+        .isoformat(timespec="microseconds")
+        .replace("+00:00", "Z")
     )
 
 
@@ -132,11 +138,45 @@ def dump_manifest(report: DiagnosticReport, path: str | Path) -> None:
     Path(path).write_text(json.dumps(manifest_payload(report), indent=2, sort_keys=True), encoding="utf-8")
 
 
+@lru_cache(maxsize=1)
+def _load_schema() -> dict[str, Any]:
+    """Load the bundled ``MANIFEST_SCHEMA.json`` once.
+
+    Uses :mod:`importlib.resources` so the lookup works whether the
+    package is installed editable, from a wheel, or from a zipfile. The
+    schema is checked into ``src/liouscope/MANIFEST_SCHEMA.json`` and
+    listed in :file:`pyproject.toml` under ``[tool.setuptools.package-data]``.
+    """
+    with resources.files("liouscope").joinpath("MANIFEST_SCHEMA.json").open(
+        "r", encoding="utf-8"
+    ) as fh:
+        return json.load(fh)
+
+
+@lru_cache(maxsize=1)
+def _compiled_validator() -> Any:
+    """Return a cached ``Draft202012Validator`` for the manifest schema.
+
+    Per the python-jsonschema docs the high-throughput pattern is to
+    instantiate a specific draft validator once and reuse it, instead of
+    calling :func:`jsonschema.validate` which auto-detects the draft on
+    every call. Returns ``None`` when :mod:`jsonschema` is not installed.
+    """
+    try:
+        from jsonschema import Draft202012Validator  # type: ignore[import-untyped]
+    except ImportError:
+        return None
+    return Draft202012Validator(_load_schema())
+
+
 def validate_manifest(payload: dict[str, Any]) -> None:
     """Validate ``payload`` against :file:`MANIFEST_SCHEMA.json`.
 
-    Uses :mod:`jsonschema` when available; falls back to a built-in subset
-    check on the required fields so the function never silently passes.
+    Runs a built-in subset check on the required fields and value spaces
+    so the function never silently passes when :mod:`jsonschema` is
+    absent. When :mod:`jsonschema` *is* installed, additionally runs the
+    cached ``Draft202012Validator`` against the bundled schema for full
+    structural conformance.
     """
     required_fields = {
         "schema_version",
@@ -179,15 +219,9 @@ def validate_manifest(payload: dict[str, Any]) -> None:
     if payload.get("solver_path") not in (None, "dense", "sparse_arpack"):
         raise ValueError(f"unknown solver_path {payload['solver_path']!r}")
 
-    # Optional strict JSON Schema validation when jsonschema is installed.
-    try:
-        import jsonschema  # type: ignore[import-not-found,import-untyped]
-    except ImportError:
-        return
-    schema_path = Path(__file__).resolve().parents[3] / "MANIFEST_SCHEMA.json"
-    if schema_path.is_file():
-        schema = json.loads(schema_path.read_text(encoding="utf-8"))
-        jsonschema.validate(instance=payload, schema=schema)
+    validator = _compiled_validator()
+    if validator is not None:
+        validator.validate(payload)
 
 
 __all__ = [

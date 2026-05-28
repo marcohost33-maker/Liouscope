@@ -125,4 +125,40 @@ def test_governance_timestamp_is_iso_with_z_suffix():
     # Parses cleanly as ISO 8601 once the Z is replaced with a UTC offset.
     import datetime
 
-    datetime.datetime.fromisoformat(ts.replace("Z", "+00:00"))
+    parsed = datetime.datetime.fromisoformat(ts.replace("Z", "+00:00"))
+    assert parsed.tzinfo == datetime.timezone.utc
+
+
+def test_governance_timestamp_has_fixed_width():
+    """timespec='microseconds' must produce a constant-length string."""
+    # YYYY-MM-DDTHH:MM:SS.ffffff + 'Z' = 27 characters.
+    ts1 = _small_report().governance.timestamp
+    ts2 = _small_report().governance.timestamp
+    assert len(ts1) == len(ts2) == 27
+
+
+def test_schema_loads_from_package():
+    """``MANIFEST_SCHEMA.json`` must ship inside the package, not the repo root.
+
+    A wheel install does not include files outside ``src/liouscope/``;
+    pyproject.toml declares the schema as package-data, so the file
+    must live next to ``__init__.py``.
+    """
+    from importlib import resources
+
+    files = resources.files("liouscope")
+    schema_text = files.joinpath("MANIFEST_SCHEMA.json").read_text(encoding="utf-8")
+    schema = json.loads(schema_text)
+    assert schema["properties"]["schema_version"]["const"] == "1.2.0"
+    assert schema["properties"]["taxonomy_version"]["const"] == TAXONOMY_VERSION
+    assert schema["properties"]["diagnostic_schema_version"]["const"] == DIAGNOSTIC_SCHEMA_VERSION
+
+
+def test_validator_is_cached():
+    """The compiled jsonschema validator must be reused across calls."""
+    pytest.importorskip("jsonschema")
+    from liouscope.io.manifest import _compiled_validator
+
+    a = _compiled_validator()
+    b = _compiled_validator()
+    assert a is b  # lru_cache memoises the validator
