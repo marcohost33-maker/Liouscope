@@ -18,7 +18,7 @@ The library implements **twenty diagnostics D1-D20** organised in six layers
 
 > **Status:** v0.2.0 released 2026-04-17. Research / pre-clinical. Not for diagnostic or operational use
 > on production hardware. See [`CHANGELOG.md`](CHANGELOG.md) for version history and
-> [`MANIFEST_SCHEMA.json`](MANIFEST_SCHEMA.json) for the run-manifest contract.
+> [`src/liouscope/MANIFEST_SCHEMA.json`](src/liouscope/MANIFEST_SCHEMA.json) for the run-manifest contract.
 
 ---
 
@@ -143,9 +143,13 @@ LiouScope is built for paper-grade reproducibility:
 
 - **Seeded everywhere.** `liouscope.io.seed.seed_everything()` controls NumPy, SciPy, Python
   random, and the BLAS thread-pool (see [`tests/conftest.py`](tests/conftest.py)).
-- **Run manifests are SHA-256 stable.** Every diagnostic run can emit a JSON manifest validated
-  against `MANIFEST_SCHEMA.json` (schema v1.2.0); two runs on the same hardware with the same seed
-  produce byte-identical manifests.
+- **Run manifests are SHA-256 stable.** Every diagnostic run can emit a JSON manifest
+  (`io.dump_manifest(report, path)`) validated against
+  [`MANIFEST_SCHEMA.json`](src/liouscope/MANIFEST_SCHEMA.json) (schema v1.2.0) via
+  `io.validate_manifest(payload)`. The validator uses a cached
+  `jsonschema.Draft202012Validator` when [`jsonschema`](https://python-jsonschema.readthedocs.io/)
+  is installed, and falls back to a built-in subset check otherwise. Two runs on the same
+  hardware with the same seed produce byte-identical manifests.
 - **Anchor tests.** `tests/test_anchors.py` locks the numerical anchors that paper figures depend on;
   changes to physics code that move these values are caught in CI.
 - **Paper-figure pipeline.** `figures/generate_all.py` regenerates Fig 1-3 deterministically.
