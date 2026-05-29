@@ -4,7 +4,7 @@ All notable changes to LiouScope are documented in this file. The format is base
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased] -- v0.2.1 (post-submission tooling)
+## [0.3.0] - 2026-05-28
 
 ### Added
 - `liouscope._zhou`: Zhou universal mixing-time predictor (D24) as an opt-in
@@ -49,6 +49,16 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `diagnose(L, rho_initial=...)`, `report.relaxation.beta_D`,
   `report.relaxation.bca_ci_beta`) — the previous snippet referenced
   symbols that did not exist (`Chain1D`, `XXZ`, `tau_eff`, `ci95`).
+
+
+### Security & CI Hardening (Welle 4)
+- `zizmor` workflow security audit added (SHA-pinned `zizmorcore/zizmor-action@v0.5.6` via `5f14fd08...`).
+- All Actions SHA-pinned (`actions/checkout@v4.2.2`, `setup-python@v6.2.0`, etc) — Welle G Gold-Standard pattern.
+- Dependabot configured (weekly grouped pip + github-actions, 7-day cooldown against Shai-Hulud-style supply-chain attacks, May 2026).
+- OpenSSF Scorecard workflow (private-repo SARIF guard + workflow_dispatch).
+- Tier-2.5 Branch Protection: `enforce_admins=true`, `required_conversation_resolution=true`, `dismiss_stale_reviews=true` (solo-dev pattern, `required_approving_review_count=0`).
+- `delete_branch_on_merge=true`.
+- `.gitattributes` (eol=lf) for cross-platform consistency.
 
 ## [0.2.0] -- 2026-04-17
 
