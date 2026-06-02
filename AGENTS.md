@@ -110,7 +110,7 @@ python examples/quickstart.py  # smoke run
   consuming code paths and adding a backward-compat note in `CHANGELOG.md`.
 - Don't introduce a "single decay rate" API surface — it contradicts the
   library's core thesis ("no single number").
-- Don't leak `GITHUB_TOKEN` or signing keys in logs.
+- Don't commit or leak secrets, API keys, `.env`/credential files, `GITHUB_TOKEN`, or signing keys (logs included).
 
 ## Do
 
