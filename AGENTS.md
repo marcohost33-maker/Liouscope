@@ -1,8 +1,8 @@
 ---
 name: liouscope-agents-md
 description: AI coding agent instructions for LiouScope (open quantum lattice diagnostics)
-version: "1.1"
-last_updated: 2026-05-28
+version: "1.2"
+last_updated: 2026-06-03
 priority_when_in_conflict: 1
 ---
 
@@ -101,6 +101,18 @@ python examples/quickstart.py  # smoke run
   manifest contract changes.
 - **Docs:** README is the public surface; deep methodology in module
   docstrings.
+
+## Branch & PR conventions (agents)
+
+- **One agent = one branch prefix:** `claude/<task>` (Claude Code), `codex/<task>`
+  (OpenAI Codex), `bot/<task>` (CI/automation). Human-led work: `feat|fix|docs/<task>`.
+- **Agent output opens as a Draft PR** and stays draft until Definition-of-Done is
+  verified; then mark ready.
+- **Label agent PRs:** `agent:claude` / `agent:codex` / `agent:bot`.
+- **Auto-merge over manual merge:** enable `gh pr merge --auto --squash` once required
+  checks exist; a second concurrent PR must rebase on the updated main.
+- **No concurrent agent pushes** to the same repo: serialize, or split work by branch
+  namespace and let auto-merge order the merges.
 
 ## Don't
 
