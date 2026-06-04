@@ -7,6 +7,28 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Added
+- Statistics-hardening wave (audit 2026-06-04, findings S1-S6):
+  - `core.lindblad.DegenerateSteadyStateError` + `steady_state(allow_degenerate=)`
+    (S1): a multi-dimensional Liouvillian null space (non-unique NESS /
+    decoherence-free subspace) now fails closed instead of silently returning
+    an arbitrary representative; opt in via `allow_degenerate=True` for one
+    representative with a `RuntimeWarning`.
+  - `fitting.neff.ar1_correlation_corrected` (S2): small-sample bias-corrected
+    lag-1 autocorrelation `(rho*(n-1)+1)/(n-3)` (Marriott-Pope/Kendall;
+    arXiv:2010.05870) + `RuntimeWarning` at `n <= 40`. Wired into `fit_gls_ar1`
+    so AR(1)-whitened CIs are no longer over-confident at small `n`.
+  - Two exact analytic anchors in `tests/test_anchors.py` (anti-circularity):
+    pure-dephasing Liouvillian gap = `2*gamma`, amplitude-damping coherence
+    decay rate = `gamma/2`, both asserted to `atol=1e-12`.
+  - `.github/workflows/ci-qutip.yml`: dedicated job that installs the QuTiP
+    extra and runs the QuTiP cross-checks **without skipping** (`pytest -m
+    qutip`), plus a guard against a vacuous 0-collected run. Closes the gap
+    where cross-family validation only ever skipped in CI. (Required-check
+    registration is done separately by a maintainer.)
+  - `_zhou.CLAIM_STATUS` / `_zhou.CLAIM_REFERENCE` (S6): the D24 Zhou predictor
+    is marked `pending`/unverified because its cited reference
+    (arXiv:2601.06256) could not be independently verified at audit time.
+    README + module docstring annotated accordingly.
 - `_consts.EPS_DIV`: canonical division-by-zero floor (1.0e-300) shared by the
   Petermann inner-product guard in `diagnostics.nonnormality.petermann_factors`
   and `_zhou`. Replaces the previously hard-coded `1.0e-300` magic numbers.
@@ -23,6 +45,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   code, which raised `LinAlgError` on non-finite input).
 
 ### Changed
+- `fitting.bootstrap.bca_ci` (S3, S4): the BCa bias-correction `z0` now uses
+  the Efron-1987 half-correction for ties (`mean(<) + 0.5*mean(==)`) instead of
+  a strict `<` (which drove `z0 -> -inf` when bootstrap replicates equalled
+  `theta_hat`); CI endpoints now use linear quantile interpolation
+  (`np.quantile`) instead of granular nearest-rank.
 - CI `mypy src/liouscope` is now an enforcing gate (`continue-on-error` removed);
   the previously type-blind 18 `mypy` findings were fixed (annotated numpy
   return locals, `is_dataclass` instance narrowing). No behaviour change.

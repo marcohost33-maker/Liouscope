@@ -225,6 +225,58 @@ def test_anchor_N_zhou_is_separate_module(pauli):
     assert res.mixing_time_upper >= res.mixing_time_lower > 0
 
 
+# --- Exact analytic anchors (anti-circularity) -------------------------------
+# These two pin LiouScope's spectrum against *closed-form* rates derived by
+# hand from the GKSL master equation, NOT against LiouScope itself or QuTiP.
+# They break the circularity where every numeric check is validated by another
+# numeric run of the same code base.
+
+
+def test_anchor_exact_pure_dephasing_gap_equals_2gamma(pauli):
+    """Pure dephasing (H=0, jump=Z, rate gamma): Liouvillian gap = 2*gamma.
+
+    Closed form: the dissipator gamma*(Z rho Z - rho) leaves populations
+    invariant (eigenvalue 0, twice) and damps both coherences with eigenvalue
+    -2*gamma. Hence the spectral gap (smallest non-zero |Re lambda|) is exactly
+    2*gamma, independent of any numerical reference.
+    """
+    Z = pauli["Z"]
+    H = np.zeros((2, 2), dtype=complex)
+    for gamma in (0.25, 0.5, 1.3):
+        L = build_liouvillian(H, [Z], [gamma])
+        eigs = eig_nonhermitian(L).eigenvalues
+        nonzero = eigs[np.abs(eigs) > 1e-12]
+        gap = float(-np.max(np.real(nonzero)))
+        np.testing.assert_allclose(gap, 2.0 * gamma, rtol=0.0, atol=1e-12)
+        # And the damped eigenvalues are exactly -2*gamma (the coherence pair).
+        coherence_eigs = np.sort(np.real(nonzero))[:2]
+        np.testing.assert_allclose(
+            coherence_eigs, [-2.0 * gamma, -2.0 * gamma], rtol=0.0, atol=1e-12
+        )
+
+
+def test_anchor_exact_amplitude_damping_coherence_rate_equals_half_gamma(pauli):
+    """Amplitude damping (H=0, jump=sigma_-, rate gamma): coherence rate = gamma/2.
+
+    Closed form for spontaneous emission: populations relax at rate gamma
+    (eigenvalue -gamma) while the off-diagonal coherences decay at rate
+    gamma/2 (a complex-conjugate eigenpair with Re = -gamma/2). This pins the
+    factor-of-two relation between T1 (=1/gamma) and T2 (=2/gamma) analytically.
+    """
+    sm = 0.5 * (pauli["X"] + 1j * pauli["Y"])  # |0><1| lowering operator
+    H = np.zeros((2, 2), dtype=complex)
+    for gamma in (0.4, 0.83, 2.0):
+        L = build_liouvillian(H, [sm], [gamma])
+        eigs = np.sort(np.real(eig_nonhermitian(L).eigenvalues))
+        # Spectrum is {-gamma, -gamma/2, -gamma/2, 0}.
+        np.testing.assert_allclose(
+            eigs,
+            [-gamma, -gamma / 2.0, -gamma / 2.0, 0.0],
+            rtol=0.0,
+            atol=1e-12,
+        )
+
+
 # QuTiP cross-check supplements anchor A.
 @qutip_required
 def test_qutip_cross_check_dephased_qubit(pauli):
