@@ -16,8 +16,6 @@ import sys
 import time
 from pathlib import Path
 
-import numpy as np
-
 import liouscope as ls
 from liouscope.examples import all_systems
 
