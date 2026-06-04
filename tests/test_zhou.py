@@ -8,16 +8,22 @@ import pytest
 from liouscope import _zhou, build_liouvillian
 
 
-def test_zhou_claim_status_is_pending():
-    """S6 audit: the unverified reference must be flagged as pending.
+def test_zhou_claim_status_is_reference_verified_bound_coarser():
+    """S6 re-audit 2026-06-04: reference verified, but our bound is coarser.
 
-    The D24 Zhou predictor cites arXiv:2601.06256, which could not be
-    independently verified. The module must advertise claim_status='pending'
-    so downstream tooling never treats D24 as publication-grade.
+    The D24 Zhou predictor cites arXiv:2601.06256, which was independently
+    verified to exist (Yi-Neng Zhou, "Universal Predictors for Mixing Time
+    more than Liouvillian Gap", v3 2026-05-20). Our implemented upper bound is
+    in the same family as Zhou's Eq.(16) but is a *related, generally coarser*
+    surrogate (Petermann Schatten-2 factor instead of Zhou's per-mode
+    trace-norm factor C_j, a single global gap/K_max, and no N_mode factor).
+    The module must advertise this exact status so downstream tooling never
+    presents our bound as a verbatim implementation of Eq.(16).
     """
-    assert _zhou.CLAIM_STATUS == "pending"
-    assert "UNVERIFIED" in _zhou.CLAIM_REFERENCE
+    assert _zhou.CLAIM_STATUS == "reference-verified-bound-coarser"
+    assert "UNVERIFIED" not in _zhou.CLAIM_REFERENCE
     assert "2601.06256" in _zhou.CLAIM_REFERENCE
+    assert "Yi-Neng Zhou" in _zhou.CLAIM_REFERENCE
 
 
 def test_zhou_returns_bounds(pauli):
