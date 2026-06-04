@@ -21,6 +21,16 @@ EPS_GAP: Final[float] = 1.0e-10
 EPS_HERMITICITY: Final[float] = 1.0e-9
 EPS_TRACE: Final[float] = 1.0e-10
 
+# Division-by-zero floor (NOT a physical tolerance). Guards denominators that
+# can legitimately underflow to ~0 for perfectly defective modes, e.g. the
+# Petermann inner product |<l, r>|^2. Set near the smallest positive normal
+# double (~2.2e-308) so that only a genuinely vanishing denominator yields inf;
+# a merely small-but-finite denominator still produces a large finite value.
+# Deliberately distinct from EPS_GAP/EPS_SUPP, which encode physics-scale
+# thresholds — collapsing this onto EPS_GAP would wrongly flag near-defective
+# (but finite) modes as inf. See nonnormality.petermann_factors and _zhou.
+EPS_DIV: Final[float] = 1.0e-300
+
 VERDICT_CONFIRMED: Final[str] = "CONFIRMED"
 VERDICT_EXCLUDED: Final[str] = "EXCLUDED"
 VERDICT_CANDIDATE: Final[str] = "CANDIDATE"

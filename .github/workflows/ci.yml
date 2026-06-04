@@ -34,7 +34,6 @@ jobs:
         run: ruff check src tests
       - name: Type check
         run: mypy src/liouscope
-        continue-on-error: true
       - name: Run anchor regressions (must pass)
         run: pytest tests/test_anchors.py -v
       - name: Run full test suite

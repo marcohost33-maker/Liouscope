@@ -26,7 +26,7 @@ def _to_jsonable(value: Any) -> Any:
         return value.item()
     if isinstance(value, FitResult):
         return {f.name: _to_jsonable(getattr(value, f.name)) for f in fields(value)}
-    if is_dataclass(value):
+    if is_dataclass(value) and not isinstance(value, type):
         return {k: _to_jsonable(v) for k, v in asdict(value).items()}
     if isinstance(value, dict):
         return {str(k): _to_jsonable(v) for k, v in value.items()}
@@ -49,4 +49,5 @@ def load_report(path: str | Path) -> dict[str, Any]:
     The result is not converted back into the original dataclass tree; it is
     intended for downstream consumption (CI artefacts, plotting).
     """
-    return json.loads(Path(path).read_text(encoding="utf-8"))
+    loaded: dict[str, Any] = json.loads(Path(path).read_text(encoding="utf-8"))
+    return loaded

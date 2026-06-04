@@ -62,7 +62,7 @@ pip install -e .[dev,qutip]
 pytest -q                      # full suite
 pytest tests/test_anchors.py -v   # anchor regressions only (CI gate)
 ruff check src tests
-mypy src/liouscope             # currently continue-on-error in CI
+mypy src/liouscope             # enforcing CI gate (must exit 0)
 python examples/quickstart.py  # smoke run
 ```
 

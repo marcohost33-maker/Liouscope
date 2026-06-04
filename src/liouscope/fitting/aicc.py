@@ -40,7 +40,7 @@ def gaussian_log_likelihood(
         sigma_sq = max(rss / n, 1.0e-30)
     else:
         sigma_sq = sigma * sigma
-    return -0.5 * n * (np.log(2.0 * np.pi * sigma_sq) + rss / (n * sigma_sq))
+    return float(-0.5 * n * (np.log(2.0 * np.pi * sigma_sq) + rss / (n * sigma_sq)))
 
 
 def choose_model(aiccs: Mapping[str, float]) -> str:

@@ -24,7 +24,7 @@ from __future__ import annotations
 import numpy as np
 import scipy.linalg as sla
 
-from .._consts import EPS_GAP
+from .._consts import EPS_DIV, EPS_GAP
 from .._types import NonNormalityResult
 
 
@@ -61,7 +61,7 @@ def petermann_factors(
         r = vr[:, j]
         l = vl[:, j]
         denom = abs(np.vdot(l, r)) ** 2
-        if denom <= 1.0e-300:
+        if denom <= EPS_DIV:
             K = np.inf
         else:
             K = float((np.linalg.norm(r) ** 2 * np.linalg.norm(l) ** 2) / denom)

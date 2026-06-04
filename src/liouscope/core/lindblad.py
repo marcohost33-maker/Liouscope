@@ -138,8 +138,8 @@ def steady_state(L_super: np.ndarray, *, atol: float = 1.0e-9) -> np.ndarray:
             raise RuntimeError("Cannot normalise steady state: trace too small")
     rho = rho / tr
     # Force Hermitian projection one more time
-    rho = 0.5 * (rho + rho.conj().T)
-    return rho
+    rho_out: np.ndarray = 0.5 * (rho + rho.conj().T)
+    return rho_out
 
 
 __all__ = ["build_liouvillian", "steady_state", "unvec", "vec"]
