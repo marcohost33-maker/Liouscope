@@ -29,7 +29,7 @@ def main() -> None:
         "boundary":        boundary_dephasing_jumps,
         "bulk_amplitude":  bulk_amplitude_damping_jumps,
     }
-    print(f"Geometry           Dissipator        Delta     model  beta_D    a_class")
+    print("Geometry           Dissipator        Delta     model  beta_D    a_class")
     for geom_name, lat in geometries.items():
         H = ising_hamiltonian(lat, J=1.0, h=0.5)
         N = lat.n_sites
