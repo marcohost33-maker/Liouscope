@@ -55,6 +55,28 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   return locals, `is_dataclass` instance narrowing). No behaviour change.
 - `_zhou`: zero-eigenvalue and division-by-zero thresholds now use the canonical
   `EPS_GAP`/`EPS_DIV` constants instead of inline `1.0e-10`/`1.0e-300`.
+- `_zhou.CLAIM_STATUS` (S6 re-audit 2026-06-04): `pending`/unverified ->
+  `reference-verified-bound-coarser`. The cited reference was independently
+  verified against the arXiv PDF: Yi-Neng Zhou, "Universal Predictors for
+  Mixing Time more than Liouvillian Gap", arXiv:2601.06256 (v3 2026-05-20,
+  University of Geneva). The placeholder title and `UNVERIFIED` marker are
+  replaced with the real title/author/version. The implemented upper bound is
+  in the same family as Zhou's central result Eq.(16) and exact in the
+  normal-mode limit (pure-dephasing anchor), but is a *related, generally
+  coarser* surrogate: it uses the Petermann (Schatten-2) factor `sqrt(K)`
+  rather than Zhou's per-mode trace-norm factor `C_j = ||rho_j||_1 *
+  ||sigma_j||_op`, a single global `gap`/`K_max` instead of a per-mode maximum
+  of `(1/lambda_j) log(N_mode C_j)`, and omits the `N_mode` factor. Differences
+  documented exactly in the `_zhou` module docstring; `CLAIM_REFERENCE`,
+  README, and the status-lock test updated accordingly. (No formula change.)
+- `fitting.neff.ar1_correlation_corrected` docstring hardened (no formula
+  change): added a validity note (first-order Kendall / Marriott-Pope
+  correction; reliable up to `rho ~ 0.85`, residual bias beyond that set by the
+  truncation order) and full references (Marriott & Pope 1954; Kendall 1954;
+  arXiv:2010.05870; Dou et al. 2026, Br. J. Math. Stat. Psychol.). Documents
+  that a higher-order Kendall variant tested marginally better at high
+  `rho`/`n` but was deliberately not adopted to keep the audit formula
+  bit-stable.
 
 ## [0.3.0] - 2026-05-28
 
