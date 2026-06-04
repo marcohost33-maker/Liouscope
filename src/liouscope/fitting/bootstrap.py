@@ -100,8 +100,15 @@ def bca_ci(
     z_alpha_hi = ndtri(1.0 - alpha / 2.0)
     for j in range(p):
         boot_j = np.sort(samples[:, j])
-        # Bias-correction z0:
-        prop_below = float(np.mean(boot_j < theta_hat[j]))
+        # Bias-correction z0 with half-correction for ties (Efron 1987, S3
+        # audit 2026-06-04). Using a strict ``<`` only would send the
+        # proportion to 0 (hence z0 -> -inf, clamped) whenever many bootstrap
+        # replicates land exactly on theta_hat (common for clipped / bounded
+        # parameters or discrete-valued statistics). Counting ties at half
+        # weight is the standard continuity correction.
+        prop_below = float(
+            np.mean(boot_j < theta_hat[j]) + 0.5 * np.mean(boot_j == theta_hat[j])
+        )
         prop_below = float(np.clip(prop_below, 1.0e-9, 1.0 - 1.0e-9))
         z0 = ndtri(prop_below)
         # Acceleration: from jackknife if provided, else default to 0.
@@ -122,9 +129,15 @@ def bca_ci(
         q_hi = adjusted(z_alpha_hi)
         q_lo = float(np.clip(q_lo, 0.0, 1.0))
         q_hi = float(np.clip(q_hi, 0.0, 1.0))
-        idx_lo = int(np.clip(round(q_lo * (B - 1)), 0, B - 1))
-        idx_hi = int(np.clip(round(q_hi * (B - 1)), 0, B - 1))
-        cis[j] = (boot_j[idx_lo], boot_j[idx_hi])
+        # Linear quantile interpolation instead of nearest-rank (S4 audit
+        # 2026-06-04). Nearest-rank ``boot_j[round(q*(B-1))]`` is granular for
+        # small B (the CI endpoints can only take the B sampled values, so
+        # they jump in discrete steps). ``np.quantile`` with the default
+        # linear method interpolates between order statistics -- the standard
+        # continuous-percentile estimator.
+        lo = float(np.quantile(boot_j, q_lo, method="linear"))
+        hi = float(np.quantile(boot_j, q_hi, method="linear"))
+        cis[j] = (lo, hi)
     return cis
 
 
