@@ -150,7 +150,8 @@ def _load_schema() -> dict[str, Any]:
     with resources.files("liouscope").joinpath("MANIFEST_SCHEMA.json").open(
         "r", encoding="utf-8"
     ) as fh:
-        return json.load(fh)
+        schema: dict[str, Any] = json.load(fh)
+    return schema
 
 
 @lru_cache(maxsize=1)

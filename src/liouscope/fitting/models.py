@@ -22,31 +22,36 @@ ModelFunc = Callable[[np.ndarray, np.ndarray], np.ndarray]
 def M0(t: np.ndarray, params: np.ndarray) -> np.ndarray:
     """``A * exp(-alpha t)``; params = (A, alpha)."""
     A, alpha = params
-    return A * np.exp(-alpha * t)
+    result: np.ndarray = A * np.exp(-alpha * t)
+    return result
 
 
 def M1(t: np.ndarray, params: np.ndarray) -> np.ndarray:
     """``A * exp(-alpha t) + C``; params = (A, alpha, C)."""
     A, alpha, C = params
-    return A * np.exp(-alpha * t) + C
+    result: np.ndarray = A * np.exp(-alpha * t) + C
+    return result
 
 
 def M2(t: np.ndarray, params: np.ndarray) -> np.ndarray:
     """``A1 exp(-beta1 t) + A2 exp(-beta2 t)``; params = (A1, beta1, A2, beta2)."""
     A1, beta1, A2, beta2 = params
-    return A1 * np.exp(-beta1 * t) + A2 * np.exp(-beta2 * t)
+    result: np.ndarray = A1 * np.exp(-beta1 * t) + A2 * np.exp(-beta2 * t)
+    return result
 
 
 def M3a(t: np.ndarray, params: np.ndarray) -> np.ndarray:
     """``(A + B t) exp(-alpha t)``; params = (A, B, alpha)."""
     A, B, alpha = params
-    return (A + B * t) * np.exp(-alpha * t)
+    result: np.ndarray = (A + B * t) * np.exp(-alpha * t)
+    return result
 
 
 def M3b(t: np.ndarray, params: np.ndarray) -> np.ndarray:
     """``A exp(-beta t) cos(omega t + phi)``; params = (A, beta, omega, phi)."""
     A, beta, omega, phi = params
-    return A * np.exp(-beta * t) * np.cos(omega * t + phi)
+    result: np.ndarray = A * np.exp(-beta * t) * np.cos(omega * t + phi)
+    return result
 
 
 def initial_guess_m0(t: np.ndarray, y: np.ndarray) -> np.ndarray:

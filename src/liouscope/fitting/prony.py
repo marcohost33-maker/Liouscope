@@ -10,14 +10,27 @@ initial omega guess (Patch v2 fix-pack, Spec Teil 13.1).
 
 from __future__ import annotations
 
+import warnings
+
 import numpy as np
+
+
+def _default_seed(y: np.ndarray) -> tuple[float, float, float, float]:
+    """Conservative decaying-oscillator seed used as a safe fallback."""
+    amp = float(np.max(np.abs(y))) if y.size else 1.0
+    if not np.isfinite(amp) or amp <= 0.0:
+        amp = 1.0
+    return amp, 1.0, 1.0, 0.0
 
 
 def prony_seed(t: np.ndarray, y: np.ndarray) -> tuple[float, float, float, float]:
     """Return a Prony seed ``(A, beta, omega, phi)`` for M3b.
 
     Assumes uniform sampling; if ``t`` is non-uniform we fall back to a
-    decaying-oscillator guess.
+    decaying-oscillator guess. If the Hankel/least-squares solve or the
+    companion-root step fails or produces a non-finite result (near-singular
+    or degenerate data), we emit a ``RuntimeWarning`` and return the safe
+    default seed instead of propagating the exception or garbage.
     """
     t = np.asarray(t, dtype=float)
     y = np.asarray(y, dtype=float)
@@ -38,21 +51,36 @@ def prony_seed(t: np.ndarray, y: np.ndarray) -> tuple[float, float, float, float
     b = -y[p:N]
     for k in range(p):
         A[:, k] = y[p - 1 - k : N - 1 - k]
-    coefs, *_ = np.linalg.lstsq(A, b, rcond=None)
-    poly = np.concatenate(([1.0], coefs))
-    roots = np.roots(poly)
+    # lstsq on a (near-)singular Hankel matrix and np.roots on the resulting
+    # companion polynomial can raise (LinAlgError) or return non-finite junk.
+    # Guard the whole estimation block and fall back to the safe default seed.
+    try:
+        coefs, *_ = np.linalg.lstsq(A, b, rcond=None)
+        if not np.all(np.isfinite(coefs)):
+            raise np.linalg.LinAlgError("non-finite Prony coefficients")
+        poly = np.concatenate(([1.0], coefs))
+        roots = np.roots(poly)
+    except (np.linalg.LinAlgError, ValueError) as exc:
+        warnings.warn(
+            f"Prony seed estimation failed ({exc}); using default seed.",
+            RuntimeWarning,
+            stacklevel=2,
+        )
+        return _default_seed(y)
     # Pick a conjugate pair (or the closest-to-unit-circle root)
-    roots = roots[np.argsort(-np.abs(np.angle(roots)))]
     if roots.size == 0:
-        return float(y[0]), 1.0, 1.0, 0.0
+        return _default_seed(y)
+    roots = roots[np.argsort(-np.abs(np.angle(roots)))]
     z = roots[0]
-    if abs(z) < 1.0e-12 or not np.isfinite(z):
-        return float(y[0]), 1.0, 1.0, 0.0
+    if not np.isfinite(z) or abs(z) < 1.0e-12:
+        return _default_seed(y)
     # ``log`` on the complex root is well-defined; cast to complex first to
     # avoid a numpy warning when the principal branch crosses the cut.
     s = np.log(complex(z)) / dt
     beta = float(-s.real)
     omega = float(abs(s.imag))
+    if not (np.isfinite(beta) and np.isfinite(omega)):
+        return _default_seed(y)
     # Amplitude / phase via least-squares on cos(omega t + phi) e^{-beta t}
     envelope = np.exp(-beta * t).reshape(-1, 1)
     basis = envelope * np.column_stack([np.cos(omega * t), np.sin(omega * t)])

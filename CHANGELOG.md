@@ -4,6 +4,31 @@ All notable changes to LiouScope are documented in this file. The format is base
 on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+- `_consts.EPS_DIV`: canonical division-by-zero floor (1.0e-300) shared by the
+  Petermann inner-product guard in `diagnostics.nonnormality.petermann_factors`
+  and `_zhou`. Replaces the previously hard-coded `1.0e-300` magic numbers.
+  Deliberately distinct from the physics-scale `EPS_GAP`/`EPS_SUPP`.
+- `tests/test_zhou.py`: a closed-form anchor for the D24 Zhou predictor
+  (single-qubit pure dephasing, gap = 1, K = 1 -> both bounds = log(1/eps))
+  plus a defective-mode guard test (a near-defective mode must not poison the
+  finite upper bound).
+- `fitting.prony._default_seed` and guarded `prony_seed`: the Prony seed now
+  catches `LinAlgError`/`ValueError` from `lstsq`/`np.roots` on near-singular
+  Hankel data (e.g. all-NaN/inf signals), emits a `RuntimeWarning`, and falls
+  back to a safe default seed with a strictly positive amplitude. New
+  regression tests in `tests/test_fitting.py` (fails-before on the pre-guard
+  code, which raised `LinAlgError` on non-finite input).
+
+### Changed
+- CI `mypy src/liouscope` is now an enforcing gate (`continue-on-error` removed);
+  the previously type-blind 18 `mypy` findings were fixed (annotated numpy
+  return locals, `is_dataclass` instance narrowing). No behaviour change.
+- `_zhou`: zero-eigenvalue and division-by-zero thresholds now use the canonical
+  `EPS_GAP`/`EPS_DIV` constants instead of inline `1.0e-10`/`1.0e-300`.
+
 ## [0.3.0] - 2026-05-28
 
 ### Added

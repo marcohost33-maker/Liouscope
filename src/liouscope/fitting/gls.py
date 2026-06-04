@@ -34,7 +34,8 @@ class GLSFitOutput:
 
 def _whiten(y: np.ndarray, rho: float) -> np.ndarray:
     if y.size < 2:
-        return y.copy()
+        y_copy: np.ndarray = y.copy()
+        return y_copy
     out = np.empty_like(y)
     out[0] = np.sqrt(max(1.0 - rho * rho, 1.0e-12)) * y[0]
     out[1:] = y[1:] - rho * y[:-1]

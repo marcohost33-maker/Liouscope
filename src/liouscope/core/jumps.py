@@ -43,10 +43,10 @@ def engineered_target_jumps(target_psi: np.ndarray) -> list[np.ndarray]:
     Returns a single rank-one operator ``L = |psi><e_0|``-style which steers
     population to the target state. The target must be normalised.
     """
-    target = np.asarray(target_psi).reshape(-1, 1).astype(complex)
+    target: np.ndarray = np.asarray(target_psi).reshape(-1, 1).astype(complex)
     norm = float(np.linalg.norm(target))
     if not np.isclose(norm, 1.0, atol=1.0e-9):
-        target = target / norm
+        target = np.asarray(target / norm, dtype=complex)
     d = target.size
     e0 = np.zeros((d, 1), dtype=complex)
     e0[0, 0] = 1.0

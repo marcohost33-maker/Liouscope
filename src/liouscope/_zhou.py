@@ -22,6 +22,7 @@ from __future__ import annotations
 import numpy as np
 import scipy.linalg as sla
 
+from ._consts import EPS_DIV, EPS_GAP
 from ._types import ZhouPredictorResult
 
 
@@ -52,7 +53,7 @@ def compute_zhou_predictor(
     L_super = np.asarray(L_super)
     if gap is None or petermann_factor is None:
         eigvals, vl, vr = sla.eig(L_super, left=True, right=True)
-        nonzero = np.abs(eigvals) > 1.0e-10
+        nonzero = np.abs(eigvals) > EPS_GAP
         if not nonzero.any():
             return ZhouPredictorResult(
                 mixing_time_lower=float("inf"),
@@ -73,7 +74,12 @@ def compute_zhou_predictor(
                 r = vr[:, j]
                 l_vec = vl[:, j]
                 denom = abs(np.vdot(l_vec, r)) ** 2
-                if denom < 1.0e-300:
+                # Same division-by-zero floor as nonnormality.petermann_factors
+                # (canonical EPS_DIV). A defective mode (denom -> 0) is skipped
+                # here rather than set to inf: an inf K_max would poison the
+                # finite t_upper bound. Anchor I (conj-pair retention) is moot
+                # for the predictor, which only needs K_max over finite modes.
+                if denom <= EPS_DIV:
                     continue
                 K_vals.append((np.linalg.norm(r) ** 2 * np.linalg.norm(l_vec) ** 2) / denom)
             petermann_factor = float(max(K_vals) if K_vals else 1.0)
