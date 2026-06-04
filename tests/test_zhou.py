@@ -8,6 +8,18 @@ import pytest
 from liouscope import _zhou, build_liouvillian
 
 
+def test_zhou_claim_status_is_pending():
+    """S6 audit: the unverified reference must be flagged as pending.
+
+    The D24 Zhou predictor cites arXiv:2601.06256, which could not be
+    independently verified. The module must advertise claim_status='pending'
+    so downstream tooling never treats D24 as publication-grade.
+    """
+    assert _zhou.CLAIM_STATUS == "pending"
+    assert "UNVERIFIED" in _zhou.CLAIM_REFERENCE
+    assert "2601.06256" in _zhou.CLAIM_REFERENCE
+
+
 def test_zhou_returns_bounds(pauli):
     L = build_liouvillian(0.5 * pauli["X"], [pauli["Z"]], [0.3])
     res = _zhou.compute_zhou_predictor(L, epsilon=1e-3)
