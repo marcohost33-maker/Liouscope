@@ -24,10 +24,12 @@ def resolvent_apply_superlu(L: np.ndarray, z: complex, b: np.ndarray) -> np.ndar
     eye = np.eye(n, dtype=complex)
     A = z * eye - L
     if n <= 256:
-        return sla.solve(A, b, assume_a="gen")
+        solved: np.ndarray = sla.solve(A, b, assume_a="gen")
+        return solved
     A_sp = sp.csc_matrix(A)
     lu = spla.splu(A_sp)
-    return lu.solve(np.asarray(b, dtype=complex))
+    sp_solved: np.ndarray = lu.solve(np.asarray(b, dtype=complex))
+    return sp_solved
 
 
 def resolvent_norm(L: np.ndarray, z: complex) -> float:
@@ -47,7 +49,9 @@ def resolvent_norm(L: np.ndarray, z: complex) -> float:
     A_sp = sp.csc_matrix(A)
     lu = spla.splu(A_sp)
     rng = np.random.default_rng(0)
-    x = rng.standard_normal(n) + 1j * rng.standard_normal(n)
+    x: np.ndarray = np.asarray(
+        rng.standard_normal(n) + 1j * rng.standard_normal(n), dtype=complex
+    )
     x /= np.linalg.norm(x)
     sigma_prev = 0.0
     for _ in range(80):

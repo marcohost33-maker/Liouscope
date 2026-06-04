@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import warnings
+
 import numpy as np
+import pytest
 
 from liouscope.fitting.aicc import aicc, choose_model, gaussian_log_likelihood
 from liouscope.fitting.bootstrap import bca_ci, parametric_bootstrap
@@ -83,6 +86,41 @@ def test_prony_seed_returns_finite(rng):
     A_est, beta_est, omega_est, _ = seed
     assert beta_est > 0
     assert omega_est > 0
+
+
+@pytest.mark.parametrize("bad_value", [np.nan, np.inf, -np.inf])
+def test_prony_seed_non_finite_input_falls_back(bad_value):
+    """FAILS-BEFORE: non-finite signals made lstsq raise LinAlgError.
+
+    The pre-hardening code propagated ``numpy.linalg.LinAlgError`` ("SVD did
+    not converge") on all-NaN / all-inf input. The guarded version must warn
+    and return a finite default seed instead of raising.
+    """
+    t = np.linspace(0.0, 1.0, 12)
+    y = np.full(12, bad_value, dtype=float)
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        seed = prony_seed(t, y)
+    assert all(np.isfinite(v) for v in seed)
+    assert any(issubclass(w.category, RuntimeWarning) for w in caught)
+
+
+def test_prony_seed_constant_signal_is_finite():
+    """A flat (zero-oscillation) signal has a (near-)singular Hankel matrix."""
+    t = np.linspace(0.0, 1.0, 16)
+    y = np.full(16, 3.0)
+    seed = prony_seed(t, y)
+    assert all(np.isfinite(v) for v in seed)
+    assert seed[0] > 0  # amplitude must be positive
+
+
+def test_prony_seed_all_zero_signal_has_positive_amplitude():
+    """Default seed must not return a zero amplitude (degenerate fit start)."""
+    t = np.linspace(0.0, 1.0, 12)
+    y = np.zeros(12)
+    seed = prony_seed(t, y)
+    assert all(np.isfinite(v) for v in seed)
+    assert seed[0] > 0
 
 
 def test_gaussian_log_likelihood_returns_finite(rng):

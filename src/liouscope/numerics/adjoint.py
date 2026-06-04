@@ -49,7 +49,8 @@ def hs_adjoint(L_super: np.ndarray) -> np.ndarray:
     L_super = np.asarray(L_super)
     if L_super.ndim != 2 or L_super.shape[0] != L_super.shape[1]:
         raise ValueError(f"hs_adjoint expects a square matrix, got {L_super.shape}")
-    return L_super.conj().T
+    adj: np.ndarray = L_super.conj().T
+    return adj
 
 
 def alicki_adjoint(
@@ -83,7 +84,8 @@ def alicki_adjoint(
     eye_d = np.eye(d, dtype=L_super.dtype)
     left = np.kron(rho_inv, eye_d)
     right = np.kron(rho_reg, eye_d)
-    return left @ L_super @ right
+    pi_adj: np.ndarray = left @ L_super @ right
+    return pi_adj
 
 
 def symmetrised_liouvillian(
@@ -107,4 +109,5 @@ def symmetrised_liouvillian(
     L_super = np.asarray(L_super)
     L_HS = L_super.conj().T
     L_HS_pi_adj = alicki_adjoint(L_super, rho_steady, eps_reg=eps_reg)
-    return 0.5 * (L_HS + L_HS_pi_adj)
+    sym: np.ndarray = 0.5 * (L_HS + L_HS_pi_adj)
+    return sym

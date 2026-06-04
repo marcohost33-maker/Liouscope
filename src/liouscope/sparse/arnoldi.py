@@ -30,7 +30,8 @@ def sparse_steady_state(
     tr = np.trace(rho)
     if abs(tr) < tol:
         raise RuntimeError("Sparse steady state has near-zero trace")
-    return rho / tr
+    rho_normed: np.ndarray = rho / tr
+    return rho_normed
 
 
 def _safe_shift_select(L_sparse: sp.spmatrix, sigma: complex) -> complex:
