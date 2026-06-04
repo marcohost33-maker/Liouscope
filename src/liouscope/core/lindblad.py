@@ -18,12 +18,36 @@ is explicit so callers cannot silently flip it.
 
 from __future__ import annotations
 
+import warnings
 from collections.abc import Sequence
 from typing import Literal
 
 import numpy as np
 
 from ..numerics.kronecker import unvec, vec
+
+
+class DegenerateSteadyStateError(ValueError):
+    """Raised when the Liouvillian null space has dimension > 1.
+
+    A multi-dimensional null space means the steady state is **not unique**:
+    the GKSL generator has more than one stationary state (e.g. a
+    decoherence-free subspace, a conserved quantity, or two non-communicating
+    sectors). In that case any single ``rho_ss`` returned by an SVD/eig solve
+    is an *arbitrary* point in the steady-state manifold, picked by numerical
+    happenstance rather than physics. Returning it silently would be a
+    correctness trap, so :func:`steady_state` fails closed by default.
+    """
+
+    def __init__(self, null_dim: int) -> None:
+        self.null_dim = null_dim
+        super().__init__(
+            f"Liouvillian null space has dimension {null_dim} > 1: the steady "
+            "state is not unique (degenerate NESS / decoherence-free subspace "
+            "or conserved quantity). An SVD picks an arbitrary representative, "
+            "which is physically meaningless. Pass allow_degenerate=True to "
+            "obtain one (trace-normalised) representative with a RuntimeWarning."
+        )
 
 
 def build_liouvillian(
@@ -102,11 +126,36 @@ def build_liouvillian(
     return L_super
 
 
-def steady_state(L_super: np.ndarray, *, atol: float = 1.0e-9) -> np.ndarray:
+def steady_state(
+    L_super: np.ndarray,
+    *,
+    atol: float = 1.0e-9,
+    allow_degenerate: bool = False,
+) -> np.ndarray:
     """Return the steady state ``rho_ss`` with ``L rho_ss = 0`` and unit trace.
 
     Uses null-space extraction on the superoperator. Falls back to the
     smallest-real-part eigenvector if SVD finds no exact null vector.
+
+    Parameters
+    ----------
+    L_super
+        ``d^2 x d^2`` Liouvillian superoperator.
+    atol
+        Absolute floor for the singular-value null-space tolerance. The
+        effective tolerance is ``max(atol, n2 * eps * s[0])``.
+    allow_degenerate
+        Guard against a degenerate steady state (multi-dimensional null
+        space). When ``False`` (default, fail-closed), a null space of
+        dimension > 1 raises :class:`DegenerateSteadyStateError` because no
+        single ``rho_ss`` is physically meaningful then. When ``True``, one
+        arbitrary trace-normalised representative is returned together with a
+        :class:`RuntimeWarning`.
+
+    Raises
+    ------
+    DegenerateSteadyStateError
+        If the null space has dimension > 1 and ``allow_degenerate`` is False.
     """
     L_super = np.asarray(L_super)
     n2 = L_super.shape[0]
@@ -118,6 +167,19 @@ def steady_state(L_super: np.ndarray, *, atol: float = 1.0e-9) -> np.ndarray:
     u, s, vh = np.linalg.svd(L_super)
     tol = max(atol, n2 * np.finfo(L_super.dtype).eps * s[0])
     null_indices = np.where(s <= tol)[0]
+    # Degeneracy guard: a null space of dimension > 1 means rho_ss is NOT
+    # unique. Picking null_indices[0] would return an arbitrary point in the
+    # steady-state manifold (anchor: S1 audit 2026-06-04).
+    if null_indices.size > 1:
+        if not allow_degenerate:
+            raise DegenerateSteadyStateError(int(null_indices.size))
+        warnings.warn(
+            f"Liouvillian null space has dimension {null_indices.size} > 1: "
+            "the steady state is not unique. Returning one arbitrary "
+            "trace-normalised representative (allow_degenerate=True).",
+            RuntimeWarning,
+            stacklevel=2,
+        )
     if null_indices.size == 0:
         # Smallest singular-value direction
         rho_vec = vh.conj().T[:, -1]
@@ -142,4 +204,10 @@ def steady_state(L_super: np.ndarray, *, atol: float = 1.0e-9) -> np.ndarray:
     return rho_out
 
 
-__all__ = ["build_liouvillian", "steady_state", "unvec", "vec"]
+__all__ = [
+    "DegenerateSteadyStateError",
+    "build_liouvillian",
+    "steady_state",
+    "unvec",
+    "vec",
+]
