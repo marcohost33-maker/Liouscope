@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import numpy as np
+import pytest
 
 from liouscope import build_liouvillian, steady_state
 from liouscope.diagnostics.spectral import (
@@ -33,10 +34,17 @@ def test_d2_gns_gap_at_equilibrium(pauli):
 
 
 def test_d2b_kms_at_equilibrium_equals_gns(pauli):
-    # For rho_ss = I/2, KMS and GNS Gram matrices coincide up to scalar.
+    # KMS and GNS Gram matrices coincide up to scalar on a diagonal steady
+    # state. NOTE: H=0 pure dephasing has a *degenerate* (non-unique) steady
+    # state (populations are conserved), so since the S1 hardening
+    # steady_state() refuses to silently pick one. This test only needs *a*
+    # representative diagonal steady state to compare the two Gram gaps, so it
+    # opts in explicitly via allow_degenerate=True (and the expected
+    # RuntimeWarning is accepted).
     H = np.zeros((2, 2), dtype=complex)
     L = build_liouvillian(H, [pauli["Z"]], [0.3])
-    rho_ss = steady_state(L)
+    with pytest.warns(RuntimeWarning, match="not unique"):
+        rho_ss = steady_state(L, allow_degenerate=True)
     g_s = gns_gap(L, rho_ss)
     g_k = kms_gap(L, rho_ss)
     assert abs(g_k - g_s) < 1e-6

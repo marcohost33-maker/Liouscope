@@ -1,0 +1,61 @@
+name: CI (QuTiP cross-checks)
+
+# Dedicated job that installs the optional QuTiP extra and runs the QuTiP
+# cross-check tests *without* skipping them. In the default ci.yml run these
+# tests skip (QuTiP is an optional, non-core dependency), which means the
+# cross-family validation never actually executes in CI. This job closes that
+# circularity gap: it exercises liouscope's Liouvillian builder against QuTiP's
+# independent `qutip.liouvillian` implementation on every push.
+#
+# Required-check registration (branch protection) is done by a human (Vero);
+# this workflow only defines the job.
+
+on:
+  push:
+    branches: [main, "claude/**"]
+  pull_request:
+    branches: [main]
+
+permissions: {}
+
+jobs:
+  qutip-cross-check:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        # QuTiP wheels lag the newest CPython; pin to versions with stable
+        # QuTiP support. Extend as QuTiP publishes newer wheels.
+        python-version: ["3.11", "3.12"]
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+        with:
+          persist-credentials: false
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # v6.2.0
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install package with QuTiP extra
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .[dev,qutip]
+      - name: Confirm QuTiP actually imports (no silent skip)
+        run: python -c "import qutip; print('QuTiP', qutip.__version__)"
+      - name: Guard against a vacuous run (0 collected = broken selector)
+        # Done BEFORE the run so a broken selector fails loudly instead of a
+        # green "0 tests, all passed".
+        run: |
+          COUNT=$(pytest -m qutip --collect-only -q 2>/dev/null | grep -c '::' || true)
+          echo "Collected $COUNT qutip test(s)"
+          if [ "$COUNT" -lt 3 ]; then
+            echo "::error::Expected >=3 qutip cross-check tests, collected $COUNT"
+            exit 1
+          fi
+      - name: Run QuTiP cross-checks (must execute, not skip)
+        # -m qutip selects exactly the cross-check tests. With QuTiP installed
+        # the skipif guard is a no-op, so they run for real. --strict-markers
+        # (from pyproject addopts) + the registered `qutip` marker guard the
+        # selector against typos.
+        run: pytest -m qutip -v

@@ -12,6 +12,7 @@ rounds (Cochrane-Orcutt style).
 
 from __future__ import annotations
 
+import warnings
 from collections.abc import Callable
 from dataclasses import dataclass
 
@@ -19,7 +20,7 @@ import numpy as np
 from scipy.optimize import least_squares
 
 from .aicc import gaussian_log_likelihood
-from .neff import ar1_correlation
+from .neff import _AR1_SMALL_N, ar1_correlation_corrected
 
 
 @dataclass(frozen=True, slots=True)
@@ -92,11 +93,24 @@ def fit_gls_ar1(
             break
         y_hat = model(t, p)
         residuals_raw = y - y_hat
-        rho = ar1_correlation(residuals_raw)
-        rho = float(np.clip(rho, -0.999, 0.999))
+        # S2 audit 2026-06-04: use the small-sample bias-corrected lag-1
+        # autocorrelation. The raw plug-in estimator is downward-biased at
+        # small n, which makes AR(1)-whitened CIs too narrow. Suppress the
+        # per-iteration small-n warning here; we emit it once below so a
+        # B-fold bootstrap does not raise B identical warnings.
+        rho = ar1_correlation_corrected(residuals_raw, warn_small_n=False)
 
     y_hat_final = model(t, p)
     residuals_raw = y - y_hat_final
+    n_resid = residuals_raw.size
+    if n_resid <= _AR1_SMALL_N:
+        warnings.warn(
+            f"GLS AR(1) fit on only n={n_resid} points (<= {_AR1_SMALL_N}): "
+            "the bias-corrected rho still carries residual downward bias, so "
+            "the reported confidence intervals may be mildly over-confident.",
+            RuntimeWarning,
+            stacklevel=2,
+        )
     whitened = _whiten(residuals_raw, rho)
     n = whitened.size
     sigma = float(np.sqrt(max(np.dot(whitened, whitened) / max(n, 1), 1.0e-30)))

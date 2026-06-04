@@ -7,6 +7,7 @@ import pytest
 from conftest import qutip_required
 
 from liouscope import build_liouvillian, steady_state
+from liouscope.core.lindblad import DegenerateSteadyStateError
 
 
 def test_build_liouvillian_no_jumps_purely_unitary(pauli):
@@ -72,6 +73,46 @@ def test_steady_state_amplitude_damped(pauli):
     rho_ss = steady_state(L)
     expected = np.array([[1, 0], [0, 0]], dtype=complex)
     np.testing.assert_allclose(rho_ss, expected, atol=1e-9)
+
+
+def test_steady_state_degenerate_nullspace_raises(pauli):
+    """FAILS-BEFORE (S1): a degenerate NESS was returned silently.
+
+    Pure dephasing with ``H = 0`` conserves populations, so *every* diagonal
+    state is stationary: the Liouvillian has a 2-dimensional null space and
+    ``rho_ss`` is not unique. The pre-hardening code silently returned an
+    arbitrary representative (|0><0|) with no warning. The guarded version
+    must fail closed.
+    """
+    H = np.zeros((2, 2), dtype=complex)
+    L = build_liouvillian(H, [pauli["Z"]], [0.5])
+    # Confirm the null space really is degenerate (two zero singular values).
+    s = np.linalg.svd(L, compute_uv=False)
+    tol = max(1e-9, L.shape[0] * np.finfo(L.dtype).eps * s[0])
+    assert int(np.sum(s <= tol)) == 2, "fixture must have a 2D null space"
+    with pytest.raises(DegenerateSteadyStateError) as excinfo:
+        steady_state(L)
+    assert excinfo.value.null_dim == 2
+
+
+def test_steady_state_degenerate_allow_warns_and_returns(pauli):
+    """allow_degenerate=True returns one representative with a RuntimeWarning."""
+    H = np.zeros((2, 2), dtype=complex)
+    L = build_liouvillian(H, [pauli["Z"]], [0.5])
+    with pytest.warns(RuntimeWarning, match="not unique"):
+        rho = steady_state(L, allow_degenerate=True)
+    # Whatever representative is chosen, it is a valid (Hermitian, unit-trace)
+    # density matrix in the steady-state manifold.
+    np.testing.assert_allclose(rho, rho.conj().T, atol=1e-12)
+    np.testing.assert_allclose(np.trace(rho), 1.0, atol=1e-9)
+
+
+def test_steady_state_unique_ness_unaffected(pauli):
+    """Regression: a unique NESS still resolves silently (no false positive)."""
+    H = 0.5 * pauli["X"]
+    L = build_liouvillian(H, [pauli["Z"]], [0.3])
+    rho_ss = steady_state(L)
+    np.testing.assert_allclose(rho_ss, 0.5 * np.eye(2, dtype=complex), atol=1e-9)
 
 
 @qutip_required

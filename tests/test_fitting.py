@@ -11,7 +11,11 @@ from liouscope.fitting.aicc import aicc, choose_model, gaussian_log_likelihood
 from liouscope.fitting.bootstrap import bca_ci, parametric_bootstrap
 from liouscope.fitting.gls import fit_gls_ar1
 from liouscope.fitting.models import M0
-from liouscope.fitting.neff import ar1_correlation, estimate_neff_geyer
+from liouscope.fitting.neff import (
+    ar1_correlation,
+    ar1_correlation_corrected,
+    estimate_neff_geyer,
+)
 from liouscope.fitting.prony import prony_seed
 
 
@@ -47,6 +51,69 @@ def test_ar1_correlation_matches_known(rng):
     assert abs(rho_hat - rho) < 0.1
 
 
+def _mc_ar1_mean_bias(n, rho_true, estimator, reps=4000, seed=12345):
+    """Monte-Carlo mean bias of an AR(1) lag-1 estimator at sample size n."""
+    rng = np.random.default_rng(seed)
+    ests = np.empty(reps)
+    for r in range(reps):
+        eps = rng.standard_normal(n)
+        x = np.zeros(n)
+        for i in range(1, n):
+            x[i] = rho_true * x[i - 1] + eps[i]
+        ests[r] = estimator(x)
+    return float(np.mean(ests) - rho_true)
+
+
+@pytest.mark.parametrize("n", [20, 40])
+def test_ar1_bias_correction_reduces_bias(n):
+    """FAILS-BEFORE (S2): raw rho_hat is materially downward-biased at small n.
+
+    The audit measured raw bias of about -0.16 @ n=20 and -0.08 @ n=40 for
+    rho=0.5. The corrected estimator must shrink the magnitude of that bias
+    substantially. (Mean over 4000 AR(1) replicates, fixed seed.)
+    """
+    rho_true = 0.5
+    raw_bias = _mc_ar1_mean_bias(n, rho_true, ar1_correlation)
+    corr_bias = _mc_ar1_mean_bias(
+        n,
+        rho_true,
+        lambda x: ar1_correlation_corrected(x, warn_small_n=False),
+    )
+    # Raw is downward-biased (the bug we are fixing).
+    assert raw_bias < -0.05, f"expected downward raw bias, got {raw_bias:+.4f}"
+    # Correction removes most of it: at least a 1.5x reduction in magnitude.
+    assert abs(corr_bias) < abs(raw_bias) / 1.5, (
+        f"n={n}: raw_bias={raw_bias:+.4f} corr_bias={corr_bias:+.4f} "
+        "(correction did not reduce bias enough)"
+    )
+
+
+def test_ar1_corrected_warns_at_small_n():
+    """The corrected estimator warns when n <= 40 (over-confident CI risk)."""
+    rng = np.random.default_rng(0)
+    n = 30
+    eps = rng.standard_normal(n)
+    x = np.zeros(n)
+    for i in range(1, n):
+        x[i] = 0.5 * x[i - 1] + eps[i]
+    with pytest.warns(RuntimeWarning, match="over-confident"):
+        ar1_correlation_corrected(x)
+
+
+def test_ar1_corrected_no_warn_large_n():
+    """No small-n warning for comfortably large series; value near truth."""
+    rng = np.random.default_rng(0)
+    n = 2000
+    eps = rng.standard_normal(n)
+    x = np.zeros(n)
+    for i in range(1, n):
+        x[i] = 0.6 * x[i - 1] + eps[i]
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")  # any warning would fail the test
+        rho_c = ar1_correlation_corrected(x)
+    assert abs(rho_c - 0.6) < 0.1
+
+
 def test_gls_ar1_recovers_known_decay(rng):
     t = np.linspace(0, 5, 100)
     A_true, alpha_true = 1.5, 0.7
@@ -76,6 +143,50 @@ def test_bca_ci_contains_truth(rng):
     # Confidence interval for alpha should contain the truth at 95% level.
     assert lo <= alpha_true + 0.1
     assert hi >= alpha_true - 0.1
+
+
+def test_bca_z0_half_correction_for_ties():
+    """FAILS-BEFORE (S3): ties at theta_hat sent prop_below to 0 (z0 -> -inf).
+
+    With many bootstrap replicates exactly equal to theta_hat, a strict ``<``
+    count yields proportion 0, so z0 is clamped to the -1e-9 floor (z0 ~ -6)
+    and the CI is wildly skewed. The Efron-1987 half-correction counts ties at
+    half weight, giving a finite, sensible z0 and a non-degenerate interval.
+    """
+    # 3 of 5 replicates land exactly on theta_hat=1.0; none strictly below.
+    samples = np.array([[1.0], [1.0], [1.0], [2.0], [3.0]])
+    theta_hat = np.array([1.0])
+    cis = bca_ci(samples, theta_hat, alpha=0.05)
+    lo, hi = cis[0]
+    assert np.isfinite(lo) and np.isfinite(hi)
+    assert lo < hi
+    # Old strict-< behaviour clamped z0 ~ -6, collapsing the interval onto the
+    # minimum (lo == hi == 1.0). The half-correction must avoid that collapse.
+    assert hi > 1.0, f"interval collapsed to the minimum (hi={hi}); ties bug"
+
+
+def test_bca_quantile_is_interpolated_not_nearest_rank():
+    """FAILS-BEFORE (S4): nearest-rank made CI endpoints granular for small B.
+
+    With z0=0 and a=0 (symmetric, no acceleration), the BCa percentiles are
+    the plain 2.5%/97.5% quantiles. On a small, evenly spaced sample the
+    interpolated endpoints must NOT coincide with raw order statistics, which
+    is what nearest-rank would have returned.
+    """
+    # No bias / no acceleration: samples symmetric about their median, mean
+    # equal to theta_hat so prop_below = 0.5 -> z0 = 0.
+    boot = np.linspace(0.0, 100.0, 9)  # 0,12.5,...,100 ; median 50
+    samples = boot.reshape(-1, 1)
+    theta_hat = np.array([50.0])
+    cis = bca_ci(samples, theta_hat, alpha=0.10)  # 5% / 95% percentiles
+    lo, hi = cis[0]
+    expected_lo = float(np.quantile(boot, 0.05, method="linear"))
+    expected_hi = float(np.quantile(boot, 0.95, method="linear"))
+    np.testing.assert_allclose([lo, hi], [expected_lo, expected_hi], atol=1e-9)
+    # And these interpolated values are strictly between order statistics
+    # (i.e. not equal to any raw sample) -> proves interpolation happened.
+    assert not np.any(np.isclose(lo, boot)), "lo fell on a raw order statistic"
+    assert not np.any(np.isclose(hi, boot)), "hi fell on a raw order statistic"
 
 
 def test_prony_seed_returns_finite(rng):

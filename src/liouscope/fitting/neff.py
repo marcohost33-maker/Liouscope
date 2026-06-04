@@ -15,7 +15,14 @@ Reference: Geyer, "Practical Markov Chain Monte Carlo", Statistical Science
 
 from __future__ import annotations
 
+import warnings
+
 import numpy as np
+
+# Below this sample size the lag-1 autocorrelation estimator is materially
+# downward-biased even after first-order correction; callers are warned so
+# AR(1)-whitened CIs are not silently over-confident (S2 audit 2026-06-04).
+_AR1_SMALL_N: int = 40
 
 
 def _autocorr(x: np.ndarray, max_lag: int) -> np.ndarray:
@@ -68,7 +75,14 @@ def estimate_neff_geyer(residuals: np.ndarray, *, max_lag: int | None = None) ->
 
 
 def ar1_correlation(residuals: np.ndarray) -> float:
-    """Return the lag-1 autocorrelation ``rho_1``."""
+    """Return the (raw, uncorrected) lag-1 autocorrelation ``rho_1``.
+
+    This is the biased plug-in estimator. For AR(1) whitening / CI work use
+    :func:`ar1_correlation_corrected`, which applies a small-sample
+    bias-correction; the raw estimator is downward-biased by ~``-(1+3 rho)/n``
+    (Marriott & Pope 1954; Kendall 1954), so the raw value yields
+    over-confident confidence intervals at small ``n``.
+    """
     x = np.asarray(residuals, dtype=float) - float(np.mean(residuals))
     if x.size < 2:
         return 0.0
@@ -77,3 +91,51 @@ def ar1_correlation(residuals: np.ndarray) -> float:
     if den == 0.0:
         return 0.0
     return float(num / den)
+
+
+def ar1_correlation_corrected(
+    residuals: np.ndarray, *, warn_small_n: bool = True
+) -> float:
+    """Return a small-sample bias-corrected lag-1 autocorrelation.
+
+    The raw plug-in estimator ``rho_hat`` (see :func:`ar1_correlation`) is
+    downward-biased at small ``n`` (E[rho_hat] - rho ~ -(1 + 3 rho)/n), which
+    makes any AR(1)-whitened variance / confidence interval too narrow. We
+    apply the closed-form first-order correction
+
+        rho_corr = (rho_hat * (n - 1) + 1) / (n - 3)
+
+    which removes the leading O(1/n) bias term while staying inside a sensible
+    range. The corrected value is clipped to ``[-0.999, 0.999]`` so downstream
+    whitening (``sqrt(1 - rho^2)``) stays well defined.
+
+    References
+    ----------
+    Marriott & Pope, *Biometrika* 41 (1954); Kendall, *Biometrika* 41 (1954);
+    bias-correction survey arXiv:2010.05870.
+
+    Parameters
+    ----------
+    residuals
+        Residual series.
+    warn_small_n
+        If True (default), emit a :class:`RuntimeWarning` when
+        ``n <= 40`` because the residual bias after correction is still
+        non-negligible there and the CI may remain mildly optimistic.
+    """
+    x = np.asarray(residuals, dtype=float)
+    n = x.size
+    rho_hat = ar1_correlation(x)
+    if n < 4:
+        # (n - 3) <= 0: correction undefined; fall back to the raw estimate.
+        return float(np.clip(rho_hat, -0.999, 0.999))
+    rho_corr = (rho_hat * (n - 1) + 1.0) / (n - 3.0)
+    if warn_small_n and n <= _AR1_SMALL_N:
+        warnings.warn(
+            f"AR(1) bias-corrected rho estimated from only n={n} residuals "
+            f"(<= {_AR1_SMALL_N}): residual downward bias remains, so "
+            "AR(1)-whitened confidence intervals may be mildly over-confident.",
+            RuntimeWarning,
+            stacklevel=2,
+        )
+    return float(np.clip(rho_corr, -0.999, 0.999))
