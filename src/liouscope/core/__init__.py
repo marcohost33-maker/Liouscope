@@ -19,9 +19,10 @@ from .lattice import (
     square_lattice,
     triangular_lattice,
 )
-from .lindblad import build_liouvillian, steady_state
+from .lindblad import DegenerateSteadyStateError, build_liouvillian, steady_state
 
 __all__ = [
+    "DegenerateSteadyStateError",
     "Lattice",
     "bose_hubbard_hamiltonian",
     "boundary_dephasing_jumps",

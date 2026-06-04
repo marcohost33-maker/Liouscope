@@ -1,7 +1,18 @@
 """v0.2.1 post-submission tooling: Zhou universal mixing-time predictor (D24).
 
-Reference: Zhou, "Universal mixing-time predictor for open quantum systems",
-arXiv:2601.06256 (2026).
+Reference (UNVERIFIED): Zhou, "Universal mixing-time predictor for open
+quantum systems", arXiv:2601.06256 (2026).
+
+.. warning::
+
+   **claim_status: pending / unverified (S6 audit 2026-06-04).** The cited
+   reference arXiv:2601.06256 could not be independently verified from an
+   authoritative source (arXiv API / DOI) at audit time. Treat the D24 Zhou
+   predictor as an *exploratory* diagnostic: its numerical machinery is unit-
+   and anchor-tested (see ``tests/test_zhou.py``, including a closed-form
+   pure-dephasing anchor that is independent of the reference), but the
+   *physical claim* attributed to the cited paper is NOT confirmed. Do not
+   present D24 results as publication-grade until the reference is verified.
 
 The Zhou predictor estimates the mixing time
 
@@ -19,11 +30,19 @@ bit-stable.
 
 from __future__ import annotations
 
+from typing import Final
+
 import numpy as np
 import scipy.linalg as sla
 
 from ._consts import EPS_DIV, EPS_GAP
 from ._types import ZhouPredictorResult
+
+# S6 audit 2026-06-04: the cited reference for the D24 predictor could not be
+# verified against an authoritative source. The diagnostic is exposed but its
+# physical claim is provisional. Consumers / tooling can read this constant.
+CLAIM_STATUS: Final[str] = "pending"
+CLAIM_REFERENCE: Final[str] = "arXiv:2601.06256 (UNVERIFIED 2026-06-04)"
 
 
 def compute_zhou_predictor(
@@ -34,6 +53,12 @@ def compute_zhou_predictor(
     gap: float | None = None,
 ) -> ZhouPredictorResult:
     """Compute Zhou's universal mixing-time lower- and upper-bounds.
+
+    .. note::
+       claim_status = ``"pending"`` (see :data:`CLAIM_STATUS`): the cited
+       reference arXiv:2601.06256 is unverified (S6 audit 2026-06-04). The
+       returned bounds are numerically tested but the underlying physical
+       claim is provisional.
 
     Parameters
     ----------
@@ -128,4 +153,9 @@ def mixing_time_upper_bound(result: ZhouPredictorResult, eps: float | None = Non
     return float(result.mixing_time_upper + np.log(result.epsilon / eps) / result.gap)
 
 
-__all__ = ["compute_zhou_predictor", "mixing_time_upper_bound"]
+__all__ = [
+    "CLAIM_REFERENCE",
+    "CLAIM_STATUS",
+    "compute_zhou_predictor",
+    "mixing_time_upper_bound",
+]

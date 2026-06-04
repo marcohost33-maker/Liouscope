@@ -98,6 +98,9 @@ report  = lp.diagnose(L, bootstrap_B=50, seed=42)
 | **G — Governance** | D23-D24 | manifest export, Zhou universal mixing-time predictor (opt-in, frozen) | `_zhou.py`, `MANIFEST_SCHEMA.json` |
 
 The Zhou predictor (D24) is opt-in and lives in `liouscope._zhou`; see CHANGELOG.
+Its `claim_status` is **pending/unverified** — the cited reference
+(arXiv:2601.06256) could not be independently verified (audit 2026-06-04), so
+D24 is an exploratory diagnostic only. See `liouscope._zhou.CLAIM_STATUS`.
 
 ---
 
