@@ -109,10 +109,31 @@ def ar1_correlation_corrected(
     range. The corrected value is clipped to ``[-0.999, 0.999]`` so downstream
     whitening (``sqrt(1 - rho^2)``) stays well defined.
 
+    Validity / range of trust
+    -------------------------
+    This is a *first-order* correction (Kendall / Marriott-Pope family): it
+    cancels only the leading ``O(1/n)`` term of the bias expansion. It is
+    reliable up to roughly ``rho ~ 0.85``; beyond that a residual bias remains,
+    set by the (truncated) order of the series expansion, and grows as ``rho``
+    approaches 1. For strongly autocorrelated series (``rho`` near 1) treat the
+    returned value as a mildly conservative estimate and prefer the
+    Geyer-IPS-based ``N_eff`` (:func:`estimate_neff_geyer`) for variance work.
+
+    A higher-order Kendall variant was tested and is marginally more accurate
+    at high ``rho`` / large ``n`` (smaller residual bias near ``rho ~ 0.9``),
+    but it was **deliberately not adopted**: the audit pins this first-order
+    closed form (item 3 / S2 audit) so the AR(1)-whitening path stays
+    bit-stable and auditable across versions. The marginal accuracy gain does
+    not justify breaking the frozen audit formula.
+
     References
     ----------
-    Marriott & Pope, *Biometrika* 41 (1954); Kendall, *Biometrika* 41 (1954);
-    bias-correction survey arXiv:2010.05870.
+    Marriott & Pope, "Bias in the estimation of autocorrelations",
+    *Biometrika* 41, 390 (1954); Kendall, "Note on bias in the estimation of
+    autocorrelation", *Biometrika* 41, 403 (1954); bias-correction survey
+    arXiv:2010.05870; Dou et al., "A review of bias-correction methods for the
+    first-order autoregressive coefficient", *British Journal of Mathematical
+    and Statistical Psychology* (2026).
 
     Parameters
     ----------
