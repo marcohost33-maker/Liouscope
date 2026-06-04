@@ -1,0 +1,23 @@
+# B3-Pilot (2026-06-04): zentrale Reusable-CI aus coworkerz-ci, ADDITIV neben
+# der bestehenden ci.yml (kein Ersatz, kein BP-Touch) - verifiziert nur, dass
+# der workflow_call-Pfad flottentauglich gruen laeuft. SHA-gepinnt (nie @main).
+name: ci-reusable-pilot
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  gate:
+    uses: marcohost33-maker/coworkerz-ci/.github/workflows/ci-python.yml@69d3bae0bd54792f499b01c1b6e1e8f6b452742b
+    with:
+      python-version: "3.12"
+      install-command: 'pip install -e ".[dev]" pytest-cov'
+      ruff-target: "src tests benchmarks"
+      mypy-target: "src/liouscope"
+      pytest-args: "--cov=liouscope --cov-fail-under=80 -q"
