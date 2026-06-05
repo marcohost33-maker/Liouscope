@@ -1,8 +1,8 @@
 ---
 name: liouscope-agents-md
 description: AI coding agent instructions for LiouScope (open quantum lattice diagnostics)
-version: "1.2"
-last_updated: 2026-06-03
+version: "1.3"
+last_updated: 2026-06-05
 priority_when_in_conflict: 1
 ---
 
@@ -23,12 +23,15 @@ priority_when_in_conflict: 1
 - **Stack:** Python >=3.10 (CI matrix 3.10/3.11/3.12/3.13), pytest, ruff, mypy,
   NumPy / SciPy, optional QuTiP cross-checks.
 - **Purpose:** Multi-diagnostic relaxation analysis for open quantum lattice
-  systems (GKSL / Lindblad). Twenty diagnostics D1-D20 in six layers + twelve
-  mechanism classes A1-A12. Replaces single-number "decay rate" with a
+  systems (GKSL / Lindblad). Diagnostics D1-D20 in six layers (+ D24 Zhou
+  mixing-time predictor, post-submission; schema `D1-D24-Übersicht-v3`) +
+  twelve mechanism classes A1-A12. Replaces single-number "decay rate" with a
   layered, auditable `DiagnosticReport`.
-- **Version:** 0.2.0 (see `pyproject.toml`)
+- **Version:** see `pyproject.toml` (single source — this file intentionally
+  states no version number; numbers here drift, pointers don't)
 - **Taxonomy version:** `A1-A12-v3.1`
-- **Manifest schema:** `MANIFEST_SCHEMA.json` v1.2.0 (SHA-256-stable run manifests)
+- **Manifest schema:** `src/liouscope/MANIFEST_SCHEMA.json` (version: see its
+  `schema_version` const; SHA-256-stable run manifests)
 - **License:** Apache-2.0
 - **Visibility:** PRIVATE (marcohost33-maker/Liouscope)
 - **KANON anchor:** `RESEARCH-LIOUSCOPE` in `Vero/Meta/KANON/KANON_APPS.yaml`
@@ -37,12 +40,12 @@ priority_when_in_conflict: 1
 
 ```
 src/liouscope/            # main package
-tests/                    # pytest suite (~18 test modules)
+  └── MANIFEST_SCHEMA.json # contract for run manifests (packaged, NOT repo root)
+tests/                    # pytest suite (17 test modules as of 2026-06-05)
   └── test_anchors.py      # anchor regressions — must pass on every CI run
 examples/                 # quickstart + tutorial scripts
 benchmarks/               # performance / reproducibility scripts
 figures/                  # generated diagnostic plots
-MANIFEST_SCHEMA.json      # contract for run manifests (v1.2.0)
 CITATION.cff              # DOI / academic citation
 codemeta.json             # CodeMeta 3.0 metadata
 .github/workflows/
@@ -68,8 +71,10 @@ python examples/quickstart.py  # smoke run
 
 ## Working agreements
 
-1. **Branch protection: Tier-2 active.** `main` requires `ci.yml` jobs green
-   (4 required status checks across the Python matrix, strict=true). PRs only.
+1. **Branch protection: Tier-2 active.** `main` requires ALL required status
+   checks green (strict=true): Python-matrix `test 3.10-3.13` + QuTiP
+   cross-checks (6 checks as of 2026-06-05 — authoritative list: branch
+   protection via `gh api`, not this file). PRs only.
 2. **Backup-First on destructive ops.** Loss-of-history incident 2026-05-16
    wiped ~20 files via unverified branch-delete + GH-GC. Backup-Triple is the
    recovery anchor in `Vero/Liouscope_Backup_2026-05-16/`. Before any
@@ -116,7 +121,7 @@ python examples/quickstart.py  # smoke run
 
 ## Don't
 
-- Don't merge without all 4 Python-matrix `ci.yml` jobs green.
+- Don't merge without ALL required status checks green (matrix + QuTiP).
 - Don't use `--no-verify`, `--no-gpg-sign`, `--force` without explicit User1 OK.
 - Don't bump `MANIFEST_SCHEMA` version without simultaneously updating
   consuming code paths and adding a backward-compat note in `CHANGELOG.md`.
@@ -140,7 +145,7 @@ python examples/quickstart.py  # smoke run
 - See `README.md` "Why LiouScope" for the design philosophy
   (no-single-number, explicit uncertainty, auditable manifests).
 - See `CHANGELOG.md` for what shipped in each version.
-- See `MANIFEST_SCHEMA.json` for the run-manifest contract (v1.2.0).
+- See `src/liouscope/MANIFEST_SCHEMA.json` for the run-manifest contract.
 - See `tests/test_anchors.py` for the canonical reference behaviour.
 - **Escalate after 3 failed attempts at the same step** — stop and ask in a PR
   draft or issue instead of looping.
@@ -154,7 +159,7 @@ A change is "done" only when **all** of the following hold:
 | 1 | `pytest -q` runs cleanly | exit 0 |
 | 2 | `pytest tests/test_anchors.py -v` (anchor regressions) green | exit 0 |
 | 3 | `ruff check src tests` passes | exit 0 |
-| 4 | All 4 matrix jobs `test (ubuntu-latest, 3.10..3.13)` green on PR | required-status checks |
+| 4 | ALL required status checks green on PR (`test 3.10-3.13` + `qutip-cross-check 3.11/3.12`, 6 as of 2026-06-05) | required-status checks |
 | 5 | If methodology/results touched: `CITATION.cff` updated | PR diff |
 | 6 | If run-manifest contract touched: `MANIFEST_SCHEMA.json` version bumped + `CHANGELOG.md` migration note | PR diff |
 | 7 | `CHANGELOG.md` updated | PR diff |
