@@ -14,7 +14,10 @@ permissions:
 
 jobs:
   gate:
-    uses: marcohost33-maker/coworkerz-ci/.github/workflows/ci-python.yml@511ae1bd35092429ddb8fb08e340a3c2c8bc9406
+    # zizmor impostor-commit kann private Cross-Repos nicht lesen (repo-scoped
+    # GITHUB_TOKEN); SHA wird stattdessen bei jedem Bump via gh api Pre/Post
+    # verifiziert. Audit hier seit 06-04 deshalb faelschlich rot.
+    uses: marcohost33-maker/coworkerz-ci/.github/workflows/ci-python.yml@511ae1bd35092429ddb8fb08e340a3c2c8bc9406 # zizmor: ignore[impostor-commit]
     with:
       python-version: "3.12"
       install-command: 'pip install -e ".[dev]" pytest-cov'
