@@ -162,3 +162,95 @@ def test_validator_is_cached():
     a = _compiled_validator()
     b = _compiled_validator()
     assert a is b  # lru_cache memoises the validator
+
+
+# --- Version single-source (audit 2026-06-06, P0) -------------------------
+
+
+def test_version_single_source():
+    """Wheel metadata, runtime ``__version__`` and the framework_version a run
+    records must all be the same string.
+
+    Regression for the 0.2.0/0.3.0 drift: ``pyproject.toml`` carried a second
+    hard-coded literal that diverged from ``_version.py``. We now resolve the
+    version dynamically from ``_version.py``; this test fails closed if the two
+    planes ever diverge again.
+    """
+    from importlib.metadata import version as dist_version
+
+    import liouscope
+
+    installed = dist_version("liouscope")
+    assert installed == liouscope.__version__, (
+        f"installed dist metadata {installed!r} != runtime "
+        f"liouscope.__version__ {liouscope.__version__!r}"
+    )
+    # And the manifest writer stamps exactly that string as framework_version.
+    assert _small_report().governance.framework_version == liouscope.__version__
+
+
+# --- Manifest byte-determinism (audit 2026-06-06, P1) ---------------------
+
+
+def _manifest_bytes(report, tmp_path: Path, name: str) -> bytes:
+    p = tmp_path / name
+    dump_manifest(report, p)
+    return p.read_bytes()
+
+
+def test_manifests_byte_identical_modulo_timestamp(tmp_path: Path):
+    """Two runs (same seed/inputs) are byte-identical once ``timestamp`` is
+    removed — the *true* reproducibility property the README now claims.
+
+    Also asserts ``run_id`` and ``input_hash`` are run-invariant (never derived
+    from the clock).
+    """
+    p1 = manifest_payload(_small_report())
+    p2 = manifest_payload(_small_report())
+    assert p1["run_id"] == p2["run_id"]
+    assert p1["input_hash"] == p2["input_hash"]
+    del p1["timestamp"]
+    del p2["timestamp"]
+    # Byte-compare the canonical (sorted-key) JSON projection.
+    b1 = json.dumps(p1, indent=2, sort_keys=True).encode("utf-8")
+    b2 = json.dumps(p2, indent=2, sort_keys=True).encode("utf-8")
+    assert b1 == b2
+
+
+def test_manifests_byte_identical_with_source_date_epoch(tmp_path: Path, monkeypatch):
+    """With ``SOURCE_DATE_EPOCH`` fixed, manifests are *fully* byte-identical
+    (timestamp included) — proves the strong reproducibility option.
+    """
+    monkeypatch.setenv("SOURCE_DATE_EPOCH", "1700000000")
+    b1 = _manifest_bytes(_small_report(), tmp_path, "m1.json")
+    b2 = _manifest_bytes(_small_report(), tmp_path, "m2.json")
+    assert b1 == b2, "manifests differ despite fixed SOURCE_DATE_EPOCH"
+    # The fixed epoch is actually reflected in the timestamp field.
+    payload = json.loads(b1)
+    assert payload["timestamp"] == "2023-11-14T22:13:20.000000Z"
+
+
+def test_source_date_epoch_rejects_garbage(monkeypatch):
+    """A non-integer SOURCE_DATE_EPOCH fails closed rather than silently
+    falling back to the wall clock (which would re-introduce non-determinism).
+    """
+    from liouscope.io.manifest import _utc_now_iso
+
+    monkeypatch.setenv("SOURCE_DATE_EPOCH", "not-a-number")
+    with pytest.raises(ValueError, match="SOURCE_DATE_EPOCH"):
+        _utc_now_iso()
+    monkeypatch.setenv("SOURCE_DATE_EPOCH", "-5")
+    with pytest.raises(ValueError, match="non-negative"):
+        _utc_now_iso()
+
+
+def test_source_date_epoch_unset_uses_wall_clock(monkeypatch):
+    """When unset/empty, the writer still produces a valid Z-suffixed ISO
+    timestamp (no regression of the default path).
+    """
+    from liouscope.io.manifest import _utc_now_iso
+
+    monkeypatch.delenv("SOURCE_DATE_EPOCH", raising=False)
+    ts = _utc_now_iso()
+    assert ts.endswith("Z")
+    assert len(ts) == 27

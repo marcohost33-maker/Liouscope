@@ -23,10 +23,11 @@ priority_when_in_conflict: 1
 - **Stack:** Python >=3.10 (CI matrix 3.10/3.11/3.12/3.13), pytest, ruff, mypy,
   NumPy / SciPy, optional QuTiP cross-checks.
 - **Purpose:** Multi-diagnostic relaxation analysis for open quantum lattice
-  systems (GKSL / Lindblad). Diagnostics D1-D20 in six layers (+ D24 Zhou
-  mixing-time predictor, post-submission; schema `D1-D24-Übersicht-v3`) +
-  twelve mechanism classes A1-A12. Replaces single-number "decay rate" with a
-  layered, auditable `DiagnosticReport`.
+  systems (GKSL / Lindblad). 24 diagnostics D1-D24 in six layers (D1-D20 =
+  peer-review submission set; D21-D24 post-submission, D24 = opt-in Zhou
+  mixing-time predictor; schema `D1-D24-Übersicht-v3`) + twelve mechanism
+  classes A1-A12. Replaces single-number "decay rate" with a layered,
+  auditable `DiagnosticReport`.
 - **Version:** see `pyproject.toml` (single source — this file intentionally
   states no version number; numbers here drift, pointers don't)
 - **Taxonomy version:** `A1-A12-v3.1`
