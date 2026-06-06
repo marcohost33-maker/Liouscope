@@ -12,12 +12,15 @@ Gorini-Kossakowski-Sudarshan-Lindblad (GKSL) generators. It quantifies *when and
 fails as a relaxation-time predictor* and replaces single-number "decay rate" reporting with a layered
 diagnostic that surfaces the underlying mechanism.
 
-The library implements **twenty diagnostics D1-D20** organised in six layers
+The library implements **24 diagnostics D1-D24** organised in six layers
 (Spectral / Non-normality / Relaxation / Uncertainty / Classification / Governance) and a
-**twelve-class mechanism taxonomy A1-A12** (`TAXONOMY_VERSION = "A1-A12-v3.1"`).
+**twelve-class mechanism taxonomy A1-A12** (`TAXONOMY_VERSION = "A1-A12-v3.1"`). D1-D20 are the
+original peer-review submission set; D21-D24 were added post-submission (D24 = the opt-in Zhou
+mixing-time predictor). The diagnostic schema constant is `D1-D24-Übersicht-v3`.
 
-> **Status:** v0.2.0 released 2026-04-17. Research / pre-clinical. Not for diagnostic or operational use
-> on production hardware. See [`CHANGELOG.md`](CHANGELOG.md) for version history and
+> **Status:** Research / pre-clinical. Not for diagnostic or operational use on production
+> hardware. The current version is whatever `liouscope.__version__` reports (single source:
+> `src/liouscope/_version.py`). See [`CHANGELOG.md`](CHANGELOG.md) for version history and
 > [`src/liouscope/MANIFEST_SCHEMA.json`](src/liouscope/MANIFEST_SCHEMA.json) for the run-manifest contract.
 
 ---
@@ -31,7 +34,7 @@ distort the relationship between gap and observed relaxation by orders of magnit
 
 LiouScope addresses this with three deliberate choices:
 
-1. **No single number.** Every analysis returns a structured `DiagnosticReport` with twenty diagnostics
+1. **No single number.** Every analysis returns a structured `DiagnosticReport` with 24 diagnostics
    grouped by physical concept, not a scalar.
 2. **Explicit uncertainty.** Bootstrap CIs (BCa), GLS with AR(1) residuals, AICc model selection, and a
    parametric-bootstrap pipeline are first-class — not optional add-ons.
@@ -86,7 +89,7 @@ report  = lp.diagnose(L, bootstrap_B=50, seed=42)
 
 ---
 
-## Diagnostic layers (D1-D20)
+## Diagnostic layers (D1-D24)
 
 | Layer | IDs | What it measures | Key modules |
 |---|---|---|---|
@@ -156,8 +159,15 @@ LiouScope is built for paper-grade reproducibility:
   [`MANIFEST_SCHEMA.json`](src/liouscope/MANIFEST_SCHEMA.json) (schema v1.2.0) via
   `io.validate_manifest(payload)`. The validator uses a cached
   `jsonschema.Draft202012Validator` when [`jsonschema`](https://python-jsonschema.readthedocs.io/)
-  is installed, and falls back to a built-in subset check otherwise. Two runs on the same
-  hardware with the same seed produce byte-identical manifests.
+  is installed, and falls back to a built-in subset check otherwise. **Two runs with the same
+  seed and inputs produce manifests that are byte-identical except for the recorded wall-clock
+  `timestamp`** — the `run_id` and `input_hash` fields are run-invariant (derived purely from
+  inputs, seed and framework version, never from the clock). For *fully* byte-identical
+  manifests (timestamp included), set the reproducible-builds standard env var
+  `SOURCE_DATE_EPOCH` to a fixed Unix timestamp; the manifest writer then uses it instead of the
+  wall clock. Both properties are gated by tests in `tests/test_manifest.py`
+  (`test_manifests_byte_identical_modulo_timestamp`,
+  `test_manifests_byte_identical_with_source_date_epoch`).
 - **Anchor tests.** `tests/test_anchors.py` locks the numerical anchors that paper figures depend on;
   changes to physics code that move these values are caught in CI.
 - **Paper-figure pipeline.** `figures/generate_all.py` regenerates Fig 1-3 deterministically.
