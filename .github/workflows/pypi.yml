@@ -8,6 +8,11 @@ permissions: {}
 
 jobs:
   build-and-publish:
+    # [2026-06-06] Template-Guard: Trusted Publishing ist fuer dieses (private
+    # Forschungs-)Repo auf PyPI nicht konfiguriert -> Job failte bei jedem
+    # Release ("Trusted publishing exchange failure", 05-21 + 05-28). Aktivierung
+    # nach echtem PyPI-Setup: Repo-Variable PYPI_PUBLISH_ENABLED=true setzen.
+    if: vars.PYPI_PUBLISH_ENABLED == 'true'
     runs-on: ubuntu-latest
     environment:
       name: pypi
