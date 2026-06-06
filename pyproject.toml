@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "liouscope"
-version = "0.3.0"
+dynamic = ["version"]
 description = "Multi-diagnostic relaxation analysis for open quantum lattice systems"
 readme = "README.md"
 license = { text = "Apache-2.0" }
@@ -58,6 +58,11 @@ Issues = "https://github.com/coworker-research/liouscope/issues"
 
 [tool.setuptools]
 include-package-data = true
+
+[tool.setuptools.dynamic]
+# Single source of truth for the version: src/liouscope/_version.py.
+# pyproject is a *pointer* here (AGENTS.md: "numbers drift, pointers don't").
+version = { attr = "liouscope._version.__version__" }
 
 [tool.setuptools.packages.find]
 where = ["src"]
