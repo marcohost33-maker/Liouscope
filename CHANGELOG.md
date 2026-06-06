@@ -6,6 +6,20 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+- `numerics.resolvent.resolvent_norm` large-matrix path (`n > 128`, power
+  iteration) computed a wrong resolvent 2-norm on non-normal operators — the
+  exact case the diagnostic exists for. The adjoint apply used
+  `lu.solve(y.conj()).conj()`, which applies `conj(A^{-1})` rather than the
+  required `(A^{-1})^H`; for a strongly non-normal `L` this gave a ~95 %
+  relative error (e.g. 3.74 vs. the true 81.20). Replaced with SuperLU's
+  `lu.solve(y, trans="H")` (solves `A^H x = b`), matching the standard
+  inverse-power-iteration estimator for `||(zI-L)^{-1}||_2` (Trefethen &
+  Embree, *Spectra and Pseudospectra*, 2005). New regression test
+  `test_resolvent_norm_large_matches_dense_svd` pins the path to the dense SVD
+  (≤ 1e-6 relative) on a strongly non-normal matrix; the dense `n ≤ 128` path
+  and all anchor regressions are unchanged.
+
 ### Added
 - Boundary-guard hardening wave (audit 2026-06-06): fail-closed input
   validation and structured IO errors at the public surface. No API breaks, no

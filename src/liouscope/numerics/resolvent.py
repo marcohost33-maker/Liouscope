@@ -53,16 +53,22 @@ def resolvent_norm(L: np.ndarray, z: complex) -> float:
         rng.standard_normal(n) + 1j * rng.standard_normal(n), dtype=complex
     )
     x /= np.linalg.norm(x)
-    sigma_prev = 0.0
-    for _ in range(80):
-        y = lu.solve(x)
-        # Apply (A^{-1})^H
-        z_vec = lu.solve(y.conj()).conj()
-        sigma = float(np.linalg.norm(z_vec))
-        if sigma == 0.0:
+    # Inverse power iteration on B = (A^{-1})^H A^{-1} (Hermitian PSD); its
+    # dominant eigenvalue is sigma_max(A^{-1})^2 = ||(zI-L)^{-1}||_2^2 (the
+    # standard pseudospectra/resolvent-norm estimator, Trefethen & Embree,
+    # *Spectra and Pseudospectra*, 2005). The adjoint solve uses SuperLU's
+    # ``trans="H"`` (A^H x = b) -- NOT ``lu.solve(y.conj()).conj()`` which
+    # applies conj(A^{-1}) and is wrong for non-normal L (the case of interest).
+    sigma = 0.0
+    for _ in range(200):
+        y = lu.solve(x)  # A^{-1} x
+        z_vec = lu.solve(y, trans="H")  # (A^{-1})^H y  == B x
+        sigma_new = float(np.linalg.norm(z_vec))
+        if sigma_new == 0.0:
             break
-        x = z_vec / sigma
-        if abs(sigma - sigma_prev) < 1.0e-9 * max(1.0, sigma):
+        x = z_vec / sigma_new
+        if abs(sigma_new - sigma) < 1.0e-12 * max(1.0, sigma_new):
+            sigma = sigma_new
             break
-        sigma_prev = sigma
-    return float(np.sqrt(sigma_prev))
+        sigma = sigma_new
+    return float(np.sqrt(sigma))

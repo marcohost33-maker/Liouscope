@@ -88,3 +88,21 @@ def test_resolvent_norm_small():
     # ||(zI - A)^{-1}|| with z = 0: max 1/|z - lambda| = max 1/lambda = 1
     norm = resolvent_norm(A, 0.0 + 0.0j)
     assert abs(norm - 1.0) < 0.5  # loose tolerance for power-iteration fallback
+
+
+def test_resolvent_norm_large_matches_dense_svd(rng):
+    """Power-iteration path (n > 128) must match the dense SVD on a strongly
+    non-normal matrix -- regression for the adjoint-solve bug where
+    ``lu.solve(y.conj()).conj()`` applied conj(A^{-1}) instead of (A^{-1})^H.
+    """
+    import scipy.linalg as sla
+
+    n = 160
+    L = rng.standard_normal((n, n)) + 1j * rng.standard_normal((n, n))
+    # Strongly non-normal: nearly upper-triangular so conj() != conj-transpose.
+    L = np.triu(L) + 0.1 * np.tril(L, -1)
+    z = 0.5 + 0.3j
+    a_inv = sla.solve(z * np.eye(n) - L, np.eye(n, dtype=complex))
+    expected = float(sla.svdvals(a_inv)[0])
+    got = resolvent_norm(L, z)
+    assert abs(got - expected) <= 1e-6 * expected
