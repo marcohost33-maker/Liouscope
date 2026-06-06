@@ -134,8 +134,17 @@ def manifest_payload(report: DiagnosticReport) -> dict[str, Any]:
 
 
 def dump_manifest(report: DiagnosticReport, path: str | Path) -> None:
-    """Write the schema-compliant manifest JSON for ``report`` to ``path``."""
-    Path(path).write_text(json.dumps(manifest_payload(report), indent=2, sort_keys=True), encoding="utf-8")
+    """Write the schema-compliant manifest JSON for ``report`` to ``path``.
+
+    Parent directories are created if missing so a nested artefact path does
+    not fail with a bare ``FileNotFoundError`` on first write.
+    """
+    p = Path(path)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(
+        json.dumps(manifest_payload(report), indent=2, sort_keys=True),
+        encoding="utf-8",
+    )
 
 
 @lru_cache(maxsize=1)

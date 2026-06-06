@@ -60,6 +60,39 @@ def eig_nonhermitian(
     )
 
 
+def require_finite_square_2d(A: np.ndarray, *, name: str = "matrix") -> np.ndarray:
+    """Validate ``A`` as a finite, square, 2-D array at a public boundary.
+
+    Returns ``np.asarray(A)`` unchanged when valid, else raises a
+    :class:`ValueError` that names the offending argument *and* the concrete
+    defect. This is a fail-closed guard for public entry points: without it a
+    ``NaN``/``inf``-laden Liouvillian flows into ``scipy.linalg.expm`` / ``svd``
+    and surfaces as an opaque, location-blind error deep in LAPACK
+    (``"array must not contain infs or NaNs"`` / ``"SVD did not converge"``),
+    leaving the caller no clue which input was malformed.
+
+    Parameters
+    ----------
+    A
+        Candidate array.
+    name
+        Human-readable argument name used in error messages.
+    """
+    arr = np.asarray(A)
+    if arr.ndim != 2 or arr.shape[0] != arr.shape[1]:
+        raise ValueError(f"{name} must be a square 2-D array, got shape {arr.shape}")
+    if arr.size == 0:
+        raise ValueError(f"{name} must be non-empty, got shape {arr.shape}")
+    if not np.all(np.isfinite(arr)):
+        n_nan = int(np.count_nonzero(np.isnan(arr)))
+        n_inf = int(np.count_nonzero(np.isinf(arr)))
+        raise ValueError(
+            f"{name} contains non-finite entries "
+            f"({n_nan} NaN, {n_inf} inf); diagnostics require a finite operator"
+        )
+    return arr
+
+
 def is_hermitian(A: np.ndarray, atol: float = EPS_HERMITICITY) -> bool:
     """Return True iff ``A`` is Hermitian within ``atol``."""
     A = np.asarray(A)
