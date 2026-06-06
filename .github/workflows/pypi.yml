@@ -3,6 +3,7 @@ name: Publish to PyPI
 on:
   release:
     types: [published]
+  workflow_dispatch:   # manueller Guard-Beweis-Lauf (Job skipt ohne PYPI_PUBLISH_ENABLED)
 
 permissions: {}
 
