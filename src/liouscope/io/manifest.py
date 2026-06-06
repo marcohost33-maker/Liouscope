@@ -5,6 +5,7 @@ from __future__ import annotations
 import datetime
 import hashlib
 import json
+import os
 import platform
 import sys
 from functools import lru_cache
@@ -73,12 +74,30 @@ def _utc_now_iso() -> str:
 
     ``datetime.timezone.utc`` is used rather than ``datetime.UTC`` because
     the latter only exists in Python 3.11+; the package supports 3.10.
+
+    **Reproducible-builds override.** When the environment variable
+    ``SOURCE_DATE_EPOCH`` is set (the cross-ecosystem reproducible-builds
+    standard, <https://reproducibility.org/specs/source-date-epoch/>), the
+    wall-clock read is replaced by that fixed Unix timestamp. This makes the
+    *entire* manifest — timestamp included — byte-identical across runs, which
+    is what the README's strong reproducibility claim relies on. An unparseable
+    or negative value is rejected fail-closed (no silent fallback to wall clock,
+    which would re-introduce non-determinism unnoticed).
     """
-    return (
-        datetime.datetime.now(datetime.timezone.utc)
-        .isoformat(timespec="microseconds")
-        .replace("+00:00", "Z")
-    )
+    epoch = os.environ.get("SOURCE_DATE_EPOCH")
+    if epoch is not None and epoch.strip() != "":
+        try:
+            ts = int(epoch)
+        except ValueError as exc:
+            raise ValueError(
+                f"SOURCE_DATE_EPOCH must be an integer Unix timestamp, got {epoch!r}"
+            ) from exc
+        if ts < 0:
+            raise ValueError(f"SOURCE_DATE_EPOCH must be non-negative, got {ts}")
+        dt = datetime.datetime.fromtimestamp(ts, tz=datetime.timezone.utc)
+    else:
+        dt = datetime.datetime.now(datetime.timezone.utc)
+    return dt.isoformat(timespec="microseconds").replace("+00:00", "Z")
 
 
 def build_manifest(
