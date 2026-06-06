@@ -6,7 +6,37 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+- Version single-source (audit 2026-06-06, P0): `pyproject.toml` no longer
+  carries a second hard-coded version literal. `[project]` now declares
+  `dynamic = ["version"]` and `[tool.setuptools.dynamic]` reads the version from
+  `src/liouscope/_version.py` (the documented single source). Previously
+  `pyproject.toml` said `0.3.0` while `_version.py` (= runtime
+  `liouscope.__version__` and every manifest's `framework_version`) said
+  `0.2.0`, so a built wheel reported the wrong version and every run manifest
+  recorded a wrong `framework_version` — a provenance bug for a tool that claims
+  paper-grade reproducibility. `_version.py` is bumped to `0.3.0`; a new test
+  (`test_version_single_source`) asserts
+  `importlib.metadata.version("liouscope") == liouscope.__version__`.
+- Reproducibility claim precision (audit 2026-06-06, P1): the README claim that
+  two runs produce "byte-identical manifests" was empirically false — the
+  embedded wall-clock `timestamp` varies, so the manifest SHA differed each run.
+  README now states the true property (byte-identical *except for* the recorded
+  `timestamp`; `run_id`/`input_hash` are run-invariant) and both properties are
+  gated by tests.
+- Diagnostic-count consistency (audit 2026-06-06, P1): README headline said
+  "twenty diagnostics D1-D20" while its own table and the code constant
+  `DIAGNOSTIC_SCHEMA_VERSION = "D1-D24-Übersicht-v3"` run to D24. README and
+  AGENTS.md now consistently say "24 diagnostics D1-D24 (D1-D20 submission set;
+  D21-D24 post-submission)".
+
 ### Added
+- `SOURCE_DATE_EPOCH` support in the manifest writer (audit 2026-06-06, P1):
+  when this reproducible-builds standard env var is set to a fixed Unix
+  timestamp, the manifest's `timestamp` field uses it instead of the wall
+  clock, making the manifest *fully* byte-identical across runs. An
+  unparseable/negative value is rejected fail-closed (no silent fallback to the
+  wall clock). Gated by `test_manifests_byte_identical_with_source_date_epoch`.
 - Boundary-guard hardening wave (audit 2026-06-06): fail-closed input
   validation and structured IO errors at the public surface. No API breaks, no
   new mandatory dependencies, anchor regressions unchanged.
