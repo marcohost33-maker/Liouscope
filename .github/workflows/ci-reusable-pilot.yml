@@ -14,7 +14,9 @@ permissions:
 
 jobs:
   gate:
-    uses: marcohost33-maker/coworkerz-ci/.github/workflows/ci-python.yml@69d3bae0bd54792f499b01c1b6e1e8f6b452742b
+    # Pin auf privates coworkerz-ci: SHA-Echtheit wird bei jedem Bump via
+    # gh api Pre/Post verifiziert (zizmor laeuft offline, s. zizmor.yml).
+    uses: marcohost33-maker/coworkerz-ci/.github/workflows/ci-python.yml@511ae1bd35092429ddb8fb08e340a3c2c8bc9406
     with:
       python-version: "3.12"
       install-command: 'pip install -e ".[dev]" pytest-cov'
