@@ -7,6 +7,34 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Added
+- Boundary-guard hardening wave (audit 2026-06-06): fail-closed input
+  validation and structured IO errors at the public surface. No API breaks, no
+  new mandatory dependencies, anchor regressions unchanged.
+  - `numerics.linalg.require_finite_square_2d`: a reusable boundary validator
+    that rejects non-finite (NaN/inf), non-square, or empty operators with a
+    structured, argument-named `ValueError` (e.g. `"L_super contains
+    non-finite entries (1 NaN, 0 inf)"`). Previously such inputs flowed into
+    `scipy.linalg.expm`/`svd` and surfaced as opaque, location-blind LAPACK
+    messages (`"array must not contain infs or NaNs"` / `"SVD did not
+    converge"`) that named neither the offending argument nor the real defect.
+  - `diagnose()` now validates `L_super` and any caller-supplied `rho_initial`
+    / `rho_steady_state` (finiteness + shape match against `d`) at the entry
+    boundary, before any numerics run. The previously uncaught path was
+    supplying `rho_steady_state` (which bypasses the steady-state SVD), where an
+    inf/NaN in `L_super` was only caught deep inside `expm`.
+  - `io.export.load_report` fails closed with structured, path-bearing errors:
+    a missing path raises `FileNotFoundError("report file not found: ...")`;
+    malformed JSON or a non-object top level raises `ValueError` naming the
+    file. Replaces the raw `json.loads(Path(path).read_text(...))` that gave
+    callers no context (the "exists()-then-read-raw" fail-open class).
+  - `io.export.dump_report` and `io.manifest.dump_manifest` now create missing
+    parent directories (`parents=True, exist_ok=True`) so nested artefact paths
+    do not fail with a bare `FileNotFoundError` on first write.
+  - `tests/test_input_guards.py` (12 tests) and `tests/test_export.py` (8
+    tests): negative/edge inputs (NaN, inf, empty, wrong shape, missing file,
+    malformed/non-object JSON) fail before the happy path; valid input is not
+    rejected (no false positives). Closes the prior coverage gap for
+    `io.export`.
 - Statistics-hardening wave (audit 2026-06-04, findings S1-S6):
   - `core.lindblad.DegenerateSteadyStateError` + `steady_state(allow_degenerate=)`
     (S1): a multi-dimensional Liouvillian null space (non-unique NESS /
