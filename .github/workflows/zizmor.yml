@@ -43,14 +43,11 @@ jobs:
         uses: zizmorcore/zizmor-action@5f14fd08f7cf1cb1609c1e344975f152c7ee938d  # v0.5.6
         with:
           persona: regular
-          # [2026-06-06] Offline-Modus: impostor-commit crasht hart ("no audit
-          # was performed") am privaten Cross-Repo-Pin coworkerz-ci, weil der
-          # repo-scoped GITHUB_TOKEN designbedingt keine fremden privaten Repos
-          # lesen kann (docs.zizmor.sh/troubleshooting). SHA-Echtheit des Pins
-          # wird stattdessen bei jedem Bump via gh api Pre/Post verifiziert.
-          # Trade-off (dokumentiert): known-vulnerable-actions/stale-refs offline
-          # deaktiviert — kompensiert durch SHA-Pins + Dependabot-Updates.
-          online-audits: false
+          # [2026-06-06] Online-Audits AKTIV; nur impostor-commit ist per
+          # .github/zizmor.yml deaktiviert (crasht am privaten Cross-Repo-Pin
+          # coworkerz-ci — repo-scoped GITHUB_TOKEN, docs.zizmor.sh). Das ist
+          # die praezisere Loesung gegenueber online-audits:false (Webrecherche
+          # 06-06): known-vulnerable-actions + stale-action-refs bleiben aktiv.
           # privates Repo ohne GHAS: kein Action-internes Code-Scanning-Upload (wirft sonst
           # "Resource not accessible"). Stattdessen Findings als inline-Annotationen.
           advanced-security: false
