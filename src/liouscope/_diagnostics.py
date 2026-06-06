@@ -16,6 +16,7 @@ from .diagnostics.spectral import compute_spectral_layer
 from .diagnostics.transient import compute_transient_layer
 from .diagnostics.uncertainty import compute_uncertainty_layer
 from .io.manifest import build_manifest, compute_input_hash
+from .numerics.linalg import require_finite_square_2d
 
 
 def diagnose(
@@ -55,11 +56,29 @@ def diagnose(
     DiagnosticReport
         A fully-populated frozen report with governance metadata.
     """
-    L_super = np.asarray(L_super)
+    # Fail-closed boundary guard: reject non-finite / non-square operators here
+    # with a structured, argument-named error instead of letting NaN/inf flow
+    # into scipy.linalg.expm / svd and surface as an opaque LAPACK message.
+    L_super = require_finite_square_2d(L_super, name="L_super")
     n2 = L_super.shape[0]
     d = int(round(np.sqrt(n2)))
     if d * d != n2:
         raise ValueError(f"L_super must have square-d dimension, got {n2}")
+
+    if rho_initial is not None:
+        rho_initial = require_finite_square_2d(rho_initial, name="rho_initial")
+        if rho_initial.shape != (d, d):
+            raise ValueError(
+                f"rho_initial shape {rho_initial.shape} != ({d}, {d})"
+            )
+    if rho_steady_state is not None:
+        rho_steady_state = require_finite_square_2d(
+            rho_steady_state, name="rho_steady_state"
+        )
+        if rho_steady_state.shape != (d, d):
+            raise ValueError(
+                f"rho_steady_state shape {rho_steady_state.shape} != ({d}, {d})"
+            )
 
     if rho_steady_state is None:
         rho_steady_state = steady_state(L_super)
