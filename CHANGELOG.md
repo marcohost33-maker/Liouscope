@@ -7,6 +7,27 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Fixed
+- D14 transient time-grid physics-scaling (audit 2026-06-06, P2-1):
+  `diagnostics.transient.trans_amplitude_ratio` (`sup_t ||e^{tL}||_2`)
+  previously used a fixed coarse grid `linspace(0.01, 5.0, 30)`. For systems
+  whose relaxation timescale `1/Delta` falls outside `[0.01, 5]` — i.e. the
+  small-gap, strongly non-normal regime the diagnostic is meant to detect — the
+  supremum was silently *underestimated* (measured 27.8% too low on an
+  amplitude-damping channel with gap 0.01: fixed grid 1.0209 vs the true
+  sqrt(2) = 1.4142, recovered by a dense oracle). The grid is now physics-scaled
+  to the spectral gap (D1) and the numerical abscissa: a two-scale window
+  `[0, ~8/Delta]` with a log-spaced early segment (to resolve sharp growth
+  peaks) plus a linear late segment. Across damping rates spanning three orders
+  of magnitude the auto-scaled D14 now matches a dense reference to < 1e-3
+  relative. An explicit `t_grid=` still overrides the scaling (backward
+  compatible); when no gap and no grid are given, the legacy coarse grid is
+  kept as a fallback. A `TransientGridWarning` is emitted when the propagator
+  norm is still rising non-negligibly at the right grid edge (the returned sup
+  is then a lower bound). `compute_transient_layer` forwards the gap so
+  `diagnose()` benefits automatically. New tests in `tests/test_transient.py`
+  pin the behaviour against a dense brute-force oracle; the QuTiP physics-kernel
+  parity cross-checks remain green (the change does not touch the Lindblad
+  builder, steady state, or spectrum).
 - Version single-source (audit 2026-06-06, P0): `pyproject.toml` no longer
   carries a second hard-coded version literal. `[project]` now declares
   `dynamic = ["version"]` and `[tool.setuptools.dynamic]` reads the version from
