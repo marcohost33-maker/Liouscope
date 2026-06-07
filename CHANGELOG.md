@@ -6,6 +6,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.4.0] — 2026-06-07
+
+Release cut: everything below shipped on `main` between `v0.3.0` (2026-05-28)
+and this tag (18 commits, PRs #34–#41 — audit waves 2026-06-04/06-06 + D14
+physics-scaling). MINOR bump per SemVer: backward-compatible API additions
+(`gap=` forwarding, `TransientGridWarning`, `SOURCE_DATE_EPOCH`).
+
 ### Fixed
 - D14 transient time-grid physics-scaling (audit 2026-06-06, P2-1):
   `diagnostics.transient.trans_amplitude_ratio` (`sup_t ||e^{tL}||_2`)
