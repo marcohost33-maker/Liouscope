@@ -66,7 +66,8 @@ def _physics_time_grid(
     n_late = max(2, n_points - n_early)
     early = np.geomspace(t_decay * 1.0e-6, t_early, n_early)
     late = np.linspace(t_early, t_decay, n_late)
-    return np.unique(np.concatenate(([0.0], early, late)))
+    # np.asarray keeps mypy happy on py3.10 numpy stubs (np.unique -> Any there).
+    return np.asarray(np.unique(np.concatenate(([0.0], early, late))), dtype=np.float64)
 
 
 def trans_amplitude_ratio(
