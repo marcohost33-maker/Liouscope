@@ -6,6 +6,32 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+- `numerics.resolvent.resolvent_norm` large-matrix branch (n > 128): the
+  SuperLU power-iteration computed the wrong conjugate-transpose for the
+  resolvent. `lu.solve(y.conj()).conj()` evaluates `conj(A)^{-1} y`, which
+  equals the required `(A^H)^{-1} y` only for symmetric `A`; on the non-normal
+  Liouvillians this kernel targets the returned `||(zI - L)^{-1}||_2` was wrong
+  by ~50% (e.g. 0.550 vs the dense reference 1.181 on a random non-symmetric
+  matrix). Fixed to solve the LU's conjugate-transpose system directly via
+  `lu.solve(y, trans="H")`; the power-iteration estimate now matches a dense
+  SVD reference to < 1e-6 relative across seeds. The function is a public
+  `numerics` utility and is not on the `diagnose()` report path, so no anchor
+  or `DiagnosticReport` output changes (the small-matrix dense branch, used for
+  Hilbert dimensions up to 128, was already correct).
+
+### Added
+- Regression tests pinning the A1–A12 mechanism classifier decision tree
+  (`tests/test_classification.py`): synthetic-input coverage of every
+  `_pick_a_class` branch, the `_pick_verdict_tier` thresholds (including the
+  `EXCLUDED` and `UNDEFINED` paths unreachable through natural confidence
+  values), and the `_confidence` scoring rules. Raises `classification.py`
+  coverage from 71% to 100%.
+- Tests for the previously-untested large-matrix branches of
+  `numerics.resolvent` (`tests/test_numerics.py`): the SuperLU sparse solve
+  (n > 256) and the power-iteration resolvent norm (n > 128, the regression
+  guard for the fix above).
+
 ## [0.4.0] — 2026-06-07
 
 Release cut: everything below shipped on `main` between `v0.3.0` (2026-05-28)
