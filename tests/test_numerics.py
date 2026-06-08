@@ -88,3 +88,30 @@ def test_resolvent_norm_small():
     # ||(zI - A)^{-1}|| with z = 0: max 1/|z - lambda| = max 1/lambda = 1
     norm = resolvent_norm(A, 0.0 + 0.0j)
     assert abs(norm - 1.0) < 0.5  # loose tolerance for power-iteration fallback
+
+
+def test_resolvent_apply_superlu_sparse_branch(rng):
+    # n > 256 exercises the SuperLU sparse solve path (the n=64 test above
+    # falls through to the dense scipy.linalg.solve branch).
+    n = 300
+    A = (rng.standard_normal((n, n)) + 1j * rng.standard_normal((n, n))) * 0.1
+    b = rng.standard_normal(n) + 1j * rng.standard_normal(n)
+    z = 5.0 + 0.0j
+    x = resolvent_apply_superlu(A, z, b)
+    res = (z * np.eye(n, dtype=complex) - A) @ x - b
+    assert np.linalg.norm(res) < 1e-8
+
+
+def test_resolvent_norm_large_matches_dense(rng):
+    # n > 128 exercises the SuperLU power-iteration branch. Regression guard for
+    # the conjugate-transpose bug (lu.solve(y.conj()).conj() computes
+    # conj(A)^{-1} y, not the required (A^H)^{-1} y) that made the largest
+    # singular value of the resolvent wrong by ~50% on non-symmetric A.
+    import scipy.linalg as sla
+
+    n = 160
+    A = (rng.standard_normal((n, n)) + 1j * rng.standard_normal((n, n))) * 0.1
+    z = 3.0 + 0.5j
+    ref = float(sla.svdvals(sla.inv(z * np.eye(n, dtype=complex) - A))[0])
+    got = resolvent_norm(A, z)
+    assert abs(got - ref) <= 1e-6 * ref

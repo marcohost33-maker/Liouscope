@@ -53,16 +53,23 @@ def resolvent_norm(L: np.ndarray, z: complex) -> float:
         rng.standard_normal(n) + 1j * rng.standard_normal(n), dtype=complex
     )
     x /= np.linalg.norm(x)
+    sigma = 0.0
     sigma_prev = 0.0
-    for _ in range(80):
+    # Konvergenz-Guard 200 Iter / 1e-12 (robustere Schranke aus PR#39 uebernommen,
+    # Trefethen & Embree, Spectra and Pseudospectra) -> Best-of-both bei nahezu
+    # degenerierten Singulaerwerten; bleibt weit unter der 1e-6-Testtoleranz.
+    for _ in range(200):
         y = lu.solve(x)
-        # Apply (A^{-1})^H
-        z_vec = lu.solve(y.conj()).conj()
+        # Apply M^H = (A^{-1})^H = (A^H)^{-1} via the LU's conjugate-transpose
+        # solve. NOTE: lu.solve(y.conj()).conj() computes conj(A)^{-1} y, which
+        # equals (A^H)^{-1} y only for symmetric A and is wrong for the
+        # non-normal Liouvillians this kernel targets -- use trans="H" instead.
+        z_vec = lu.solve(y, trans="H")
         sigma = float(np.linalg.norm(z_vec))
         if sigma == 0.0:
             break
         x = z_vec / sigma
-        if abs(sigma - sigma_prev) < 1.0e-9 * max(1.0, sigma):
+        if abs(sigma - sigma_prev) < 1.0e-12 * max(1.0, sigma):
             break
         sigma_prev = sigma
-    return float(np.sqrt(sigma_prev))
+    return float(np.sqrt(sigma))
