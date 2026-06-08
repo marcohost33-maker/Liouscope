@@ -13,9 +13,11 @@ abstract: >-
   LiouScope is an open-source diagnostic framework for time-homogeneous
   Markovian open quantum systems described by Gorini-Kossakowski-Sudarshan-
   Lindblad (GKSL) generators. It quantifies when and why the Liouvillian gap
-  fails as a relaxation-time predictor, providing twenty diagnostics (D1-D20)
-  organised in six layers (Spectral, Non-normality, Relaxation, Uncertainty,
-  Classification, Governance) and a twelve-class mechanism taxonomy A1-A12.
+  fails as a relaxation-time predictor, providing 24 diagnostics (D1-D24;
+  D1-D20 are the original submission set and D21-D24 are post-submission
+  additions) organised in six layers (Spectral, Non-normality, Relaxation,
+  Uncertainty, Classification, Governance) and a twelve-class mechanism
+  taxonomy A1-A12.
 keywords:
   - open quantum systems
   - Lindblad
@@ -28,7 +30,7 @@ preferred-citation:
   type: software
   authors:
     - name: "Coworker Research"
-  title: "LiouScope: Multi-Diagnostic Relaxation Analysis for Open Quantum Lattice Systems (v0.2.0)"
+  title: "LiouScope: Multi-Diagnostic Relaxation Analysis for Open Quantum Lattice Systems"
   year: 2026
   url: "https://github.com/marcohost33-maker/Liouscope"
   notes: >-
