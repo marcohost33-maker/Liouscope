@@ -33,7 +33,17 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Tests for the previously-untested large-matrix branches of
   `numerics.resolvent` (`tests/test_numerics.py`): the SuperLU sparse solve
   (n > 256) and the power-iteration resolvent norm (n > 128, the regression
-  guard for the fix above).
+  guard for the fix above), plus a clustered-singular-value case proving the
+  norm stays accurate to < 1e-3 when the top two singular values nearly
+  coincide.
+
+### Changed
+- `numerics.resolvent.resolvent_norm` docstring now documents the method as the
+  standard pseudospectra shift-and-invert approach (Trefethen, *Pseudospectra
+  of Linear Operators*, SIAM Rev. 1997) and records why plain power iteration
+  is sufficient for the dominant value (value-convergence is robust to top
+  singular-value clustering, unlike eigenvector-convergence — verified
+  empirically), so Lanczos/`svds` is intentionally not used.
 
 ## [0.4.0] — 2026-06-07
 

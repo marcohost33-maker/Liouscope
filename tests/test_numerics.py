@@ -115,3 +115,23 @@ def test_resolvent_norm_large_matches_dense(rng):
     ref = float(sla.svdvals(sla.inv(z * np.eye(n, dtype=complex) - A))[0])
     got = resolvent_norm(A, z)
     assert abs(got - ref) <= 1e-6 * ref
+
+
+def test_resolvent_norm_large_clustered_singular_values():
+    # Robustness guard: two eigenvalues at nearly-equal distance from z make the
+    # top two singular values of the resolvent cluster -- the regime where the
+    # power method's *eigenvector* convergence stalls. The *value* (the norm)
+    # must still be accurate, which is why plain power iteration is sufficient
+    # here and Lanczos/svds is not needed (see resolvent_norm docstring).
+    import scipy.linalg as sla
+
+    n = 160
+    z = 0.0 + 0.0j
+    lam = np.empty(n, dtype=complex)
+    lam[0] = 1.0
+    lam[1] = 1.001  # sigma_2/sigma_1 ~ 0.999 -> tightly clustered top pair
+    lam[2:] = np.linspace(5.0, 20.0, n - 2)  # far away -> negligible sigmas
+    A = np.diag(lam)
+    ref = float(sla.svdvals(sla.inv(z * np.eye(n, dtype=complex) - A))[0])
+    got = resolvent_norm(A, z)
+    assert abs(got - ref) <= 1e-3 * ref
