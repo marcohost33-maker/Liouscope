@@ -7,10 +7,37 @@ Liouvillian-resolvent systems (anchor E / patch E10).
 
 from __future__ import annotations
 
+import warnings
+
 import numpy as np
 import scipy.linalg as sla
 import scipy.sparse as sp
 import scipy.sparse.linalg as spla
+
+# Dense explicit-inverse + SVD is exact and O(n^3); used up to this size. Above
+# it the SuperLU shift-and-invert power iteration (O(n) memory, sparse solves)
+# takes over. resolvent_apply_superlu uses a larger cutoff because a single
+# dense solve is much cheaper than a full SVD.
+_DENSE_NORM_CUTOFF = 128
+_DENSE_SOLVE_CUTOFF = 256
+# Power-iteration budget for the largest singular value of the resolvent. 200
+# lets moderately clustered top singular values (sigma_2/sigma_1 >~ 0.98)
+# converge; tighter clusters exhaust the budget but, because it is the dominant
+# *value* that is sought (not the eigenvector), the estimate is still accurate
+# to ~1e-4 relative and a ResolventConvergenceWarning is emitted.
+_POWER_ITERS = 200
+_POWER_TOL = 1.0e-9
+
+
+class ResolventConvergenceWarning(UserWarning):
+    """Emitted when the resolvent-norm power iteration hits its budget.
+
+    The cross-product power iteration for ``||(zI - L)^{-1}||_2`` did not meet
+    its relative tolerance within :data:`_POWER_ITERS` steps -- the top singular
+    values of the resolvent are tightly clustered. The returned value is a
+    slight underestimate (lower bound); it is typically still accurate to
+    ~1e-4 relative.
+    """
 
 
 def resolvent_apply_superlu(L: np.ndarray, z: complex, b: np.ndarray) -> np.ndarray:
@@ -23,7 +50,7 @@ def resolvent_apply_superlu(L: np.ndarray, z: complex, b: np.ndarray) -> np.ndar
     n = L.shape[0]
     eye = np.eye(n, dtype=complex)
     A = z * eye - L
-    if n <= 256:
+    if n <= _DENSE_SOLVE_CUTOFF:
         solved: np.ndarray = sla.solve(A, b, assume_a="gen")
         return solved
     A_sp = sp.csc_matrix(A)
@@ -55,12 +82,16 @@ def resolvent_norm(L: np.ndarray, z: complex) -> float:
       stays within ~1e-3 relative of the dense reference across separated and
       clustered spectra alike, so the extra ARPACK machinery -- and its own
       non-convergence failure modes -- buys nothing here.
+
+    If the power iteration exhausts its budget without meeting the tolerance, a
+    :class:`ResolventConvergenceWarning` is emitted and the returned value is a
+    lower bound (still typically accurate to ~1e-4 relative).
     """
     L = np.asarray(L)
     n = L.shape[0]
     eye = np.eye(n, dtype=complex)
     A = z * eye - L
-    if n <= 128:
+    if n <= _DENSE_NORM_CUTOFF:
         Ainv = sla.solve(A, eye)
         return float(sla.svdvals(Ainv)[0])
 
@@ -73,10 +104,8 @@ def resolvent_norm(L: np.ndarray, z: complex) -> float:
     x /= np.linalg.norm(x)
     sigma = 0.0
     sigma_prev = 0.0
-    # Konvergenz-Guard 200 Iter / 1e-12 (robustere Schranke aus PR#39 uebernommen,
-    # Trefethen & Embree, Spectra and Pseudospectra) -> Best-of-both bei nahezu
-    # degenerierten Singulaerwerten; bleibt weit unter der 1e-6-Testtoleranz.
-    for _ in range(200):
+    converged = False
+    for _ in range(_POWER_ITERS):
         y = lu.solve(x)
         # Apply M^H = (A^{-1})^H = (A^H)^{-1} via the LU's conjugate-transpose
         # solve. NOTE: lu.solve(y.conj()).conj() computes conj(A)^{-1} y, which
@@ -85,9 +114,19 @@ def resolvent_norm(L: np.ndarray, z: complex) -> float:
         z_vec = lu.solve(y, trans="H")
         sigma = float(np.linalg.norm(z_vec))
         if sigma == 0.0:
+            converged = True
             break
         x = z_vec / sigma
-        if abs(sigma - sigma_prev) < 1.0e-12 * max(1.0, sigma):
+        if abs(sigma - sigma_prev) < _POWER_TOL * max(1.0, sigma):
+            converged = True
             break
         sigma_prev = sigma
+    if not converged:
+        warnings.warn(
+            f"resolvent_norm power iteration did not converge in {_POWER_ITERS} "
+            f"steps (z={z!r}); the top singular values of the resolvent are "
+            "clustered. Returned value is a lower bound.",
+            ResolventConvergenceWarning,
+            stacklevel=2,
+        )
     return float(np.sqrt(sigma))

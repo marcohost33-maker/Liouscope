@@ -38,6 +38,15 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   coincide.
 
 ### Changed
+- `numerics.resolvent.resolvent_norm` hardened for production: the power
+  iteration now emits a `ResolventConvergenceWarning` (new, exported from
+  `numerics.resolvent`) when it exhausts its budget on tightly-clustered top
+  singular values (the returned value is then a documented lower bound), the
+  iteration budget was raised 80 → 200 (moderately clustered spectra now
+  converge; tight clusters improve from ~2e-4 to ~1e-6 relative error), and the
+  size cutoffs / iteration constants are now named module constants instead of
+  magic numbers. New tests cover the warning path and a convergent clustered
+  case.
 - `numerics.resolvent.resolvent_norm` docstring now documents the method as the
   standard pseudospectra shift-and-invert approach (Trefethen, *Pseudospectra
   of Linear Operators*, SIAM Rev. 1997) and records why plain power iteration
