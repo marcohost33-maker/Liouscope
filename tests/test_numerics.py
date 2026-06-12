@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import numpy as np
+import pytest
 
 from liouscope.numerics.kronecker import unvec, vec
 from liouscope.numerics.linalg import (
@@ -11,11 +12,14 @@ from liouscope.numerics.linalg import (
     is_hermitian,
     matrix_2_norm,
 )
-from liouscope.numerics.resolvent import resolvent_apply_superlu, resolvent_norm
+from liouscope.numerics.resolvent import (
+    ResolventConvergenceWarning,
+    resolvent_apply_superlu,
+    resolvent_norm,
+)
 
 
 def test_vec_rejects_non_square():
-    import pytest
     with pytest.raises(ValueError):
         vec(np.zeros((2, 3)))
 
@@ -115,3 +119,44 @@ def test_resolvent_norm_large_matches_dense(rng):
     ref = float(sla.svdvals(sla.inv(z * np.eye(n, dtype=complex) - A))[0])
     got = resolvent_norm(A, z)
     assert abs(got - ref) <= 1e-6 * ref
+
+
+def _clustered_resolvent_matrix(n: int, d2: float) -> np.ndarray:
+    # Two eigenvalues at distance 1.0 and d2 from z=0 -> the top two singular
+    # values of the resolvent cluster (sigma_2/sigma_1 = 1/d2); the rest are far
+    # away and negligible.
+    lam = np.empty(n, dtype=complex)
+    lam[0] = 1.0
+    lam[1] = d2
+    lam[2:] = np.linspace(5.0, 20.0, n - 2)
+    return np.diag(lam)
+
+
+def test_resolvent_norm_large_clustered_singular_values():
+    # Robustness guard: clustered top singular values are the regime where the
+    # power method's *eigenvector* convergence stalls. The *value* (the norm)
+    # must still be accurate, which is why plain power iteration is sufficient
+    # here and Lanczos/svds is not needed (see resolvent_norm docstring). d2 is
+    # chosen so the iteration still converges within budget (no warning).
+    import scipy.linalg as sla
+
+    n = 160
+    A = _clustered_resolvent_matrix(n, d2=1.02)
+    ref = float(sla.svdvals(sla.inv(0.0j * np.eye(n) - A))[0])
+    got = resolvent_norm(A, 0.0 + 0.0j)
+    assert abs(got - ref) <= 1e-3 * ref
+
+
+def test_resolvent_norm_emits_convergence_warning_on_tight_cluster():
+    # A near-degenerate top pair (d2 = 1.001) exhausts the power-iteration budget
+    # so a ResolventConvergenceWarning is emitted; the returned value is a lower
+    # bound but still within 1e-3 of the dense reference.
+    import scipy.linalg as sla
+
+    n = 160
+    A = _clustered_resolvent_matrix(n, d2=1.001)
+    ref = float(sla.svdvals(sla.inv(0.0j * np.eye(n) - A))[0])
+    with pytest.warns(ResolventConvergenceWarning):
+        got = resolvent_norm(A, 0.0 + 0.0j)
+    assert got <= ref * (1.0 + 1e-9)  # lower bound
+    assert abs(got - ref) <= 1e-3 * ref

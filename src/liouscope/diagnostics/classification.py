@@ -1,12 +1,17 @@
 """Mechanism classifier A1-A12 with F1-F5 family mapping.
 
-Five evidence families (Spec Teil 7.1) are aggregated:
+The classifier emits a mechanism class ``A1..A12`` and a gap-failure *family*
+``F1..F5`` (or ``"none"``). Both label sets and their literature anchors are
+defined authoritatively in ``liouscope._consts`` (``A_CLASS_DESCRIPTIONS`` /
+``F_FAMILY_DESCRIPTIONS``); this module must stay consistent with them. The
+families denote the physical gap-failure *mechanism*, each tied to a primary
+reference:
 
-* F1 spectral: D1, D2, D3, D4
-* F2 transient: D10, D14, D15
-* F3 non-normality: D8, D9, D11
-* F4 resolvent: D11b, D12
-* F5 pseudo-sigma: D13
+* F1 Mori-Shirai overlap amplification    (PRL 125, 230604, 2020)
+* F2 Liouvillian skin effect              (PRL 127, 070402, 2021)
+* F3 symmetrised Liouvillian gap          (PRL 130, 230404, 2023)
+* F4 quantum Mpemba effect                (PRL 127, 060401, 2021)
+* F5 phantom relaxation                   (arXiv:2306.07876, 2023)
 
 Verdict in {CONFIRMED, EXCLUDED, CANDIDATE, NOT_EXCLUDED, UNDEFINED}.
 Tier in {PUBLICATION_GRADE, CONFIRMATION, EXPLORATION}.
@@ -88,7 +93,8 @@ def _pick_a_class(
     # F5 phantom relaxation
     if ev["pseudospectral_radius"] > 2.0 * ev.get("gap_to_gns_ratio", 1.0) and ev["henrici_eta"] > 1.0:
         return "A10", "F5"
-    # F4 resolvent-amplified non-normality
+    # F1 overlap/eigenvector amplification (Mori-Shirai 2020): non-normal
+    # amplification flagged by high Kreiss constant + Petermann factor
     if ev["kreiss"] > 5.0 and ev["petermann_max"] > 5.0:
         return "A3", "F1"
     # F2 skin effect: large trans-amplitude ratio + kappa_trans
@@ -116,7 +122,6 @@ def _pick_a_class(
 
 def _pick_verdict_tier(
     a_class: str,
-    f_family: str,
     relaxation: RelaxationResult,
     confidence: float,
 ) -> tuple[str, str]:
@@ -166,7 +171,7 @@ def classify_mechanism(
     ev = _gather_evidence(spectral, nonnorm, resolvent, transient, lep, mpemba)
     a_class, f_family = _pick_a_class(ev, relaxation=relaxation)
     conf = _confidence(ev, a_class)
-    verdict, tier = _pick_verdict_tier(a_class, f_family, relaxation, conf)
+    verdict, tier = _pick_verdict_tier(a_class, relaxation, conf)
     return ClassificationResult(
         a_class=a_class,
         f_family=f_family,

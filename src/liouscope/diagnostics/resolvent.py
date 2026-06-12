@@ -17,6 +17,7 @@ import scipy.linalg as sla
 
 from .._types import ResolventResult
 from ..numerics.pseudospec import pseudospectral_radius
+from ..numerics.resolvent import resolvent_norm
 
 
 def resolvent_peak_curve(
@@ -28,20 +29,21 @@ def resolvent_peak_curve(
     """Compute the resolvent norm profile along ``omega`` at fixed ``sigma``.
 
     Returns ``(omegas, norms)``.
+
+    Each point delegates to :func:`liouscope.numerics.resolvent.resolvent_norm`,
+    which is exact (dense inverse + SVD) for ``n <= 128`` and switches to the
+    SuperLU shift-and-invert power iteration for larger Liouvillians (where the
+    dense ``O(n^3)`` inverse per frequency would be intractable).
     """
     L_super = np.asarray(L_super)
-    n = L_super.shape[0]
     eigvals = sla.eigvals(L_super)
     omega_max = max(1.0, float(np.max(np.abs(np.imag(eigvals)))) + 1.0)
     omegas = np.linspace(-omega_max, omega_max, n_omega)
-    eye = np.eye(n, dtype=complex)
     re_max = float(np.max(np.real(eigvals)))
     shift = sigma + re_max
     norms = np.empty(n_omega)
     for i, omega in enumerate(omegas):
-        z = shift + 1j * omega
-        Ainv = sla.solve(z * eye - L_super, eye)
-        norms[i] = float(sla.svdvals(Ainv)[0])
+        norms[i] = resolvent_norm(L_super, shift + 1j * omega)
     return omegas, norms
 
 
