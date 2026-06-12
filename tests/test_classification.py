@@ -45,6 +45,30 @@ def test_f_family_set_size():
     assert len(F_FAMILIES) == 6  # F1-F5 + "none"
 
 
+def test_family_citations_consistent_between_docstring_and_consts():
+    # The classifier module docstring enumerates the F1-F5 mechanism families
+    # with their primary references. Those must stay in lock-step with the
+    # authoritative _consts.F_FAMILY_DESCRIPTIONS (literature-validated PRL/arXiv
+    # IDs). This guard prevents the two from drifting apart again.
+    import liouscope.diagnostics.classification as clf
+    from liouscope._consts import F_FAMILY_DESCRIPTIONS
+
+    primary_ref_token = {
+        "F1": "230604",      # PRL 125, 230604 (2020) Mori-Shirai overlap
+        "F2": "070402",      # PRL 127, 070402 (2021) Liouvillian skin effect
+        "F3": "230404",      # PRL 130, 230404 (2023) symmetrised gap
+        "F4": "060401",      # PRL 127, 060401 (2021) quantum Mpemba
+        "F5": "2306.07876",  # arXiv:2306.07876 (2023) phantom relaxation
+    }
+    doc_lines = (clf.__doc__ or "").splitlines()
+    for fam, token in primary_ref_token.items():
+        assert token in F_FAMILY_DESCRIPTIONS[fam], f"_consts drift for {fam}"
+        doc_line = next(
+            (ln for ln in doc_lines if ln.lstrip().startswith(f"* {fam} ")), ""
+        )
+        assert token in doc_line, f"docstring drift for {fam}"
+
+
 def test_classification_stamps_versions(pauli):
     L = build_liouvillian(0.5 * pauli["X"], [pauli["Z"]], [0.3])
     plus = np.array([1, 1], dtype=complex) / np.sqrt(2)
@@ -244,7 +268,8 @@ def test_branch_a10_phantom_relaxation():
     assert cls.tier == TIER_CONFIRMATION
 
 
-def test_branch_a3_resolvent_amplified():
+def test_branch_a3_overlap_amplified():
+    # A3 = overlap/eigenvector-amplified (Mori-Shirai 2020) -> family F1.
     cls = _classify(nonnorm=_nonnorm(kreiss=11.0, petermann_max=6.0))
     assert (cls.a_class, cls.f_family) == ("A3", "F1")
     assert cls.confidence == pytest.approx(0.85)
@@ -333,13 +358,13 @@ def test_undefined_when_beta_not_finite():
     ],
 )
 def test_pick_verdict_tier_thresholds(confidence, expected_verdict, expected_tier):
-    verdict, tier = _pick_verdict_tier("A3", "F1", _relaxation(), confidence)
+    verdict, tier = _pick_verdict_tier("A3", _relaxation(), confidence)
     assert verdict == expected_verdict
     assert tier == expected_tier
 
 
 def test_pick_verdict_tier_a12_short_circuits():
-    verdict, tier = _pick_verdict_tier("A12", "none", _relaxation(), 0.95)
+    verdict, tier = _pick_verdict_tier("A12", _relaxation(), 0.95)
     assert verdict == VERDICT_NOT_EXCLUDED
     assert tier == TIER_EXPLORATION
 

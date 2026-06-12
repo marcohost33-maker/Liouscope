@@ -18,12 +18,20 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   SVD reference to < 1e-6 relative across seeds. The function is a public
   `numerics` utility and is not on the `diagnose()` report path, so no anchor
   or `DiagnosticReport` output changes (the small-matrix dense branch, used for
-  Hilbert dimensions up to 128, was already correct). The power-iteration
-  convergence guard was also tightened to 200 iterations / 1e-12 (from 80 / 1e-9,
-  adopting PR#39's stricter bound; Trefethen & Embree) for more robust convergence
-  near degenerate singular values — still far below the 1e-6 test tolerance.
+  Hilbert dimensions up to 128, was already correct). (The power-iteration
+  convergence handling is hardened further under "Changed" below.)
 
 ### Added
+- Regression tests for the fit-model layer (`tests/test_models.py`): the
+  closed-form M0–M3b evaluations and all initial-guess seeds, including the
+  log-linear M0 regression with its too-few-positive-samples fallback and the
+  FFT-based M3b dominant-frequency pick (supplied-omega and short-signal
+  branches). Raises `fitting/models.py` coverage from 69% to 97% (the only
+  remaining line is a defensive `else` unreachable for equal-length inputs).
+- Edge-branch tests for `sparse.build.build_sparse_liouvillian`
+  (`tests/test_sparse.py`): the order/shape/rate-length validation errors, the
+  `jump_ops=None` and `rates=None` defaults, and zero-rate-jump skipping.
+  Raises `sparse/build.py` coverage from 71% to 100%.
 - Regression tests pinning the A1–A12 mechanism classifier decision tree
   (`tests/test_classification.py`): synthetic-input coverage of every
   `_pick_a_class` branch, the `_pick_verdict_tier` thresholds (including the
@@ -33,7 +41,53 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Tests for the previously-untested large-matrix branches of
   `numerics.resolvent` (`tests/test_numerics.py`): the SuperLU sparse solve
   (n > 256) and the power-iteration resolvent norm (n > 128, the regression
-  guard for the fix above).
+  guard for the fix above), plus a clustered-singular-value case proving the
+  norm stays accurate to < 1e-3 when the top two singular values nearly
+  coincide.
+
+### Changed
+- `diagnostics.classification` documentation corrected to match the
+  authoritative `_consts` taxonomy. The module docstring previously described an
+  unrelated "evidence families" scheme (F1=spectral, F4=resolvent, …) that
+  contradicted `_consts.F_FAMILY_DESCRIPTIONS`, where F1–F5 denote the
+  literature-anchored gap-failure *mechanisms* (F1 Mori-Shirai overlap PRL 125
+  230604; F2 skin effect PRL 127 070402; F3 symmetrised gap PRL 130 230404;
+  F4 quantum Mpemba PRL 127 060401; F5 phantom relaxation arXiv:2306.07876 —
+  all references web-validated). The misleading inline comment on the A3 branch
+  ("F4 resolvent-amplified non-normality") was fixed: A3 = overlap/eigenvector-
+  amplified (Mori-Shirai 2020) correctly maps to family F1, which is what the
+  code already returned — a comment/doc defect, not a behaviour change. Added a
+  guard test (`test_family_citations_consistent_between_docstring_and_consts`)
+  pinning the docstring and `_consts` to the same citations so they cannot drift
+  apart again. Also removed a dead `f_family` parameter from the private
+  `_pick_verdict_tier` helper (it never influenced the verdict/tier). No
+  classifier output changes; anchors unaffected.
+- D11b/D12 resolvent diagnostics now scale to large Liouvillians. The inline
+  per-frequency dense inverse + SVD in `diagnostics.resolvent.resolvent_peak_curve`
+  (201 dense `O(n^3)` solves, intractable for larger lattices and a duplicate of
+  the numerics utility) is replaced by a delegation to
+  `numerics.resolvent.resolvent_norm`. For `n <= 128` — which includes every
+  anchor/example system — this is bit-identical (same dense inverse + SVD); for
+  `n > 128` it uses the SuperLU shift-and-invert power iteration, so the
+  resolvent peak (D11b) and ridge FWHM (D12) become computable where the dense
+  path previously could not finish. The peak matches the dense reference to
+  machine precision; low-norm tail points of the profile inherit the power
+  iteration's documented ~1e-3 lower-bound behaviour in the clustered regime.
+- `numerics.resolvent.resolvent_norm` hardened for production: the power
+  iteration now emits a `ResolventConvergenceWarning` (new, exported from
+  `numerics.resolvent`) when it exhausts its budget on tightly-clustered top
+  singular values (the returned value is then a documented lower bound), the
+  iteration budget was raised 80 → 200 (moderately clustered spectra now
+  converge; tight clusters improve from ~2e-4 to ~1e-6 relative error), and the
+  size cutoffs / iteration constants are now named module constants instead of
+  magic numbers. New tests cover the warning path and a convergent clustered
+  case.
+- `numerics.resolvent.resolvent_norm` docstring now documents the method as the
+  standard pseudospectra shift-and-invert approach (Trefethen, *Pseudospectra
+  of Linear Operators*, SIAM Rev. 1997) and records why plain power iteration
+  is sufficient for the dominant value (value-convergence is robust to top
+  singular-value clustering, unlike eigenvector-convergence — verified
+  empirically), so Lanczos/`svds` is intentionally not used.
 
 ## [0.4.0] — 2026-06-07
 
