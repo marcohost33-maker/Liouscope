@@ -38,6 +38,17 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   coincide.
 
 ### Changed
+- D11b/D12 resolvent diagnostics now scale to large Liouvillians. The inline
+  per-frequency dense inverse + SVD in `diagnostics.resolvent.resolvent_peak_curve`
+  (201 dense `O(n^3)` solves, intractable for larger lattices and a duplicate of
+  the numerics utility) is replaced by a delegation to
+  `numerics.resolvent.resolvent_norm`. For `n <= 128` — which includes every
+  anchor/example system — this is bit-identical (same dense inverse + SVD); for
+  `n > 128` it uses the SuperLU shift-and-invert power iteration, so the
+  resolvent peak (D11b) and ridge FWHM (D12) become computable where the dense
+  path previously could not finish. The peak matches the dense reference to
+  machine precision; low-norm tail points of the profile inherit the power
+  iteration's documented ~1e-3 lower-bound behaviour in the clustered regime.
 - `numerics.resolvent.resolvent_norm` hardened for production: the power
   iteration now emits a `ResolventConvergenceWarning` (new, exported from
   `numerics.resolvent`) when it exhausts its budget on tightly-clustered top
