@@ -18,10 +18,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   SVD reference to < 1e-6 relative across seeds. The function is a public
   `numerics` utility and is not on the `diagnose()` report path, so no anchor
   or `DiagnosticReport` output changes (the small-matrix dense branch, used for
-  Hilbert dimensions up to 128, was already correct). The power-iteration
-  convergence guard was also tightened to 200 iterations / 1e-12 (from 80 / 1e-9,
-  adopting PR#39's stricter bound; Trefethen & Embree) for more robust convergence
-  near degenerate singular values — still far below the 1e-6 test tolerance.
+  Hilbert dimensions up to 128, was already correct). (The power-iteration
+  convergence handling is hardened further under "Changed" below.)
 
 ### Added
 - Regression tests for the fit-model layer (`tests/test_models.py`): the
