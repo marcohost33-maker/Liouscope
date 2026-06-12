@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import numpy as np
+import pytest
 
 from liouscope import build_liouvillian
 from liouscope.sparse import (
@@ -17,6 +18,41 @@ def test_sparse_matches_dense(pauli):
     L_dense = build_liouvillian(0.5 * pauli["X"], [pauli["Z"]], [0.3])
     L_sparse = build_sparse_liouvillian(0.5 * pauli["X"], [pauli["Z"]], [0.3])
     np.testing.assert_allclose(L_sparse.toarray(), L_dense, atol=1e-10)
+
+
+def test_sparse_rejects_non_fortran_order(pauli):
+    with pytest.raises(ValueError, match="order='F'"):
+        build_sparse_liouvillian(pauli["X"], order="C")  # type: ignore[arg-type]
+
+
+def test_sparse_rejects_non_square_hamiltonian():
+    with pytest.raises(ValueError, match="square"):
+        build_sparse_liouvillian(np.zeros((2, 3), dtype=complex))
+
+
+def test_sparse_rejects_rate_length_mismatch(pauli):
+    with pytest.raises(ValueError, match="len\\(rates\\)"):
+        build_sparse_liouvillian(pauli["X"], [pauli["Z"]], [0.1, 0.2])
+
+
+def test_sparse_defaults_no_jumps_to_coherent_only(pauli):
+    # jump_ops=None -> purely coherent generator, matching the dense path.
+    L_dense = build_liouvillian(0.5 * pauli["X"], [], [])
+    L_sparse = build_sparse_liouvillian(0.5 * pauli["X"])
+    np.testing.assert_allclose(L_sparse.toarray(), L_dense, atol=1e-10)
+
+
+def test_sparse_defaults_rates_to_unity(pauli):
+    explicit = build_sparse_liouvillian(0.5 * pauli["X"], [pauli["Z"]], [1.0])
+    defaulted = build_sparse_liouvillian(0.5 * pauli["X"], [pauli["Z"]])
+    np.testing.assert_allclose(defaulted.toarray(), explicit.toarray(), atol=1e-12)
+
+
+def test_sparse_zero_rate_jump_is_skipped(pauli):
+    # A gamma == 0.0 jump must not contribute -> identical to coherent-only.
+    coherent = build_sparse_liouvillian(0.5 * pauli["X"])
+    with_zero = build_sparse_liouvillian(0.5 * pauli["X"], [pauli["Z"]], [0.0])
+    np.testing.assert_allclose(with_zero.toarray(), coherent.toarray(), atol=1e-12)
 
 
 def test_sparse_steady_state(pauli):

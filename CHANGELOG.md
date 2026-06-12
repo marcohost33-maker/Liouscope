@@ -24,6 +24,16 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   near degenerate singular values — still far below the 1e-6 test tolerance.
 
 ### Added
+- Regression tests for the fit-model layer (`tests/test_models.py`): the
+  closed-form M0–M3b evaluations and all initial-guess seeds, including the
+  log-linear M0 regression with its too-few-positive-samples fallback and the
+  FFT-based M3b dominant-frequency pick (supplied-omega and short-signal
+  branches). Raises `fitting/models.py` coverage from 69% to 97% (the only
+  remaining line is a defensive `else` unreachable for equal-length inputs).
+- Edge-branch tests for `sparse.build.build_sparse_liouvillian`
+  (`tests/test_sparse.py`): the order/shape/rate-length validation errors, the
+  `jump_ops=None` and `rates=None` defaults, and zero-rate-jump skipping.
+  Raises `sparse/build.py` coverage from 71% to 100%.
 - Regression tests pinning the A1–A12 mechanism classifier decision tree
   (`tests/test_classification.py`): synthetic-input coverage of every
   `_pick_a_class` branch, the `_pick_verdict_tier` thresholds (including the
