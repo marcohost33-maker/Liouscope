@@ -38,6 +38,22 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   coincide.
 
 ### Changed
+- `diagnostics.classification` documentation corrected to match the
+  authoritative `_consts` taxonomy. The module docstring previously described an
+  unrelated "evidence families" scheme (F1=spectral, F4=resolvent, …) that
+  contradicted `_consts.F_FAMILY_DESCRIPTIONS`, where F1–F5 denote the
+  literature-anchored gap-failure *mechanisms* (F1 Mori-Shirai overlap PRL 125
+  230604; F2 skin effect PRL 127 070402; F3 symmetrised gap PRL 130 230404;
+  F4 quantum Mpemba PRL 127 060401; F5 phantom relaxation arXiv:2306.07876 —
+  all references web-validated). The misleading inline comment on the A3 branch
+  ("F4 resolvent-amplified non-normality") was fixed: A3 = overlap/eigenvector-
+  amplified (Mori-Shirai 2020) correctly maps to family F1, which is what the
+  code already returned — a comment/doc defect, not a behaviour change. Added a
+  guard test (`test_family_citations_consistent_between_docstring_and_consts`)
+  pinning the docstring and `_consts` to the same citations so they cannot drift
+  apart again. Also removed a dead `f_family` parameter from the private
+  `_pick_verdict_tier` helper (it never influenced the verdict/tier). No
+  classifier output changes; anchors unaffected.
 - D11b/D12 resolvent diagnostics now scale to large Liouvillians. The inline
   per-frequency dense inverse + SVD in `diagnostics.resolvent.resolvent_peak_curve`
   (201 dense `O(n^3)` solves, intractable for larger lattices and a duplicate of
