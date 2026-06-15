@@ -59,6 +59,60 @@ def test_build_liouvillian_negative_rate_rejected(pauli):
         build_liouvillian(H, [pauli["Z"]], [-0.5])
 
 
+def test_build_liouvillian_rejects_non_fortran_order(pauli):
+    # The column-stacking (order='F') guard on the dense builder (anchor A).
+    with pytest.raises(ValueError, match="order='F'"):
+        build_liouvillian(pauli["Z"], [], order="C")  # type: ignore[arg-type]
+
+
+def test_build_liouvillian_jump_ops_none_equals_empty(pauli):
+    # The default jump_ops=None must behave like an explicit empty list.
+    H = pauli["Z"]
+    np.testing.assert_allclose(build_liouvillian(H), build_liouvillian(H, []))
+
+
+def test_build_liouvillian_zero_rate_jump_skipped(pauli):
+    # A gamma == 0.0 jump contributes nothing -> identical to coherent-only.
+    H = pauli["Z"]
+    coherent = build_liouvillian(H, [])
+    with_zero = build_liouvillian(H, [pauli["Z"]], [0.0])
+    np.testing.assert_allclose(with_zero, coherent, atol=1e-12)
+
+
+def test_build_liouvillian_rate_length_mismatch_raises(pauli):
+    # Correct-shape jump but wrong number of rates exercises the rate-length
+    # guard, which is distinct from the jump-operator shape guard.
+    with pytest.raises(ValueError, match=r"len\(rates\)"):
+        build_liouvillian(pauli["Z"], [pauli["Z"]], [0.1, 0.2])
+
+
+def test_steady_state_rejects_non_square_superoperator():
+    # n2 must be a perfect square (d^2); 3 is not -> ValueError.
+    with pytest.raises(ValueError, match="square-d"):
+        steady_state(np.eye(3, dtype=complex))
+
+
+def test_steady_state_full_rank_uses_smallest_singular_vector():
+    # A full-rank superoperator has no exact null space, so steady_state falls
+    # back to the smallest-singular-value direction (vh[:, -1]).
+    # diag(1,2,3,4): smallest singular value is at index 0 -> rho = |0><0|.
+    L = np.diag([1.0, 2.0, 3.0, 4.0]).astype(complex)
+    rho = steady_state(L)
+    expected = np.array([[1, 0], [0, 0]], dtype=complex)
+    np.testing.assert_allclose(rho, expected, atol=1e-9)
+
+
+def test_steady_state_traceless_nullspace_raises_runtime():
+    # Unphysical superoperator whose unique null vector unvecs to a traceless
+    # matrix (vec of Pauli Z). The SVD candidate and the eig fallback are both
+    # trace-0, so the normaliser must fail loudly rather than divide by ~0.
+    v = np.array([1, 0, 0, -1], dtype=complex)  # vec(Z), Tr = 0
+    proj = np.outer(v, v.conj()) / np.vdot(v, v)
+    L = np.eye(4, dtype=complex) - proj  # null space = span{v}, dim 1
+    with pytest.raises(RuntimeError, match="Cannot normalise"):
+        steady_state(L)
+
+
 def test_steady_state_dephased_qubit(pauli):
     H = 0.5 * pauli["X"]
     L = build_liouvillian(H, [pauli["Z"]], [0.3])

@@ -28,6 +28,17 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   FFT-based M3b dominant-frequency pick (supplied-omega and short-signal
   branches). Raises `fitting/models.py` coverage from 69% to 97% (the only
   remaining line is a defensive `else` unreachable for equal-length inputs).
+- Branch coverage for the foundational Liouvillian builder and steady-state
+  solver (`tests/test_lindblad.py`): the `jump_ops=None` default, the
+  `order != "F"` guard, zero-rate-jump skipping, the rate-length guard
+  (distinct from the jump-shape guard), the non-square-superoperator rejection,
+  the no-exact-null-space smallest-singular-vector fallback, and the
+  traceless-null-space "cannot normalise" RuntimeError. Raises
+  `core/lindblad.py` coverage from 81% to 99%.
+- Fallback-path tests for the Prony M3b seed (`tests/test_fitting.py`):
+  short-signal, non-uniform-sampling, and too-few-samples-for-model-order
+  fallbacks — pinning the robustness guards that let `prony_seed` degrade
+  gracefully instead of raising. Raises `fitting/prony.py` coverage to 88%.
 - Edge-branch tests for `sparse.build.build_sparse_liouvillian`
   (`tests/test_sparse.py`): the order/shape/rate-length validation errors, the
   `jump_ops=None` and `rates=None` defaults, and zero-rate-jump skipping.
