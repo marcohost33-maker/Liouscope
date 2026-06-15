@@ -234,6 +234,33 @@ def test_prony_seed_all_zero_signal_has_positive_amplitude():
     assert seed[0] > 0
 
 
+def test_prony_seed_short_signal_falls_back():
+    """Fewer than 6 samples -> immediate finite fallback (no Hankel solve)."""
+    t = np.linspace(0.0, 1.0, 4)
+    y = np.exp(-t)
+    seed = prony_seed(t, y)
+    assert len(seed) == 4
+    assert all(np.isfinite(v) for v in seed)
+
+
+def test_prony_seed_non_uniform_sampling_falls_back():
+    """Non-uniform ``t`` (Prony assumes uniform) -> decaying-oscillator seed."""
+    t = np.array([0.0, 0.1, 0.3, 0.6, 1.0, 1.5, 2.1])
+    y = np.exp(-0.5 * t) * np.cos(2.0 * t)
+    seed = prony_seed(t, y)
+    assert all(np.isfinite(v) for v in seed)
+    assert seed[1] == 1.0 and seed[2] == 1.0  # beta, omega fallback conventions
+
+
+def test_prony_seed_too_few_for_model_order_falls_back():
+    """N <= 2p+2 (here N=6, p=2) leaves no rows for the Hankel solve."""
+    t = np.linspace(0.0, 1.0, 6)
+    y = np.exp(-t)
+    seed = prony_seed(t, y)
+    assert all(np.isfinite(v) for v in seed)
+    assert seed[1] == 1.0 and seed[2] == 1.0
+
+
 def test_gaussian_log_likelihood_returns_finite(rng):
     res = rng.standard_normal(50)
     ll = gaussian_log_likelihood(res)
