@@ -1,6 +1,6 @@
 # LiouScope Canon Status
 
-Last updated: 2026-06-08
+Last updated: 2026-06-16
 Repository: `marcohost33-maker/Liouscope`
 
 ## 1. Canon layers
@@ -11,9 +11,9 @@ sentence without qualification.
 | Layer | Current status | Authority |
 |---|---|---|
 | Scientific/Drive canon | 0Liou+ v1.0 / consolidated report v2.0 FINAL / A1-A12-v3.1 / D1-D24 | Drive-side canon and project archive |
-| Repo runtime canon | `liouscope.__version__ == 0.4.0` | `src/liouscope/_version.py` |
+| Repo runtime canon | `liouscope.__version__ == 0.4.1` | `src/liouscope/_version.py` |
 | Manifest contract | `MANIFEST_SCHEMA_VERSION == 1.2.0` | `src/liouscope/MANIFEST_SCHEMA.json` and `_consts.py` |
-| Current code frontier | PR #43, draft/open/mergeable, not merge-ready | GitHub PR state |
+| Current code frontier | PRs #43–#45 merged to `main`; v0.4.1 release being cut | GitHub PR state |
 
 ## 2. Operational rule
 
@@ -29,10 +29,10 @@ Release canon is final only when metadata, CI, archive, and provenance gates all
 
 ```text
 Science baseline: GREEN for existing scope
-Runtime repo version: 0.4.0
-Release metadata: YELLOW, actively being cleaned
-Public/citable release: OPEN
-PR #43: not merge-ready until CI and review gates pass
+Runtime repo version: 0.4.1
+Release metadata: GREEN for engineering release (version/citation/changelog aligned)
+Public/citable release: OPEN (archive/provenance gates pending — see RELEASE_AUDIT)
+PRs #43-#45: merged to main; v0.4.1 changelog cut from the Unreleased section
 ```
 
 ## 4. No-drift invariants
@@ -49,14 +49,15 @@ The following identifiers must remain synchronized or be explicitly version-bump
 ## 5. Pending canon work
 
 - Update the Drive-side 0Liou+ canon to reflect the repo runtime moving from the
-  older package canon to v0.4.0.
+  older package canon to v0.4.1.
 - Keep the scientific report v2.0 FINAL as the baseline unless a new reviewed
   scientific report supersedes it.
 - Do not relabel D24 as an exact implementation of Zhou Eq.(16); keep the
   documented status as a related, generally coarser surrogate / reference-
   verified-bound-coarser claim.
-- Do not merge PR #43 solely because it is `mergeable`; it is still gated by
-  draft state, required CI, QuTiP cross-checks, and review.
+- A public/citable v0.4.1 still depends on the archive/provenance gates in
+  `docs/RELEASE_AUDIT_v0.4.0.md` §5 (GitHub release notes, PyPI/Zenodo/SWHID as
+  applicable); the engineering release (code + metadata) is green.
 
 ## 6. Production rule for future changes
 

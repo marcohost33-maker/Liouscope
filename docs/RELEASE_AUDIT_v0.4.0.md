@@ -88,3 +88,31 @@ v0.4.1 or v0.4.1rc1 release-candidate PR that includes:
 3. a final changelog section,
 4. build/wheel/sdist checks,
 5. archive/provenance records.
+
+## 8. Addendum — v0.4.1 cut (2026-06-16)
+
+PRs #43, #44 and #45 have since merged to `main`, closing the §5 `[CODE]`
+gates. v0.4.1 is cut by moving the `CHANGELOG.md` `Unreleased` section into a
+`[0.4.1] — 2026-06-16` release section (resolvent conjugate-transpose fix +
+hardening/large-matrix scaling + classifier taxonomy doc fix + coverage lifts),
+bumping `src/liouscope/_version.py` to `0.4.1`, and aligning `CITATION.cff`
+(`version: 0.4.1`, `date-released: 2026-06-16`). PATCH per SemVer: a numerics
+correctness fix plus tests/doc corrections; the single new public symbol
+(`numerics.resolvent.ResolventConvergenceWarning`) is a numerics-utility
+warning, not a `diagnose()`/`DiagnosticReport` API addition, and no anchor or
+report output changes.
+
+`[CODE]` gate evidence, verified locally 2026-06-16 (Python 3.11):
+
+```text
+[x] pytest -q                         271 passed, 4 skipped
+[x] tests/test_anchors.py             19 passed, 2 skipped (QuTiP not installed)
+[x] ruff check src tests              All checks passed!
+[x] mypy src/liouscope                Success: no issues found in 45 source files
+[x] python -m build + twine check     see verification below
+```
+
+`[ARCHIVE]` gates (GitHub release notes, PyPI/Zenodo/SWHID provenance) remain
+open; v0.4.1 is the engineering release, not yet the public/citable archival
+release. The required-CI matrix and QuTiP cross-checks are re-verified on the
+release PR, not locally.

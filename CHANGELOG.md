@@ -6,6 +6,19 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.4.1] — 2026-06-16
+
+Release cut: numerics correctness + production-hardening that shipped on `main`
+after `v0.4.0`, PRs #43–#45 (resolvent conjugate-transpose fix, resolvent
+hardening + large-matrix scaling, classifier taxonomy doc fix, and coverage
+lifts across the fit, Liouvillian, sparse, classification, and numerics
+layers). PATCH bump per SemVer: the change set is a numerics correctness fix
+plus tests and documentation corrections. The one new public symbol
+(`numerics.resolvent.ResolventConvergenceWarning`) is a diagnostic warning on a
+numerics utility, not a new feature on the `diagnose()` / `DiagnosticReport`
+API surface, and no anchor or report output changes — see the per-entry
+"anchors unaffected" notes below.
+
 ### Fixed
 - `numerics.resolvent.resolvent_norm` large-matrix branch (n > 128): the
   SuperLU power-iteration computed the wrong conjugate-transpose for the
