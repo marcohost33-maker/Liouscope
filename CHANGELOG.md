@@ -6,6 +6,15 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+- `pyproject.toml` `[project.urls]` (Homepage/Repository/Issues) pointed to
+  `github.com/coworker-research/liouscope`, which does not exist (HTTP 404 — the
+  `coworker-research` org has no such repo). The published wheel/sdist metadata
+  therefore carried dead project links. Corrected to the canonical repository
+  `github.com/marcohost33-maker/Liouscope`, matching `CITATION.cff`,
+  `AGENTS.md` ("Visibility: PRIVATE (marcohost33-maker/Liouscope)"), and the
+  `CHANGELOG.md` version-compare links. Metadata-only; no runtime/API change.
+
 ## [0.4.1] — 2026-06-16
 
 Release cut: numerics correctness + production-hardening that shipped on `main`
