@@ -6,6 +6,19 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.4.1] — 2026-06-16
+
+Release cut: numerics correctness + production-hardening that shipped on `main`
+after `v0.4.0`, PRs #43–#45 (resolvent conjugate-transpose fix, resolvent
+hardening + large-matrix scaling, classifier taxonomy doc fix, and coverage
+lifts across the fit, Liouvillian, sparse, classification, and numerics
+layers). PATCH bump per SemVer: the change set is a numerics correctness fix
+plus tests and documentation corrections. The one new public symbol
+(`numerics.resolvent.ResolventConvergenceWarning`) is a diagnostic warning on a
+numerics utility, not a new feature on the `diagnose()` / `DiagnosticReport`
+API surface, and no anchor or report output changes — see the per-entry
+"anchors unaffected" notes below.
+
 ### Fixed
 - `numerics.resolvent.resolvent_norm` large-matrix branch (n > 128): the
   SuperLU power-iteration computed the wrong conjugate-transpose for the
@@ -99,6 +112,15 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   is sufficient for the dominant value (value-convergence is robust to top
   singular-value clustering, unlike eigenvector-convergence — verified
   empirically), so Lanczos/`svds` is intentionally not used.
+- Packaging metadata modernised to PEP 639: `pyproject.toml` now declares the
+  license as the SPDX expression `license = "Apache-2.0"` with
+  `license-files = ["LICENSE"]`, and the deprecated `License ::` trove
+  classifier is removed (the SPDX expression is the single source). The
+  `setuptools` build requirement is raised to `>=77.0` (first release with PEP
+  639 support). This clears the deprecation that setuptools enforces after
+  2026-02-18 for the old `license = {text = ...}` table, and is the same
+  Metadata-2.4 machinery behind the `twine check` `license-file` note recorded
+  for this release. No runtime, API, or dependency change.
 
 ## [0.4.0] — 2026-06-07
 
@@ -355,3 +377,11 @@ physics-scaling). MINOR bump per SemVer: backward-compatible API additions
 - L. `TAXONOMY_VERSION` stamped on every `ClassificationResult`.
 - M. D11 = Bohr-AP (Basso 2025), D11b = resolvent peak.
 - N. D24 = Zhou (universal mixing-time predictor), not Lee-Bound.
+
+<!-- Version-compare references (Keep a Changelog 1.1.0). The v0.4.1 tag is
+     created at merge to main; the [0.4.1] link resolves once it is pushed. -->
+[Unreleased]: https://github.com/marcohost33-maker/Liouscope/compare/v0.4.1...HEAD
+[0.4.1]: https://github.com/marcohost33-maker/Liouscope/compare/v0.4.0...v0.4.1
+[0.4.0]: https://github.com/marcohost33-maker/Liouscope/compare/v0.3.0...v0.4.0
+[0.3.0]: https://github.com/marcohost33-maker/Liouscope/compare/v0.2.0...v0.3.0
+[0.2.0]: https://github.com/marcohost33-maker/Liouscope/releases/tag/v0.2.0
