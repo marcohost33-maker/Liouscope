@@ -20,7 +20,7 @@ priority_when_in_conflict: 1
 
 ## Project context
 
-- **Stack:** Python >=3.10 (CI matrix 3.10/3.11/3.12/3.13), pytest, ruff, mypy,
+- **Stack:** Python >=3.10 (CI matrix 3.10/3.11/3.12/3.13/3.14), pytest, ruff, mypy,
   NumPy / SciPy, optional QuTiP cross-checks.
 - **Purpose:** Multi-diagnostic relaxation analysis for open quantum lattice
   systems (GKSL / Lindblad). 24 diagnostics D1-D24 in six layers (D1-D20 =

@@ -6,6 +6,15 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+- CI test matrix extended to **Python 3.14** (`.github/workflows/ci.yml`) and
+  `3.14` added to the `pyproject.toml` Trove classifiers. Verified locally via
+  the exact CI command chain on CPython 3.14.4: `pip install -e .[dev,qutip]`
+  (qutip 5.3.0 ships cp314 wheels), `ruff check src tests benchmarks` (exit 0),
+  `mypy src/liouscope` (exit 0), anchor regressions (21 passed), full suite
+  (274 passed, 1 skipped, coverage 93.54% ≥ 80% gate). Closes the freshness gap
+  where the library ran clean on 3.14 but CI never exercised it.
+
 ### Fixed
 - `pyproject.toml` `[project.urls]` (Homepage/Repository/Issues) pointed to
   `github.com/coworker-research/liouscope`, which does not exist (HTTP 404 — the
