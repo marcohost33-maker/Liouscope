@@ -7,6 +7,23 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Added
+- Independent-oracle cross-checks for the **spectral diagnostic layer**
+  (`tests/test_qutip_spectral_oracle.py`). The previous QuTiP cross-checks only
+  validated the Liouvillian *builder* (matrix construction); the diagnostic
+  *outputs* (D1 gap, D3 oscillating gap, steady state, GNS/KMS symmetrised gap)
+  were only asserted for self-consistency and loose magnitudes
+  (`abs(gap - 0.2) < 0.05 or abs(gap - 0.4) < 0.05`). The new module pins them on
+  three canonical GKSL systems (amplitude damping, coherently driven dephasing,
+  detailed-balance thermal qubit) against two independent oracles: closed-form
+  analytic spectra (always runs) and `qutip.liouvillian(...).eigenenergies()` /
+  `qutip.steadystate(...)` (`@qutip_required`). Includes the Mori-Shirai
+  prediction that the symmetrised gap coincides with the standard gap at
+  equilibrium (PRL 130, 230404 / arXiv:2212.06317). Test-only; no production
+  code, anchor, or `DiagnosticReport` output changes. Verified locally via the
+  CI command chain on CPython 3.14.4: `ruff check src tests` (exit 0),
+  `mypy src/liouscope` (exit 0), anchors (21 passed), full suite with coverage
+  (281 passed, 1 skipped — pre-existing local `jsonschema`-extra skip,
+  coverage 93.54% ≥ 80% gate), `pytest -m qutip` (6 passed).
 - CI test matrix extended to **Python 3.14** (`.github/workflows/ci.yml`) and
   `3.14` added to the `pyproject.toml` Trove classifiers. Verified locally via
   the exact CI command chain on CPython 3.14.4: `pip install -e .[dev,qutip]`
