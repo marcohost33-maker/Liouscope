@@ -56,8 +56,11 @@ The following identifiers must remain synchronized or be explicitly version-bump
   documented status as a related, generally coarser surrogate / reference-
   verified-bound-coarser claim.
 - A public/citable v0.4.1 still depends on the archive/provenance gates in
-  `docs/RELEASE_AUDIT_v0.4.0.md` §5 (GitHub release notes, PyPI/Zenodo/SWHID as
-  applicable); the engineering release (code + metadata) is green.
+  `docs/RELEASE_AUDIT_v0.4.1.md` §5 (GitHub release notes, PyPI/Zenodo/SWHID as
+  applicable); the engineering release (code + metadata) is green. The
+  authoritative release audit for the current runtime is
+  `docs/RELEASE_AUDIT_v0.4.1.md`; `docs/RELEASE_AUDIT_v0.4.0.md` is superseded
+  and retained for history only.
 
 ## 6. Production rule for future changes
 

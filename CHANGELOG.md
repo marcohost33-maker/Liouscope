@@ -56,7 +56,24 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   (274 passed, 1 skipped, coverage 93.54% ≥ 80% gate). Closes the freshness gap
   where the library ran clean on 3.14 but CI never exercised it.
 
+### Documentation
+- Added `docs/RELEASE_AUDIT_v0.4.1.md`, the post-`v0.4.1`-tag public/citable-release
+  readiness audit (archive/provenance gates + post-v0.4.1 CI hardening). It is
+  documentation-only and is **not** part of the tagged `v0.4.1` source snapshot
+  (the `v0.4.1` tag at commit `1965f2b` predates this file); it lives in
+  `[Unreleased]` as accompanying post-release documentation. Updated
+  `docs/CANON_STATUS.md` §5 to point public/citable-release work at this v0.4.1
+  audit instead of the superseded `docs/RELEASE_AUDIT_v0.4.0.md` §5.
+
 ### Fixed
+- `codemeta.json` was stale: it reported `version: "0.2.0"`, described only
+  "twenty diagnostics D1-D20", and set `codeRepository` to the non-existent
+  `github.com/coworker-research/liouscope`. Synchronized to the repo canon:
+  `version` → `0.4.1` (matching `src/liouscope/_version.py` and `CITATION.cff`),
+  diagnostic description → 24 diagnostics D1-D24 (D1-D20 original submission set,
+  D21-D24 post-submission; schema `D1-D24-Übersicht-v3`, per `_consts.py` /
+  `MANIFEST_SCHEMA.json`), and `codeRepository` →
+  `github.com/marcohost33-maker/Liouscope`. Metadata-only; no runtime/API change.
 - `pyproject.toml` `[project.urls]` (Homepage/Repository/Issues) pointed to
   `github.com/coworker-research/liouscope`, which does not exist (HTTP 404 — the
   `coworker-research` org has no such repo). The published wheel/sdist metadata
