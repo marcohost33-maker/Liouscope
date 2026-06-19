@@ -7,6 +7,30 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Added
+- Independent-oracle cross-checks for the **non-normality layer D8-D11**
+  (`tests/test_nonnormality_oracle.py`). The previous tests
+  (`tests/test_nonnormality.py`) only asserted *signs* and self-consistency
+  (`eta > 0`, `K > 0`, `length >= 1`), so a wrong normalisation or eigenvalue
+  filter would pass. The new module pins each diagnostic to a closed-form or an
+  independent numerical oracle, never to the library's own machinery: **D8
+  Henrici** against the unitarily-invariant `sqrt(||A||_F^2 - sum|lambda|^2)`
+  (Henrici 1962; closed form `|b|` for `[[0,b],[0,-1]]`); **D9 Petermann**
+  against the 2x2 adjugate condition-number `tr(B0^H B0)/|li-lj|^2` (e.g. Phys.
+  Rev. Research 5, 033042 (2023)) plus the normality floor (Petermann = 1 for a
+  pure-dephasing Liouvillian); **D10 Kreiss** against the continuous-time
+  reference facts (K = 1 for a normal Hurwitz matrix; K >= 1 always; closed form
+  `sqrt(1+b^2)` for `[[0,b],[0,-1]]`) and an independent 2D Nelder-Mead
+  resolvent-norm maximisation (Kreiss matrix theorem; Mitchell, SIAM J. Matrix
+  Anal. Appl. 41(4), 2020); **D11 Bohr AP** against hand-constructed spectra with
+  a known longest arithmetic progression and the `log_2(d)` Pauli bound (Basso,
+  arXiv:2510.07267, 2025). Each oracle includes a non-vacuous negative control
+  (wrong-zero Henrici, missing-denominator Petermann via eigenvalue gap != 1,
+  grid-cannot-exceed-oracle Kreiss, no-three-term-AP Bohr). Test-only; no
+  production code, anchor, or `DiagnosticReport` output changes. Verified locally
+  via the CI command chain on CPython 3.14: `ruff check src tests` (exit 0),
+  `mypy src/liouscope` (exit 0), `pytest -q` full suite (307 passed, 1 skipped —
+  pre-existing local `jsonschema`-extra skip), `pytest -m qutip` (6 passed), new
+  module `tests/test_nonnormality_oracle.py` (26 passed).
 - Independent-oracle cross-checks for the **spectral diagnostic layer**
   (`tests/test_qutip_spectral_oracle.py`). The previous QuTiP cross-checks only
   validated the Liouvillian *builder* (matrix construction); the diagnostic
