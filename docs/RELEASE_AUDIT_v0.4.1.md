@@ -41,7 +41,8 @@ This file is aligned with the following release-engineering rules:
 |---|---|---|
 | Engineering release | GREEN | v0.4.1 has version/citation/changelog alignment, and the merged PR trail records the corrected numerics and test hardening. |
 | Scientific claim safety | GREEN for existing scope | No new scientific claim is introduced by this audit; D24 remains a related/coarser Zhou-family surrogate, not an exact Eq.(16) claim. |
-| CI status | GREEN for observed PR heads | PR #43 and PR #48 had successful observed CI/QuTiP/security runs on their PR heads. |
+| CI / QuTiP status | GREEN for observed PR heads | The `ci.yml` test matrix + QuTiP cross-checks ran and passed on the observed heads of both PR #43 and PR #48. |
+| Security-workflow status | GREEN for PR #48 only (scope-limited) | The Workflow Security Audit (`zizmor.yml`) is path-filtered to `.github/workflows/**` + `.github/dependabot.yml` on `pull_request`; PR #43 changed no `.github/` files, so zizmor did **not** run on #43. PR #48 changed `.github/workflows/ci.yml`, so zizmor ran and passed on #48. OpenSSF Scorecard (`scorecard.yml`) has no `pull_request` trigger at all (only `workflow_dispatch` / `branch_protection_rule` / `schedule` / `push:main`), so it ran on neither PR head. Security evidence is therefore valid for #48, not #43. |
 | Python version support | GREEN / needs protection promotion | Python 3.14 is in the test matrix and classifiers; it should become a required check only after stable green history. |
 | Citation metadata | GREEN | `CITATION.cff` is synchronized to v0.4.1 and D1-D24. |
 | Public/citable release | YELLOW / OPEN | Requires GitHub release, PyPI/TestPyPI or explicit no-PyPI decision, Zenodo/DOI decision, SWHID decision, checksums, and evidence lock. |
@@ -55,15 +56,24 @@ This file is aligned with the following release-engineering rules:
 [x] CITATION.cff version/date match v0.4.1
 [x] Changelog has [0.4.1] section
 [x] Canon status document states runtime v0.4.1
-[ ] Git tag v0.4.1 exists and points to the intended release commit
+[x] Git tag v0.4.1 exists (at commit 1965f2b) and points to the intended release commit
 [ ] GitHub Release v0.4.1 exists with reviewed release notes
 [ ] GitHub Release notes link to CHANGELOG.md and this audit file
+    NOTE (tag scope): this audit file is POST-tag accompanying documentation. It
+    is NOT part of the tagged v0.4.1 source snapshot (the v0.4.1 tag at 1965f2b
+    predates this file) and must NOT be tagged into it — re-tagging the audit
+    commit would silently pull Unreleased changes (e.g. #47/#48) into the v0.4.1
+    source archive. The GitHub Release object (not the git tag's source tree) is
+    what links to CHANGELOG.md and this audit; the linkage lives in the release
+    notes, leaving the v0.4.1 source archive unchanged.
 
 [CI / QUALITY]
-[x] CI success observed for PR #48 head
+[x] CI matrix success observed for PR #48 head
 [x] QuTiP cross-check success observed for PR #48 head
 [x] Encoding Guard success observed for PR #48 head
-[x] Workflow Security Audit success observed for PR #48 head
+[x] Workflow Security Audit (zizmor) success observed for PR #48 head (#48 changed .github/, so zizmor ran; it did NOT run on #43)
+[ ] Required checks confirmed GREEN on the INTENDED v0.4.1 tag commit (1965f2b),
+    not merely on the #48 PR head — OPEN until re-verified against the tag commit
 [ ] Python 3.14 check promoted to required after stable green history
 [ ] Required-check list documented in branch protection / ruleset notes
 
