@@ -39,9 +39,13 @@ dependencies = [
     # Upper cap excludes numpy 2.5.x: its stubs use the PEP 695 `type` statement,
     # which mypy (configured target python_version = 3.10) rejects while parsing
     # numpy/__init__.pyi ("Type statement is only supported in Python 3.12 and
-    # greater"), breaking the enforcing mypy CI gate on every job. Lift this cap
-    # once mypy parses newer-syntax third-party stubs under the 3.10 target (or
-    # the mypy target is raised). See CHANGELOG [Unreleased].
+    # greater"), breaking the enforcing mypy CI gate on every job. Root cause is
+    # upstream mypy bug python/mypy#18701 (stub files should parse regardless of
+    # the target version) — closed "not planned", and numpy will not revert the
+    # stub syntax, so this cap is effectively long-lived, not short-term. The
+    # mypy-recommended alternative is raising python_version to >= 3.12; this
+    # project instead caps numpy to preserve 3.10 type-checking semantics.
+    # numpy 2.4.x retains cp314 wheels (CI 3.14 job green under this cap).
     "numpy>=1.24,<2.5",
     "scipy>=1.10",
 ]

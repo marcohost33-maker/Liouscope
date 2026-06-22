@@ -72,10 +72,17 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `Type statement is only supported in Python 3.12 and greater [syntax]`
   (errors prevented further checking), which broke the enforcing mypy CI gate on
   every matrix job (observed on PR #53's CI; affects `main` and any fresh run,
-  not a single PR). The cap is a temporary, dependency-only mitigation chosen
-  over raising the mypy target so the 3.10 type-checking semantics are preserved;
-  remove it once mypy parses newer-syntax third-party stubs under the 3.10 target
-  or numpy ships 3.10-parseable stubs again. No runtime/API/schema/anchor change.
+  not a single PR). The root cause is upstream mypy bug
+  [python/mypy#18701](https://github.com/python/mypy/issues/18701) — stub files
+  are meant to parse regardless of the target version — which was closed *not
+  planned*; since numpy will not revert the stub syntax, this cap is effectively
+  long-lived rather than short-term. The mypy-recommended alternative is raising
+  `python_version` to >= 3.12; this project caps numpy instead to preserve the
+  3.10 type-checking semantics (ruff `target-version = py310` continues to guard
+  3.10 syntax compatibility). numpy 2.4.x keeps cp314 wheels, so the Python 3.14
+  matrix job stays green under the cap (verified on this PR's CI). Lift the cap
+  if mypy#18701 is ever resolved or the project raises its mypy target. No
+  runtime/API/schema/anchor change.
 - `codemeta.json` was stale: it reported `version: "0.2.0"`, described only
   "twenty diagnostics D1-D20", and set `codeRepository` to the non-existent
   `github.com/coworker-research/liouscope`. Synchronized to the repo canon:
