@@ -66,6 +66,16 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   audit instead of the superseded `docs/RELEASE_AUDIT_v0.4.0.md` §5.
 
 ### Fixed
+- Capped `numpy < 2.5` in `pyproject.toml` `dependencies`. numpy 2.5.0 ships
+  stubs that use the PEP 695 `type` statement; mypy — configured with
+  `python_version = "3.10"` — fails to parse `numpy/__init__.pyi` with
+  `Type statement is only supported in Python 3.12 and greater [syntax]`
+  (errors prevented further checking), which broke the enforcing mypy CI gate on
+  every matrix job (observed on PR #53's CI; affects `main` and any fresh run,
+  not a single PR). The cap is a temporary, dependency-only mitigation chosen
+  over raising the mypy target so the 3.10 type-checking semantics are preserved;
+  remove it once mypy parses newer-syntax third-party stubs under the 3.10 target
+  or numpy ships 3.10-parseable stubs again. No runtime/API/schema/anchor change.
 - `codemeta.json` was stale: it reported `version: "0.2.0"`, described only
   "twenty diagnostics D1-D20", and set `codeRepository` to the non-existent
   `github.com/coworker-research/liouscope`. Synchronized to the repo canon:

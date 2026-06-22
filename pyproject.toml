@@ -36,7 +36,13 @@ classifiers = [
     "Typing :: Typed",
 ]
 dependencies = [
-    "numpy>=1.24",
+    # Upper cap excludes numpy 2.5.x: its stubs use the PEP 695 `type` statement,
+    # which mypy (configured target python_version = 3.10) rejects while parsing
+    # numpy/__init__.pyi ("Type statement is only supported in Python 3.12 and
+    # greater"), breaking the enforcing mypy CI gate on every job. Lift this cap
+    # once mypy parses newer-syntax third-party stubs under the 3.10 target (or
+    # the mypy target is raised). See CHANGELOG [Unreleased].
+    "numpy>=1.24,<2.5",
     "scipy>=1.10",
 ]
 
