@@ -50,6 +50,14 @@ This file is aligned with the following release-engineering rules:
 
 ## 5. Required public/citable-release checklist
 
+> **Status update (2026-06-22):** the package/provenance and CI-on-tag gates
+> below are now discharged with recorded evidence in
+> `docs/EVIDENCE_LOCK_v0.4.1.md` (build hashes, `twine check` PASS, required
+> checks GREEN on tag commit `1965f2b`, intrinsic SWHIDs, PyPI/Zenodo/SWHID
+> ADRs). The GitHub Release for v0.4.1 already exists (published 2026-06-17);
+> the only remaining open item is the external 0Liou+ Drive canon update. The
+> checklist below is retained as the original point-in-time plan.
+
 ```text
 [REPO]
 [x] Runtime version single-source is v0.4.1
