@@ -31,20 +31,39 @@ Built from a detached worktree checked out at `v0.4.1` with
 
 | Artifact | SHA-256 | Reproducible |
 |---|---|---|
-| `liouscope-0.4.1-py3-none-any.whl` | `3b5c833aabe631ddd1ce176b6da42fbfd88286ecbf4bf002838b2a7d0a7e9257` | **Yes** — byte-identical across two independent builds |
-| `liouscope-0.4.1.tar.gz` (sdist) | `79324efab2425792af554f09c2d03891627037c350be5477af76971026c4cb9b` | **No** — second build produced a different digest |
+| `liouscope-0.4.1-py3-none-any.whl` | `3b5c833aabe631ddd1ce176b6da42fbfd88286ecbf4bf002838b2a7d0a7e9257` | **Yes** — byte-identical across three independent builds |
+| `liouscope-0.4.1.tar.gz` (sdist) | `79324efab2425792af554f09c2d03891627037c350be5477af76971026c4cb9b` | **No** — three builds produced three different digests |
 
-Reproducibility note (honest caveat): the **wheel** is byte-reproducible with
-`SOURCE_DATE_EPOCH` set. The **sdist** is *not* byte-stable across rebuilds
-(setuptools sdist gzip/tar emission is not fully deterministic even with
-`SOURCE_DATE_EPOCH`). The recorded sdist digest therefore identifies *this
-specific artifact*, not a value any rebuild will reproduce. If a byte-stable
-sdist is required later, pin it as a release asset and record that asset's hash
-as authoritative.
+Reproducibility note (root cause diagnosed, not hand-waved): the **wheel** is
+byte-reproducible with `SOURCE_DATE_EPOCH` set (the same digest `3b5c833a…`
+recurred on three independent builds). The **sdist** is *not* byte-stable; the
+precise cause was isolated by comparing two sdists member-by-member:
+
+- the gzip layer **and** the uncompressed tar both differ, but the tar **member
+  order is identical** and **every file's content is byte-identical** (no
+  content diff on any of the 88 members);
+- the only differences are tar **member mtimes**, and they carry the build
+  wall-clock time (e.g. `1782156192` vs `1782156197`, ~6 s apart), **not**
+  `SOURCE_DATE_EPOCH` (`1781680820`). setuptools does not apply
+  `SOURCE_DATE_EPOCH` to the sdist tar entries (it does for the wheel zip);
+- proof of content identity: normalising every member's `mtime` to 0 makes the
+  two sdists hash **identically** (`7fb29e2c…`).
+
+So the sdist's *content* is fully deterministic; only timestamps vary. The
+recorded sdist digest identifies *this specific artifact*. For a byte-stable
+sdist later, either post-process the tar to clamp member mtimes to
+`SOURCE_DATE_EPOCH`, or pin the published sdist as a release asset and record
+that asset's hash as authoritative.
 
 ## 3. Distribution metadata check
 
-`twine check dist/*` → **PASSED** for both wheel and sdist.
+State-of-the-art validator sweep on the clean-tag artifacts, all green:
+
+| Validator | Result |
+|---|---|
+| `twine check --strict dist/*` | **PASSED** (wheel + sdist; strict = warnings are errors) |
+| `validate-pyproject pyproject.toml` | **Valid file** |
+| `check-wheel-contents dist/*.whl` | **OK** |
 
 Root-cause finding (validated and falsified): an initial `twine check` in the
 container reported `InvalidDistribution: unrecognized or malformed field
@@ -96,6 +115,24 @@ Core SWHIDs captured now (intrinsic git object hashes, equal to the SWHID core):
 swh:1:rev:1965f2ba664ab6497236fed27c480e9edc04e102   # revision (release commit)
 swh:1:dir:a47213a006649527f8f6265b61254deb5d75ec4f   # directory (root tree of the tag)
 ```
+
+Validation (official tool, not assertion): the directory SWHID was confirmed
+with Software Heritage's own `swh identify` (`swh.model`) run on a **clean,
+`.git`-free** export of the tag (`git archive v0.4.1 | tar -x`):
+
+```text
+swh:1:dir:a47213a006649527f8f6265b61254deb5d75ec4f   ← swh identify on the export
+a47213a006649527f8f6265b61254deb5d75ec4f             ← git rev-parse v0.4.1^{tree}
+```
+
+The two match exactly, confirming the SWHID's git-compatible design
+(`swh:1:dir` core == git tree hash; `swh:1:rev` core == git commit hash).
+
+Pitfall recorded: running `swh identify --type directory` directly on a *working
+tree* yields a **different** value (here `swh:1:dir:96d5a10f…`) because the
+filesystem walk includes the `.git` worktree pointer that is not part of the git
+tree. Always identify a `.git`-free export (or the git object) for a source
+SWHID that matches the repository tree.
 
 Archive resolution is **deferred** until the source is public; the limitation is
 the repo's PRIVATE visibility, not a SWHID gap. When/if the repo goes public,

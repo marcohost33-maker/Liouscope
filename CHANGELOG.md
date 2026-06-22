@@ -60,17 +60,21 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Added `docs/EVIDENCE_LOCK_v0.4.1.md`, the provenance evidence lock that
   discharges the v0.4.1 package/archive gates tracked in issue #50 and
   `docs/RELEASE_AUDIT_v0.4.1.md` §5. Records, from a clean `v0.4.1`-tag worktree:
-  build provenance and SHA-256 hashes (wheel `3b5c833a…`, sdist `79324efa…`;
-  wheel byte-reproducible across two builds, sdist not — gzip/tar nondeterminism,
-  documented as a caveat); `twine check` **PASS** for wheel+sdist plus the
-  validated/falsified root-cause that the earlier local failure was a stale
-  `packaging==24.0` (pre-PEP-639) toolchain, not a package defect (re-check with
-  `packaging>=24.2` PASSED on the identical artifacts); the six required status
-  checks confirmed **GREEN on the intended tag commit** `1965f2b`
+  build provenance and SHA-256 hashes (wheel `3b5c833a…` byte-reproducible across
+  **three** builds; sdist `79324efa…` content byte-identical across builds but
+  timestamp-nondeterministic — setuptools does not apply `SOURCE_DATE_EPOCH` to
+  the sdist tar mtimes, proven by mtime-normalised digest equality `7fb29e2c…`);
+  a state-of-the-art validator sweep — `twine check --strict`,
+  `validate-pyproject`, and `check-wheel-contents` all green — plus the
+  validated/falsified root-cause that the earlier local `twine check` failure was
+  a stale `packaging==24.0` (pre-PEP-639) toolchain, not a package defect
+  (re-check with `packaging>=24.2` PASSED on the identical artifacts); the six
+  required status checks confirmed **GREEN on the intended tag commit** `1965f2b`
   (test 3.10–3.13 CI run `27672586182` + QuTiP cross-check run `27672586173`),
   not merely on a later PR head; intrinsic core SWHIDs captured now
-  (`swh:1:rev:1965f2b…`, `swh:1:dir:a47213a0…`) with archive resolution deferred
-  to public availability; and explicit PyPI / Zenodo / SWHID ADRs (defer while
+  (`swh:1:rev:1965f2b…`, `swh:1:dir:a47213a0…`) and **validated with the official
+  `swh identify`** on a `.git`-free export, with archive resolution deferred to
+  public availability; and explicit PyPI / Zenodo / SWHID ADRs (defer while
   PRIVATE; OIDC/Trusted-Publishing mandated if PyPI is ever used). Updated
   `docs/RELEASE_AUDIT_v0.4.1.md` §5 with a status-update pointer. Documentation-
   only; no runtime/API/schema/anchor change.
