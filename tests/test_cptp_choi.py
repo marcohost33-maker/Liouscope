@@ -195,3 +195,26 @@ def test_cptp_gate_rejects_non_square_dim():
 def test_choi_matrix_rejects_non_square_input():
     with pytest.raises(ValueError, match="square"):
         choi_matrix(np.zeros((2, 3), dtype=complex))
+
+
+def test_cptp_gate_rejects_nonfinite_generator_entries():
+    L = build_liouvillian(np.zeros((2, 2), dtype=complex), [_LOWER], [0.4])
+    L_bad = L.copy()
+    L_bad[0, 0] = np.nan
+    with pytest.raises(ValueError, match="L_super.*finite"):
+        cptp_choi_gate(L_bad, dt=0.1)
+
+
+def test_cptp_gate_rejects_invalid_tolerances():
+    L = build_liouvillian(np.zeros((2, 2), dtype=complex), [_LOWER], [0.4])
+    with pytest.raises(ValueError, match="tol_choi.*non-negative"):
+        cptp_choi_gate(L, dt=0.1, tol_choi=-1.0)
+    with pytest.raises(ValueError, match="tol_tp.*finite"):
+        cptp_choi_gate(L, dt=0.1, tol_tp=float("nan"))
+
+
+def test_choi_matrix_rejects_nonfinite_entries():
+    channel = np.eye(4, dtype=complex)
+    channel[0, 0] = np.inf
+    with pytest.raises(ValueError, match="channel_super.*finite"):
+        choi_matrix(channel)
