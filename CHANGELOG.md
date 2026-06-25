@@ -6,6 +6,16 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-06-25
+
+Release cut: the Canon v0.5 diagnostics & contracts wave plus the cross-family
+CPTP-Choi hardening (PR #55, B1/B2) and the repo-wide mypy gate fix that
+shipped on `main` after `v0.4.1`. MINOR bump per SemVer: backward-compatible,
+additive API surface (8 validated formelbuch entries LIOU-A-011/A-012/A-013,
+F-018/F-019/F-020, RPT-001, NG-003; new `StabilityReport v2.1` projection and
+`cptp` Choi gate). No `diagnose()` / `DiagnosticReport` break, no manifest
+schema bump (the new StabilityReport is a separate, additive projection).
+
 ### Fixed
 - **CPTP Choi gate (`liouscope.numerics.cptp`) hardened against non-GKSL /
   corrupted input** (cross-family math review of PR #55, B1/B2). The gate now
@@ -543,9 +553,10 @@ physics-scaling). MINOR bump per SemVer: backward-compatible API additions
 - M. D11 = Bohr-AP (Basso 2025), D11b = resolvent peak.
 - N. D24 = Zhou (universal mixing-time predictor), not Lee-Bound.
 
-<!-- Version-compare references (Keep a Changelog 1.1.0). The v0.4.1 tag is
-     created at merge to main; the [0.4.1] link resolves once it is pushed. -->
-[Unreleased]: https://github.com/marcohost33-maker/Liouscope/compare/v0.4.1...HEAD
+<!-- Version-compare references (Keep a Changelog 1.1.0). The v0.5.0 tag is
+     created at release time; the [0.5.0] link resolves once it is pushed. -->
+[Unreleased]: https://github.com/marcohost33-maker/Liouscope/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/marcohost33-maker/Liouscope/compare/v0.4.1...v0.5.0
 [0.4.1]: https://github.com/marcohost33-maker/Liouscope/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/marcohost33-maker/Liouscope/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/marcohost33-maker/Liouscope/compare/v0.2.0...v0.3.0
