@@ -10,12 +10,22 @@ The Ljung-Box statistic over the first ``m`` lags is
 
     Q = N (N + 2) sum_{k=1}^{m} rho_k^2 / (N - k)
 
-with ``rho_k`` the lag-``k`` sample autocorrelation of the residuals. Under the
-null hypothesis of whiteness ``Q ~ chi^2_{m - p}`` where ``p`` is the number of
-fitted model parameters (Ljung & Box, Biometrika 65, 1978). Residuals are
-declared white iff ``Q <= chi^2_{1-alpha, m-p}`` (equivalently ``p_value >
-alpha``). The chi-squared critical value is taken from :mod:`scipy.stats`, an
-independent oracle for the reference distribution.
+with ``rho_k`` the lag-``k`` sample autocorrelation of the residuals
+(Ljung, G. M. & Box, G. E. P., "On a measure of lack of fit in time series
+models", Biometrika 65(2), 297-303, 1978).
+
+**Degrees of freedom.** For an *observed* (non-fitted) series the reference is
+``Q ~ chi^2_m``. When the residuals come from a model with ``p`` estimated
+parameters, the standard correction subtracts them: ``Q ~ chi^2_{m - p}`` (for
+ARMA(p_ar, q_ma) residuals ``p = p_ar + q_ma``; this is the classical Box-Pierce
+/ Ljung-Box adjustment). This module exposes ``n_params`` so the caller chooses
+``p`` explicitly. The **default is ``n_params = 0``** (``dof = m``), the
+conservative, fail-closed choice: it never *fabricates* extra rejection power by
+over-subtracting degrees of freedom. For an M0-M3b fit residual, pass the fitted
+parameter count (e.g. ``n_params=2`` for M0). Residuals are declared white iff
+``Q <= chi^2_{1-alpha, dof}`` (equivalently ``p_value > alpha``); the
+chi-squared critical value comes from :mod:`scipy.stats`, an independent oracle
+for the reference distribution.
 """
 
 from __future__ import annotations

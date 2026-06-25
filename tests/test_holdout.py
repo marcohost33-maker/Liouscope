@@ -67,5 +67,20 @@ def test_split_rejects_shape_mismatch():
 
 
 def test_split_rejects_too_few_points():
+    # Monotone t so the points-per-segment guard (not the monotonicity guard) fires.
+    t = np.array([0.0, 1.0, 2.0])
     with pytest.raises(ValueError, match=">=2 points"):
-        train_holdout_split(np.zeros(3), np.zeros(3), holdout_frac=0.5)
+        train_holdout_split(t, t, holdout_frac=0.5)
+
+
+def test_split_rejects_non_monotone_time():
+    # c3 regression: unordered time would leak future samples into training.
+    t = np.array([0.0, 1.0, 0.5, 2.0, 3.0, 4.0, 5.0, 6.0])
+    with pytest.raises(ValueError, match="strictly increasing"):
+        train_holdout_split(t, t, holdout_frac=0.25)
+
+
+def test_split_rejects_nonfinite_time():
+    t = np.array([0.0, 1.0, np.nan, 3.0, 4.0, 5.0, 6.0, 7.0])
+    with pytest.raises(ValueError, match="finite"):
+        train_holdout_split(t, t, holdout_frac=0.25)

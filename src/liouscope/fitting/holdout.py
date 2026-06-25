@@ -66,9 +66,12 @@ def train_holdout_split(
     ------
     ValueError
         If ``holdout_frac`` is not in the open interval ``(0, 1)``, if ``t`` and
-        ``y`` differ in length, or if the split would leave fewer than two
-        points in either segment (a one-point segment cannot constrain an
-        exponential fit nor yield a meaningful RMSE).
+        ``y`` differ in length, if the split would leave fewer than two points in
+        either segment (a one-point segment cannot constrain an exponential fit
+        nor yield a meaningful RMSE), or if ``t`` is not strictly increasing.
+        A strictly-increasing time grid is required: the split assumes ``t`` is
+        time-ordered, so an unordered ``t`` would put arbitrary (not the latest)
+        samples into the holdout and leak future information into training.
     """
     t = np.asarray(t, dtype=float)
     y = np.asarray(y, dtype=float)
@@ -76,6 +79,14 @@ def train_holdout_split(
         raise ValueError(f"t and y must have the same shape, got {t.shape} vs {y.shape}")
     if t.ndim != 1:
         raise ValueError(f"t and y must be 1-D, got ndim {t.ndim}")
+    if not np.all(np.isfinite(t)):
+        raise ValueError("t must be finite (no NaN/inf) to define a temporal order")
+    if t.size >= 2 and not np.all(np.diff(t) > 0.0):
+        raise ValueError(
+            "t must be strictly increasing (time-ordered) so the holdout is the "
+            "latest segment; got a non-monotone grid, which would leak future "
+            "samples into training."
+        )
     if not np.isfinite(holdout_frac) or not (0.0 < holdout_frac < 1.0):
         raise ValueError(
             f"holdout_frac must lie in the open interval (0, 1), got {holdout_frac}"

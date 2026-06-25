@@ -7,6 +7,34 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Fixed
+- **CPTP Choi gate (`liouscope.numerics.cptp`) hardened against non-GKSL /
+  corrupted input** (cross-family math review of PR #55, B1/B2). The gate now
+  fail-closes on two seams a naive Choi test waved through:
+  - **B1 — trace preservation is checked at the propagator, not the generator.**
+    The TP residual was `||<<I| M_L||` (the *generator*), which is dt-/scale-blind:
+    a sub-tolerance generator violation amplified by a large `dt` is a gross
+    propagator trace violation that an absolute-tolerance generator check passes.
+    Repro: generator residual `7.07e-10` (< the old `1e-9`) but propagator trace
+    scaled ~148x -> real TP residual `~208`; the old gate reported `is_tp=True`.
+    Now TP is `||<<I| Phi - <<I||` on `Phi = exp(dt*L)` -> `is_tp=False`.
+  - **B2 — Choi Hermiticity is checked before the PSD test.** A non-Hermiticity-
+    preserving map has a non-Hermitian Choi matrix; Hermitising it (`(J+J^dag)/2`)
+    before taking the minimum eigenvalue *masked* the defect. Repro: a depolarizing
+    channel plus a small non-HP term has Hermitised `min_eig > 0` (old PSD check
+    "CP") yet `||J - J^dag|| > 0`; the old gate reported `is_cp=True`. Now a
+    non-Hermitian Choi forces `is_cp=False`.
+  - Absolute `1e-9` tolerances replaced by **relative** ones (scaled by `||J||` /
+    `sqrt(d)`) so the verdict is scale-invariant. `ChoiGateResult` gains
+    `choi_herm_residual` and `is_hp`. The gate's CP claim therefore now also
+    fail-closes on non-GKSL / corrupted input, not only on physical channels.
+  Regression tests added for both repros in `tests/test_cptp_choi.py`.
+- `liouscope.fitting.holdout.train_holdout_split` now rejects a non-strictly-
+  increasing (or non-finite) time grid, preventing future-sample leakage into
+  training from an unordered series (cross-family review c3).
+- `liouscope.fitting.whiteness` docstring: precise Ljung-Box (1978) citation
+  (Biometrika 65(2), 297-303) and an explicit statement of the `dof = m - n_params`
+  choice (default `n_params=0`, the conservative fail-closed dof; cross-family
+  review c2). No behaviour change.
 - Repo-wide **mypy gate** failure on the Python 3.12-3.14 CI matrix. NumPy >=2.5
   ships type stubs that use the PEP 695 `type` statement, which mypy rejects
   while parsing `numpy/__init__.pyi` unless its target is >=3.12. Raised

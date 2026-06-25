@@ -50,24 +50,51 @@ TOL_TP: float = 1.0e-9
 class ChoiGateResult:
     """Outcome of the CPTP Choi gate.
 
+    The gate is **fail-closed against non-GKSL / corrupted input**: it does not
+    trust that the supplied generator is physical. Two seams that a naive Choi
+    test would silently pass are checked explicitly (B1/B2 hardening):
+
+    * **Hermiticity-preservation (B2).** A completely positive map has a
+      *Hermitian* Choi matrix. If the propagator is not Hermiticity-preserving,
+      ``J`` is non-Hermitian; Hermitising it (``(J+J^dag)/2``) *before* the PSD
+      test would mask that. The asymmetry ``||J - J^dag||`` is therefore checked
+      first and a non-Hermitian Choi forces ``is_cp = False``.
+    * **Trace preservation at the propagator (B1).** TP is verified on the
+      actual channel ``Phi = exp(dt*L)`` via ``<<I| Phi = <<I|``, not on the
+      generator residual ``||<<I| M_L||``. The generator residual is
+      dt-/scale-blind: a sub-tolerance generator violation can be amplified by a
+      large ``dt`` into a gross propagator trace violation that the generator
+      check (absolute tolerance) would wave through.
+
+    All tolerances are **relative** (scaled by ``||J||`` / ``sqrt(d)``), not
+    absolute, so the verdict does not drift with the operator scale.
+
     Attributes
     ----------
     min_eig
-        Smallest eigenvalue of the (Hermitised) Choi matrix. ``>= -tol_choi``
-        certifies complete positivity.
+        Smallest eigenvalue of the Hermitised Choi matrix ``(J+J^dag)/2``.
+    choi_herm_residual
+        ``||J - J^dag||_F`` -- the Hermiticity-preservation residual of the
+        propagator's Choi matrix (``~0`` for any CP map).
     tp_residual
-        ``|| <<I| M_L ||`` -- the trace-preservation residual of the generator
-        (``0`` for an exact GKSL generator).
+        ``|| <<I| Phi - <<I| ||`` -- the trace-preservation residual of the
+        **propagator** ``Phi = exp(dt*L)`` (``~0`` for an exact GKSL channel).
+    is_hp
+        ``choi_herm_residual <= tol_choi * max(||J||, 1)`` -- the map is
+        Hermiticity-preserving.
     is_cp
-        ``min_eig >= -tol_choi``.
+        ``is_hp and min_eig >= -tol_choi * max(|eig|, 1)`` -- complete
+        positivity (Hermitian Choi AND PSD).
     is_tp
-        ``tp_residual <= tol_tp``.
+        ``tp_residual <= tol_tp * max(sqrt(d), 1)``.
     is_cptp
         ``is_cp and is_tp``.
     """
 
     min_eig: float
+    choi_herm_residual: float
     tp_residual: float
+    is_hp: bool
     is_cp: bool
     is_tp: bool
     is_cptp: bool
@@ -118,9 +145,11 @@ def cptp_choi_gate(
     dt
         Non-negative propagation time. ``dt == 0`` yields the identity channel.
     tol_choi
-        Negative-eigenvalue tolerance for the PSD (complete-positivity) test.
+        Relative tolerance for the PSD (complete-positivity) and Choi-Hermiticity
+        tests (scaled by ``||J||`` / ``max|eig|``).
     tol_tp
-        Tolerance for the trace-preservation residual ``|| <<I| M_L ||``.
+        Relative tolerance for the propagator trace-preservation residual
+        ``|| <<I| Phi - <<I| ||`` (scaled by ``sqrt(d)``).
 
     Returns
     -------
@@ -151,20 +180,39 @@ def cptp_choi_gate(
 
     phi = sla.expm(dt * L_super) if dt > 0.0 else np.eye(n2, dtype=complex)
     J = choi_matrix(phi)
+    j_scale = max(float(np.linalg.norm(J)), 1.0)
+
+    # B2: Hermiticity-preservation. A CP map (indeed any Hermiticity-preserving
+    # map) has a Hermitian Choi matrix. If J is non-Hermitian the map is not
+    # Hermiticity-preserving -> not CP, and Hermitising J before the PSD test
+    # would MASK that. Check the asymmetry first, with a relative tolerance.
+    choi_herm_residual = float(np.linalg.norm(J - J.conj().T))
+    is_hp = choi_herm_residual <= tol_choi * j_scale
+
     J_herm = 0.5 * (J + J.conj().T)
-    min_eig = float(np.linalg.eigvalsh(J_herm)[0])
+    eigs = np.linalg.eigvalsh(J_herm)
+    min_eig = float(eigs[0])
+    eig_scale = max(float(np.abs(eigs).max()), 1.0)
+    is_psd = min_eig >= -tol_choi * eig_scale
+    # Non-Hermiticity-preserving channels are not CP regardless of the
+    # Hermitised spectrum (B2): require BOTH a Hermitian Choi and PSD.
+    is_cp = is_hp and is_psd
 
-    # Trace preservation: the all-identity covector <<I| annihilates the
-    # generator. <<I| = vec(I)^T in column stacking; the channel is TP iff
-    # vec(I)^T M_L == 0.
+    # B1: Trace preservation at the PROPAGATOR Phi = exp(dt*L), not the
+    # generator. TP <=> <<I| Phi = <<I| in column stacking. The generator
+    # residual ||<<I| M_L|| is dt-/scale-blind: a sub-tolerance generator
+    # violation amplified by a large dt is a gross propagator trace violation
+    # that an absolute-tolerance generator check would silently pass.
     iden_vec = vec(np.eye(d, dtype=complex))
-    tp_residual = float(np.linalg.norm(iden_vec.conj() @ L_super))
+    tp_residual = float(np.linalg.norm(iden_vec.conj() @ phi - iden_vec.conj()))
+    tp_scale = max(float(np.linalg.norm(iden_vec)), 1.0)  # = sqrt(d)
+    is_tp = tp_residual <= tol_tp * tp_scale
 
-    is_cp = min_eig >= -tol_choi
-    is_tp = tp_residual <= tol_tp
     return ChoiGateResult(
         min_eig=min_eig,
+        choi_herm_residual=choi_herm_residual,
         tp_residual=tp_residual,
+        is_hp=is_hp,
         is_cp=is_cp,
         is_tp=is_tp,
         is_cptp=is_cp and is_tp,

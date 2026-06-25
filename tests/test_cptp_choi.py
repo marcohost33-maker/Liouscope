@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import numpy as np
 import pytest
+import scipy.linalg as sla
 
 from liouscope import build_liouvillian
 from liouscope.numerics.cptp import choi_matrix, cptp_choi_gate
@@ -108,6 +109,67 @@ def test_euler_step_is_not_a_cp_proof():
         "expected at least one dt where the Euler step violates complete "
         "positivity (entry NR-002: Euler positivity is not a CP proof)"
     )
+
+
+# --- B1/B2 cross-family hardening regressions --------------------------------
+
+
+def test_b1_tp_is_checked_at_propagator_not_dt_blind_generator():
+    # B1 regression: a trace-scaling generator whose <<I| M_L residual sits just
+    # BELOW the old absolute 1e-9 tolerance (so the dt-/scale-blind GENERATOR
+    # check reported is_tp=True), while the actual propagator exp(dt*L) scales
+    # the trace ~148x. The propagator-level TP check must reject it.
+    L_valid = build_liouvillian(np.zeros((2, 2), dtype=complex), [_LOWER], [0.4])
+    n2 = L_valid.shape[0]
+    eps = 5.0e-10
+    L_bad = L_valid + eps * np.eye(n2, dtype=complex)
+    dt = float(np.log(148.0) / eps)  # exp(eps*dt) = 148
+
+    # The OLD generator residual ||<<I| M_L|| would have passed (< 1e-9):
+    gen_resid = float(np.linalg.norm(vec(np.eye(2, dtype=complex)).conj() @ L_bad))
+    assert gen_resid < 1.0e-9
+
+    res = cptp_choi_gate(L_bad, dt=dt)
+    assert not res.is_tp  # propagator trace scales ~148x => TP violated
+    assert res.tp_residual == pytest.approx(147.0 * np.sqrt(2), rel=1e-3)  # ~207.9
+    assert not res.is_cptp
+
+
+def test_b2_non_hermiticity_preserving_map_is_not_cp_even_if_psd_passes():
+    # B2 regression: a depolarizing channel (full-rank PSD Choi) plus a small
+    # non-Hermiticity-preserving perturbation. The HERMITISED Choi stays PSD
+    # (min_eig > 0 -> the old PSD-only check would have certified "CP"), yet the
+    # Choi matrix is non-Hermitian, so the map is not Hermiticity-preserving and
+    # therefore not CP. Hermitising before the PSD test masked exactly this.
+    I2 = np.eye(2, dtype=complex)
+    p = 0.6
+    S_dep = p * np.eye(4, dtype=complex) + (1.0 - p) * np.outer(
+        vec(I2 / 2.0), vec(I2).conj()
+    )
+    k01 = np.zeros((2, 2), dtype=complex)
+    k01[0, 1] = 1.0  # |0><1|
+    k00 = np.zeros((2, 2), dtype=complex)
+    k00[0, 0] = 1.0  # |0><0|
+    M = np.outer(vec(k01), vec(k00).conj())  # non-HP, nilpotent (M^2 = 0)
+    phi = S_dep + 0.15 * M
+    L = sla.logm(phi)  # exp(1.0 * L) == phi
+
+    res = cptp_choi_gate(L, dt=1.0)
+    assert res.min_eig > 0.0  # Hermitised PSD check ALONE would pass
+    assert res.choi_herm_residual > 1.0e-3  # but the Choi is non-Hermitian
+    assert not res.is_hp
+    assert not res.is_cp  # masking closed: non-HP => not CP
+    assert res.is_tp  # trace IS preserved (so the old gate said CPTP)
+    assert not res.is_cptp
+
+
+def test_tolerances_are_relative_scale_invariant():
+    # A valid GKSL channel stays CPTP after a large uniform rescale of the
+    # generator (relative tolerances must not drift with operator scale).
+    L = build_liouvillian(0.5 * 1.3 * _Z, [_LOWER, _RAISE], [0.9, 0.2])
+    res = cptp_choi_gate(1e6 * L, dt=1e-7)  # scaled generator, same physics
+    assert res.is_cptp
+    assert res.is_hp
 
 
 # --- negative / edge-input gates (silent-failure gate) -----------------------
