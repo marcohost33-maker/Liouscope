@@ -6,6 +6,15 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+- Repo-wide **mypy gate** failure on the Python 3.12-3.14 CI matrix. NumPy >=2.5
+  ships type stubs that use the PEP 695 `type` statement, which mypy rejects
+  while parsing `numpy/__init__.pyi` unless its target is >=3.12. Raised
+  `[tool.mypy] python_version` from `3.10` to `3.12`. Runtime 3.10/3.11 support is
+  still guarded by the test matrix and `ruff target-version = py310`; the change
+  only affects type-checking semantics, not packaged code. (Preferred over
+  capping `numpy<2.5` so v0.5 development stays on the current NumPy.)
+
 ### Added
 - Independent-oracle cross-checks for the **non-normality layer D8-D11**
   (`tests/test_nonnormality_oracle.py`). The previous tests
