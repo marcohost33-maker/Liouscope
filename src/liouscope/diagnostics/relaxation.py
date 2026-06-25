@@ -99,6 +99,33 @@ def fidelity(rho: np.ndarray, sigma: np.ndarray) -> float:
     return float(np.sum(np.sqrt(eigs)))
 
 
+def trace_distance(rho: np.ndarray, sigma: np.ndarray) -> float:
+    """D_tr: half the trace-norm distance ``(1/2) || rho - sigma ||_1`` (LIOU-F-018).
+
+    For Hermitian inputs this equals ``(1/2) sum_i |lambda_i|`` over the
+    eigenvalues of ``rho - sigma`` (Nielsen & Chuang). It is the observable
+    relaxation metric complementing D5 (von-Neumann entropy), D6 (relative
+    entropy) and D7 (Uhlmann fidelity): a metric (``0 <= D_tr <= 1`` for density
+    operators, ``D_tr = 0`` iff ``rho == sigma``) that contracts monotonically
+    under any CPTP map (data-processing inequality) and upper-bounds the
+    distinguishability of ``rho`` and ``sigma`` by measurement (Helstrom).
+
+    The difference is Hermitised before the eigenvalue decomposition so a tiny
+    non-Hermitian numerical excursion in either argument cannot leak a complex
+    part into the (real, by construction) distance.
+    """
+    rho = np.asarray(rho)
+    sigma = np.asarray(sigma)
+    if rho.shape != sigma.shape:
+        raise ValueError(
+            f"trace_distance requires equal shapes, got {rho.shape} vs {sigma.shape}"
+        )
+    diff = rho - sigma
+    diff_sym = 0.5 * (diff + diff.conj().T)
+    evals = np.linalg.eigvalsh(diff_sym)
+    return float(0.5 * np.sum(np.abs(evals)))
+
+
 def entanglement_asymmetry(rho: np.ndarray) -> float:
     """D7b: Rylands et al. 2024 entanglement-asymmetry measure (single block).
 
@@ -216,6 +243,9 @@ def compute_relaxation_layer(
     fidelity_curve = np.array(
         [fidelity(traj[k], rho_steady_state) for k in range(traj.shape[0])]
     )
+    trace_distance_curve = np.array(
+        [trace_distance(traj[k], rho_steady_state) for k in range(traj.shape[0])]
+    )
 
     # Fit hierarchy on relative entropy decay (ensures positivity).
     fits: dict[str, FitResult] = {}
@@ -259,6 +289,7 @@ def compute_relaxation_layer(
         von_neumann_entropy=von_neumann_entropy(final_rho),
         relative_entropy_curve=rel_entropy,
         fidelity_curve=fidelity_curve,
+        trace_distance_curve=trace_distance_curve,
         entanglement_asymmetry=None if np.isnan(ent_asym) else ent_asym,
         fits=fits,
         aicc_model=winner,

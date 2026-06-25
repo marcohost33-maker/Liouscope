@@ -9,6 +9,17 @@ D9 -- :func:`petermann_factors`. Mode-resolved condition numbers
 ``K_j = ||r_j||^2 ||l_j||^2 / |<l_j, r_j>|^2``. Anchor I: complex-conjugate
 pairs are INCLUDED.
 
+    SAFE caveat (LIOU-NG-003 / NR-004): a large Petermann factor (eigenvector
+    condition number) is a *necessary but not sufficient* indicator of
+    transient amplification. It must NOT be read as a direct propagator
+    amplification ``sup_t ||e^{tL}||``. The actual transient growth is bounded
+    by the Kreiss constant (``K(L)/e <= sup_t ||e^{tL}||``, D10) and its initial
+    slope by the numerical abscissa ``omega(L)`` (D15); the pseudospectrum (D13)
+    gives the geometric picture. Petermann is therefore *cross-evidence* about
+    spectral geometry, not a standalone proof of amplification (sharpens
+    LIOU-NG-001: non-normality measures are corroborating signals, not single
+    proofs).
+
 D10 -- :func:`kreiss_constant`. Mitchell SIMAX 41(4) (2020) discrete-grid
 algorithm: ``K = sup_{sigma > 0, omega} sigma ||((sigma + i omega) I - L)^{-1}||``.
 
@@ -52,6 +63,11 @@ def petermann_factors(
     Returns ``(eigenvalues, K_j)`` with the eigenvalues sorted by real part
     descending, the steady-state mode (``lambda = 0``) dropped, and
     complex-conjugate pairs retained (anchor I).
+
+    Interpretation caveat (LIOU-NG-003): ``K_j`` quantifies the conditioning of
+    eigenmode ``j``; it does NOT equal the realised transient amplification of
+    the propagator. Use D10 (Kreiss) / D15 (numerical abscissa) / D13
+    (pseudospectrum) to bound ``sup_t ||e^{tL}||``. See the module docstring.
     """
     L_super = np.asarray(L_super)
     eigvals, vl, vr = sla.eig(L_super, left=True, right=True)
