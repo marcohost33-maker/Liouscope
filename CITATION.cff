@@ -4,8 +4,9 @@ message: "If you use this software, please cite it as below."
 type: software
 authors:
   - name: "Coworker Research"
-version: "0.4.1"
-date-released: "2026-06-16"
+version: "0.5.0"
+date-released: "2026-06-25"
+# doi: backfilled at Zenodo release (no DOI minted yet for this private repo)
 license: Apache-2.0
 repository-code: "https://github.com/marcohost33-maker/Liouscope"
 url: "https://github.com/marcohost33-maker/Liouscope"
