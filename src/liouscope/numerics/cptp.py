@@ -14,8 +14,9 @@ Complete positivity is decided by the Choi-Jamiolkowski matrix
     J(Phi) = sum_{i,j} Phi(|i><j|) (x) |i><j|
 
 via the Choi theorem (Choi 1975): ``Phi`` is CP iff ``J(Phi)`` is positive
-semi-definite. The trace-preservation condition is the generator identity
-``<<I| M_L = 0`` (the all-identity covector annihilates ``L``).
+semi-definite. Trace preservation is checked at the **propagator** level via
+``<<I| Phi = <<I|`` so a small generator-level trace defect cannot be amplified
+by a large ``dt`` and still pass the gate.
 
 Scope (entry NR-002): this is a **dense-only** CP *proof*. For sparse/large
 systems the GKSL construction path is the CP guarantee and randomised
@@ -100,6 +101,20 @@ class ChoiGateResult:
     is_cptp: bool
 
 
+def _require_finite_array(name: str, array: np.ndarray) -> None:
+    """Reject NaN/Inf payloads before LAPACK turns them into opaque failures."""
+    if not np.all(np.isfinite(array)):
+        raise ValueError(f"{name} must contain only finite values")
+
+
+def _require_nonnegative_finite_tol(name: str, value: float) -> None:
+    """Reject invalid tolerances so verdicts cannot be inverted accidentally."""
+    if not np.isfinite(value):
+        raise ValueError(f"{name} must be finite, got {value}")
+    if value < 0.0:
+        raise ValueError(f"{name} must be non-negative, got {value}")
+
+
 def choi_matrix(channel_super: np.ndarray) -> np.ndarray:
     """Choi matrix of a superoperator acting on column-stacked density matrices.
 
@@ -107,13 +122,14 @@ def choi_matrix(channel_super: np.ndarray) -> np.ndarray:
     ``vec(Phi(rho))``. Returns the ``(d^2, d^2)`` Choi matrix
     ``J = sum_{ij} Phi(|i><j|) (x) |i><j|``.
     """
-    channel_super = np.asarray(channel_super)
+    channel_super = np.asarray(channel_super, dtype=complex)
     n2 = channel_super.shape[0]
     if channel_super.ndim != 2 or channel_super.shape[0] != channel_super.shape[1]:
         raise ValueError(
             f"channel_super must be a square (d^2, d^2) matrix, got "
             f"{channel_super.shape}"
         )
+    _require_finite_array("channel_super", channel_super)
     d = int(round(np.sqrt(n2)))
     if d * d != n2:
         raise ValueError(
@@ -158,14 +174,18 @@ def cptp_choi_gate(
     Raises
     ------
     ValueError
-        If ``dt`` is negative or ``L_super`` is not a square ``(d^2, d^2)``
-        matrix. Negative ``dt`` would propagate *backwards*, which is generally
-        not CP and would silently mislabel a valid forward generator -- so it is
+        If ``dt`` is negative/non-finite, if a tolerance is negative/non-finite,
+        or if ``L_super`` is non-finite or not a square ``(d^2, d^2)`` matrix.
+        Negative ``dt`` would propagate *backwards*, which is generally not CP
+        and would silently mislabel a valid forward generator -- so it is
         rejected up front rather than producing a meaningless verdict.
     """
     L_super = np.asarray(L_super, dtype=complex)
     if L_super.ndim != 2 or L_super.shape[0] != L_super.shape[1]:
         raise ValueError(f"L_super must be square, got shape {L_super.shape}")
+    _require_finite_array("L_super", L_super)
+    _require_nonnegative_finite_tol("tol_choi", tol_choi)
+    _require_nonnegative_finite_tol("tol_tp", tol_tp)
     n2 = L_super.shape[0]
     d = int(round(np.sqrt(n2)))
     if d * d != n2:
