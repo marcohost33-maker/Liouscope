@@ -7,6 +7,34 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Fixed
+- **CPTP Choi gate (`liouscope.numerics.cptp`) hardened against non-GKSL /
+  corrupted input** (cross-family math review of PR #55, B1/B2). The gate now
+  fail-closes on two seams a naive Choi test waved through:
+  - **B1 — trace preservation is checked at the propagator, not the generator.**
+    The TP residual was `||<<I| M_L||` (the *generator*), which is dt-/scale-blind:
+    a sub-tolerance generator violation amplified by a large `dt` is a gross
+    propagator trace violation that an absolute-tolerance generator check passes.
+    Repro: generator residual `7.07e-10` (< the old `1e-9`) but propagator trace
+    scaled ~148x -> real TP residual `~208`; the old gate reported `is_tp=True`.
+    Now TP is `||<<I| Phi - <<I||` on `Phi = exp(dt*L)` -> `is_tp=False`.
+  - **B2 — Choi Hermiticity is checked before the PSD test.** A non-Hermiticity-
+    preserving map has a non-Hermitian Choi matrix; Hermitising it (`(J+J^dag)/2`)
+    before taking the minimum eigenvalue *masked* the defect. Repro: a depolarizing
+    channel plus a small non-HP term has Hermitised `min_eig > 0` (old PSD check
+    "CP") yet `||J - J^dag|| > 0`; the old gate reported `is_cp=True`. Now a
+    non-Hermitian Choi forces `is_cp=False`.
+  - Absolute `1e-9` tolerances replaced by **relative** ones (scaled by `||J||` /
+    `sqrt(d)`) so the verdict is scale-invariant. `ChoiGateResult` gains
+    `choi_herm_residual` and `is_hp`. The gate's CP claim therefore now also
+    fail-closes on non-GKSL / corrupted input, not only on physical channels.
+  Regression tests added for both repros in `tests/test_cptp_choi.py`.
+- `liouscope.fitting.holdout.train_holdout_split` now rejects a non-strictly-
+  increasing (or non-finite) time grid, preventing future-sample leakage into
+  training from an unordered series (cross-family review c3).
+- `liouscope.fitting.whiteness` docstring: precise Ljung-Box (1978) citation
+  (Biometrika 65(2), 297-303) and an explicit statement of the `dof = m - n_params`
+  choice (default `n_params=0`, the conservative fail-closed dof; cross-family
+  review c2). No behaviour change.
 - Repo-wide **mypy gate** failure on the Python 3.12-3.14 CI matrix. NumPy >=2.5
   ships type stubs that use the PEP 695 `type` statement, which mypy rejects
   while parsing `numpy/__init__.pyi` unless its target is >=3.12. Raised
@@ -16,6 +44,58 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   capping `numpy<2.5` so v0.5 development stays on the current NumPy.)
 
 ### Added
+- **Canon v0.5 diagnostics & contracts** (additive, backward-compatible;
+  validated formelbuch entries LIOU-A-011/A-012/A-013, F-018/F-019/F-020,
+  RPT-001, NG-003). Each new diagnostic is pinned to an *independent* oracle
+  (closed form, QuTiP, or analytic soll-value), never to its own machinery:
+  - **CPTP Choi-PSD gate** (`liouscope.numerics.cptp`, LIOU-A-011): verifies
+    complete positivity of `exp(dt*L)` via the Choi-matrix minimum eigenvalue
+    (`>= -tol`) plus the trace-preservation residual `|| <<I| M_L ||`. Oracles:
+    the transpose map (positive but not CP) has Choi `min_eig = -1`; a dephasing
+    channel sits on the CP boundary at `min_eig = 0` (entry beleg); and an Euler
+    step `I + dt*L` is shown non-CP where `exp(dt*L)` stays CP (entry NR-002:
+    Euler positivity is not a CP proof). Dense-only CP proof by design.
+  - **Trace distance D_tr** (`liouscope.diagnostics.relaxation.trace_distance`,
+    LIOU-F-018): `(1/2)||rho-sigma||_1`, the observable relaxation metric beside
+    D5/D6/D7, plus an additive `RelaxationResult.trace_distance_curve`. Oracles:
+    orthogonal pure states -> 1, diagonal states -> total variation, Fuchs-van de
+    Graaf bounds vs the Uhlmann fidelity, CPTP contractivity, and `qutip.tracedist`.
+  - **Temporal holdout split** (`liouscope.fitting.holdout`, LIOU-A-012): an
+    out-of-sample anti-overfit gate for the M0-M3b hierarchy (time-ordered tail,
+    no shuffling).
+  - **Residual-whiteness gate** (`liouscope.fitting.whiteness`, LIOU-A-013):
+    Ljung-Box Q with the chi-squared reference from `scipy.stats` (white noise
+    passes, AR(1) is rejected).
+  - **Metamorphic spectral oracles** (`tests/test_metamorphic_spectral.py`,
+    LIOU-F-020): `gap(c*L)=c*gap(L)` and `spec(U L U^dag)=spec(L)` — ground-truth-
+    free invariants.
+  - **Gap-invariant reproduction** (`tests/test_gap_invariants_canon.py`,
+    LIOU-F-019): reproduces the pack mini-oracle parametrisation (amplitude
+    damping `gap=gamma/2`; thermal `g_down=0.9, g_up=0.2, omega=1.3 -> gap=0.55`).
+    NOTE: the *general* `gamma/2` and `(g_up+g_down)/2` oracles already exist in
+    `tests/test_qutip_spectral_oracle.py` (PR#51); this adds the exact pack
+    parametrisation. Dephasing `2*gamma` is intentionally NOT re-added (canon).
+  - **StabilityReport v2.1 contract** (`liouscope.io.stability_report` +
+    packaged `STABILITY_REPORT_SCHEMA.json`, LIOU-RPT-001): a claim-safe,
+    machine-auditable projection of a `DiagnosticReport` adding `claim_level`
+    (SAFE/REVIEW/BLOCK), `direction`, `cp_evidence_level`, independently
+    recomputed invariant residuals, an `evidence_bundle` and `provenance`. New
+    diagnostics carry `claim_status="pending"`. Purely additive — it does NOT
+    modify the existing run manifest, `MANIFEST_SCHEMA.json` or `DiagnosticReport`
+    (no schema-version bump; older artefacts stay valid).
+  - **Petermann interpretation caveat** (D9 docstring, LIOU-NG-003): a large
+    Petermann factor is necessary-but-not-sufficient for transient amplification;
+    `sup_t ||e^{tL}||` is bounded by the Kreiss constant (D10) / numerical
+    abscissa (D15), not by the Petermann factor alone.
+
+  Every new public boundary ships negative/edge-input gates (negative `dt`, NaN,
+  non-square dim, bad `holdout_frac`, `m>=N`, non-positive dof, out-of-enum
+  verdict fields, tampered schema fields). Verified locally on CPython 3.14 via
+  the CI command chain: `ruff check src tests benchmarks` (exit 0), `mypy
+  src/liouscope` clean at `--python-version 3.12` (the pyproject-default invocation
+  aborts on an unrelated numpy-stub/toolchain skew in the local sandbox), full
+  suite `pytest --cov-fail-under=80` (375 passed, coverage 93.9%), anchors
+  `pytest tests/test_anchors.py` (21 passed), `pytest -m qutip` (8 passed).
 - Independent-oracle cross-checks for the **non-normality layer D8-D11**
   (`tests/test_nonnormality_oracle.py`). The previous tests
   (`tests/test_nonnormality.py`) only asserted *signs* and self-consistency

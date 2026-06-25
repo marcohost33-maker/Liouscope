@@ -70,6 +70,11 @@ class RelaxationResult:
     aicc_model: str                       # winning model
     beta_D: float                         # fitted exponential rate of best model
     bca_ci_beta: tuple[float, float]      # BCa 95% CI
+    # F-018 (LIOU-F-018): half trace-norm distance to rho_ss along the
+    # trajectory, the observable relaxation metric alongside D5/D6/D7. Optional
+    # and defaulted so the field is purely additive (older callers/serialised
+    # reports remain valid).
+    trace_distance_curve: np.ndarray | None = None
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)

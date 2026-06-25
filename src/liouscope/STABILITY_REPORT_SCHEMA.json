@@ -1,0 +1,125 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "liouscope.stability_report.v2.1",
+  "title": "LiouScope StabilityReport v2.1",
+  "description": "Claim-safe, machine-auditable contract for a LiouScope diagnostic run. Additive over the run manifest (MANIFEST_SCHEMA.json): it adds an explicit claim_level/direction verdict, the CP evidence level, the invariant residuals and an evidence_bundle + provenance block. Backward-compatible: this is a NEW contract layer; it does not replace or modify the existing manifest or DiagnosticReport.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "run_id",
+    "system",
+    "generator",
+    "invariants",
+    "stationary_structure",
+    "diagnostics",
+    "classification",
+    "evidence_bundle",
+    "provenance"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": "liouscope.stability_report.v2.1"
+    },
+    "run_id": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$",
+      "description": "64-char lowercase hex SHA-256 run id (shared with the run manifest)."
+    },
+    "system": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["dimension"],
+      "properties": {
+        "dimension": { "type": "integer", "minimum": 1 },
+        "label": { "type": "string" }
+      }
+    },
+    "generator": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["kind"],
+      "properties": {
+        "kind": { "type": "string", "description": "e.g. 'GKSL'." },
+        "solver_path": { "type": "string", "enum": ["dense", "sparse_arpack"] }
+      }
+    },
+    "invariants": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "trace_preservation_residual",
+        "hermiticity_residual",
+        "stationarity_residual"
+      ],
+      "properties": {
+        "trace_preservation_residual": { "type": "number", "minimum": 0 },
+        "hermiticity_residual": { "type": "number", "minimum": 0 },
+        "stationarity_residual": { "type": "number", "minimum": 0 },
+        "cp_choi_min_eig": { "type": ["number", "null"] }
+      }
+    },
+    "stationary_structure": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["is_unique"],
+      "properties": {
+        "is_unique": { "type": "boolean" },
+        "null_dimension": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "diagnostics": {
+      "type": "object",
+      "description": "Map of diagnostic id -> value/object. New (not yet anchor-confirmed) diagnostics carry claim_status='pending'.",
+      "additionalProperties": true
+    },
+    "classification": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["mechanism", "direction", "claim_level"],
+      "properties": {
+        "mechanism": { "type": "string" },
+        "direction": {
+          "type": "string",
+          "enum": [
+            "slowdown",
+            "acceleration",
+            "protocol-dependent",
+            "ambiguous",
+            "not_applicable"
+          ]
+        },
+        "claim_level": {
+          "type": "string",
+          "enum": ["SAFE", "REVIEW", "BLOCK"]
+        },
+        "cp_evidence_level": {
+          "type": "string",
+          "enum": ["choi_psd_proof", "construction_only", "proxy_sampling", "none"]
+        }
+      }
+    },
+    "evidence_bundle": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["benchmarks", "oracles", "external_refs"],
+      "properties": {
+        "benchmarks": { "type": "array", "items": { "type": "string" } },
+        "oracles": { "type": "array", "items": { "type": "string" } },
+        "external_refs": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "provenance": {
+      "type": "object",
+      "additionalProperties": true,
+      "required": ["framework_version", "timestamp", "input_hash"],
+      "properties": {
+        "framework_version": { "type": "string" },
+        "timestamp": { "type": "string" },
+        "input_hash": { "type": "string" },
+        "taxonomy_version": { "type": "string" },
+        "diagnostic_schema_version": { "type": "string" }
+      }
+    }
+  }
+}
