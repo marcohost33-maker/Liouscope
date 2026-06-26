@@ -104,7 +104,15 @@ guard, not a failure.
   **not** run on pull requests, so it cannot affect the required PR checks and
   cannot publish from this PR.
 - `permissions: id-token: write` + `contents: read`; `environment: pypi`.
-- Build: `python -m build`; publish: `pypa/gh-action-pypi-publish@cef221092ed1bacb1cc03d23a2d87d1d172e277b  # v1.14.0` (SHA-pinned).
+- Build: `python -m build`; publish: `pypa/gh-action-pypi-publish@cef221092ed1bacb1cc03d23a2d87d1d172e277b  # v1.14.0` (SHA-pinned), with `print-hash: true`.
+- **Release evidence:** `print-hash: true` makes the publish step log the
+  SHA-256 of every uploaded sdist/wheel, so the evidence lock (§7) can record
+  the published digests directly from the run log. Under Trusted Publishing the
+  PyPA action **already** generates and uploads PEP 740 digital attestations by
+  default; we deliberately do **not** add a second `attest-build-provenance`
+  step, because PyPI accepts at most two attestations per file and rejects
+  duplicate predicate types. The single PyPA-managed attestation is the
+  provenance source of record.
 - **Safety guard retained:** `if: vars.PYPI_PUBLISH_ENABLED == 'true'`. Until
   Marco sets the repo variable, a published `v0.5.0` release will **skip** the
   publish job instead of failing with a "Trusted publishing exchange failure"

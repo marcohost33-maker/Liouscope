@@ -9,10 +9,11 @@ permissions: {}
 
 jobs:
   build-and-publish:
-    # [2026-06-06] Template-Guard: Trusted Publishing ist fuer dieses (private
-    # Forschungs-)Repo auf PyPI nicht konfiguriert -> Job failte bei jedem
-    # Release ("Trusted publishing exchange failure", 05-21 + 05-28). Aktivierung
-    # nach echtem PyPI-Setup: Repo-Variable PYPI_PUBLISH_ENABLED=true setzen.
+    # [2026-06-06; comment refreshed 2026-06-26] Template-Guard: Trusted
+    # Publishing ist fuer dieses (oeffentliche) Forschungs-Repo auf PyPI noch
+    # nicht konfiguriert -> Job failte bei jedem Release ("Trusted publishing
+    # exchange failure", 05-21 + 05-28). Aktivierung nach echtem PyPI-Setup:
+    # Repo-Variable PYPI_PUBLISH_ENABLED=true setzen (s. docs/RELEASE_AUDIT_v0.5.0).
     if: vars.PYPI_PUBLISH_ENABLED == 'true'
     runs-on: ubuntu-latest
     environment:
@@ -38,7 +39,9 @@ jobs:
       - name: Publish via Trusted Publishing
         uses: pypa/gh-action-pypi-publish@cef221092ed1bacb1cc03d23a2d87d1d172e277b  # v1.14.0
         with:
-          # Records SHA256/MD5/BLAKE2-256 in the release log without adding a
-          # second attestation predicate. The action keeps Trusted-Publisher
-          # attestations default-on.
+          # Print the SHA-256 of each uploaded distribution to the run log so the
+          # release-evidence lock can record digests without a separate step. The
+          # PyPA action already generates + uploads PEP 740 attestations by default
+          # under Trusted Publishing; do NOT add a second attest step (PyPI rejects
+          # duplicate predicates / >2 attestations per file).
           print-hash: true
