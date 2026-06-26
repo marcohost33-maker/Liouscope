@@ -26,6 +26,16 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   canon: public-repo status, Python 3.14 CI coverage, the dedicated QuTiP
   cross-check checks, and the `StabilityReport v2.1` additive projection.
 
+### CI
+- `ci-reusable-pilot.yml` is now **fail-soft**: the additive pilot that exercises
+  the private `coworkerz-ci` reusable-workflow path is gated behind an opt-in repo
+  variable (`REUSABLE_CI_PILOT_ENABLED`). A cross-repo `workflow_call` to a private
+  repo the run cannot read resolves to *zero jobs* and reports the whole run as a
+  failure (empty job list) — an external access condition, not a liouscope defect.
+  Gating it (same idiom as `pypi.yml`'s `PYPI_PUBLISH_ENABLED`) stops a transient
+  access outage from painting a permanent red ✗ on every PR. Re-enable by setting
+  the variable once private-repo read access is restored.
+
 ## [0.5.0] - 2026-06-25
 
 Release cut: the Canon v0.5 diagnostics & contracts wave plus the cross-family

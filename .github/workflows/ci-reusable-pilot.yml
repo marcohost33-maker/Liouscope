@@ -1,6 +1,16 @@
 # B3-Pilot (2026-06-04): zentrale Reusable-CI aus coworkerz-ci, ADDITIV neben
 # der bestehenden ci.yml (kein Ersatz, kein BP-Touch) - verifiziert nur, dass
 # der workflow_call-Pfad flottentauglich gruen laeuft. SHA-gepinnt (nie @main).
+#
+# Fail-soft (2026-06-26): der Aufruf des PRIVATEN coworkerz-ci Reusable-Workflows
+# scheitert strukturell, sobald der aufrufende Lauf keinen Lesezugriff auf das
+# private Repo hat (Cross-Repo-`workflow_call` aufloest dann zu NULL Jobs ->
+# Run = failure mit leerer Jobliste, z.B. auf PR #58/#60). Das ist KEIN Defekt
+# im liouscope-Code und der Pilot ist ADDITIV (kein Required-Check). Damit ein
+# externer Zugriffs-Ausfall nicht jeden PR dauerhaft rot faerbt, ist der Pilot
+# jetzt hinter einer opt-in Repo-Variable gegated (gleiches Idiom wie pypi.yml
+# `PYPI_PUBLISH_ENABLED`). Wieder-Aktivierung nach wiederhergestelltem Zugriff:
+# Repo-Variable `REUSABLE_CI_PILOT_ENABLED=true` setzen.
 name: ci-reusable-pilot
 
 on:
@@ -14,6 +24,10 @@ permissions:
 
 jobs:
   gate:
+    # Opt-in Guard: ohne gesetzte Variable wird der Job uebersprungen (neutral),
+    # statt am unreachable Cross-Repo-`workflow_call` mit leerer Jobliste zu
+    # failen. Siehe Kopfkommentar fuer Re-Aktivierung.
+    if: vars.REUSABLE_CI_PILOT_ENABLED == 'true'
     # Pin auf privates coworkerz-ci: SHA-Echtheit wird bei jedem Bump via
     # gh api Pre/Post verifiziert (zizmor laeuft offline, s. zizmor.yml).
     uses: marcohost33-maker/coworkerz-ci/.github/workflows/ci-python.yml@511ae1bd35092429ddb8fb08e340a3c2c8bc9406
