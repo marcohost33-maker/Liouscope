@@ -195,3 +195,54 @@ def test_cptp_gate_rejects_non_square_dim():
 def test_choi_matrix_rejects_non_square_input():
     with pytest.raises(ValueError, match="square"):
         choi_matrix(np.zeros((2, 3), dtype=complex))
+
+
+def test_cptp_gate_rejects_nonfinite_generator_entries():
+    L = build_liouvillian(np.zeros((2, 2), dtype=complex), [_LOWER], [0.4])
+    L_bad = L.copy()
+    L_bad[0, 0] = np.nan
+    with pytest.raises(ValueError, match=r"L_super.*finite"):
+        cptp_choi_gate(L_bad, dt=0.1)
+
+
+def test_cptp_gate_rejects_invalid_tolerances():
+    L = build_liouvillian(np.zeros((2, 2), dtype=complex), [_LOWER], [0.4])
+    with pytest.raises(ValueError, match=r"tol_choi.*non-negative"):
+        cptp_choi_gate(L, dt=0.1, tol_choi=-1.0)
+    with pytest.raises(ValueError, match=r"tol_tp.*finite"):
+        cptp_choi_gate(L, dt=0.1, tol_tp=float("nan"))
+
+
+def test_choi_matrix_rejects_nonfinite_entries():
+    channel = np.eye(4, dtype=complex)
+    channel[0, 0] = np.inf
+    with pytest.raises(ValueError, match=r"channel_super.*finite"):
+        choi_matrix(channel)
+
+
+def _partial_trace_output_leg(J: np.ndarray, d: int) -> np.ndarray:
+    """Trace over the output (channel) leg of ``J = sum_ij Phi(E_ij) (x) E_ij``.
+
+    ``choi_matrix`` builds ``J`` with the channel-output factor *first* in the
+    Kronecker product, so reshaping to ``(d, d, d, d)`` gives index order
+    ``[out_row, in_row, out_col, in_col]``. Summing the output diagonal
+    (``aiaj -> ij``) leaves the input-leg reduced operator, which equals the
+    identity exactly when the channel is trace preserving.
+    """
+    return np.einsum("aiaj->ij", J.reshape(d, d, d, d))
+
+
+def test_identity_channel_choi_partial_trace_is_identity_across_dimensions():
+    # The identity channel's Choi matrix is NOT np.eye(d**2); that is the
+    # identity *superoperator*. Its Choi matrix is the unnormalised maximally
+    # entangled rank-one operator |Omega><Omega|. Build it through choi_matrix
+    # and pin both the tensor-leg convention (partial trace over the output leg
+    # is the identity) and CP-boundary PSD-ness across several dimensions.
+    for d in (2, 4, 8, 16):
+        identity_super = np.eye(d * d, dtype=complex)
+        J = choi_matrix(identity_super)
+        tr_out = _partial_trace_output_leg(J, d)
+        atol = max(100.0 * d * np.finfo(float).eps, 1.0e-12)
+        np.testing.assert_allclose(tr_out, np.eye(d), atol=atol)
+        eigs = np.linalg.eigvalsh(0.5 * (J + J.conj().T))
+        assert float(eigs[0]) >= -atol

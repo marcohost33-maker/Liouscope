@@ -1,8 +1,8 @@
 ---
 name: liouscope-agents-md
 description: AI coding agent instructions for LiouScope (open quantum lattice diagnostics)
-version: "1.3"
-last_updated: 2026-06-05
+version: "1.4"
+last_updated: 2026-06-26
 priority_when_in_conflict: 1
 ---
 
@@ -28,13 +28,15 @@ priority_when_in_conflict: 1
   mixing-time predictor; schema `D1-D24-Übersicht-v3`) + twelve mechanism
   classes A1-A12. Replaces single-number "decay rate" with a layered,
   auditable `DiagnosticReport`.
-- **Version:** see `pyproject.toml` (single source — this file intentionally
-  states no version number; numbers here drift, pointers don't)
+- **Version:** see `src/liouscope/_version.py` (single source; `pyproject.toml`
+  reads it dynamically — numbers drift, pointers don't).
 - **Taxonomy version:** `A1-A12-v3.1`
 - **Manifest schema:** `src/liouscope/MANIFEST_SCHEMA.json` (version: see its
   `schema_version` const; SHA-256-stable run manifests)
 - **License:** Apache-2.0
-- **Visibility:** PRIVATE (marcohost33-maker/Liouscope)
+- **Visibility:** PUBLIC (`marcohost33-maker/Liouscope`). Do not assume that
+  internal Drive/canon context is public unless it is explicitly committed or
+  cited in release notes.
 - **KANON anchor:** `RESEARCH-LIOUSCOPE` in `<internal-ref-redacted>`
 
 ## Repository layout
@@ -42,7 +44,7 @@ priority_when_in_conflict: 1
 ```
 src/liouscope/            # main package
   └── MANIFEST_SCHEMA.json # contract for run manifests (packaged, NOT repo root)
-tests/                    # pytest suite (17 test modules as of 2026-06-05)
+tests/                    # pytest suite: anchors, qutip, numerics, fitting, classification
   └── test_anchors.py      # anchor regressions — must pass on every CI run
 examples/                 # quickstart + tutorial scripts
 benchmarks/               # performance / reproducibility scripts
@@ -51,7 +53,8 @@ CITATION.cff              # DOI / academic citation
 codemeta.json             # CodeMeta 3.0 metadata
 .github/workflows/
   ├── ci.yml              # test + lint + mypy + anchor regressions (required)
-  ├── scorecard.yml       # OpenSSF Scorecard (private-repo guarded)
+  ├── ci-qutip.yml        # optional-dependency QuTiP cross-checks (required)
+  ├── scorecard.yml       # OpenSSF Scorecard (public-repo active)
   ├── encoding-guard.yml  # UTF-8 / line-ending guard
   ├── zizmor.yml          # workflow security audit (SHA-pinned actions)
   └── pypi.yml            # release publication template
@@ -61,21 +64,21 @@ codemeta.json             # CodeMeta 3.0 metadata
 
 ```bash
 python -m venv .venv
-source .venv/bin/activate     # or .venv\Scripts\activate on Windows
+source .venv/bin/activate       # or .venv\Scripts\activate on Windows
 pip install -e .[dev,qutip]
-pytest -q                      # full suite
-pytest tests/test_anchors.py -v   # anchor regressions only (CI gate)
-ruff check src tests
-mypy src/liouscope             # enforcing CI gate (must exit 0)
-python examples/quickstart.py  # smoke run
+pytest -q                       # full suite
+pytest tests/test_anchors.py -v # anchor regressions only (CI gate)
+ruff check src tests benchmarks
+mypy src/liouscope              # enforcing CI gate (must exit 0)
+python examples/quickstart.py   # smoke run
 ```
 
 ## Working agreements
 
 1. **Branch protection: Tier-2 active.** `main` requires ALL required status
-   checks green (strict=true): Python-matrix `test 3.10-3.13` + QuTiP
-   cross-checks (6 checks as of 2026-06-05 — authoritative list: branch
-   protection via `gh api`, not this file). PRs only.
+   checks green (strict=true): Python-matrix `test 3.10-3.14` + QuTiP
+   cross-checks `3.11/3.12` (7 checks as of 2026-06-26 — authoritative list:
+   branch protection via `gh api`, not this file). PRs only.
 2. **Backup-First on destructive ops.** History-handling incident 2026-05-16
    wiped ~20 files via unverified branch-delete + GH-GC. Backup-Triple is the
    recovery anchor in `<internal-ref-redacted>`. Before any
@@ -148,6 +151,7 @@ python examples/quickstart.py  # smoke run
 - See `CHANGELOG.md` for what shipped in each version.
 - See `src/liouscope/MANIFEST_SCHEMA.json` for the run-manifest contract.
 - See `tests/test_anchors.py` for the canonical reference behaviour.
+- See `docs/RELEASE_AUDIT_v0.5.0.md` for the current public/citable release gates.
 - **Escalate after 3 failed attempts at the same step** — stop and ask in a PR
   draft or issue instead of looping.
 
@@ -159,11 +163,11 @@ A change is "done" only when **all** of the following hold:
 |---|---|---|
 | 1 | `pytest -q` runs cleanly | exit 0 |
 | 2 | `pytest tests/test_anchors.py -v` (anchor regressions) green | exit 0 |
-| 3 | `ruff check src tests` passes | exit 0 |
-| 4 | ALL required status checks green on PR (`test 3.10-3.13` + `qutip-cross-check 3.11/3.12`, 6 as of 2026-06-05) | required-status checks |
+| 3 | `ruff check src tests benchmarks` passes | exit 0 |
+| 4 | ALL required status checks green on PR (`test 3.10-3.14` + `qutip-cross-check 3.11/3.12`, 7 as of 2026-06-26) | required-status checks |
 | 5 | If methodology/results touched: `CITATION.cff` updated | PR diff |
 | 6 | If run-manifest contract touched: `MANIFEST_SCHEMA.json` version bumped + `CHANGELOG.md` migration note | PR diff |
-| 7 | `CHANGELOG.md` updated | PR diff |
+| 7 | `CHANGELOG.md` updated or an explicit no-changelog rationale is in the PR body | PR diff / PR body |
 | 8 | PR body contains Summary + Test plan checklist | manual review |
 
 A PR that misses any of 1-8 is not "ready". Anchor regressions (item 2) are

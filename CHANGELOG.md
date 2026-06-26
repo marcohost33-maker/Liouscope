@@ -6,6 +6,26 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+- `liouscope.numerics.cptp`: fail-closed input validation now rejects
+  non-finite generator/channel entries (`L_super`, `channel_super`) and invalid
+  (negative / non-finite) tolerances *before* the matrix exponential, Choi
+  construction, or eigensolvers run. This replaces opaque LAPACK failures with a
+  clear `ValueError` and prevents a bad caller tolerance from silently inverting
+  the CP/TP verdict.
+
+### Added
+- `tests/test_cptp_choi.py`: regression coverage for the new non-finite / invalid
+  tolerance seams, plus an independent partial-trace oracle that pins the
+  `choi_matrix` tensor-leg convention (the identity channel's Choi matrix is the
+  unnormalised maximally entangled operator, *not* `eye(d**2)`) and its
+  CP-boundary PSD-ness across `d in {2, 4, 8, 16}`.
+
+### Documentation
+- Synchronized `docs/CANON_STATUS.md` and `AGENTS.md` with the v0.5.0 runtime
+  canon: public-repo status, Python 3.14 CI coverage, the dedicated QuTiP
+  cross-check checks, and the `StabilityReport v2.1` additive projection.
+
 ## [0.5.0] - 2026-06-25
 
 Release cut: the Canon v0.5 diagnostics & contracts wave plus the cross-family
