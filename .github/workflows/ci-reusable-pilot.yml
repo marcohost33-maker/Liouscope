@@ -13,13 +13,67 @@ permissions:
   contents: read
 
 jobs:
+  define-matrix:
+    name: define matrix
+    runs-on: ubuntu-latest
+    outputs:
+      python-versions: ${{ steps.matrix.outputs.python-versions }}
+    steps:
+      - id: matrix
+        run: |
+          # Single-leg pilot by design. Keep this generated so future fleet rollout
+          # changes fail closed if the generated matrix becomes empty/malformed.
+          echo 'python-versions=["3.12"]' >> "$GITHUB_OUTPUT"
+
+  validate-matrix:
+    name: validate matrix
+    needs: define-matrix
+    runs-on: ubuntu-latest
+    outputs:
+      matrix-ok: ${{ steps.validate.outputs.matrix-ok }}
+    steps:
+      - id: validate
+        env:
+          PYTHON_VERSIONS_JSON: ${{ needs.define-matrix.outputs.python-versions }}
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          import sys
+
+          raw = os.environ["PYTHON_VERSIONS_JSON"]
+          try:
+              versions = json.loads(raw)
+          except json.JSONDecodeError as exc:
+              print(f"::error::invalid python-version matrix JSON: {exc}")
+              sys.exit(1)
+
+          if not isinstance(versions, list) or not versions:
+              print("::error::python-version matrix must be a non-empty JSON list")
+              sys.exit(1)
+
+          if not all(isinstance(version, str) and version.strip() for version in versions):
+              print("::error::python-version matrix entries must be non-empty strings")
+              sys.exit(1)
+          PY
+          echo "matrix-ok=true" >> "$GITHUB_OUTPUT"
+
   gate:
+    name: reusable gate / py${{ matrix.python-version }}
+    needs: [define-matrix, validate-matrix]
+    if: ${{ needs.validate-matrix.outputs.matrix-ok == 'true' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ${{ fromJSON(needs.define-matrix.outputs.python-versions) }}
     # Pin auf privates coworkerz-ci: SHA-Echtheit wird bei jedem Bump via
     # gh api Pre/Post verifiziert (zizmor laeuft offline, s. zizmor.yml).
     uses: marcohost33-maker/coworkerz-ci/.github/workflows/ci-python.yml@511ae1bd35092429ddb8fb08e340a3c2c8bc9406
     with:
-      python-version: "3.12"
+      python-version: ${{ matrix.python-version }}
       install-command: 'pip install -e ".[dev]" pytest-cov'
       ruff-target: "src tests benchmarks"
       mypy-target: "src/liouscope"
       pytest-args: "--cov=liouscope --cov-fail-under=80 -q"
+    # No `secrets: inherit`: the called CI workflow only needs checkout/install/test
+    # read access. Do not widen secret exposure for a pilot gate.
