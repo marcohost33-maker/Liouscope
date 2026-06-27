@@ -31,12 +31,13 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       matrix-ok: ${{ steps.validate.outputs.matrix-ok }}
+      python-version: ${{ steps.validate.outputs.python-version }}
     steps:
       - id: validate
         env:
           PYTHON_VERSIONS_JSON: ${{ needs.define-matrix.outputs.python-versions }}
         run: |
-          python - <<'PY'
+          python - <<'PY' >> "$GITHUB_OUTPUT"
           import json
           import os
           import sys
@@ -45,32 +46,37 @@ jobs:
           try:
               versions = json.loads(raw)
           except json.JSONDecodeError as exc:
-              print(f"::error::invalid python-version matrix JSON: {exc}")
+              print(f"::error::invalid python-version matrix JSON: {exc}", file=sys.stderr)
               sys.exit(1)
 
           if not isinstance(versions, list) or not versions:
-              print("::error::python-version matrix must be a non-empty JSON list")
+              print("::error::python-version matrix must be a non-empty JSON list", file=sys.stderr)
               sys.exit(1)
 
           if not all(isinstance(version, str) and version.strip() for version in versions):
-              print("::error::python-version matrix entries must be non-empty strings")
+              print("::error::python-version matrix entries must be non-empty strings", file=sys.stderr)
               sys.exit(1)
+
+          if len(versions) != 1:
+              print(
+                  "::error::this pilot expects exactly one python version; expand the caller deliberately",
+                  file=sys.stderr,
+              )
+              sys.exit(1)
+
+          print("matrix-ok=true")
+          print(f"python-version={versions[0]}")
           PY
-          echo "matrix-ok=true" >> "$GITHUB_OUTPUT"
 
   gate:
-    name: reusable gate / py${{ matrix.python-version }}
+    name: reusable gate / py${{ needs.validate-matrix.outputs.python-version }}
     needs: [define-matrix, validate-matrix]
     if: ${{ needs.validate-matrix.outputs.matrix-ok == 'true' }}
-    strategy:
-      fail-fast: false
-      matrix:
-        python-version: ${{ fromJSON(needs.define-matrix.outputs.python-versions) }}
     # Pin auf privates coworkerz-ci: SHA-Echtheit wird bei jedem Bump via
     # gh api Pre/Post verifiziert (zizmor laeuft offline, s. zizmor.yml).
     uses: marcohost33-maker/coworkerz-ci/.github/workflows/ci-python.yml@511ae1bd35092429ddb8fb08e340a3c2c8bc9406
     with:
-      python-version: ${{ matrix.python-version }}
+      python-version: ${{ needs.validate-matrix.outputs.python-version }}
       install-command: 'pip install -e ".[dev]" pytest-cov'
       ruff-target: "src tests benchmarks"
       mypy-target: "src/liouscope"
