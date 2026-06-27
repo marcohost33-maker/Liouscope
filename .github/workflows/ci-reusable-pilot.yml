@@ -1,6 +1,7 @@
-# B3-Pilot (2026-06-04): zentrale Reusable-CI aus coworkerz-ci, ADDITIV neben
-# der bestehenden ci.yml (kein Ersatz, kein BP-Touch) - verifiziert nur, dass
-# der workflow_call-Pfad flottentauglich gruen laeuft. SHA-gepinnt (nie @main).
+# B3-Pilot (2026-06-04): reusable-CI pilot, ADDITIV neben der bestehenden
+# ci.yml (kein Ersatz, kein BP-Touch). This caller intentionally uses a local
+# reusable workflow so the public repo does not fail at workflow graph creation
+# when a private cross-repo workflow is inaccessible.
 name: ci-reusable-pilot
 
 on:
@@ -72,9 +73,7 @@ jobs:
     name: reusable gate / py${{ needs.validate-matrix.outputs.python-version }}
     needs: [define-matrix, validate-matrix]
     if: ${{ needs.validate-matrix.outputs.matrix-ok == 'true' }}
-    # Pin auf privates coworkerz-ci: SHA-Echtheit wird bei jedem Bump via
-    # gh api Pre/Post verifiziert (zizmor laeuft offline, s. zizmor.yml).
-    uses: marcohost33-maker/coworkerz-ci/.github/workflows/ci-python.yml@511ae1bd35092429ddb8fb08e340a3c2c8bc9406
+    uses: ./.github/workflows/ci-python-local.yml
     with:
       python-version: ${{ needs.validate-matrix.outputs.python-version }}
       install-command: 'pip install -e ".[dev]" pytest-cov'
