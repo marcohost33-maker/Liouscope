@@ -15,6 +15,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   the CP/TP verdict.
 
 ### Added
+- `jsonschema>=4.18` added to the `dev` extra so CI actually exercises the full
+  `Draft202012Validator` structural-conformance path for run manifests. It was
+  previously absent from the dev/CI environment, so `_compiled_validator()`
+  returned `None` and the manifest schema-contract test was silently skipped on
+  every CI run (the built-in required-field fallback still ran). No runtime
+  change — `jsonschema` remains an optional runtime extra with graceful fallback.
 - `tests/test_cptp_choi.py`: regression coverage for the new non-finite / invalid
   tolerance seams, plus an independent partial-trace oracle that pins the
   `choi_matrix` tensor-leg convention (the identity channel's Choi matrix is the
