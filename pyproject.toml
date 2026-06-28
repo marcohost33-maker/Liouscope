@@ -50,6 +50,11 @@ dev = [
     "mypy>=1.10",
     "hypothesis>=6.100",
     "build>=1.2",
+    # jsonschema is an optional runtime extra (manifest validation degrades
+    # gracefully without it), but the dev/CI env must have it so the full
+    # Draft202012Validator structural-conformance path is actually exercised
+    # instead of silently skipped.
+    "jsonschema>=4.18",
 ]
 
 [project.urls]
