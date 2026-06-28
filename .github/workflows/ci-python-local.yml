@@ -1,0 +1,70 @@
+# Local reusable Python-CI gate for LiouScope.
+# Rationale: the public repo must not hard-fail because a private cross-repo
+# reusable workflow is inaccessible at workflow-graph construction time. Keep
+# this local caller/callee pair green; central fleet reuse can be restored in a
+# dedicated PR after GitHub Actions access settings are proven.
+name: ci-python-local (reusable)
+
+on:
+  workflow_call:
+    inputs:
+      python-version:
+        type: string
+        required: true
+      install-command:
+        type: string
+        required: true
+      ruff-target:
+        type: string
+        required: true
+      run-mypy:
+        type: boolean
+        default: true
+      mypy-target:
+        type: string
+        required: true
+      pytest-args:
+        type: string
+        required: true
+
+permissions:
+  contents: read
+
+jobs:
+  gate:
+    name: gate
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # v6.2.0
+        with:
+          python-version: ${{ inputs.python-version }}
+      - name: install
+        env:
+          INSTALL_COMMAND: ${{ inputs.install-command }}
+        run: |
+          python -m pip install --upgrade pip
+          eval "$INSTALL_COMMAND"
+          pip install ruff mypy pytest
+      - name: ruff
+        env:
+          RUFF_TARGET: ${{ inputs.ruff-target }}
+        run: ruff check $RUFF_TARGET
+      - name: mypy
+        if: ${{ inputs.run-mypy }}
+        env:
+          MYPY_TARGET: ${{ inputs.mypy-target }}
+        run: mypy $MYPY_TARGET
+      - name: pytest
+        env:
+          PYTEST_ARGS: ${{ inputs.pytest-args }}
+        run: pytest $PYTEST_ARGS
+      - name: tree-clean
+        run: |
+          if [ -n "$(git status --porcelain)" ]; then
+            echo "::error::Tests changed tracked files:"
+            git status --porcelain
+            exit 1
+          fi

@@ -1,6 +1,7 @@
-# B3-Pilot (2026-06-04): zentrale Reusable-CI aus coworkerz-ci, ADDITIV neben
-# der bestehenden ci.yml (kein Ersatz, kein BP-Touch) - verifiziert nur, dass
-# der workflow_call-Pfad flottentauglich gruen laeuft. SHA-gepinnt (nie @main).
+# B3-Pilot (2026-06-04): reusable-CI pilot, ADDITIV neben der bestehenden
+# ci.yml (kein Ersatz, kein BP-Touch). This caller intentionally uses a local
+# reusable workflow so the public repo does not fail at workflow graph creation
+# when a private cross-repo workflow is inaccessible.
 name: ci-reusable-pilot
 
 on:
@@ -13,13 +14,71 @@ permissions:
   contents: read
 
 jobs:
+  define-matrix:
+    name: define matrix
+    runs-on: ubuntu-latest
+    outputs:
+      python-versions: ${{ steps.matrix.outputs.python-versions }}
+    steps:
+      - id: matrix
+        run: |
+          # Single-leg pilot by design. Keep this generated so future fleet rollout
+          # changes fail closed if the generated matrix becomes empty/malformed.
+          echo 'python-versions=["3.12"]' >> "$GITHUB_OUTPUT"
+
+  validate-matrix:
+    name: validate matrix
+    needs: define-matrix
+    runs-on: ubuntu-latest
+    outputs:
+      matrix-ok: ${{ steps.validate.outputs.matrix-ok }}
+      python-version: ${{ steps.validate.outputs.python-version }}
+    steps:
+      - id: validate
+        env:
+          PYTHON_VERSIONS_JSON: ${{ needs.define-matrix.outputs.python-versions }}
+        run: |
+          python - <<'PY' >> "$GITHUB_OUTPUT"
+          import json
+          import os
+          import sys
+
+          raw = os.environ["PYTHON_VERSIONS_JSON"]
+          try:
+              versions = json.loads(raw)
+          except json.JSONDecodeError as exc:
+              print(f"::error::invalid python-version matrix JSON: {exc}", file=sys.stderr)
+              sys.exit(1)
+
+          if not isinstance(versions, list) or not versions:
+              print("::error::python-version matrix must be a non-empty JSON list", file=sys.stderr)
+              sys.exit(1)
+
+          if not all(isinstance(version, str) and version.strip() for version in versions):
+              print("::error::python-version matrix entries must be non-empty strings", file=sys.stderr)
+              sys.exit(1)
+
+          if len(versions) != 1:
+              print(
+                  "::error::this pilot expects exactly one python version; expand the caller deliberately",
+                  file=sys.stderr,
+              )
+              sys.exit(1)
+
+          print("matrix-ok=true")
+          print(f"python-version={versions[0]}")
+          PY
+
   gate:
-    # Pin auf privates coworkerz-ci: SHA-Echtheit wird bei jedem Bump via
-    # gh api Pre/Post verifiziert (zizmor laeuft offline, s. zizmor.yml).
-    uses: marcohost33-maker/coworkerz-ci/.github/workflows/ci-python.yml@511ae1bd35092429ddb8fb08e340a3c2c8bc9406
+    name: reusable gate / py${{ needs.validate-matrix.outputs.python-version }}
+    needs: [define-matrix, validate-matrix]
+    if: ${{ needs.validate-matrix.outputs.matrix-ok == 'true' }}
+    uses: ./.github/workflows/ci-python-local.yml
     with:
-      python-version: "3.12"
+      python-version: ${{ needs.validate-matrix.outputs.python-version }}
       install-command: 'pip install -e ".[dev]" pytest-cov'
       ruff-target: "src tests benchmarks"
       mypy-target: "src/liouscope"
       pytest-args: "--cov=liouscope --cov-fail-under=80 -q"
+    # No `secrets: inherit`: the called CI workflow only needs checkout/install/test
+    # read access. Do not widen secret exposure for a pilot gate.
