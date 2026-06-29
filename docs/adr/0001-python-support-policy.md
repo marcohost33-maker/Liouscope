@@ -81,9 +81,18 @@ in one coherent change:
 - `.github/workflows/ci.yml`:
   - remove the Python 3.10 and 3.11 matrix legs
   - keep at least 3.12, 3.13, and 3.14 while they are active supported baselines
+- `.github/workflows/ci-qutip.yml`:
+  - trim the `qutip-cross-check` matrix (currently `["3.11", "3.12"]`) to drop the
+    3.11 leg. This workflow registers its own *required* status checks
+    independently of `ci.yml`, so a stale 3.11 leg here would keep an
+    "unsupported" interpreter in CI even after `ci.yml` is updated.
 - `.github/workflows/ci-reusable-pilot.yml`:
   - update the generated pilot matrix consistently
   - keep the matrix validation fail-closed
+- Branch protection:
+  - update the required-status-check list (`gh api`) so the removed
+    `test (… 3.11)` / `qutip-cross-check (3.11)` checks are no longer required;
+    otherwise the protected branch waits forever on checks that never run again.
 - Documentation:
   - changelog entry under `[Unreleased]`
   - release-audit / release-notes support-policy paragraph
@@ -144,5 +153,17 @@ Before a baseline PR is marked ready, it must include:
 - `CHANGELOG.md` — v0.5.0 "Fixed": mypy `python_version` raised to 3.12.
 - `AGENTS.md` §"Working agreements" — branch-protection / required-check policy.
 - Roadmap issue #59 (post-v0.5 architecture & policy items); PRs #61, #64.
+
+## Revision history
+
+The **decision** in this ADR is unchanged across the entries below; only the
+record's location and surrounding detail were edited (an *editorial
+consolidation*, not a decision change — see `docs/adr/README.md` for the
+immutability convention that distinguishes the two).
+
+| Date | Change | PR |
+|------|--------|----|
+| 2026-06-26 | Accepted. Original record created at `docs/adr/0001-python-support-policy.md`. | #64 |
+| 2026-06-29 | Editorial consolidation. Merged the governance detail (release classification, evidence gate, required-steps checklist) from the parallel `docs/ADR_SUPPORT_POLICY.md` (PR #61) into this record; reduced that path to a pointer stub. No decision change. | #66 |
 
 [spec0]: https://scientific-python.org/specs/spec-0000/
