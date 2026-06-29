@@ -31,6 +31,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Synchronized `docs/CANON_STATUS.md` and `AGENTS.md` with the v0.5.0 runtime
   canon: public-repo status, Python 3.14 CI coverage, the dedicated QuTiP
   cross-check checks, and the `StabilityReport v2.1` additive projection.
+- Added an Architecture Decision Record directory (`docs/adr/`) with **ADR 0001
+  — Scientific-Python support policy (SPEC 0)**. ADR 0001 records the decision to
+  follow SPEC 0 and the *post-v0.5* target (`requires-python >=3.12`, CI
+  3.12/3.13/3.14, drop 3.10/3.11 in a dedicated support-policy release). It is a
+  decision record only — `pyproject.toml`, the CI matrix, and classifiers are
+  unchanged in this PR.
 
 ## [0.5.0] - 2026-06-25
 
