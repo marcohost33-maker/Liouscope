@@ -38,6 +38,15 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   decision record only — `pyproject.toml`, the CI matrix, and classifiers are
   unchanged in this PR.
 
+### CI
+- `pypi.yml`: the Trusted-Publishing step now sets `print-hash: true` so each
+  uploaded sdist/wheel's SHA-256 is logged for the release-evidence lock. No
+  second attestation step is added — the PyPA action already uploads a PEP 740
+  attestation by default under Trusted Publishing, and PyPI rejects duplicate
+  predicates / more than two attestations per file. `docs/RELEASE_AUDIT_v0.5.0.md`
+  §5 documents the evidence flow; the stale "private repo" comment was refreshed
+  to "public".
+
 ## [0.5.0] - 2026-06-25
 
 Release cut: the Canon v0.5 diagnostics & contracts wave plus the cross-family
