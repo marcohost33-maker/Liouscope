@@ -29,9 +29,10 @@ The [Scientific Python ecosystem][spec0] addresses exactly this with
 - support each **core package** (NumPy, SciPy, …) for **2 years** after its
   release.
 
-Under SPEC 0's schedule, Python 3.10 (released 2021-10) and 3.11 (2022-10) are
-outside the recommended 3-year window as of late 2025 / 2026, while Python 3.12
-(2023-10) remains inside it until roughly 2026-10.
+Under SPEC 0's published drop schedule (verified 2026-06-29): Python 3.10
+(released 2021-10-04) and 3.11 (released 2022-10-24, SPEC 0 support window ending
+**2025-10-23**) are already past the recommended 3-year window, while Python 3.12
+(released 2023-10-02) remains inside it until **2026-10-01**.
 
 ## Decision
 
