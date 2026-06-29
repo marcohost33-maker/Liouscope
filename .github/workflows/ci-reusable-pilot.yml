@@ -11,6 +11,21 @@
 # jetzt hinter einer opt-in Repo-Variable gegated (gleiches Idiom wie pypi.yml
 # `PYPI_PUBLISH_ENABLED`). Wieder-Aktivierung nach wiederhergestelltem Zugriff:
 # Repo-Variable `REUSABLE_CI_PILOT_ENABLED=true` setzen.
+#
+# Warum ein `if:`-Gate und NICHT `continue-on-error`? GitHub unterstuetzt
+# `continue-on-error` auf Job-Ebene NICHT fuer Jobs, die per `uses:` einen
+# Reusable-Workflow aufrufen (offene Limitierung, community discussions
+# #77915/#159265). Ein `if:`-Guard ist daher der einzige Mechanismus, diesen
+# Reusable-Caller nicht-blockierend zu machen.
+#
+# ECHTE Root-Cause-Fix (nicht in dieser additiven Workflow-Datei loesbar):
+# Der private coworkerz-ci-Repo muss Lesezugriff fuer Liouscope freigeben
+# (coworkerz-ci -> Settings -> Actions -> General -> "Access" -> Accessible from
+# repositories owned by 'marcohost33-maker'), sonst loest der Cross-Repo-
+# `workflow_call` weiterhin zu NULL Jobs auf. Quelle: GitHub Docs, "Sharing
+# actions and workflows from your private repository". Dieser Gate ist die
+# Defense-in-Depth-Schicht, damit ein erneuter Zugriffsverlust nicht wieder
+# jeden PR rot faerbt.
 name: ci-reusable-pilot
 
 on:
