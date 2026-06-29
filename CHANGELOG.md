@@ -37,6 +37,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   3.12/3.13/3.14, drop 3.10/3.11 in a dedicated support-policy release). It is a
   decision record only — `pyproject.toml`, the CI matrix, and classifiers are
   unchanged in this PR.
+- Consolidated the duplicate support-policy ADR: the governance detail from
+  `docs/ADR_SUPPORT_POLICY.md` (release classification, evidence gate, the
+  required-steps checklist) is merged into `docs/adr/0001-python-support-policy.md`,
+  and the old path is reduced to a pointer stub so existing links still resolve.
+  Single numbered ADR going forward.
 
 ## [0.5.0] - 2026-06-25
 
