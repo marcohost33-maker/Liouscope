@@ -1,17 +1,26 @@
 # ADR 0001 — Scientific-Python support policy (SPEC 0)
 
 - **Status:** Accepted
-- **Date:** 2026-06-26
+- **Date:** 2026-06-26 (consolidated 2026-06-29)
 - **Deciders:** LiouScope maintainers
-- **Supersedes:** —
+- **Supersedes:** `docs/ADR_SUPPORT_POLICY.md` (folded in here; that path is now a
+  pointer stub)
 - **Superseded by:** —
+
+> This ADR consolidates two parallel records of the same decision: the original
+> `docs/adr/0001-…` (PR #64) and `docs/ADR_SUPPORT_POLICY.md` (PR #61). The
+> governance detail from the latter (required-steps checklist, release
+> classification, evidence gate) is merged in below; the numbered `docs/adr/`
+> structure and the web-verified SPEC 0 dates are kept.
 
 ## Context
 
-LiouScope currently declares `requires-python = ">=3.10"` and runs its CI test
-matrix on Python 3.10 / 3.11 / 3.12 / 3.13 / 3.14, with Trove classifiers to
-match. As the project moves past `v0.5.0`, two pressures push toward narrowing
-the supported runtime window:
+LiouScope is a scientific Python package with a deliberately broad v0.5.0 runtime
+matrix (`requires-python >=3.10`; CI on Python 3.10, 3.11, 3.12, 3.13, 3.14).
+Issue #59 asks for an explicit support policy rather than silently changing the
+runtime baseline inside an unrelated hardening PR.
+
+Two pressures push toward narrowing the supported runtime window:
 
 1. **Toolchain drift.** NumPy ≥ 2.5 ships type stubs that use the PEP 695 `type`
    statement; mypy only accepts them when its `python_version` target is ≥ 3.12,
@@ -22,12 +31,15 @@ the supported runtime window:
    dependency-floor compatibility surface, and the set of behaviours the anchor
    regressions must hold invariant.
 
-The [Scientific Python ecosystem][spec0] addresses exactly this with
-**SPEC 0 — Minimum Supported Dependencies**, which recommends:
+The relevant external anchor is [Scientific Python SPEC 0][spec0], which
+recommends:
 
 - support each **Python** minor for **3 years** after its initial release, and
 - support each **core package** (NumPy, SciPy, …) for **2 years** after its
   release.
+
+SPEC 0 is a Scientific-Python *ecosystem* recommendation, **not** a claim that
+upstream Python itself is EOL.
 
 Under SPEC 0's published drop schedule (verified 2026-06-29): Python 3.10
 (released 2021-10-04) and 3.11 (released 2022-10-24, SPEC 0 support window ending
@@ -36,22 +48,79 @@ Under SPEC 0's published drop schedule (verified 2026-06-29): Python 3.10
 
 ## Decision
 
-LiouScope adopts **SPEC 0** as the reference policy for its Python and core
-dependency support windows.
+1. **Do not drop Python 3.10 or 3.11 in v0.5.x.** The v0.5.0 public-release lane
+   stays focused on archiving, publication, citation metadata, and evidence
+   locking; user-visible support changes must not be mixed into a
+   release-publication gate.
+2. **Adopt SPEC 0 as the forward support-policy reference.** Future baseline PRs
+   must compare Python and core-dependency floors against SPEC 0 and document any
+   intentional deviation.
+3. **First candidate post-v0.5 baseline:** `requires-python >=3.12` with CI on
+   3.12, 3.13, and 3.14. This is a *candidate*, not an automatic change; it
+   requires a dedicated PR and release note.
+4. **No silent dependency-floor bumps.** Raising NumPy/SciPy floors must be done
+   together with CI evidence, resolver checks, and a compatibility note. A floor
+   may remain older than SPEC 0 temporarily for user compatibility, but the
+   deviation must be explicit.
+5. **Mypy target is not the runtime floor.** The current `mypy` target of Python
+   3.12 is a toolchain workaround for modern NumPy stubs. It does **not** imply
+   that Python 3.10/3.11 runtime support has been removed while those interpreters
+   remain in the CI test matrix.
 
-**Post-`v0.5.0` target (to be enacted in a dedicated support-policy release, not
-as a side-effect of an unrelated change):**
+This ADR is a **decision record only** — it does not modify `pyproject.toml`, the
+CI matrix, or the Trove classifiers.
 
-- `requires-python = ">=3.12"`
-- CI test matrix: **3.12 / 3.13 / 3.14**
-- Drop the 3.10 and 3.11 legs, their Trove classifiers, and any 3.10/3.11-only
-  compatibility shims **together** in that one release.
-- Re-evaluate NumPy/SciPy floors against the SPEC 0 2-year window at the same
-  time (separately reviewed; not mandated by this ADR).
+## Required steps for a future Python 3.12+ baseline PR
 
-Until that release ships, the **status quo is unchanged**: `>=3.10` and the
-five-version matrix remain in force. This ADR records the decision and its
-rationale; it does **not** modify `pyproject.toml`, the CI matrix, or classifiers.
+A future PR that actually drops Python 3.10/3.11 must update all of the following
+in one coherent change:
+
+- `pyproject.toml`:
+  - `requires-python = ">=3.12"`
+  - remove the Python 3.10 and 3.11 Trove classifiers
+- `.github/workflows/ci.yml`:
+  - remove the Python 3.10 and 3.11 matrix legs
+  - keep at least 3.12, 3.13, and 3.14 while they are active supported baselines
+- `.github/workflows/ci-qutip.yml`:
+  - trim the `qutip-cross-check` matrix (currently `["3.11", "3.12"]`) to drop the
+    3.11 leg. This workflow registers its own *required* status checks
+    independently of `ci.yml`, so a stale 3.11 leg here would keep an
+    "unsupported" interpreter in CI even after `ci.yml` is updated.
+- `.github/workflows/ci-reusable-pilot.yml`:
+  - update the generated pilot matrix consistently
+  - keep the matrix validation fail-closed
+- Branch protection:
+  - update the required-status-check list (`gh api`) so the removed
+    `test (… 3.11)` / `qutip-cross-check (3.11)` checks are no longer required;
+    otherwise the protected branch waits forever on checks that never run again.
+- Documentation:
+  - changelog entry under `[Unreleased]`
+  - release-audit / release-notes support-policy paragraph
+  - README compatibility/installation note if one exists at that point
+
+## Release classification
+
+Dropping interpreter support is user-visible and must not be hidden in a patch
+release. Default LiouScope governance classification:
+
+- **PATCH:** bug fixes and fail-closed hardening that keep the same supported
+  runtime floor.
+- **MINOR:** additive APIs, new diagnostics, and explicitly announced
+  baseline-policy updates when no public stable API is broken.
+- **MAJOR:** reserved for breaking public API, manifest, or diagnostic-report
+  contract changes. If downstream users rely materially on Python 3.10/3.11, the
+  project may choose a MAJOR bump for the interpreter drop even though the Python
+  packaging ecosystem often handles such drops in MINOR releases.
+
+## Evidence gate
+
+Before a baseline PR is marked ready, it must include:
+
+- CI green on every retained Python version.
+- `ruff`, `mypy`, anchor regressions, full suite, and QuTiP cross-checks green.
+- A dependency-resolver smoke test from a clean environment.
+- A changelog note that distinguishes the SPEC-0 recommendation from upstream
+  Python EOL status.
 
 ## Consequences
 
@@ -65,25 +134,36 @@ rationale; it does **not** modify `pyproject.toml`, the CI matrix, or classifier
 
 - Dropping supported runtimes is **SemVer- and governance-relevant**: it changes
   `requires-python`, the CI matrix, classifiers, dependency floors, and release
-  notes. It must therefore land in its **own** PR with a `CHANGELOG.md` migration
-  note, not be folded into a feature or fix PR.
+  notes. It must land in its **own** PR with a `CHANGELOG.md` migration note.
 - Anchor regressions (`tests/test_anchors.py`) must stay green across the new,
   narrower matrix; the drop PR re-verifies them as the sacred gate.
 
 ## Non-goals
 
-- This ADR is **not** a claim that the upstream CPython project considers 3.10 or
-  3.11 unsupported. SPEC 0 is a *Scientific-Python ecosystem* support-window
-  convention; those interpreters continue to receive upstream security fixes on
-  their own schedule.
-- It does not bump any dependency floor by itself, and it does not change the
-  `ruff` `target-version` (tracked separately in the enacting release).
+- **Not** a claim that the upstream CPython project considers 3.10 or 3.11
+  unsupported — SPEC 0 is an ecosystem support-window convention.
+- No dependency-floor bump by itself, and no change to the `ruff`
+  `target-version` (tracked in the enacting release).
+- No D24 claim expansion, no manifest-schema bump, no change to the v0.5.0
+  archive/citation gates.
 
 ## References
 
 - SPEC 0 — Minimum Supported Dependencies: <https://scientific-python.org/specs/spec-0000/>
 - `CHANGELOG.md` — v0.5.0 "Fixed": mypy `python_version` raised to 3.12.
 - `AGENTS.md` §"Working agreements" — branch-protection / required-check policy.
-- Roadmap issue #59 (post-v0.5 architecture & policy items).
+- Roadmap issue #59 (post-v0.5 architecture & policy items); PRs #61, #64.
+
+## Revision history
+
+The **decision** in this ADR is unchanged across the entries below; only the
+record's location and surrounding detail were edited (an *editorial
+consolidation*, not a decision change — see `docs/adr/README.md` for the
+immutability convention that distinguishes the two).
+
+| Date | Change | PR |
+|------|--------|----|
+| 2026-06-26 | Accepted. Original record created at `docs/adr/0001-python-support-policy.md`. | #64 |
+| 2026-06-29 | Editorial consolidation. Merged the governance detail (release classification, evidence gate, required-steps checklist) from the parallel `docs/ADR_SUPPORT_POLICY.md` (PR #61) into this record; reduced that path to a pointer stub. No decision change. | #66 |
 
 [spec0]: https://scientific-python.org/specs/spec-0000/
