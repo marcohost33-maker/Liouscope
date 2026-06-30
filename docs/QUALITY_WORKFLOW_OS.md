@@ -142,12 +142,10 @@ A PR touching workflows, docs, release, packaging, or claims must answer:
 
 ## 6. What this document does not do
 
-This document does not:
-
-- assert that LiouScope is production-ready;
-- assert that LiouScope is externally certified;
-- assert that PyPI or DOI publication is complete;
-- replace scientific validation;
-- replace human release approval.
+- This document does **not** assert that LiouScope is production-ready.
+- This document does **not** assert that LiouScope is externally certified.
+- This document does **not** assert that PyPI or DOI publication is complete.
+- This document does **not** replace scientific validation.
+- This document does **not** replace human release approval.
 
 It defines the repo’s quality contract so those statuses can be reached without drifting into unsupported claims.
