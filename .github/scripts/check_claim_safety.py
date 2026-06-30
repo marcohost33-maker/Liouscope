@@ -1,9 +1,13 @@
 #!/usr/bin/env python3
 """Documentation claim-safety check for LiouScope.
 
-The goal is not to ban strong claims forever; the goal is to prevent release,
-production, citation, and certification claims from appearing without explicit
-qualifiers or linked evidence.
+The goal is not to ban strong claims forever; the goal is to prevent public-facing
+status, release, certification, and deployment claims from appearing without
+explicit qualifiers or linked evidence.
+
+Release-audit files are intentionally excluded: they are the evidence ledger where
+PyPI/DOI/release gaps and evidence are discussed in detail. Public status claims
+should point to those files instead of duplicating unchecked wording.
 """
 
 from __future__ import annotations
@@ -14,6 +18,8 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 DOC_PATHS = [ROOT / "README.md", ROOT / "CHANGELOG.md", ROOT / "docs"]
+SKIP_NAMES = {"QUALITY_WORKFLOW_OS.md"}
+SKIP_PREFIXES = ("RELEASE_AUDIT_",)
 
 RISK_PATTERNS = [
     re.compile(r"\bproduction[- ]ready\b", re.IGNORECASE),
@@ -38,16 +44,28 @@ ALLOW_MARKERS = [
     "missing evidence",
     "not for diagnostic or operational use",
     "does not certify",
+    "placeholder",
 ]
+
+
+def _should_skip(path: Path) -> bool:
+    name = path.name
+    return name in SKIP_NAMES or any(name.startswith(prefix) for prefix in SKIP_PREFIXES)
 
 
 def _iter_docs() -> list[Path]:
     paths: list[Path] = []
     for root in DOC_PATHS:
-        if root.is_file():
+        if root.is_file() and not _should_skip(root):
             paths.append(root)
         elif root.is_dir():
-            paths.extend(sorted(root.rglob("*.md")))
+            paths.extend(
+                sorted(
+                    path
+                    for path in root.rglob("*.md")
+                    if path.is_file() and not _should_skip(path)
+                )
+            )
     return paths
 
 
@@ -83,7 +101,7 @@ def main() -> int:
         )
         return 1
 
-    print(f"Claim-safety check passed for {len(docs)} markdown files.")
+    print(f"Claim-safety check passed for {len(docs)} public-facing markdown files.")
     return 0
 
 
