@@ -66,12 +66,12 @@ The default solution is to use `pull_request`, `workflow_dispatch`, `release`, o
 
 Documentation must not claim any of the following unless a release/evidence file explicitly supports it:
 
-- production-ready
-- clinically or operationally validated
-- PyPI-published
-- DOI/Zenodo archived
-- externally certified
-- release-complete
+- not evidence-backed production-ready status
+- not evidence-backed clinical or operational validation
+- not evidence-backed PyPI-published status
+- not evidence-backed DOI/Zenodo archival status
+- not evidence-backed external certification
+- not evidence-backed release-complete status
 
 Negative disclaimers are allowed and encouraged, for example: “not for diagnostic or operational use”.
 
