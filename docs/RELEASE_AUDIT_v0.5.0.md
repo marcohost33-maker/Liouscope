@@ -104,7 +104,20 @@ guard, not a failure.
   **not** run on pull requests, so it cannot affect the required PR checks and
   cannot publish from this PR.
 - `permissions: id-token: write` + `contents: read`; `environment: pypi`.
-- Build: `python -m build`; publish: `pypa/gh-action-pypi-publish@cef221092ed1bacb1cc03d23a2d87d1d172e277b  # v1.14.0` (SHA-pinned).
+- Build: `python -m build`; publish: `pypa/gh-action-pypi-publish@cef221092ed1bacb1cc03d23a2d87d1d172e277b  # v1.14.0` (SHA-pinned), with `print-hash: true`.
+- **Release evidence:** `print-hash: true` makes the publish step log the
+  SHA-256 / MD5 / BLAKE2-256 of every uploaded sdist/wheel, so the evidence lock
+  (§7) can record the published digests directly from the run log. Under Trusted
+  Publishing the PyPA action **already** generates and uploads a PEP 740 digital
+  attestation by default (default-on since `gh-action-pypi-publish` **v1.11.0**;
+  we pin v1.14.0), so we deliberately do **not** add a second
+  `attest-build-provenance` step: PyPI accepts **at most two attestations per
+  file and rejects more than two or any repeated predicate type** (PyPI docs,
+  *Publish Attestations v1*), so a redundant attest step would be rejected. The
+  single PyPA-managed attestation is the provenance source of record. Sources
+  verified 2026-06-29: PyPA `gh-action-pypi-publish` README (`print-hash`,
+  `attestations` default), PyPI Docs `docs.pypi.org/attestations/publish/v1/`,
+  PyPI blog *"PyPI now supports digital attestations"* (2024-11-14).
 - **Safety guard retained:** `if: vars.PYPI_PUBLISH_ENABLED == 'true'`. Until
   Marco sets the repo variable, a published `v0.5.0` release will **skip** the
   publish job instead of failing with a "Trusted publishing exchange failure"
