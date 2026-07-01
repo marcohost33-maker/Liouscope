@@ -91,8 +91,12 @@ filterwarnings = [
     # error, so dependency drift surfaces in CI instead of hiding in logs.
     "error",
     # Documented library behaviour, not a defect: the power iteration reports
-    # a lower bound when top resolvent singular values are clustered.
-    "ignore::liouscope.numerics.resolvent.ResolventConvergenceWarning",
+    # a lower bound when top resolvent singular values are clustered
+    # (ResolventConvergenceWarning). Matched BY MESSAGE, not by class path:
+    # a class-based filter forces pytest to import liouscope at config time,
+    # i.e. before pytest-cov starts measuring, which silently craters the
+    # coverage report (module-not-measured) and trips --cov-fail-under.
+    "ignore:resolvent_norm power iteration did not converge:UserWarning",
     # QuTiP emits this UserWarning at import time when the optional matplotlib
     # is absent (the CI matrix installs .[dev,qutip] without the figures
     # extra). Graphics are irrelevant to the cross-checks.
