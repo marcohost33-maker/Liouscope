@@ -1,0 +1,33 @@
+# Quality Contract Gate — claim safety + workflow hardening.
+# This is intentionally fast and dependency-free. It should be safe as a required
+# check because it runs on every PR to main and has no path filters.
+name: Quality Contract
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  contract:
+    name: quality contract
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+        with:
+          persist-credentials: false
+      - name: Set up Python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # v6.2.0
+        with:
+          python-version: "3.12"
+      - name: Check workflow hardening
+        run: python .github/scripts/check_workflow_hardening.py
+      - name: Check documentation claim safety
+        run: python .github/scripts/check_claim_safety.py
