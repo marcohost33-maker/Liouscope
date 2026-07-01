@@ -3,8 +3,9 @@
 #
 # Note: Scorecard requires read access to the GitHub GraphQL API. On private
 # repos without GitHub Advanced Security this fails with "Resource not
-# accessible by integration". We skip the job on private repos until the
-# repo is made public or GHAS is enabled.
+# accessible by integration"; the `if:` guard keeps the job skipped there.
+# This repo is PUBLIC (since 2026-06), so the job runs and results are
+# published to the Scorecard REST API (badge-capable).
 name: OpenSSF Scorecard
 
 on:
@@ -40,7 +41,9 @@ jobs:
         with:
           results_file: results.sarif
           results_format: sarif
-          publish_results: false
+          # Public repo: publish to the Scorecard REST API so the score is
+          # badge-capable and externally auditable (uses the job's id-token).
+          publish_results: true
 
       - name: Upload artifact
         if: ${{ !cancelled() && hashFiles('results.sarif') != '' }}

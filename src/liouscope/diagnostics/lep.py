@@ -63,8 +63,8 @@ def initial_state_sensitivity(
 ) -> float:
     """D18: std of relaxation distance over a Haar-random initial-state ensemble.
 
-    Samples ``n_samples`` Haar-random pure states (or thermal in the
-    Hermitian case), evolves to ``t_eval`` and measures
+    Samples ``n_samples`` Haar-random pure states, evolves to ``t_eval`` and
+    measures
     ``||rho(t) - rho_ss||_F``. Returns the standard deviation across samples.
     """
     L_super = np.asarray(L_super)

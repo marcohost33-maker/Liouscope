@@ -4,6 +4,8 @@ plus the M0-M3b fit hierarchy orchestrated through AICc with N_eff.
 
 from __future__ import annotations
 
+import warnings
+
 import numpy as np
 import scipy.linalg as sla
 
@@ -130,8 +132,9 @@ def entanglement_asymmetry(rho: np.ndarray) -> float:
     """D7b: Rylands et al. 2024 entanglement-asymmetry measure (single block).
 
     For a 2-site reduced state this returns the SU(2) symmetry-breaking
-    Delta S_A defined via the symmetrised state. Falls back to 0 outside
-    the supported 2-qubit case.
+    Delta S_A defined via the symmetrised state. Returns ``nan`` outside
+    the supported 2-qubit (d=4) case; the report layer maps that to
+    ``entanglement_asymmetry=None``.
     """
     rho = np.asarray(rho)
     d = rho.shape[0]
@@ -277,8 +280,19 @@ def compute_relaxation_layer(
             cis = bca_ci(samples, theta_hat, jackknife_estimates=jk)
             beta_idx = _beta_index(winner, fits[winner].params)
             bca_lo, bca_hi = float(cis[beta_idx, 0]), float(cis[beta_idx, 1])
-        except (ValueError, RuntimeError, np.linalg.LinAlgError):
-            pass
+        except (ValueError, RuntimeError, np.linalg.LinAlgError) as exc:
+            # Fail loud, not certain: a swallowed bootstrap failure used to
+            # leave the degenerate CI (beta_D, beta_D), which the uncertainty
+            # layer reads as fit_uncertainty == 0.0 — *perfect* confidence as
+            # the failure mode of an uncertainty pipeline. NaN propagates as
+            # "unknown" instead.
+            warnings.warn(
+                f"parametric bootstrap for beta_D failed ({exc!r}); "
+                "bca_ci_beta set to (nan, nan) — fit uncertainty is UNKNOWN, "
+                "not zero.",
+                RuntimeWarning,
+            )
+            bca_lo, bca_hi = float("nan"), float("nan")
 
     try:
         ent_asym = entanglement_asymmetry(final_rho)

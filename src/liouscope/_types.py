@@ -27,7 +27,7 @@ class SpectralResult:
     gns_gap: float              # D2 Delta_s (Mori-Shirai 2023)
     kms_gap: float              # D2b (Fagnola 2025)
     oscillating_gap: float      # D3 min |Im(lambda)| over complex pairs
-    spectral_spread: float      # D4 max-Re minus second-min-Re
+    spectral_spread: float      # D4 max|Re| minus min|Re| (non-zero modes)
     eigenvalues: np.ndarray     # full sigma(L) sorted by real part
     steady_state: np.ndarray    # rho_ss matrix, d x d
     has_complex_pairs: bool

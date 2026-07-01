@@ -17,7 +17,11 @@ def seed_everything(seed: int = DEFAULT_SEED) -> np.random.Generator:
     Returns the dedicated ``np.random.Generator`` callers should use for
     subsequent random draws (preferred over the legacy global state).
     """
-    if not isinstance(seed, int) or seed < 0:
+    # Validate through an `object`-typed alias: the annotation promises `int`,
+    # but callers outside the typed surface can pass anything, and `bool` is an
+    # `int` subclass that would silently seed with 0/1.
+    seed_obj: object = seed
+    if isinstance(seed_obj, bool) or not isinstance(seed_obj, int) or seed_obj < 0:
         raise ValueError(f"seed must be a non-negative int, got {seed!r}")
     os.environ["PYTHONHASHSEED"] = str(seed)
     random.seed(seed)

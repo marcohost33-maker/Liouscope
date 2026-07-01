@@ -55,8 +55,11 @@ def chi1_lower_bound(
         l_vec = vecs_l[:, best]
         denom = abs(np.vdot(l_vec, r))
         if denom < 1.0e-30:
-            K = float("inf")
+            sqrt_K = float("inf")
         else:
-            K = float(np.linalg.norm(r) * np.linalg.norm(l_vec) / denom)
-        chi = max(chi, np.sqrt(K))
+            # ||r||·||l|| / |<l,r>| is already K_j^{1/2} (the Petermann factor
+            # is the SQUARE of this ratio) — do not take another square root,
+            # or the certificate weakens quadratically to K_j^{1/4}.
+            sqrt_K = float(np.linalg.norm(r) * np.linalg.norm(l_vec) / denom)
+        chi = max(chi, sqrt_K)
     return float(chi)

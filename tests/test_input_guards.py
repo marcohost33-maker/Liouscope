@@ -111,3 +111,61 @@ def test_diagnose_still_accepts_valid_input(pauli):
     L = _good_L(pauli)
     report = diagnose(L, bootstrap_B=10, seed=1)
     assert np.isfinite(report.spectral.gap)
+
+
+# --- 2026-07 hardening batch (audit A10/A11) ---------------------------------
+
+
+def test_seed_everything_rejects_bool():
+    """bool is an int subclass and would silently seed with 0/1."""
+    from liouscope.io.seed import seed_everything
+
+    with pytest.raises(ValueError, match="seed"):
+        seed_everything(True)
+
+
+def test_steady_state_accepts_integer_dtype():
+    """Integer input used to crash np.finfo; must be cast, not rejected."""
+    from liouscope.core.lindblad import steady_state
+
+    # Integer generator with a unique steady state: diag(0, -1, -2, -3).
+    L_int = np.diag([0, -1, -2, -3])
+    assert L_int.dtype.kind in "iu"
+    rho_ss = steady_state(L_int)
+    assert np.isclose(np.trace(rho_ss).real, 1.0)
+
+
+def test_v4_thermal_rejects_zero_beta_omega():
+    from liouscope.examples import v4_thermal_two_level
+
+    with pytest.raises(ValueError, match="beta"):
+        v4_thermal_two_level(beta=0.0)
+
+
+def test_engineered_target_jumps_rejects_zero_vector():
+    from liouscope.core.jumps import engineered_target_jumps
+
+    with pytest.raises(ValueError, match="non-zero"):
+        engineered_target_jumps(np.zeros(4))
+
+
+def test_bootstrap_failure_yields_nan_ci_not_zero_width():
+    """A failed bootstrap must report UNKNOWN uncertainty, not zero."""
+    from unittest import mock
+
+    from liouscope.diagnostics.relaxation import compute_relaxation_layer
+
+    # Amplitude damping: unique steady state |0><0|, clean exponential decay.
+    lower = np.array([[0, 1], [0, 0]], dtype=complex)
+    L = build_liouvillian(np.zeros((2, 2), dtype=complex), [lower], [0.4])
+    plus = np.array([1, 1], dtype=complex) / np.sqrt(2)
+    rho0 = np.outer(plus, plus.conj())
+
+    with mock.patch(
+        "liouscope.diagnostics.relaxation.parametric_bootstrap",
+        side_effect=RuntimeError("synthetic bootstrap failure"),
+    ):
+        with pytest.warns(RuntimeWarning, match="UNKNOWN"):
+            result = compute_relaxation_layer(L, rho_initial=rho0, bootstrap_B=10, seed=1)
+    lo, hi = result.bca_ci_beta
+    assert np.isnan(lo) and np.isnan(hi)
