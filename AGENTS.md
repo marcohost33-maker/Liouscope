@@ -91,8 +91,11 @@ python examples/quickstart.py   # smoke run
 4. **SHA-pin all GitHub Actions.** Welle G established the gold-standard:
    every action reference is `@<full-sha>  # vX.Y.Z`. Dependabot is on a
    cooldown to avoid PR-spam.
-5. **Reproducibility.** Manifest seeds, library versions, lattice geometry
-   are recorded automatically; do not bypass the manifest writer.
+5. **Reproducibility.** The run manifest records seed, framework/schema/
+   taxonomy versions, Python/NumPy/SciPy versions, platform, solver path and a
+   run-invariant `input_hash` automatically; do not bypass the manifest writer.
+   (Lattice geometry / dissipator family are NOT yet manifest fields — do not
+   claim them; see MANIFEST_SCHEMA.json for the authoritative field list.)
 6. **Reality-Anchor.** Prefer "anchors pass (verified <date>)" over
    "diagnostics implemented". No claims without code-belege.
 7. **Plain paths in code-blocks** for file references (no markdown links —

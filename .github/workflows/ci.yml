@@ -8,6 +8,12 @@ on:
 
 permissions: {}
 
+# Auto-cancel superseded runs on the same ref (saves matrix minutes on
+# rapid-fire pushes); never cancel main-branch runs.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
 jobs:
   test:
     runs-on: ${{ matrix.os }}

@@ -101,3 +101,34 @@ def test_chi1_lower_bound(pauli):
     L_sparse = build_sparse_liouvillian(H, sz_chain, [0.1] * 3)
     chi = chi1_lower_bound(L_sparse, k_modes=3, tol=1e-6)
     assert chi > 0
+
+
+def test_chi1_lower_bound_matches_dense_petermann_sqrt(pauli):
+    """The certificate must equal max_j sqrt(K_j) over the probed modes.
+
+    Regression for the double-square-root bug: the ratio
+    ``||r||*||l|| / |<l,r>|`` IS ``sqrt(K_Petermann)`` already; taking another
+    square root silently weakened the bound to ``K^(1/4)``.
+    """
+    import scipy.sparse as sp
+
+    from liouscope.diagnostics.nonnormality import petermann_factors
+
+    # Non-normal two-qubit system (Liouville dim 16 satisfies ARPACK k < N-1):
+    # transverse drive + one-sided amplitude damping.
+    lower = np.array([[0, 1], [0, 0]], dtype=complex)
+    eye2 = np.eye(2, dtype=complex)
+    from liouscope import build_liouvillian
+
+    H = 0.5 * np.kron(pauli["X"], eye2) + 0.2 * np.kron(pauli["Z"], pauli["Z"])
+    jumps = [np.kron(lower, eye2), np.kron(eye2, lower)]
+    L_dense = build_liouvillian(H, jumps, [0.4, 0.15])
+    chi = chi1_lower_bound(sp.csc_matrix(L_dense), k_modes=4, tol=1e-10)
+
+    _, K = petermann_factors(L_dense)
+    # chi probes the k_modes slowest modes; it must be a genuine sqrt(K_j)
+    # value: bounded above by the global max and >= 1 (K_j >= 1 always).
+    assert 1.0 - 1e-9 <= chi <= float(np.sqrt(np.max(K))) + 1e-6
+    # And it must be attained by one of the modes (not K^(1/4) of one).
+    sqrt_Ks = np.sqrt(K)
+    assert np.min(np.abs(sqrt_Ks - chi)) < 1e-6 * max(1.0, chi)

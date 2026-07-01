@@ -38,13 +38,17 @@ def boundary_dephasing_jumps(n_qubits: int) -> list[np.ndarray]:
 
 
 def engineered_target_jumps(target_psi: np.ndarray) -> list[np.ndarray]:
-    """Jump that drives the system towards ``target_psi``.
+    """Jumps that drive the system towards ``target_psi``.
 
-    Returns a single rank-one operator ``L = |psi><e_0|``-style which steers
-    population to the target state. The target must be normalised.
+    Returns TWO rank-one operators: ``L = |psi><e_0|`` steering population
+    into the target state and ``L_perp = |e_0><psi|`` draining it out of the
+    reference basis state. ``target_psi`` is normalised internally; a zero
+    vector raises :class:`ValueError`.
     """
     target: np.ndarray = np.asarray(target_psi).reshape(-1, 1).astype(complex)
     norm = float(np.linalg.norm(target))
+    if norm <= 1.0e-12:
+        raise ValueError("target_psi must be a non-zero state vector")
     if not np.isclose(norm, 1.0, atol=1.0e-9):
         target = np.asarray(target / norm, dtype=complex)
     d = target.size

@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=77.0", "wheel"]
+requires = ["setuptools>=77.0"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -78,11 +78,29 @@ liouscope = ["py.typed", "MANIFEST_SCHEMA.json", "STABILITY_REPORT_SCHEMA.json"]
 
 [tool.pytest.ini_options]
 minversion = "8.0"
-addopts = "-ra --strict-markers"
+addopts = "-ra --strict-markers --strict-config"
 testpaths = ["tests"]
+log_level = "INFO"
+xfail_strict = true
 markers = [
     "slow: marks tests that take significant time (deselect with -m 'not slow')",
     "qutip: tests that require qutip to be installed",
+]
+filterwarnings = [
+    # Fail-loud default: any unexpected warning (deprecations included) is an
+    # error, so dependency drift surfaces in CI instead of hiding in logs.
+    "error",
+    # Documented library behaviour, not a defect: the power iteration reports
+    # a lower bound when top resolvent singular values are clustered
+    # (ResolventConvergenceWarning). Matched BY MESSAGE, not by class path:
+    # a class-based filter forces pytest to import liouscope at config time,
+    # i.e. before pytest-cov starts measuring, which silently craters the
+    # coverage report (module-not-measured) and trips --cov-fail-under.
+    "ignore:resolvent_norm power iteration did not converge:UserWarning",
+    # QuTiP emits this UserWarning at import time when the optional matplotlib
+    # is absent (the CI matrix installs .[dev,qutip] without the figures
+    # extra). Graphics are irrelevant to the cross-checks.
+    "ignore:matplotlib not found:UserWarning",
 ]
 
 [tool.coverage.run]
@@ -102,8 +120,9 @@ exclude_lines = [
 ]
 
 [tool.ruff]
+# target-version is intentionally absent: ruff infers py310 from
+# project.requires-python (single source, sp-repo-review RF002).
 line-length = 100
-target-version = "py310"
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "N", "B", "UP", "C4", "SIM", "RUF"]
@@ -130,14 +149,16 @@ ignore = [
 [tool.mypy]
 # 3.12 (not 3.10) so mypy can parse NumPy >=2.5 stubs, which use the PEP 695
 # `type` statement (only accepted when the mypy target is >=3.12). Runtime 3.10
-# support stays guarded by the test matrix (3.10/3.11) and ruff target-version
-# py310. Reversible: drop to 3.10 + cap numpy<2.5 if 3.10 type semantics are
+# support stays guarded by the test matrix (3.10/3.11) and ruff's py310 target
+# (inferred from requires-python). Reversible: drop to 3.10 + cap numpy<2.5 if 3.10 type semantics are
 # ever required. Fixes the repo-wide mypy gate failure on the 3.12-3.14 matrix.
 python_version = "3.12"
 warn_return_any = true
 warn_unused_configs = true
+warn_unreachable = true
 strict_equality = true
 disallow_untyped_defs = false
+enable_error_code = ["ignore-without-code", "redundant-expr", "truthy-bool"]
 files = ["src/liouscope"]
 
 [[tool.mypy.overrides]]

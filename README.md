@@ -12,11 +12,12 @@ Gorini-Kossakowski-Sudarshan-Lindblad (GKSL) generators. It quantifies *when and
 fails as a relaxation-time predictor* and replaces single-number "decay rate" reporting with a layered
 diagnostic that surfaces the underlying mechanism.
 
-The library implements **24 diagnostics D1-D24** organised in six layers
-(Spectral / Non-normality / Relaxation / Uncertainty / Classification / Governance) and a
-**twelve-class mechanism taxonomy A1-A12** (`TAXONOMY_VERSION = "A1-A12-v3.1"`). D1-D20 are the
-original peer-review submission set; D21-D24 were added post-submission (D24 = the opt-in Zhou
-mixing-time predictor). The diagnostic schema constant is `D1-D24-Übersicht-v3`.
+The library implements the diagnostic schema `D1-D24-Übersicht-v3` and a
+**twelve-class mechanism taxonomy A1-A12** (`TAXONOMY_VERSION = "A1-A12-v3.1"`).
+**Code-backed today: D1-D20** (the peer-review submission set, plus sub-diagnostics
+D2b/D7b/D11b) **and D24** (the opt-in Zhou mixing-time predictor). D21-D23 are
+schema-defined post-submission slots that are not yet implemented in this
+repository — the layer table below reflects what the code actually computes.
 
 > **Status:** Research / pre-clinical. Not for diagnostic or operational use on production
 > hardware. The current version is whatever `liouscope.__version__` reports (single source:
@@ -39,7 +40,8 @@ LiouScope addresses this with three deliberate choices:
 2. **Explicit uncertainty.** Bootstrap CIs (BCa), GLS with AR(1) residuals, AICc model selection, and a
    parametric-bootstrap pipeline are first-class — not optional add-ons.
 3. **Auditable manifests.** Each run produces a SHA-256-stable JSON manifest (`MANIFEST_SCHEMA v1.2.0`)
-   that captures seeds, library versions, lattice geometry, dissipator family, and full result graph.
+   that captures the seed, framework/schema/taxonomy versions, Python/NumPy/SciPy versions,
+   platform, solver path, quality label and a run-invariant `input_hash`.
 
 ---
 
@@ -66,7 +68,7 @@ rho_0 = np.outer(plus, plus.conj())
 report = lp.diagnose(L, rho_initial=rho_0, bootstrap_B=100, seed=42)
 
 # A-class mechanism + 95% BCa CI on the fitted relaxation rate
-print(report.classification.a_class)         # e.g. "A1"
+print(report.classification.a_class)         # one of "A1".."A12"
 print(report.relaxation.beta_D, "in",
       report.relaxation.bca_ci_beta)         # (lo, hi)
 ```
@@ -91,14 +93,19 @@ report  = lp.diagnose(L, bootstrap_B=50, seed=42)
 
 ## Diagnostic layers (D1-D24)
 
+The table below is the **code-backed** numbering (module docstrings and
+`StabilityReport` keys are the source of truth). D21-D23 are defined in the
+Drive-side canon schema (`D1-D24-Übersicht-v3`) but are **not yet implemented
+in this repository**; D24 ships as an opt-in module.
+
 | Layer | IDs | What it measures | Key modules |
 |---|---|---|---|
-| **S — Spectral** | D1-D4 | gap, sub-gap density, spectrum shape, dissipative-gap separation | `diagnostics/spectral.py` |
-| **N — Non-normality** | D5-D8 | Henrici departure, pseudospectrum, condition number, Schur diagonal | `diagnostics/nonnormality.py` |
-| **R — Relaxation** | D9-D13 | tau-effective, transient amplification (D11), early-time slope, GLS fit | `diagnostics/relaxation.py`, `diagnostics/transient.py` |
-| **U — Uncertainty** | D14-D17 | BCa CIs, AICc model selection M0..M3b, N_eff via Geyer IPS, bootstrap-pivot | `fitting/aicc.py`, `fitting/bootstrap.py`, `fitting/gls.py` |
-| **C — Classification** | D18-D22 | A1-A12 mechanism classifier, Mpemba detector, LEP scan, resolvent peaks | `diagnostics/classification.py`, `diagnostics/mpemba.py`, `diagnostics/lep.py`, `diagnostics/resolvent.py` |
-| **G — Governance** | D23-D24 | manifest export, Zhou universal mixing-time predictor (opt-in, frozen) | `_zhou.py`, `MANIFEST_SCHEMA.json` |
+| **S — Spectral** | D1-D4 (+D2b) | gap, GNS-symmetrised gap, KMS gap, oscillating-mode gap, spectral spread | `diagnostics/spectral.py` |
+| **R — Relaxation** | D5-D7 (+D7b) | von-Neumann entropy, relative entropy, Uhlmann fidelity, entanglement asymmetry | `diagnostics/relaxation.py` |
+| **N — Non-normality** | D8-D13 (+D11b) | Henrici departure, Petermann factors, Kreiss constant, Bohr-AP, resolvent peak/FWHM, pseudospectral radius | `diagnostics/nonnormality.py`, `diagnostics/resolvent.py` |
+| **T — Transient** | D14-D15 | sup-norm transient amplification, numerical-abscissa ratio | `diagnostics/transient.py` |
+| **C — Classification** | D16-D20 | LEP proximity, gap-rate consistency, initial-state sensitivity, Mpemba overlap/scaling; A1-A12 mechanism classifier on top | `diagnostics/lep.py`, `diagnostics/mpemba.py`, `diagnostics/classification.py` |
+| **U/G — Uncertainty & Governance** | U0-U2, D24 | BCa CIs, AICc model selection M0..M3b, GLS+AR(1); manifest export; Zhou mixing-time predictor (opt-in, frozen) | `fitting/`, `diagnostics/uncertainty.py`, `io/manifest.py`, `_zhou.py` |
 
 The Zhou predictor (D24) is opt-in and lives in `liouscope._zhou`; see CHANGELOG.
 Its `claim_status` is **reference-verified-bound-coarser** — the cited reference
@@ -152,8 +159,10 @@ imports resolve from `src/liouscope/...`.
 
 LiouScope is built for paper-grade reproducibility:
 
-- **Seeded everywhere.** `liouscope.io.seed.seed_everything()` controls NumPy, SciPy, Python
-  random, and the BLAS thread-pool (see [`tests/conftest.py`](tests/conftest.py)).
+- **Seeded everywhere.** `liouscope.io.seed.seed_everything()` pins Python `random`, NumPy's
+  global state, `PYTHONHASHSEED`, and returns a dedicated `np.random.Generator` for all
+  subsequent draws (see [`tests/conftest.py`](tests/conftest.py)). SciPy draws through NumPy;
+  BLAS threading is *not* controlled — bit-exactness across BLAS builds is out of scope.
 - **Run manifests are SHA-256 stable.** Every diagnostic run can emit a JSON manifest
   (`io.dump_manifest(report, path)`) validated against
   [`MANIFEST_SCHEMA.json`](src/liouscope/MANIFEST_SCHEMA.json) (schema v1.2.0) via

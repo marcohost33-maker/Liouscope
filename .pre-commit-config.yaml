@@ -1,0 +1,40 @@
+# pre-commit — fast local hygiene gates (mirror of the cheap CI checks).
+# Install once:  pip install pre-commit && pre-commit install
+# Run manually:  pre-commit run --all-files
+#
+# Deliberately NOT included: a code formatter (would churn the whole history;
+# adopt ruff-format in a dedicated PR if ever), mypy (needs the full numpy
+# environment — CI covers it), pytest (too slow for a commit hook).
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: check-added-large-files
+      - id: check-case-conflict
+      - id: check-merge-conflict
+      - id: check-yaml
+      - id: check-json
+      - id: check-toml
+      - id: end-of-file-fixer
+      - id: trailing-whitespace
+        args: [--markdown-linebreak-ext=md]
+      - id: detect-private-key
+
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.12.1
+    hooks:
+      - id: ruff-check
+        args: [src, tests, benchmarks]
+        pass_filenames: false
+
+  - repo: https://github.com/citation-file-format/cffconvert
+    rev: b6045d78aac9e02b039703b030588d54d53262ac  # 2.0.0
+    hooks:
+      - id: validate-cff
+
+  - repo: https://github.com/zizmorcore/zizmor-pre-commit
+    rev: v1.26.1
+    hooks:
+      - id: zizmor
+        args: [--persona=regular, --no-online-audits, .github/workflows]
+        pass_filenames: false

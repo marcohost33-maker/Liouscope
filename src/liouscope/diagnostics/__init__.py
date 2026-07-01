@@ -1,4 +1,5 @@
-"""Twenty diagnostics organised in six layers S/N/R/U/C/G."""
+"""Diagnostics D1-D20 organised in six layers S/N/R/U/C/G (D24 lives in
+``liouscope._zhou``; see the diagnostic schema constant for the full set)."""
 
 from .classification import classify_mechanism
 from .lep import compute_lep_layer

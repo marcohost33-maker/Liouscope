@@ -4,7 +4,8 @@ Uses the grid-based singular-value definition
 
     sigma_eps(L) = { z in C : sigma_min(z I - L) <= eps }
 
-restricted to a rectangular grid in the right half plane. Returns the
+restricted to a rectangular grid bracketing the spectrum (for a Liouvillian
+that grid lies in the closed left half-plane). Returns the
 maximal modulus of grid points belonging to the pseudospectrum, which we
 report as the pseudospectral radius for diagnostic D13.
 """

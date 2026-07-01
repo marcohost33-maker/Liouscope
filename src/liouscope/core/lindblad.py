@@ -157,7 +157,11 @@ def steady_state(
     DegenerateSteadyStateError
         If the null space has dimension > 1 and ``allow_degenerate`` is False.
     """
+    # Cast up front: integer/bool input would crash np.finfo below, and the
+    # SVD/normalisation math assumes an inexact dtype anyway.
     L_super = np.asarray(L_super)
+    if not np.issubdtype(L_super.dtype, np.inexact):
+        L_super = L_super.astype(complex)
     n2 = L_super.shape[0]
     d = int(round(np.sqrt(n2)))
     if d * d != n2:

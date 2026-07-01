@@ -1,0 +1,49 @@
+# CodeQL — static application security testing (SAST) for the Python package.
+# Docs: https://docs.github.com/en/code-security/code-scanning
+#
+# Satisfies the OpenSSF Scorecard "SAST" check (ruff is a linter, not SAST).
+# Runs on PRs + main pushes + a weekly cron so newly added CodeQL queries
+# retroactively scan the existing code, not just new diffs.
+#
+# NOT branch-protection-required (Quality Workflow OS G6): it is path-relevant
+# to every PR, but keep it advisory until its signal/noise ratio on this
+# codebase is established.
+name: CodeQL
+
+on:
+  push:
+    branches: ["main"]
+  pull_request:
+    branches: ["main"]
+  schedule:
+    - cron: "22 5 * * 1"   # Mondays 05:22 UTC — offset from Scorecard/Dependabot
+
+permissions: {}
+
+jobs:
+  analyze:
+    name: CodeQL analyze (python)
+    runs-on: ubuntu-latest
+    permissions:
+      security-events: write   # upload CodeQL results to Code Scanning — required
+      contents: read           # checkout — required
+      actions: read            # workflow metadata for private-path resolution — required
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+        with:
+          persist-credentials: false
+
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@7211b7c8077ea37d8641b6271f6a365a22a5fbfa  # v4.36.0
+        with:
+          languages: python
+          # security-and-quality adds maintainability queries on top of the
+          # default security suite; scope stays src/ + packaged code.
+          queries: security-and-quality
+
+      - name: Perform CodeQL analysis
+        uses: github/codeql-action/analyze@7211b7c8077ea37d8641b6271f6a365a22a5fbfa  # v4.36.0
+        with:
+          category: "/language:python"

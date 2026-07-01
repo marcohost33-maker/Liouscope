@@ -22,7 +22,7 @@ import scipy.linalg as sla
 from .._consts import EPS_GAP
 from .._types import SpectralResult
 from ..core.lindblad import steady_state
-from ..numerics.adjoint import symmetrised_liouvillian
+from ..numerics.adjoint import gram_adjoint, symmetrised_liouvillian
 from ..numerics.linalg import eig_nonhermitian
 
 
@@ -50,17 +50,20 @@ def _real_gap_from_symmetric(M: np.ndarray, *, atol: float = EPS_GAP) -> float:
     """
     M_sym = 0.5 * (M + M.conj().T)
     evals = np.linalg.eigvalsh(M_sym)
-    # Strip the zero eigenvalue
     sorted_evals = np.sort(evals)[::-1]
-    # The largest should be ~0 (steady state); second-largest gives the gap.
     if sorted_evals.size < 2:
         return 0.0
-    # Filter eigenvalues within atol of zero to find the gap properly.
-    nonzero = sorted_evals[np.abs(sorted_evals) > atol]
-    if nonzero.size == 0:
-        return 0.0
-    # nonzero[0] is the largest non-zero (least negative) eigenvalue.
-    return float(-nonzero[0])
+    # sorted_evals[0] is the steady-state zero mode (~0 for a consistent
+    # Gram/adjoint pair; M is a contraction so everything else is <= 0).
+    # Deflate exactly ONE zero mode and read the gap from the complement.
+    # Do NOT filter all |eval| <= atol: the Hermitian part can carry
+    # *additional* (near-)zero eigenvalues — isometric directions of the
+    # numerical range — and then there is no certified exponential
+    # contraction at all, i.e. Delta_s = 0, not the next negative level
+    # (2026-07 audit A1 follow-up; skipping them inflated Delta_s past
+    # Delta on generic non-detailed-balance systems).
+    lam1 = float(sorted_evals[1])
+    return max(0.0, -lam1)
 
 
 def gns_gap(L_super: np.ndarray, rho_steady: np.ndarray) -> float:
@@ -79,12 +82,21 @@ def gns_gap(L_super: np.ndarray, rho_steady: np.ndarray) -> float:
 
 
 def kms_gap(L_super: np.ndarray, rho_steady: np.ndarray) -> float:
-    """D2b: KMS-symmetrised gap (Fagnola JFA 2025, ``s = 1/2``)."""
+    """D2b: KMS-symmetrised gap (Fagnola JFA 2025, ``s = 1/2``).
+
+    The symmetrisation must use the adjoint w.r.t. the *KMS* Gram — mixing
+    the GNS (pi-weighted) adjoint with a KMS similarity transform (pre-2026-07
+    behaviour) produces a non-Hermitian ``M`` whose Hermitisation silently
+    reports unphysical ``Delta_s < 0`` off the real-diagonal-``rho_ss``
+    manifold (audit A1).
+    """
+    L_super = np.asarray(L_super)
     rho_steady = np.asarray(rho_steady)
     d = rho_steady.shape[0]
     rho_reg = rho_steady + 1.0e-14 * np.eye(d, dtype=rho_steady.dtype)
-    L_sym = symmetrised_liouvillian(L_super, rho_reg)
     G = _gram_kms(rho_reg)
+    L_HS = L_super.conj().T
+    L_sym = 0.5 * (L_HS + gram_adjoint(L_super, G))
     G_half = sla.sqrtm(G)
     G_inv_half = sla.inv(G_half)
     M = G_half @ L_sym @ G_inv_half
