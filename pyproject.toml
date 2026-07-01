@@ -93,6 +93,10 @@ filterwarnings = [
     # Documented library behaviour, not a defect: the power iteration reports
     # a lower bound when top resolvent singular values are clustered.
     "ignore::liouscope.numerics.resolvent.ResolventConvergenceWarning",
+    # QuTiP emits this UserWarning at import time when the optional matplotlib
+    # is absent (the CI matrix installs .[dev,qutip] without the figures
+    # extra). Graphics are irrelevant to the cross-checks.
+    "ignore:matplotlib not found:UserWarning",
 ]
 
 [tool.coverage.run]
