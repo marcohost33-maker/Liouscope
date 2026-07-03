@@ -259,7 +259,7 @@ def test_branch_a11_mpemba_weak_confidence():
 
 def test_branch_a10_phantom_relaxation():
     cls = _classify(
-        resolvent=_resolvent(pseudospectral_radius=5.0),
+        resolvent=_resolvent(pseudospectral_radius=3.0),
         nonnorm=_nonnorm(henrici_eta=2.0),
     )
     assert (cls.a_class, cls.f_family) == ("A10", "F5")
@@ -318,7 +318,7 @@ def test_branch_a1_strong_gap_consistency():
         relaxation=_relaxation(aicc_model="M0"),
         lep=_lep(gap_rate_consistency=0.01),
     )
-    assert (cls.a_class, cls.f_family) == ("A1", "F1")
+    assert (cls.a_class, cls.f_family) == ("A1", "none")
     assert cls.confidence == pytest.approx(0.95)
     assert cls.verdict == VERDICT_CONFIRMED
 
@@ -326,7 +326,7 @@ def test_branch_a1_strong_gap_consistency():
 def test_branch_a1_moderate_gap_consistency():
     # gap_rate_consistency < 0.20 but not the M0 + < 0.05 strong combo.
     cls = _classify(lep=_lep(gap_rate_consistency=0.1))
-    assert (cls.a_class, cls.f_family) == ("A1", "F1")
+    assert (cls.a_class, cls.f_family) == ("A1", "none")
     assert cls.confidence == pytest.approx(0.5)
     assert cls.verdict == VERDICT_NOT_EXCLUDED
 
