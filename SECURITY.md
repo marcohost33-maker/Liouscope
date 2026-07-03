@@ -2,13 +2,13 @@
 
 ## Supported versions
 
-LiouScope is research software. Only the most recent minor version on `main` receives security
+LiouScope is research software. Only the current minor version on `main` receives security
 fixes. There is no LTS branch and no backport policy.
 
 | Version | Supported          |
 | ------- | ------------------ |
-| 0.2.x   | :white_check_mark: |
-| < 0.2   | :x:                |
+| 0.5.x   | :white_check_mark: |
+| < 0.5   | :x:                |
 
 ## Reporting a vulnerability
 
