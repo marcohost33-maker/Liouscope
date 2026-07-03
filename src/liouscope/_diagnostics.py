@@ -18,7 +18,6 @@ from .diagnostics.uncertainty import compute_uncertainty_layer
 from .io.manifest import build_manifest, compute_input_hash
 from .numerics.linalg import require_finite_square_2d
 
-
 _VALID_SOLVER_PATHS = {"dense", "sparse_arpack"}
 
 
