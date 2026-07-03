@@ -112,11 +112,12 @@ def _pick_a_class(
     # Biexponential => metastable plateau or operator spreading
     if relaxation.aicc_model == "M2":
         return "A5", "none"
-    # Strong gap consistency (M0 winner, beta_D close to Delta)
+    # Strong gap consistency (M0 winner, beta_D close to Delta). A1 is the
+    # no-gap-failure control case, so its family is "none", not F1.
     if ev["gap_rate_consistency"] < 0.05 and relaxation.aicc_model == "M0":
-        return "A1", "F1"
+        return "A1", "none"
     if ev["gap_rate_consistency"] < 0.20:
-        return "A1", "F1"
+        return "A1", "none"
     return "A12", "none"
 
 
