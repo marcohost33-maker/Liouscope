@@ -18,6 +18,28 @@ from .diagnostics.uncertainty import compute_uncertainty_layer
 from .io.manifest import build_manifest, compute_input_hash
 from .numerics.linalg import require_finite_square_2d
 
+_VALID_SOLVER_PATHS = {"dense", "sparse_arpack"}
+
+
+def _validate_solver_path(solver_path: str) -> None:
+    """Fail closed until non-dense orchestrator paths are genuinely wired.
+
+    ``solver_path`` is part of the public governance/manifest surface, so a
+    caller must never be allowed to request one execution path while receiving a
+    different one silently. Today the top-level pipeline is dense-only; the
+    low-level ``liouscope.sparse`` helpers exist but are not integrated into
+    :func:`diagnose` yet.
+    """
+    if solver_path not in _VALID_SOLVER_PATHS:
+        allowed = ", ".join(sorted(_VALID_SOLVER_PATHS))
+        raise ValueError(f"solver_path must be one of {{{allowed}}}, got {solver_path!r}")
+    if solver_path == "sparse_arpack":
+        raise NotImplementedError(
+            "solver_path='sparse_arpack' is reserved: diagnose() currently runs the "
+            "dense pipeline only. Use liouscope.sparse low-level helpers directly "
+            "or keep solver_path='dense' until the sparse orchestrator path is wired."
+        )
+
 
 def diagnose(
     L_super: np.ndarray,
@@ -49,13 +71,16 @@ def diagnose(
     seed
         PRNG seed for any stochastic step (jackknife, bootstrap, Haar).
     solver_path
-        ``"dense"`` (default) or ``"sparse_arpack"``.
+        ``"dense"`` (default). ``"sparse_arpack"`` is a reserved manifest value
+        and currently raises ``NotImplementedError`` rather than silently running
+        the dense path.
 
     Returns
     -------
     DiagnosticReport
         A fully-populated frozen report with governance metadata.
     """
+    _validate_solver_path(solver_path)
     # Fail-closed boundary guard: reject non-finite / non-square operators here
     # with a structured, argument-named error instead of letting NaN/inf flow
     # into scipy.linalg.expm / svd and surface as an opaque LAPACK message.

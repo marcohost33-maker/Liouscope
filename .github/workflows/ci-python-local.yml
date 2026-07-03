@@ -47,7 +47,9 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           eval "$INSTALL_COMMAND"
-          pip install ruff mypy pytest
+          # ruff pinned exactly (see pyproject dev extra): a linter release must
+          # not turn CI red on byte-identical code. Bump deliberately in a PR.
+          pip install ruff==0.15.20 mypy pytest
       - name: ruff
         env:
           RUFF_TARGET: ${{ inputs.ruff-target }}

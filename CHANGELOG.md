@@ -7,6 +7,18 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Fixed
+- **CI: pinned `ruff==0.15.20` and reformatted the `_diagnostics` import
+  block.** Ruff's isort `I001` heuristic for `lines-after-imports` before a
+  module-level constant changed between 0.15.14 and 0.15.20, flagging a
+  byte-identical, previously-green import block and turning the whole test
+  matrix red on a tool release rather than a code defect. Ruff is now pinned
+  exactly in both `pyproject` (`dev` extra) and the reusable
+  `ci-python-local.yml` install step; a bump is now a deliberate,
+  reformat-in-one-PR event.
+- **`diagnose()` fails closed on the solver path.** An unknown `solver_path`
+  raises `ValueError`; the reserved `sparse_arpack` path raises
+  `NotImplementedError` instead of silently falling back to the dense solver.
+  Now covered by `tests/test_solver_path_contract.py` (2 tests, executed).
 - **D2/D2b symmetrised gaps (`numerics.adjoint`, `diagnostics.spectral`) are
   now genuine Gram-adjoint constructions** (2026-07 audit A1). Three coupled
   defects were fixed:

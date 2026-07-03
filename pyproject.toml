@@ -46,7 +46,11 @@ figures = ["matplotlib>=3.7"]
 dev = [
     "pytest>=8",
     "pytest-cov>=4",
-    "ruff>=0.5",
+    # Pinned exactly: ruff's isort I001 heuristic (lines-after-imports before a
+    # module-level constant) changed between 0.15.14 and 0.15.20, flagging a
+    # byte-identical, previously-green import block. Pin so red CI reflects code
+    # defects, not linter releases. Bump deliberately + reformat in a dedicated PR.
+    "ruff==0.15.20",
     "mypy>=1.10",
     "hypothesis>=6.100",
     "build>=1.2",
