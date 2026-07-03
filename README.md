@@ -5,7 +5,7 @@
 [![CI](https://github.com/marcohost33-maker/Liouscope/actions/workflows/ci.yml/badge.svg)](https://github.com/marcohost33-maker/Liouscope/actions/workflows/ci.yml)
 [![License: Apache-2.0](https://img.shields.io/badge/License-Apache--2.0-blue.svg)](LICENSE)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue)](pyproject.toml)
-[![DOI / citation](https://img.shields.io/badge/cite-CITATION.cff-green)](CITATION.cff)
+[![Citation metadata](https://img.shields.io/badge/citation-CITATION.cff-green)](CITATION.cff)
 
 LiouScope is a research framework for **time-homogeneous Markovian open quantum systems** described by
 Gorini-Kossakowski-Sudarshan-Lindblad (GKSL) generators. It quantifies *when and why the Liouvillian gap
@@ -35,8 +35,8 @@ distort the relationship between gap and observed relaxation by orders of magnit
 
 LiouScope addresses this with three deliberate choices:
 
-1. **No single number.** Every analysis returns a structured `DiagnosticReport` with 24 diagnostics
-   grouped by physical concept, not a scalar.
+1. **No single number.** Every analysis returns a structured `DiagnosticReport` with the code-backed
+   diagnostic set grouped by physical concept, not a scalar.
 2. **Explicit uncertainty.** Bootstrap CIs (BCa), GLS with AR(1) residuals, AICc model selection, and a
    parametric-bootstrap pipeline are first-class — not optional add-ons.
 3. **Auditable manifests.** Each run produces a SHA-256-stable JSON manifest (`MANIFEST_SCHEMA v1.2.0`)
@@ -126,7 +126,7 @@ it is a related, generally coarser surrogate (not a verbatim Eq.(16)). See the
 | Lattices | 1D chain, 2D square, honeycomb, triangular |
 | Hamiltonians | Ising, XY, Heisenberg-XXZ, Bose-Hubbard |
 | Dissipator families | bulk, boundary, engineered (5 validation systems V1-V5) |
-| Sparse path | ARPACK shift-invert via `liouscope.sparse` for d up to 128 |
+| Sparse utilities | Low-level ARPACK shift-invert helpers via `liouscope.sparse`; not yet wired into `diagnose()` |
 
 V1-V5 validation systems are exposed as library functions in `liouscope.examples`; see
 [`examples/`](examples) for runnable demonstrations.
@@ -142,7 +142,7 @@ src/liouscope/
                     uncertainty, classification, mpemba, lep, resolvent)
   fitting/          GLS+AR(1), BCa bootstrap, AICc model selection
   io/               Run-manifest export, seed control
-  sparse/           ARPACK shift-invert path (d up to 128)
+  sparse/           Low-level ARPACK shift-invert helpers (not yet wired into diagnose())
   _zhou.py          Zhou universal mixing-time predictor (opt-in, D24)
 benchmarks/         Heisenberg scaling, paper-reproduction harness
 examples/           quickstart.py, jc_ep_sweep.py, qutrit_v1.py
