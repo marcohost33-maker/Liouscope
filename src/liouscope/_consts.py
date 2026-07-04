@@ -54,7 +54,9 @@ U1_NOMINAL_FLOOR: Final[float] = 1.0e-10
 EPS_DIV: Final[float] = 1.0e-300
 
 VERDICT_CONFIRMED: Final[str] = "CONFIRMED"
-VERDICT_EXCLUDED: Final[str] = "EXCLUDED"
+# issue #70 A5: VERDICT_EXCLUDED removed -- it was unreachable through
+# ``diagnose()`` and semantically inexpressible in a single-pass best-class
+# classifier (active exclusion needs per-hypothesis scoring; deferred).
 VERDICT_CANDIDATE: Final[str] = "CANDIDATE"
 VERDICT_NOT_EXCLUDED: Final[str] = "NOT_EXCLUDED"
 VERDICT_UNDEFINED: Final[str] = "UNDEFINED"

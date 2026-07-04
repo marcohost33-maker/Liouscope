@@ -195,7 +195,10 @@ def test_gap_controlled_reference_reaches_a1():
     rep = diagnose(L, rho_initial=rho0, bootstrap_B=20, seed=42)
     cls = rep.classification
     assert cls.a_class == "A1"
-    assert cls.f_family == "F1"
+    # issue #70 A6: A1 (gap-controlled, primitive QMS) is the NO-gap-failure case
+    # and maps to family "none", not F1 (Mori-Shirai overlap gap-FAILURE). This
+    # does not touch the #69 dimension-coherence logic -- only the family label.
+    assert cls.f_family == "none"
     assert cls.verdict == "CONFIRMED"
     # Dimension-coherent D17 is essentially zero: the observable relaxation is a
     # single exponential at exactly the gap.
@@ -237,9 +240,13 @@ def test_phantom_with_gap_matched_rho0_is_not_mislabelled_a1():
     assert rep.lep.gap_rate_consistency < 0.05
     assert ev["d17_linear_single_exp"] == 1.0
     # The operator is genuinely a strong F5 phantom (operator-intrinsic).
+    # issue #70 A8: the F5 rule is now dimension-coherent -- the pseudospectral
+    # REACH (radius / gap, dimensionless) exceeds 2 * gap_to_gns_ratio, not the
+    # bare (rate-dimensioned) radius.
     assert ev["henrici_eta"] > 1.0
-    assert ev["pseudospectral_radius"] > 2.0 * ev["gap_to_gns_ratio"]
-    # ...so the gap-failure family wins; A1/F1 is NOT awarded.
+    assert ev["gap"] > 0.0
+    assert ev["pseudospectral_radius"] / ev["gap"] > 2.0 * ev["gap_to_gns_ratio"]
+    # ...so the gap-failure family wins; A1/"none" is NOT awarded.
     assert (rep.classification.a_class, rep.classification.f_family) == ("A10", "F5")
     assert rep.classification.a_class != "A1"
 

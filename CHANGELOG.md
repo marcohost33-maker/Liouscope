@@ -42,13 +42,14 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   pipeline is untouched). The classifier now exposes `beta_D`, `beta_D_linear`,
   `gap` and the implied multiplier `d17_metric_multiplier` in the evidence dict
   (the factor is explicit and auditable, not hidden), and a genuine single-mode
-  gap-controlled system can now earn A1 "gap-controlled" (F1). The A1 early-branch
+  gap-controlled system can now earn A1 "gap-controlled" (family "none" -- see
+  issue #70 A6 below, which corrected the A1 family from F1). The A1 early-branch
   is ordered *after* the F1-F5 gap-failure families and only *before* the
   relative-entropy-shape branches (M2/M3a/M3b): `gap_rate_consistency` +
   `linear_fit_model` are initial-state-dependent, so a strongly non-normal
   phantom/skin operator with an `rho_0` that excites only the slow gap mode must
   NOT shadow its true (operator-intrinsic) F5/F2 mechanism -- it stays A10/F5
-  (resp. A4/F2), not A1/F1 (Equalita #79 review). No V1-V5 mechanism label changes
+  (resp. A4/F2), not A1 (Equalita #79 review). No V1-V5 mechanism label changes
   (golden-pinned end-to-end against baseline `3fef6a1`); only the D17 *number* is
   corrected. New end-to-end regression
   `tests/test_validation_systems/test_d17_gap_coherence.py` (20 tests, incl. V1-V5
@@ -65,6 +66,54 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   conservative *placeholder* (not a measured residual) unless the caller runs
   an ODE-tolerance sweep -- which `diagnose()` does not. Same numeric value, no
   behaviour change; the semantics are now explicit in code.
+- **Classifier semantics debt cleared: A1 family, F5 dimensional coherence,
+  LEP degeneracy, dead EXCLUDED verdict** (issue #70, A5/A6/A8/A9). Four
+  semantic corrections to the A1-A12 classifier, each with a physics rationale:
+  - **A6 -- A1 now maps to family `"none"`, not `F1`.** `F1` is the Mori-Shirai
+    *overlap gap-FAILURE* mechanism (PRL 125, 230604); A1 (asymptotic-gap-
+    controlled, primitive QMS) is precisely the *no-gap-failure* case. Tagging
+    the healthy gap-controlled label with a gap-FAILURE family was a category
+    error. `"none"` = "No gap-failure mechanism flagged" is A1's correct family.
+    (`tests/test_classification.py` + `test_d17_gap_coherence.py` updated to pin
+    A1/`"none"`; the #69 dimension-coherence logic is untouched.)
+  - **A8 -- the F5 phantom-relaxation rule is now dimension-coherent and
+    scale-invariant.** The old rule `pseudospectral_radius > 2 * gap_to_gns_ratio`
+    compared a RATE (the D13 radius `max{|z|: z in sigma_eps(L)}`) against a
+    dimensionless ratio, so rescaling the Liouvillian `L -> cL` (a pure change of
+    time unit) flipped the A10/F5 verdict. The rule now compares the
+    dimensionless pseudospectral *reach* `radius / gap` (how far the
+    eps-pseudospectrum extends relative to the asymptotic decay rate `Delta`,
+    the physical phantom signature, Znidaric 2023) against `2 * gap_to_gns_ratio`
+    -- both sides dimensionless, scale-invariant to leading order. A vanishing
+    gap is treated as infinite reach (the gapless/critical phantom limit). New
+    metamorphic rescale tests over `c in [1e-3, 1e3]` pin no verdict flip, plus a
+    regression proving the old bare-radius rule *would* have flipped.
+  - **A9 -- `lep_proximity` (D16) no longer blind to exact degeneracies.** The
+    min-separation scan skipped every pair with `sep <= atol`, so an exactly
+    degenerate eigenvalue pair -- the STRONGEST exceptional-point signal (two
+    eigenvalues coalescing) -- was invisible, and a fully degenerate spectrum
+    returned `inf` ("maximally far from an EP"), the exact inverse of the
+    physics. Coalescence now yields proximity `0.0`; the candidate-count loop
+    uses the same data and a `max(10*min_sep, atol)` window, so the two loops are
+    mutually consistent. (D16 measures eigenvalue proximity only; genuine
+    defective EP vs semisimple degeneracy is disambiguated by the Petermann
+    factor D9, as before.) New edge tests cover exact/full/sub-atol degeneracy.
+  - **A5 -- the unreachable `EXCLUDED` verdict was removed** from the `Verdict`
+    Literal (and `_consts.VERDICT_EXCLUDED`). A single-pass, maximum-evidence
+    classifier reports the best-fit A-class with its support and never reports a
+    class it is simultaneously ruling out, so a per-class active-rejection
+    verdict is not expressible in this architecture -- the value was permanently
+    unreachable through `diagnose()`. The old `confidence < 0.30 -> EXCLUDED`
+    branch was also semantically wrong (low confidence = epistemic "unresolved"
+    = `NOT_EXCLUDED`, not counter-evidence); low confidence now correctly yields
+    `NOT_EXCLUDED`. **API note:** `Verdict` narrows from 5 to 4 members; this is
+    a type-surface narrowing only (runtime `diagnose()` output is unchanged --
+    it never emitted `EXCLUDED`). Genuine active exclusion is deferred to a
+    future per-hypothesis scoring mode. B3 (unreachable classes A6/A7/A9) and B4
+    (unused D16/D18/D11/D12/D20 evidence) are analysed but NOT wired in this PR
+    (see PR body) -- both are class/verdict-influencing design decisions that can
+    introduce false positives and are deferred to dedicated PRs with anchor
+    coverage.
 
 ### Fixed
 - **D19/A11 Mpemba detector no longer false-positives on trivially symmetric

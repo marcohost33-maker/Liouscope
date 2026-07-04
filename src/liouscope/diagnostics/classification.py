@@ -31,7 +31,6 @@ from .._consts import (
     TIER_PUBLICATION,
     VERDICT_CANDIDATE,
     VERDICT_CONFIRMED,
-    VERDICT_EXCLUDED,
     VERDICT_NOT_EXCLUDED,
     VERDICT_UNDEFINED,
 )
@@ -118,8 +117,26 @@ def _pick_a_class(
     # no longer reaches A11 -- only a genuine, fine-tuned skip does.
     if ev.get("mpemba_is_candidate", 0.0) > 0.5:
         return "A11", "F4"
-    # F5 phantom relaxation
-    if ev["pseudospectral_radius"] > 2.0 * ev.get("gap_to_gns_ratio", 1.0) and ev["henrici_eta"] > 1.0:
+    # F5 phantom relaxation (issue #70 A8). The rule must be dimension-coherent
+    # AND scale-invariant. ``pseudospectral_radius`` (D13) is the max modulus
+    # max{|z| : z in sigma_eps(L)} -- a RATE-dimensioned quantity that scales
+    # ~linearly under a uniform Liouvillian rescale L -> cL (all eigenvalues,
+    # and the bracketing grid, scale by c). ``gap_to_gns_ratio`` is a pure
+    # dimensionless number (Delta / Delta_s), invariant under L -> cL. Comparing
+    # a rate directly against a dimensionless ratio (the pre-#70 rule) was
+    # incoherent: rescaling L -> cL flipped the A10/F5 verdict even though the
+    # physics is unchanged. Normalising the radius by the spectral gap Delta
+    # yields the dimensionless pseudospectral reach (radius / Delta) -- how far
+    # the eps-pseudospectrum extends relative to the asymptotic decay rate --
+    # which is the physically meaningful phantom-relaxation signature (Znidaric
+    # 2023) and is scale-invariant to leading order (both radius and gap scale
+    # as c). A vanishing gap (no spectral gap) is treated as inf reach: a
+    # gapless, strongly non-normal operator is the phantom/critical limit.
+    _gap = ev.get("gap", 0.0)
+    _psr_reach = (
+        ev["pseudospectral_radius"] / _gap if _gap > 0.0 else float("inf")
+    )
+    if _psr_reach > 2.0 * ev.get("gap_to_gns_ratio", 1.0) and ev["henrici_eta"] > 1.0:
         return "A10", "F5"
     # F1 overlap/eigenvector amplification (Mori-Shirai 2020): non-normal
     # amplification flagged by high Kreiss constant + Petermann factor
@@ -141,14 +158,14 @@ def _pick_a_class(
     # DEPENDENT trace-distance curve, whereas pseudospectral_radius / henrici /
     # trans_amplitude / kreiss / petermann are operator-INTRINSIC. A strongly
     # non-normal phantom/skin operator with an rho_0 that excites only the slow
-    # gap mode yields a clean single-exp at the gap rate; awarding A1/F1
+    # gap mode yields a clean single-exp at the gap rate; awarding A1/"none"
     # CONFIRMED there would shadow the true A10/F5 (or A3/A4) mechanism. So the
     # gap-failure families are decided first; A1 is reached only when none fire.
     if (
         ev.get("gap_rate_consistency", float("inf")) < 0.05
         and ev.get("d17_linear_single_exp", 0.0) > 0.5
     ):
-        return "A1", "F1"
+        return "A1", "none"
     # Oscillatory transient
     if ev["has_complex_pairs"] > 0 and relaxation.aicc_model == "M3b":
         return "A8", "none"
@@ -160,9 +177,9 @@ def _pick_a_class(
         return "A5", "none"
     # Strong gap consistency (M0 winner, beta_D close to Delta)
     if ev["gap_rate_consistency"] < 0.05 and relaxation.aicc_model == "M0":
-        return "A1", "F1"
+        return "A1", "none"
     if ev["gap_rate_consistency"] < 0.20:
-        return "A1", "F1"
+        return "A1", "none"
     return "A12", "none"
 
 
@@ -180,8 +197,17 @@ def _pick_verdict_tier(
         return VERDICT_CONFIRMED, TIER_PUBLICATION
     if confidence >= 0.60:
         return VERDICT_CANDIDATE, TIER_CONFIRMATION
-    if confidence < 0.30:
-        return VERDICT_EXCLUDED, TIER_EXPLORATION
+    # issue #70 A5: no genuine EXCLUDED (active-rejection) branch here. A
+    # single-pass, maximum-evidence classifier reports the BEST-fit A-class with
+    # its support -- it never reports a class it is simultaneously ruling out, so
+    # a per-class "EXCLUDED" verdict is not expressible in this architecture
+    # (active exclusion needs per-hypothesis scoring, deferred; see PR body). The
+    # old ``confidence < 0.30 -> EXCLUDED`` branch was also SEMANTICALLY wrong:
+    # low confidence in the best-fit class is epistemic uncertainty ("unresolved"
+    # = NOT_EXCLUDED), not positive counter-evidence ("ruled out"). It was
+    # additionally unreachable (the only sub-0.30 confidence, A12 = 0.20,
+    # short-circuits to NOT_EXCLUDED above). Low confidence now correctly falls
+    # through to NOT_EXCLUDED.
     return VERDICT_NOT_EXCLUDED, TIER_EXPLORATION
 
 
