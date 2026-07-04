@@ -6,6 +6,34 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+- **Anti-overfit gates wired into the claim vocabulary** (issue #71 B2). The
+  residual-whiteness (Ljung-Box, `fitting/whiteness.py`) and temporal-holdout
+  (`fitting/holdout.py`) gates were implemented and unit-tested but exported by
+  nothing and connected to no claim-level concept. They are now exported from
+  `liouscope.fitting`, and a new `fitting/claim_gate.py::assess_relaxation_claim`
+  maps their verdicts onto the StabilityReport `SAFE/REVIEW/BLOCK` vocabulary
+  *fail-closed* (worst-wins): a rejected holdout -> `BLOCK`, non-white residuals
+  or an un-run gate -> `REVIEW`, both gates run and passing -> `SAFE`. The result
+  feeds straight into `build_stability_report(claim_level=...)`. This is purely
+  additive -- `diagnose()` behaviour is unchanged; callers opt in. New
+  `tests/test_claim_gate.py` pins the full truth table (10 tests, executed).
+- **D21-D23 reserved-slot contract** (issue #71 C2). The `D1-D24` schema name
+  spans slots that are defined in the Drive-side canon but not implemented in
+  this repository. `_consts.RESERVED_DIAGNOSTIC_SLOTS` now records D21-D23 as an
+  explicit, discoverable code-level contract next to `DIAGNOSTIC_SCHEMA_VERSION`,
+  each marked "reserved ... not implemented", so the "24 diagnostics" name stays
+  honest. Pinned by `tests/test_reserved_slots.py`.
+
+### Changed
+- **U1 solver uncertainty now reads from a named nominal floor**
+  (issue #71 B5). `compute_uncertainty_layer` reported a bare `1e-10` magic
+  number for U1 when no `solver_residual` was supplied; it now reads
+  `_consts.U1_NOMINAL_FLOOR` and the docstring states plainly that U1 is a
+  conservative *placeholder* (not a measured residual) unless the caller runs
+  an ODE-tolerance sweep -- which `diagnose()` does not. Same numeric value, no
+  behaviour change; the semantics are now explicit in code.
+
 ### Fixed
 - **CI: pinned `ruff==0.15.20` and reformatted the `_diagnostics` import
   block.** Ruff's isort `I001` heuristic for `lines-after-imports` before a

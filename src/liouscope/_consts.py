@@ -12,6 +12,20 @@ TAXONOMY_VERSION: Final[str] = "A1-A12-v3.1"
 DIAGNOSTIC_SCHEMA_VERSION: Final[str] = "D1-D24-Übersicht-v3-2026-04-24"
 MANIFEST_SCHEMA_VERSION: Final[str] = "1.2.0"
 
+# Reserved diagnostic slots. The schema name spans D1-D24, but only D1-D20
+# (peer-review set) and D24 (opt-in Zhou mixing-time predictor) are implemented
+# in this repository. D21-D23 are defined in the Drive-side canon schema and
+# reserved here as an explicit code-level contract (issue #71 C2) so the gap is
+# discoverable next to the schema version instead of only in prose. Reserving a
+# slot is NOT a claim that it is implemented -- consumers must treat these ids as
+# absent from any run's diagnostics block until they graduate to real code with
+# their own anchor coverage (``claim_status:pending`` until anchors confirm).
+RESERVED_DIAGNOSTIC_SLOTS: Final[dict[str, str]] = {
+    "D21": "reserved (canon schema D1-D24-Übersicht-v3; not implemented here)",
+    "D22": "reserved (canon schema D1-D24-Übersicht-v3; not implemented here)",
+    "D23": "reserved (canon schema D1-D24-Übersicht-v3; not implemented here)",
+}
+
 CORE_SCOPE: Final[str] = "time-homogeneous finite-dimensional GKSL/QMS"
 RELEASE_STATE: Final[str] = "engineering release-ready"
 PAPER_STATE: Final[str] = "arXiv v5 submitted; peer-review pending"
@@ -20,6 +34,14 @@ EPS_SUPP: Final[float] = 1.0e-12
 EPS_GAP: Final[float] = 1.0e-10
 EPS_HERMITICITY: Final[float] = 1.0e-9
 EPS_TRACE: Final[float] = 1.0e-10
+
+# U1 (solver uncertainty) nominal floor. ``compute_uncertainty_layer`` reports
+# this constant for U1 unless the caller supplies a real ``solver_residual``
+# from an ODE-tolerance sweep. It is a *nominal placeholder* -- a conservative
+# lower bound on the solver contribution, NOT a measured residual. Kept here as
+# a single named source so the semantics are explicit in code (issue #71 B5)
+# rather than a bare magic number inside the uncertainty layer.
+U1_NOMINAL_FLOOR: Final[float] = 1.0e-10
 
 # Division-by-zero floor (NOT a physical tolerance). Guards denominators that
 # can legitimately underflow to ~0 for perfectly defective modes, e.g. the
