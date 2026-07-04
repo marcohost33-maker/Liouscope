@@ -78,6 +78,8 @@ def _gather_evidence(
     if mpemba is not None:
         ev["mpemba_overlap_c1"] = float(mpemba.overlap_c1)
         ev["mpemba_expansion_alpha"] = float(mpemba.expansion_alpha)
+        ev["mpemba_is_candidate"] = float(mpemba.is_mpemba_candidate)
+        ev["mpemba_trivial_overlap"] = float(mpemba.trivial_overlap)
     return ev
 
 
@@ -87,8 +89,11 @@ def _pick_a_class(
     relaxation: RelaxationResult,
 ) -> tuple[str, str]:
     """Return ``(a_class, f_family)`` based on evidence priorities."""
-    # F4 Mpemba check first (high salience for current literature risk)
-    if ev.get("mpemba_overlap_c1", 1.0) < 1.0e-4:
+    # F4 Mpemba check first (high salience for current literature risk). The
+    # candidate flag already folds in the non-triviality guard (issue #68), so a
+    # symmetry-protected zero overlap (diagonal rho_0 vs a coherence slow mode)
+    # no longer reaches A11 -- only a genuine, fine-tuned skip does.
+    if ev.get("mpemba_is_candidate", 0.0) > 0.5:
         return "A11", "F4"
     # F5 phantom relaxation
     if ev["pseudospectral_radius"] > 2.0 * ev.get("gap_to_gns_ratio", 1.0) and ev["henrici_eta"] > 1.0:
@@ -152,7 +157,13 @@ def _confidence(ev: dict[str, float], a_class: str) -> float:
     elif a_class == "A10":
         score = 0.70
     elif a_class == "A11" and ev.get("mpemba_overlap_c1", 1.0) < 1.0e-5:
-        score = 0.90
+        # A single initial state skipping the slowest mode is a *candidate*, not
+        # a confirmed anomalous Mpemba effect: confirmation needs a reference
+        # family (e.g. thermal states at different temperatures), which the
+        # single-state pipeline does not provide. Capped below the
+        # PUBLICATION_GRADE threshold so a lone overlap cannot self-certify
+        # (issue #68); genuine cases still surface as A11 CANDIDATE.
+        score = 0.70
     elif a_class == "A12":
         score = 0.20
     return float(min(max(score, 0.0), 1.0))

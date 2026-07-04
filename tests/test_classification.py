@@ -203,10 +203,16 @@ def _lep(**kw) -> LepResult:
 def _mpemba(**kw) -> MpembaResult:
     base = {
         "overlap_c1": 0.5,
-        "is_mpemba_candidate": False,
         "expansion_alpha": 1.0,
     }
     base.update(kw)
+    # Synthetic evidence carries no steady state, so mirror the real
+    # (non-trivial) candidate rule: a below-threshold overlap is a candidate
+    # unless the caller explicitly marks it trivial or overrides the flag.
+    base.setdefault(
+        "is_mpemba_candidate",
+        bool(base["overlap_c1"] < 1.0e-4 and not kw.get("trivial_overlap", False)),
+    )
     return MpembaResult(**base)
 
 
@@ -241,11 +247,13 @@ def test_branch_default_fallback_a12():
 
 
 def test_branch_a11_mpemba():
+    # issue #68: a single-state Mpemba overlap is CANDIDATE-grade, never
+    # PUBLICATION_GRADE-confirmed (confirmation needs a reference family).
     cls = _classify(mpemba=_mpemba(overlap_c1=1.0e-6))
     assert (cls.a_class, cls.f_family) == ("A11", "F4")
-    assert cls.confidence == pytest.approx(0.90)
-    assert cls.verdict == VERDICT_CONFIRMED
-    assert cls.tier == TIER_PUBLICATION
+    assert cls.confidence == pytest.approx(0.70)
+    assert cls.verdict == VERDICT_CANDIDATE
+    assert cls.tier == TIER_CONFIRMATION
 
 
 def test_branch_a11_mpemba_weak_confidence():
@@ -255,6 +263,15 @@ def test_branch_a11_mpemba_weak_confidence():
     assert cls.a_class == "A11"
     assert cls.confidence == pytest.approx(0.5)
     assert cls.verdict == VERDICT_NOT_EXCLUDED
+
+
+def test_branch_a11_trivial_overlap_not_flagged():
+    # issue #68: a symmetry-protected zero overlap (trivial_overlap=True) must
+    # NOT reach A11 even though overlap_c1 is below the raw trigger.
+    cls = _classify(mpemba=_mpemba(overlap_c1=1.0e-6, trivial_overlap=True))
+    assert cls.a_class != "A11"
+    assert cls.evidence["mpemba_trivial_overlap"] == 1.0
+    assert cls.evidence["mpemba_is_candidate"] == 0.0
 
 
 def test_branch_a10_phantom_relaxation():

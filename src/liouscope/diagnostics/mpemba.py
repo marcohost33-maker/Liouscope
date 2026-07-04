@@ -1,9 +1,28 @@
 """Mpemba layer: D19 slowest-mode overlap, D20 expansion-coefficient scaling.
 
 D19 -- :func:`overlap_c1`. The Mpemba-overlap test (Carollo 2021). Decompose
-the initial state in left-eigenvector basis of L and test whether the
+the initial state in the left-eigenvector basis of L and test whether the
 coefficient on the slowest mode (lambda_1 != 0) vanishes. If ``|c_1| << eps``,
-the system relaxes anomalously fast (Mpemba candidate).
+the state relaxes anomalously fast (strong-Mpemba *candidate*).
+
+The coefficient reported is the **biorthogonal** expansion coefficient
+``c_1 = <l_1, rho_0> / <l_1, r_1>`` -- the physically meaningful weight of the
+slowest right-mode ``r_1`` in the decomposition of ``rho_0`` (l_1, r_1 the left
+and right eigenvectors of the slowest non-zero mode). Normalising by
+``<l_1, r_1>`` rather than ``||l_1||`` (the previous behaviour, for which only
+the zero test was meaningful) makes ``c_1`` the actual expansion magnitude.
+
+**Non-triviality guard (LIOU-CLS-002, issue #68).** A vanishing ``c_1`` is only
+an *anomalous* Mpemba skip when a state that could generically excite the
+slowest mode is fine-tuned so it does not. A ``rho_0`` that **commutes with the
+steady state** ``rho_ss`` lies in the classical (population) sector of
+``rho_ss``; if the slowest mode is a *coherence* in the ``rho_ss`` eigenbasis,
+such a ``rho_0`` has ``c_1 = 0`` by symmetry -- it never populates that mode --
+which is trivially fast relaxation, not a Mpemba effect. The default
+``rho_0 = I/d`` and any diagonal state fall in this class. :func:`is_trivial_overlap`
+detects it, and :func:`compute_mpemba_layer` withholds the candidate flag so a
+canonical amplitude-damping / dephasing system cannot earn an anomalous-Mpemba
+label from its default inputs.
 
 D20 -- :func:`expansion_alpha`. Scaling exponent of overlap coefficients
 ``|c_n|`` against the index n. Polynomial scaling ``Phi_n ~ exp(alpha L)``
@@ -15,9 +34,28 @@ from __future__ import annotations
 import numpy as np
 import scipy.linalg as sla
 
-from .._consts import EPS_GAP
+from .._consts import EPS_DIV, EPS_GAP, EPS_HERMITICITY
 from .._types import MpembaResult
 from ..numerics.kronecker import vec
+
+
+def _slowest_mode(
+    L_super: np.ndarray, *, atol: float = EPS_GAP
+) -> tuple[np.ndarray, np.ndarray] | None:
+    """Return ``(l_slow, r_slow)`` for the slowest non-zero mode, or ``None``.
+
+    The slowest mode is the non-zero eigenvalue with the largest (least
+    negative) real part. Returns ``None`` when every mode is a zero mode.
+    """
+    L_super = np.asarray(L_super)
+    eigvals, vl, vr = sla.eig(L_super, left=True, right=True)
+    nonzero_mask = np.abs(eigvals) > atol
+    if not np.any(nonzero_mask):
+        return None
+    eigvals_nz = eigvals[nonzero_mask]
+    order = np.argsort(-np.real(eigvals_nz))
+    slowest_idx = np.where(nonzero_mask)[0][order[0]]
+    return vl[:, slowest_idx], vr[:, slowest_idx]
 
 
 def overlap_c1(
@@ -26,21 +64,89 @@ def overlap_c1(
     *,
     atol: float = EPS_GAP,
 ) -> float:
-    """Magnitude of the slowest-mode overlap ``|c_1|``."""
-    L_super = np.asarray(L_super)
-    eigvals, vl, vr = sla.eig(L_super, left=True, right=True)
-    # Filter the zero mode
-    nonzero_mask = np.abs(eigvals) > atol
-    eigvals_nz = eigvals[nonzero_mask]
-    if eigvals_nz.size == 0:
+    """Magnitude of the biorthogonal slowest-mode overlap ``|c_1|``.
+
+    ``c_1 = <l_1, vec(rho_0)> / <l_1, r_1>``; the denominator is floored at
+    :data:`liouscope._consts.EPS_DIV` so a genuinely defective (``<l_1, r_1> = 0``)
+    slow mode yields a large finite value rather than a spurious NaN.
+    """
+    mode = _slowest_mode(L_super, atol=atol)
+    if mode is None:
         return 0.0
-    # Slowest non-zero mode = largest real part (least negative)
-    order = np.argsort(-np.real(eigvals_nz))
-    slowest_idx = np.where(nonzero_mask)[0][order[0]]
-    l_slow = vl[:, slowest_idx]
+    l_slow, r_slow = mode
     rho_vec0 = vec(np.asarray(rho_initial))
-    norm = max(np.linalg.norm(l_slow), 1.0e-12)
-    return float(abs(np.vdot(l_slow, rho_vec0)) / norm)
+    denom = abs(np.vdot(l_slow, r_slow))
+    return float(abs(np.vdot(l_slow, rho_vec0)) / max(denom, EPS_DIV))
+
+
+def _steady_state_eigenprojectors(
+    rho_steady_state: np.ndarray, *, tol: float = EPS_HERMITICITY
+) -> list[np.ndarray]:
+    """Orthogonal projectors onto the distinct eigenspaces of ``rho_ss``.
+
+    Grouping degenerate eigenvalues into a single projector makes the sector
+    decomposition well-defined even when ``rho_ss`` is degenerate or maximally
+    mixed -- the regime where an individual-eigenvector basis is arbitrary.
+    """
+    rho_steady_state = np.asarray(rho_steady_state, dtype=complex)
+    w, u = np.linalg.eigh(rho_steady_state)
+    projectors: list[np.ndarray] = []
+    i = 0
+    n = w.size
+    while i < n:
+        j = i + 1
+        while j < n and abs(w[j] - w[i]) <= tol:
+            j += 1
+        block = u[:, i:j]
+        projectors.append(block @ block.conj().T)
+        i = j
+    return projectors
+
+
+def is_trivial_overlap(
+    L_super: np.ndarray,
+    rho_initial: np.ndarray,
+    rho_steady_state: np.ndarray,
+    *,
+    atol: float = EPS_GAP,
+    block_tol: float = 1.0e-9,
+) -> bool:
+    """Is a vanishing slowest-mode overlap symmetry-protected (not Mpemba)?
+
+    Returns ``True`` when the zero overlap is *structural*: in the sector
+    decomposition set by the eigenprojectors ``{P_a}`` of ``rho_ss``, the slowest
+    mode ``l_1`` and ``rho_0`` occupy **disjoint** blocks ``P_a (.) P_b``. Then
+    ``rho_0`` can never populate the slowest mode -- its fast relaxation is
+    trivial, not a fine-tuned Mpemba skip (e.g. a diagonal ``rho_0`` vs a
+    coherence slowest mode of an amplitude-damping channel).
+
+    Using eigen*projectors* (not individual eigenvectors) keeps the test robust
+    when ``rho_ss`` is degenerate. A maximally mixed ``rho_ss`` collapses to a
+    single projector (one block), so nothing is structurally decoupled and the
+    guard does not fire -- such a state has no protecting symmetry sector and is
+    handled by the (demoted) confidence tier instead.
+    """
+    L_super = np.asarray(L_super)
+    rho_initial = np.asarray(rho_initial, dtype=complex)
+    rho_steady_state = np.asarray(rho_steady_state, dtype=complex)
+
+    mode = _slowest_mode(L_super, atol=atol)
+    if mode is None:
+        return False
+    l_slow, _ = mode
+    d = rho_steady_state.shape[0]
+    l_mat = l_slow.reshape(d, d, order="F")
+
+    projectors = _steady_state_eigenprojectors(rho_steady_state)
+    l_scale = max(float(np.linalg.norm(l_mat)), 1.0)
+    rho_scale = max(float(np.linalg.norm(rho_initial)), 1.0)
+    for p_a in projectors:
+        for p_b in projectors:
+            l_block = float(np.linalg.norm(p_a @ l_mat @ p_b))
+            rho_block = float(np.linalg.norm(p_a @ rho_initial @ p_b))
+            if l_block > block_tol * l_scale and rho_block > block_tol * rho_scale:
+                return False  # a shared block -> rho_0 can reach the slow mode
+    return True
 
 
 def expansion_alpha(
@@ -56,7 +162,7 @@ def expansion_alpha(
     Returns ``alpha`` (slope). A flat distribution gives ``alpha`` near 0.
     """
     L_super = np.asarray(L_super)
-    eigvals, vl, _ = sla.eig(L_super, left=True, right=True)
+    eigvals, vl, vr = sla.eig(L_super, left=True, right=True)
     mask = np.abs(eigvals) > atol
     eigvals_nz = eigvals[mask]
     if eigvals_nz.size < 2:
@@ -67,8 +173,8 @@ def expansion_alpha(
     cs: list[float] = []
     for idx in nz_indices[: min(n_modes, len(nz_indices))]:
         l_n = vl[:, idx]
-        norm = max(np.linalg.norm(l_n), 1.0e-12)
-        cs.append(float(abs(np.vdot(l_n, rho_vec0)) / norm))
+        denom = abs(np.vdot(l_n, vr[:, idx]))
+        cs.append(float(abs(np.vdot(l_n, rho_vec0)) / max(denom, EPS_DIV)))
     if len(cs) < 2:
         return 0.0
     log_cs = np.log(np.clip(np.asarray(cs), 1.0e-30, None))
@@ -81,13 +187,26 @@ def compute_mpemba_layer(
     L_super: np.ndarray,
     rho_initial: np.ndarray,
     *,
+    rho_steady_state: np.ndarray | None = None,
     overlap_threshold: float = 1.0e-4,
 ) -> MpembaResult:
-    """Run D19, D20 and flag Mpemba candidacy."""
+    """Run D19, D20 and flag Mpemba candidacy.
+
+    ``is_mpemba_candidate`` is ``True`` only when ``|c_1| < overlap_threshold``
+    **and** the vanishing overlap is not symmetry-protected. Triviality can only
+    be assessed when ``rho_steady_state`` is supplied (the standalone default is
+    ``None``, which preserves the raw overlap test for direct callers).
+    """
     c1 = overlap_c1(L_super, rho_initial)
     alpha = expansion_alpha(L_super, rho_initial)
+    trivial = (
+        is_trivial_overlap(L_super, rho_initial, rho_steady_state)
+        if rho_steady_state is not None
+        else False
+    )
     return MpembaResult(
         overlap_c1=c1,
-        is_mpemba_candidate=c1 < overlap_threshold,
+        is_mpemba_candidate=bool(c1 < overlap_threshold and not trivial),
         expansion_alpha=alpha,
+        trivial_overlap=trivial,
     )

@@ -132,7 +132,9 @@ def diagnose(
     )
     mpemba: MpembaResult | None = None
     if include_mpemba:
-        mpemba = compute_mpemba_layer(L_super, rho_initial)
+        mpemba = compute_mpemba_layer(
+            L_super, rho_initial, rho_steady_state=rho_steady_state
+        )
 
     classification = classify_mechanism(
         spectral=spectral,
