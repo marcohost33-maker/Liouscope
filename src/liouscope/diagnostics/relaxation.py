@@ -200,6 +200,33 @@ def _beta_from_params(model_name: str, params: np.ndarray) -> float:
     return float("nan")
 
 
+def _dominant_rate(t: np.ndarray, curve: np.ndarray) -> tuple[float, str]:
+    """Fit the M0..M3b hierarchy (AICc, no bootstrap) to a decay ``curve`` and
+    return ``(dominant_rate, winning_model)``.
+
+    Used to obtain a LINEAR-metric relaxation rate (from the trace-distance
+    curve) for the D17 gap-rate consistency check. Unlike relative entropy,
+    a linear distance metric decays at the bare mode rate ``Delta`` (no metric
+    multiplier), so its dominant rate is dimension-coherent with the spectral
+    gap. Returns ``(nan, "none")`` if every model fit fails -- fail-closed, so
+    the consistency check reads "unknown" rather than a spurious match.
+    """
+    curve = np.asarray(curve, dtype=float)
+    fits: dict[str, FitResult] = {}
+    for name in ("M0", "M1", "M2", "M3a", "M3b"):
+        try:
+            fit_result, _ = _fit_with_model(name, t, curve)
+            fits[name] = fit_result
+        except (ValueError, RuntimeError):
+            continue
+    if not fits:
+        return float("nan"), "none"
+    winner = choose_model({n: fr.aicc for n, fr in fits.items()})
+    if winner not in fits:
+        winner = next(iter(fits))
+    return _beta_from_params(winner, fits[winner].params), winner
+
+
 def _beta_index(model_name: str, params: np.ndarray) -> int:
     """Index in ``params`` of the value that :func:`_beta_from_params` returns.
 
@@ -299,6 +326,19 @@ def compute_relaxation_layer(
     except Exception:
         ent_asym = float("nan")
 
+    # LINEAR-metric relaxation rate for D17 (LIOU-#69). ``beta_D`` above is fit
+    # on the RELATIVE-ENTROPY curve, which decays at a metric multiplier m times
+    # the bare mode rate (m=2 for a faithful/full-rank steady state where D is
+    # quadratic near pi; m=1 for a rank-deficient pi where the null-space-leakage
+    # term is linear). That multiplier makes beta_D dimensionally incomparable to
+    # the spectral gap Delta. The trace-distance curve is a linear distance
+    # metric, so its dominant rate decays at the bare mode rate and IS
+    # dimension-coherent with Delta -- this is what the gap-rate consistency
+    # check (D17) must use. (_dominant_rate is fail-closed: it returns nan if
+    # every model fit fails, so D17 then reads "unknown" rather than a spurious
+    # match.)
+    beta_D_linear, linear_fit_model = _dominant_rate(t_grid, trace_distance_curve)
+
     return RelaxationResult(
         von_neumann_entropy=von_neumann_entropy(final_rho),
         relative_entropy_curve=rel_entropy,
@@ -309,4 +349,6 @@ def compute_relaxation_layer(
         aicc_model=winner,
         beta_D=float(beta_D),
         bca_ci_beta=(bca_lo, bca_hi),
+        beta_D_linear=float(beta_D_linear),
+        linear_fit_model=linear_fit_model,
     )

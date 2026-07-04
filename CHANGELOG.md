@@ -26,6 +26,29 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   honest. Pinned by `tests/test_reserved_slots.py`.
 
 ### Changed
+- **D17 gap-rate consistency is now dimension-coherent** (issue #69). D17 was
+  `|beta_D - Delta| / Delta`, comparing the relative-entropy fit rate `beta_D`
+  directly with the spectral gap `Delta`. Relative entropy near the steady state
+  `pi` is *quadratic* in `(rho - pi)` when `pi` is faithful (full-rank), so it
+  decays at `2*Delta`; when `pi` is rank-deficient the null-space-leakage term is
+  *linear*, so it decays at `1*Delta`. That metric multiplier `m in {1, 2}`
+  (verified empirically across V1-V5: `m ~ 2.0` for faithful `pi` V1/V2/V4,
+  `m ~ 1.05` for rank-deficient `pi` V3/V5) inflated D17 (dephasing `~3.3`,
+  amp-damp `~1.1`) and made the A1 "gap-controlled" label *unreachable for every
+  system*. D17 now uses `beta_D_linear`, the dominant decay rate of the **linear
+  trace-distance curve** (LIOU-F-018), which decays at the bare mode rate and is
+  therefore dimension-coherent with `Delta`. The relative-entropy rate `beta_D`
+  is unchanged (still the headline relaxation rate; the fit/bootstrap/anchor
+  pipeline is untouched). The classifier now exposes `beta_D`, `beta_D_linear`,
+  `gap` and the implied multiplier `d17_metric_multiplier` in the evidence dict
+  (the factor is explicit and auditable, not hidden), and a genuine single-mode
+  gap-controlled system can now earn A1 "gap-controlled" (F1). No V1-V5 mechanism
+  label changes; only the D17 *number* is corrected. New end-to-end regression
+  `tests/test_validation_systems/test_d17_gap_coherence.py` (14 tests). Additive
+  fields `RelaxationResult.beta_D_linear/linear_fit_model` and
+  `LepResult.beta_D_linear` are defaulted, so serialised reports stay valid;
+  `compute_lep_layer(beta_D=...)` -> `compute_lep_layer(beta_D_linear=...)` and
+  the `gap_rate_consistency(beta_D=...)` param -> `rate=...` (both internal).
 - **U1 solver uncertainty now reads from a named nominal floor**
   (issue #71 B5). `compute_uncertainty_layer` reported a bare `1e-10` magic
   number for U1 when no `solver_residual` was supplied; it now reads

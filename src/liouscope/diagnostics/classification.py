@@ -50,6 +50,7 @@ from .._types import (
 def _gather_evidence(
     spectral: SpectralResult,
     nonnorm: NonNormalityResult,
+    relaxation: RelaxationResult,
     resolvent: ResolventResult,
     transient: TransientResult,
     lep: LepResult,
@@ -73,6 +74,28 @@ def _gather_evidence(
     ev["trans_amplitude_ratio"] = float(transient.trans_amplitude_ratio)
     ev["lep_proximity"] = float(lep.lep_proximity)
     ev["gap_rate_consistency"] = float(lep.gap_rate_consistency)
+    # LIOU-#69: expose the D17 inputs explicitly so the metric multiplier is
+    # auditable rather than hidden. ``beta_D`` is the relative-entropy rate;
+    # ``beta_D_linear`` is the dimension-coherent trace-distance rate fed to D17;
+    # ``gap`` is the spectral gap Delta. The implied relative-entropy metric
+    # multiplier m = beta_D / beta_D_linear is ~2 for a faithful (full-rank)
+    # steady state and ~1 for a rank-deficient one (verified across V1-V5).
+    ev["beta_D"] = float(relaxation.beta_D)
+    ev["beta_D_linear"] = float(relaxation.beta_D_linear)
+    ev["gap"] = float(spectral.gap)
+    _blin = float(relaxation.beta_D_linear)
+    ev["d17_metric_multiplier"] = (
+        float(relaxation.beta_D / _blin)
+        if np.isfinite(_blin) and _blin > 0.0 and np.isfinite(relaxation.beta_D)
+        else float("nan")
+    )
+    # 1.0 iff the observable (linear-metric) relaxation is a single exponential
+    # (M0/M1) -- i.e. one dominant mode. Combined with a small
+    # gap_rate_consistency this is the textbook signature of gap-controlled
+    # relaxation, independent of the relative-entropy fit SHAPE.
+    ev["d17_linear_single_exp"] = (
+        1.0 if relaxation.linear_fit_model in ("M0", "M1") else 0.0
+    )
     ev["resolvent_peak"] = float(resolvent.resolvent_peak)
     ev["pseudospectral_radius"] = float(resolvent.pseudospectral_radius)
     if mpemba is not None:
@@ -95,6 +118,19 @@ def _pick_a_class(
     # no longer reaches A11 -- only a genuine, fine-tuned skip does.
     if ev.get("mpemba_is_candidate", 0.0) > 0.5:
         return "A11", "F4"
+    # A1 gap-controlled (LIOU-#69): the OBSERVABLE (linear trace-distance)
+    # relaxation is a single exponential whose rate matches the spectral gap
+    # (dimension-coherent D17 < 0.05). This is the textbook definition of
+    # gap-controlled relaxation and takes priority over the M2/M3a/M3b branches
+    # below, which key off the relative-entropy fit SHAPE -- that curve carries a
+    # metric multiplier and can prefer a bi-exponential even for single-mode
+    # dynamics. A gap-failure family (F1-F4) cannot co-occur with a rate that
+    # already matches the gap, so this precedes the F5/F1/F2/F3 checks.
+    if (
+        ev.get("gap_rate_consistency", float("inf")) < 0.05
+        and ev.get("d17_linear_single_exp", 0.0) > 0.5
+    ):
+        return "A1", "F1"
     # F5 phantom relaxation
     if ev["pseudospectral_radius"] > 2.0 * ev.get("gap_to_gns_ratio", 1.0) and ev["henrici_eta"] > 1.0:
         return "A10", "F5"
@@ -179,7 +215,9 @@ def classify_mechanism(
     mpemba: MpembaResult | None = None,
 ) -> ClassificationResult:
     """Classify the dominant relaxation mechanism into A1..A12 with F1..F5 tag."""
-    ev = _gather_evidence(spectral, nonnorm, resolvent, transient, lep, mpemba)
+    ev = _gather_evidence(
+        spectral, nonnorm, relaxation, resolvent, transient, lep, mpemba
+    )
     a_class, f_family = _pick_a_class(ev, relaxation=relaxation)
     conf = _confidence(ev, a_class)
     verdict, tier = _pick_verdict_tier(a_class, relaxation, conf)

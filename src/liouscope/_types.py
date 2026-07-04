@@ -75,6 +75,13 @@ class RelaxationResult:
     # and defaulted so the field is purely additive (older callers/serialised
     # reports remain valid).
     trace_distance_curve: np.ndarray | None = None
+    # LIOU-#69: dominant rate of the LINEAR trace-distance curve. Unlike beta_D
+    # (fit on relative entropy, which carries a metric multiplier m in {1, 2}),
+    # this rate decays at the bare mode rate and is dimension-coherent with the
+    # spectral gap Delta -- it is the rate the D17 gap-rate consistency check
+    # uses. Additive + defaulted so older callers / serialised reports stay valid.
+    beta_D_linear: float = float("nan")
+    linear_fit_model: str = "none"
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -104,9 +111,12 @@ class LepResult:
     """
 
     lep_proximity: float                  # D16 min pair separation
-    gap_rate_consistency: float           # D17 |beta_D - Delta| / Delta
+    gap_rate_consistency: float           # D17 |beta_D_linear - Delta| / Delta
     initial_state_sensitivity: float      # D18 std over Haar ensemble
     lep_candidate_count: int
+    # LIOU-#69: the LINEAR-metric rate actually fed to D17 (dimension-coherent
+    # with the gap). Additive + defaulted so synthetic callers stay valid.
+    beta_D_linear: float = float("nan")
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)

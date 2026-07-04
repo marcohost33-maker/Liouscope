@@ -23,8 +23,10 @@ def test_lep_proximity_includes_complex_pairs(pauli):
 
 
 def test_gap_rate_consistency():
-    assert gap_rate_consistency(beta_D=0.5, gap=0.5) == 0
-    assert np.isinf(gap_rate_consistency(beta_D=0.5, gap=0.0))
+    # D17 takes a LINEAR-metric rate (LIOU-#69); param renamed beta_D -> rate.
+    assert gap_rate_consistency(rate=0.5, gap=0.5) == 0
+    assert np.isinf(gap_rate_consistency(rate=0.5, gap=0.0))
+    assert np.isinf(gap_rate_consistency(rate=float("nan"), gap=0.5))
 
 
 def test_initial_state_sensitivity_smoke(pauli):
@@ -37,6 +39,8 @@ def test_initial_state_sensitivity_smoke(pauli):
 def test_compute_lep_layer_returns_result(pauli):
     L = build_liouvillian(0.5 * pauli["X"], [pauli["Z"]], [0.3])
     eigs = eig_nonhermitian(L).eigenvalues
-    res = compute_lep_layer(L, eigs, beta_D=0.6, gap=0.3, n_haar=4)
+    res = compute_lep_layer(L, eigs, beta_D_linear=0.6, gap=0.3, n_haar=4)
     assert np.isfinite(res.gap_rate_consistency)
+    assert res.gap_rate_consistency == abs(0.6 - 0.3) / 0.3
+    assert res.beta_D_linear == 0.6
     assert res.lep_candidate_count >= 0

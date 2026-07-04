@@ -44,13 +44,24 @@ def lep_proximity(eigenvalues: np.ndarray, *, atol: float = EPS_GAP) -> tuple[fl
     return min_sep, pairs_close
 
 
-def gap_rate_consistency(beta_D: float, gap: float) -> float:
-    """D17: ``|beta_D - Delta| / Delta``. Returns inf if gap is zero."""
+def gap_rate_consistency(rate: float, gap: float) -> float:
+    """D17: ``|rate - Delta| / Delta``. Returns inf if gap is zero or rate is
+    non-finite.
+
+    ``rate`` must be a LINEAR-metric relaxation rate (LIOU-#69): the spectral
+    gap ``Delta = -max Re(lambda != 0)`` is a bare single-mode decay rate, so
+    the consistency check is only dimension-coherent when it is compared against
+    a rate measured on a *linear* distance metric (trace distance / fidelity),
+    which decays at that same bare rate. The relative-entropy rate ``beta_D``
+    carries a metric multiplier m in {1, 2} (m=2 for a faithful pi, m=1 for a
+    rank-deficient pi) and must NOT be passed here -- doing so inflates D17 by m
+    and makes the A1 "gap-controlled" label unreachable (issue #69).
+    """
     if gap <= 0:
         return float("inf")
-    if not np.isfinite(beta_D):
+    if not np.isfinite(rate):
         return float("inf")
-    return float(abs(beta_D - gap) / gap)
+    return float(abs(rate - gap) / gap)
 
 
 def initial_state_sensitivity(
@@ -86,18 +97,24 @@ def compute_lep_layer(
     L_super: np.ndarray,
     eigenvalues: np.ndarray,
     *,
-    beta_D: float,
+    beta_D_linear: float,
     gap: float,
     rho_steady_state: np.ndarray | None = None,
     seed: int = 7,
     n_haar: int = 10,
 ) -> LepResult:
-    """Run D16, D17, D18 together."""
+    """Run D16, D17, D18 together.
+
+    ``beta_D_linear`` is the LINEAR-metric relaxation rate (from the trace-
+    distance curve), which is dimension-coherent with the spectral ``gap``; see
+    :func:`gap_rate_consistency` for why the relative-entropy rate must not be
+    used here (issue #69).
+    """
     L_super = np.asarray(L_super)
     if rho_steady_state is None:
         rho_steady_state = steady_state(L_super)
     proximity, candidates = lep_proximity(eigenvalues)
-    consistency = gap_rate_consistency(beta_D, gap)
+    consistency = gap_rate_consistency(beta_D_linear, gap)
     sensitivity = initial_state_sensitivity(
         L_super, rho_steady_state, n_samples=n_haar, seed=seed
     )
@@ -106,4 +123,5 @@ def compute_lep_layer(
         gap_rate_consistency=consistency,
         initial_state_sensitivity=sensitivity,
         lep_candidate_count=candidates,
+        beta_D_linear=float(beta_D_linear),
     )
