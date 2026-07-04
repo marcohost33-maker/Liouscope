@@ -42,9 +42,18 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   pipeline is untouched). The classifier now exposes `beta_D`, `beta_D_linear`,
   `gap` and the implied multiplier `d17_metric_multiplier` in the evidence dict
   (the factor is explicit and auditable, not hidden), and a genuine single-mode
-  gap-controlled system can now earn A1 "gap-controlled" (F1). No V1-V5 mechanism
-  label changes; only the D17 *number* is corrected. New end-to-end regression
-  `tests/test_validation_systems/test_d17_gap_coherence.py` (14 tests). Additive
+  gap-controlled system can now earn A1 "gap-controlled" (F1). The A1 early-branch
+  is ordered *after* the F1-F5 gap-failure families and only *before* the
+  relative-entropy-shape branches (M2/M3a/M3b): `gap_rate_consistency` +
+  `linear_fit_model` are initial-state-dependent, so a strongly non-normal
+  phantom/skin operator with an `rho_0` that excites only the slow gap mode must
+  NOT shadow its true (operator-intrinsic) F5/F2 mechanism -- it stays A10/F5
+  (resp. A4/F2), not A1/F1 (Equalita #79 review). No V1-V5 mechanism label changes
+  (golden-pinned end-to-end against baseline `3fef6a1`); only the D17 *number* is
+  corrected. New end-to-end regression
+  `tests/test_validation_systems/test_d17_gap_coherence.py` (20 tests, incl. V1-V5
+  a_class golden + an adversarial non-normal-phantom shadow test) plus synthetic
+  ordering regressions in `tests/test_classification.py`. Additive
   fields `RelaxationResult.beta_D_linear/linear_fit_model` and
   `LepResult.beta_D_linear` are defaulted, so serialised reports stay valid;
   `compute_lep_layer(beta_D=...)` -> `compute_lep_layer(beta_D_linear=...)` and

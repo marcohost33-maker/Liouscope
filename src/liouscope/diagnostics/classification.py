@@ -118,19 +118,6 @@ def _pick_a_class(
     # no longer reaches A11 -- only a genuine, fine-tuned skip does.
     if ev.get("mpemba_is_candidate", 0.0) > 0.5:
         return "A11", "F4"
-    # A1 gap-controlled (LIOU-#69): the OBSERVABLE (linear trace-distance)
-    # relaxation is a single exponential whose rate matches the spectral gap
-    # (dimension-coherent D17 < 0.05). This is the textbook definition of
-    # gap-controlled relaxation and takes priority over the M2/M3a/M3b branches
-    # below, which key off the relative-entropy fit SHAPE -- that curve carries a
-    # metric multiplier and can prefer a bi-exponential even for single-mode
-    # dynamics. A gap-failure family (F1-F4) cannot co-occur with a rate that
-    # already matches the gap, so this precedes the F5/F1/F2/F3 checks.
-    if (
-        ev.get("gap_rate_consistency", float("inf")) < 0.05
-        and ev.get("d17_linear_single_exp", 0.0) > 0.5
-    ):
-        return "A1", "F1"
     # F5 phantom relaxation
     if ev["pseudospectral_radius"] > 2.0 * ev.get("gap_to_gns_ratio", 1.0) and ev["henrici_eta"] > 1.0:
         return "A10", "F5"
@@ -144,6 +131,24 @@ def _pick_a_class(
     # F3 symmetrised gap correction
     if ev["gap_to_gns_ratio"] > 1.2:
         return "A2", "F3"
+    # A1 gap-controlled (LIOU-#69): the OBSERVABLE (linear trace-distance)
+    # relaxation is a single exponential whose rate matches the spectral gap
+    # (dimension-coherent D17 < 0.05). This takes priority over the M2/M3a/M3b
+    # SHAPE branches below -- the relative-entropy curve carries a metric
+    # multiplier and can prefer a bi-exponential even for single-mode dynamics.
+    # It must NOT precede the F1-F5 gap-failure families (Equalita #79 review):
+    # gap_rate_consistency + linear_fit_model come from the initial-state-
+    # DEPENDENT trace-distance curve, whereas pseudospectral_radius / henrici /
+    # trans_amplitude / kreiss / petermann are operator-INTRINSIC. A strongly
+    # non-normal phantom/skin operator with an rho_0 that excites only the slow
+    # gap mode yields a clean single-exp at the gap rate; awarding A1/F1
+    # CONFIRMED there would shadow the true A10/F5 (or A3/A4) mechanism. So the
+    # gap-failure families are decided first; A1 is reached only when none fire.
+    if (
+        ev.get("gap_rate_consistency", float("inf")) < 0.05
+        and ev.get("d17_linear_single_exp", 0.0) > 0.5
+    ):
+        return "A1", "F1"
     # Oscillatory transient
     if ev["has_complex_pairs"] > 0 and relaxation.aicc_model == "M3b":
         return "A8", "none"
