@@ -125,7 +125,7 @@ def diagnose(
     lep = compute_lep_layer(
         L_super,
         spectral.eigenvalues,
-        beta_D=relaxation.beta_D,
+        beta_D_linear=relaxation.beta_D_linear,
         gap=spectral.gap,
         rho_steady_state=rho_steady_state,
         seed=seed,

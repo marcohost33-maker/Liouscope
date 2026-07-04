@@ -348,6 +348,46 @@ def test_branch_a1_moderate_gap_consistency():
     assert cls.verdict == VERDICT_NOT_EXCLUDED
 
 
+def test_a1_early_branch_reached_when_no_gap_failure_family():
+    # LIOU-#69: the dimension-coherent A1 early branch fires when the observable
+    # (linear) relaxation is a single exponential at the gap rate AND no
+    # gap-failure family (F1-F5) is present.
+    cls = _classify(
+        relaxation=_relaxation(aicc_model="M2", linear_fit_model="M0"),
+        lep=_lep(gap_rate_consistency=0.01),
+    )
+    assert (cls.a_class, cls.f_family) == ("A1", "F1")
+    assert cls.verdict == VERDICT_CONFIRMED  # confidence 0.95 (D17 < 0.05)
+
+
+def test_a1_early_branch_does_not_shadow_f5_phantom():
+    # LIOU-#69 (Equalita #79 adversarial): a STRONGLY non-normal phantom operator
+    # (F5: pseudospectral_radius > 2*gap_to_gns AND henrici > 1 -- both
+    # operator-INTRINSIC) combined with an rho_0 that excites only the slow gap
+    # mode yields a clean single-exp trace distance at the gap rate (the
+    # initial-state-DEPENDENT A1 signal). The A1 early branch must NOT award
+    # A1/F1 CONFIRMED here; the reorder places F5 first, so the true phantom
+    # mechanism wins. Same evidence, only the reorder decides A10 vs A1.
+    cls = _classify(
+        relaxation=_relaxation(aicc_model="M0", linear_fit_model="M0"),
+        resolvent=_resolvent(pseudospectral_radius=5.0),
+        nonnorm=_nonnorm(henrici_eta=2.0),
+        lep=_lep(gap_rate_consistency=0.01),  # A1-early WOULD fire if it came first
+    )
+    assert (cls.a_class, cls.f_family) == ("A10", "F5")
+    assert cls.a_class != "A1"
+
+
+def test_a1_early_branch_does_not_shadow_f2_skin():
+    # Same guard for the F2 skin family (operator-intrinsic trans_amplitude).
+    cls = _classify(
+        relaxation=_relaxation(aicc_model="M0", linear_fit_model="M0"),
+        transient=_transient(trans_amplitude_ratio=11.0, kappa_trans=3.0),
+        lep=_lep(gap_rate_consistency=0.01),
+    )
+    assert (cls.a_class, cls.f_family) == ("A4", "F2")
+
+
 def test_branch_evidence_without_mpemba():
     cls = _classify(mpemba=None)
     assert "mpemba_overlap_c1" not in cls.evidence
