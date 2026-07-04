@@ -37,12 +37,23 @@ def lep_proximity(eigenvalues: np.ndarray, *, atol: float = EPS_GAP) -> tuple[fl
     the window is ``atol`` (counting the coalesced cluster) rather than a
     degenerate zero-width window -- the two loops are now mutually consistent.
 
+    Issue #82 follow-up: non-finite eigenvalues are not a physical LEP signal and
+    must not be silently converted into ``inf`` / zero candidates. NaN/inf input
+    now fails closed with ``ValueError`` before the pairwise scan, so upstream
+    eigensolver corruption cannot masquerade as "maximally far from an EP".
+
     D16 measures eigenvalue proximity only; it cannot by itself distinguish a
     genuine (defective) EP from a semisimple / symmetry-protected degeneracy.
     That disambiguation is the job of the non-normality layer (Petermann factor
     D9), which the classifier combines with this signal.
     """
     eigenvalues = np.asarray(eigenvalues)
+    if not np.all(np.isfinite(eigenvalues)):
+        bad = np.flatnonzero(~np.isfinite(eigenvalues)).tolist()
+        raise ValueError(
+            "lep_proximity requires finite eigenvalues; "
+            f"non-finite entries at indices {bad}"
+        )
     n = eigenvalues.size
     if n < 2:
         return float("inf"), 0
