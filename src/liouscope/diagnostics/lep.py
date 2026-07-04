@@ -21,25 +21,46 @@ def lep_proximity(eigenvalues: np.ndarray, *, atol: float = EPS_GAP) -> tuple[fl
     """Minimum eigenvalue-pair separation, including complex-conjugate pairs.
 
     Returns ``(min_sep, candidate_count)`` where ``candidate_count`` is the
-    number of pairs within ``10 * min_sep`` of each other.
+    number of pairs within a proximity window of the closest pair.
+
+    Issue #70 A9: a Liouvillian exceptional point (LEP) is where two eigenvalues
+    (and their eigenvectors) coalesce, so eigenvalue separation -> 0 is the
+    signature of *approaching* an EP and an EXACT degeneracy is the STRONGEST
+    possible proximity signal. The pre-#70 scan skipped every pair with
+    ``sep <= atol`` (``if sep > atol``), which discarded exactly that signal:
+    an exactly (or numerically) degenerate pair was invisible, and a fully
+    degenerate spectrum returned ``inf`` -- "maximally FAR from an EP" -- the
+    exact inverse of the physics. The scan below keeps all ``i < j`` pairs; a
+    minimum separation at or below ``atol`` is clamped to ``0.0`` (coalesced =
+    proximity 0, not inf). The candidate-count loop uses the SAME data and a
+    proximity window ``max(10 * min_sep, atol)`` so that when ``min_sep == 0``
+    the window is ``atol`` (counting the coalesced cluster) rather than a
+    degenerate zero-width window -- the two loops are now mutually consistent.
+
+    D16 measures eigenvalue proximity only; it cannot by itself distinguish a
+    genuine (defective) EP from a semisimple / symmetry-protected degeneracy.
+    That disambiguation is the job of the non-normality layer (Petermann factor
+    D9), which the classifier combines with this signal.
     """
     eigenvalues = np.asarray(eigenvalues)
     n = eigenvalues.size
     if n < 2:
         return float("inf"), 0
     min_sep = float("inf")
+    for i in range(n):
+        for j in range(i + 1, n):
+            sep = float(abs(eigenvalues[i] - eigenvalues[j]))
+            if sep < min_sep:
+                min_sep = sep
+    # Exact / numerically-degenerate closest pair == strongest EP signal.
+    if min_sep <= atol:
+        min_sep = 0.0
+    window = max(10.0 * min_sep, atol)
     pairs_close = 0
     for i in range(n):
         for j in range(i + 1, n):
             sep = float(abs(eigenvalues[i] - eigenvalues[j]))
-            if sep < min_sep and sep > atol:
-                min_sep = sep
-    if not np.isfinite(min_sep):
-        return float("inf"), 0
-    for i in range(n):
-        for j in range(i + 1, n):
-            sep = float(abs(eigenvalues[i] - eigenvalues[j]))
-            if sep <= 10.0 * min_sep:
+            if sep <= window:
                 pairs_close += 1
     return min_sep, pairs_close
 

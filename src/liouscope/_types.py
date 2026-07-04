@@ -13,7 +13,12 @@ import numpy as np
 
 from ._consts import DIAGNOSTIC_SCHEMA_VERSION, TAXONOMY_VERSION
 
-Verdict = Literal["CONFIRMED", "EXCLUDED", "CANDIDATE", "NOT_EXCLUDED", "UNDEFINED"]
+# issue #70 A5: "EXCLUDED" was removed. A single-pass maximum-evidence
+# classifier reports the best-fit A-class with its support and never emits a
+# genuine active-rejection verdict, so the value was permanently unreachable
+# through ``diagnose()`` (advertised a capability the pipeline lacks). Active
+# exclusion requires a per-hypothesis scoring mode (deferred). See CHANGELOG.
+Verdict = Literal["CONFIRMED", "CANDIDATE", "NOT_EXCLUDED", "UNDEFINED"]
 Tier = Literal["PUBLICATION_GRADE", "CONFIRMATION", "EXPLORATION"]
 QualityLabel = Literal["stable", "moderate", "exploratory"]
 SolverPath = Literal["dense", "sparse_arpack"]

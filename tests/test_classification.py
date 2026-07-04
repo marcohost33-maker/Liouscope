@@ -20,7 +20,6 @@ from liouscope._consts import (
     TIER_PUBLICATION,
     VERDICT_CANDIDATE,
     VERDICT_CONFIRMED,
-    VERDICT_EXCLUDED,
     VERDICT_NOT_EXCLUDED,
     VERDICT_UNDEFINED,
 )
@@ -320,6 +319,52 @@ def test_branch_a8_oscillatory_transient():
     assert (cls.a_class, cls.f_family) == ("A8", "none")
 
 
+@pytest.mark.parametrize("c", [0.001, 0.01, 0.1, 1.0, 10.0, 1000.0])
+def test_a8_f5_rule_is_scale_invariant_under_rescale(c):
+    # issue #70 A8 (metamorphic): rescaling the Liouvillian L -> cL rescales
+    # every RATE-dimensioned quantity by c -- the spectral gap, the GNS gap and
+    # the pseudospectral radius -- while dimensionless quantities (gap_to_gns
+    # ratio, henrici) are invariant. A dimension-coherent F5 rule must NOT flip
+    # the A10/F5 verdict under this rescale (the physics is unchanged; only the
+    # unit of time changed). The fixed rule compares the dimensionless reach
+    # radius/gap, which is scale-invariant.
+    spectral = _spectral(gap=0.5 * c, gns_gap=0.5 * c, kms_gap=0.5 * c)
+    resolvent = _resolvent(pseudospectral_radius=5.0 * c)
+    nonnorm = _nonnorm(henrici_eta=2.0)
+    cls = _classify(spectral=spectral, resolvent=resolvent, nonnorm=nonnorm)
+    assert (cls.a_class, cls.f_family) == ("A10", "F5")
+
+
+def test_a8_old_bare_radius_rule_would_have_flipped_under_rescale():
+    # Load-bearing regression: the pre-#70 rule compared the BARE radius (a rate)
+    # against 2 * gap_to_gns (dimensionless). Under a strong down-scale the bare
+    # radius drops below the threshold and the OLD rule would have dropped A10/F5,
+    # whereas the same physical system stays A10/F5 with the dimension-coherent
+    # rule. This pins that the fix is real, not cosmetic.
+    c = 0.01
+    spectral = _spectral(gap=0.5 * c, gns_gap=0.5 * c, kms_gap=0.5 * c)
+    resolvent = _resolvent(pseudospectral_radius=5.0 * c)
+    nonnorm = _nonnorm(henrici_eta=2.0)
+    cls = _classify(spectral=spectral, resolvent=resolvent, nonnorm=nonnorm)
+    ev = cls.evidence
+    # New (dimension-coherent) rule fires:
+    assert ev["pseudospectral_radius"] / ev["gap"] > 2.0 * ev["gap_to_gns_ratio"]
+    assert (cls.a_class, cls.f_family) == ("A10", "F5")
+    # Old (bare-radius) rule would NOT have fired on the same rescaled system:
+    assert not (ev["pseudospectral_radius"] > 2.0 * ev["gap_to_gns_ratio"])
+
+
+def test_a8_f5_fires_on_gapless_strongly_nonnormal_operator():
+    # issue #70 A8 edge: a vanishing spectral gap with strong non-normality is
+    # the phantom/critical limit -> infinite pseudospectral reach -> F5 fires.
+    cls = _classify(
+        spectral=_spectral(gap=0.0),
+        resolvent=_resolvent(pseudospectral_radius=5.0),
+        nonnorm=_nonnorm(henrici_eta=2.0),
+    )
+    assert (cls.a_class, cls.f_family) == ("A10", "F5")
+
+
 def test_branch_a10_jordan_block_m3a():
     cls = _classify(relaxation=_relaxation(aicc_model="M3a"))
     assert (cls.a_class, cls.f_family) == ("A10", "F5")
@@ -331,19 +376,22 @@ def test_branch_a5_biexponential_m2():
 
 
 def test_branch_a1_strong_gap_consistency():
+    # issue #70 A6: A1 (gap-controlled, primitive QMS) is the NO-gap-failure case
+    # and must map to family "none", not F1 (Mori-Shirai overlap gap-FAILURE).
     cls = _classify(
         relaxation=_relaxation(aicc_model="M0"),
         lep=_lep(gap_rate_consistency=0.01),
     )
-    assert (cls.a_class, cls.f_family) == ("A1", "F1")
+    assert (cls.a_class, cls.f_family) == ("A1", "none")
     assert cls.confidence == pytest.approx(0.95)
     assert cls.verdict == VERDICT_CONFIRMED
 
 
 def test_branch_a1_moderate_gap_consistency():
     # gap_rate_consistency < 0.20 but not the M0 + < 0.05 strong combo.
+    # issue #70 A6: A1 -> family "none" (no gap-failure mechanism flagged).
     cls = _classify(lep=_lep(gap_rate_consistency=0.1))
-    assert (cls.a_class, cls.f_family) == ("A1", "F1")
+    assert (cls.a_class, cls.f_family) == ("A1", "none")
     assert cls.confidence == pytest.approx(0.5)
     assert cls.verdict == VERDICT_NOT_EXCLUDED
 
@@ -356,7 +404,7 @@ def test_a1_early_branch_reached_when_no_gap_failure_family():
         relaxation=_relaxation(aicc_model="M2", linear_fit_model="M0"),
         lep=_lep(gap_rate_consistency=0.01),
     )
-    assert (cls.a_class, cls.f_family) == ("A1", "F1")
+    assert (cls.a_class, cls.f_family) == ("A1", "none")  # issue #70 A6
     assert cls.verdict == VERDICT_CONFIRMED  # confidence 0.95 (D17 < 0.05)
 
 
@@ -400,9 +448,11 @@ def test_undefined_when_beta_not_finite():
     assert cls.tier == TIER_EXPLORATION
 
 
-# Direct unit tests for the verdict/tier mapping, including branches that are
-# unreachable through the natural confidence values (e.g. EXCLUDED requires a
-# non-A12 class with confidence < 0.30).
+# Direct unit tests for the verdict/tier mapping. issue #70 A5: there is no
+# longer an EXCLUDED branch -- low confidence in the best-fit class is epistemic
+# uncertainty ("unresolved" = NOT_EXCLUDED), not active counter-evidence. The
+# sub-0.30 row below now PINS that corrected semantics (previously it wrongly
+# expected EXCLUDED, a verdict diagnose() could never emit anyway).
 @pytest.mark.parametrize(
     "confidence,expected_verdict,expected_tier",
     [
@@ -411,7 +461,8 @@ def test_undefined_when_beta_not_finite():
         (0.70, VERDICT_CANDIDATE, TIER_CONFIRMATION),
         (0.60, VERDICT_CANDIDATE, TIER_CONFIRMATION),
         (0.45, VERDICT_NOT_EXCLUDED, TIER_EXPLORATION),
-        (0.20, VERDICT_EXCLUDED, TIER_EXPLORATION),
+        (0.20, VERDICT_NOT_EXCLUDED, TIER_EXPLORATION),
+        (0.0, VERDICT_NOT_EXCLUDED, TIER_EXPLORATION),
     ],
 )
 def test_pick_verdict_tier_thresholds(confidence, expected_verdict, expected_tier):
