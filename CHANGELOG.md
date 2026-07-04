@@ -35,6 +35,31 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   behaviour change; the semantics are now explicit in code.
 
 ### Fixed
+- **D19/A11 Mpemba detector no longer false-positives on trivially symmetric
+  initial states** (issue #68). Three coupled defects were corrected:
+  - `diagnostics/mpemba.py::overlap_c1` normalised the slowest-mode overlap by
+    `||l_1||`, so only its *zero test* was meaningful. It now returns the true
+    **biorthogonal** expansion coefficient `|<l_1, rho_0>| / |<l_1, r_1>|`
+    (denominator floored at `EPS_DIV`), the physical weight of the slow mode.
+  - A **non-triviality guard** (`is_trivial_overlap`, wired through `diagnose()`
+    via the new `rho_steady_state` argument of `compute_mpemba_layer`) now
+    distinguishes a *symmetry-protected* zero overlap from an anomalous skip. In
+    the sector decomposition set by the **eigenprojectors of `rho_ss`** (robust
+    to a degenerate / maximally mixed steady state, unlike an eigenvector basis),
+    a `rho_0` whose active blocks are disjoint from the slowest mode's can never
+    populate it — trivially fast relaxation, not Mpemba. Amplitude damping with
+    the default `rho_0 = I/2` (and the excited state `|1><1|`) previously
+    returned `A11 F4 CONFIRMED PUBLICATION_GRADE`; both now fall through the A11
+    branch. `MpembaResult` gains a `trivial_overlap` field.
+  - A single initial state skipping the slowest mode is now **CANDIDATE-grade,
+    not PUBLICATION_GRADE**: `A11` confidence is capped at 0.70 because
+    confirmation needs a reference family (e.g. thermal states across
+    temperatures) the single-state pipeline does not provide. The README
+    dephasing example (`rho_ss = I/2`, no protecting symmetry sector) stays
+    `A11` but as `CANDIDATE`/`CONFIRMATION`, no longer self-certifying.
+  - New/updated coverage in `tests/test_mpemba.py` (biorthogonal coefficient,
+    guard truth table, a fine-tuned qutrit true-positive oracle, canonical
+    false-positive regressions) and `tests/test_classification.py`.
 - **CI: pinned `ruff==0.15.20` and reformatted the `_diagnostics` import
   block.** Ruff's isort `I001` heuristic for `lines-after-imports` before a
   module-level constant changed between 0.15.14 and 0.15.20, flagging a

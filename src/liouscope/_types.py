@@ -116,6 +116,7 @@ class MpembaResult:
     overlap_c1: float                     # D19 slowest-mode overlap
     is_mpemba_candidate: bool
     expansion_alpha: float                # D20 Phi_n scaling exponent
+    trivial_overlap: bool = False         # symmetry-protected zero overlap (not Mpemba)
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
