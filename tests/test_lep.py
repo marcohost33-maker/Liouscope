@@ -61,7 +61,7 @@ def test_lep_proximity_nondegenerate_is_unchanged():
 
 def test_lep_proximity_rejects_nonfinite_eigenvalues():
     # issue #82: NaN/inf eigenvalues used to be silently ignored by comparisons,
-    # typically yielding (inf, 0) and looking "maximally far from an EP". That is
+    # typically yielding (1.0, 1) and misclassifying it as a valid D16 signal. That is
     # a silent-failure mode, not a valid D16 signal, so it must fail closed.
     for eigs in (
         np.array([0.0, np.nan, -1.0], dtype=complex),
