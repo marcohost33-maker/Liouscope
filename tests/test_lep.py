@@ -59,6 +59,26 @@ def test_lep_proximity_nondegenerate_is_unchanged():
     assert count >= 1
 
 
+def test_lep_proximity_rejects_nonfinite_eigenvalues():
+    # issue #82: NaN/inf eigenvalues used to be silently ignored by comparisons,
+    # typically yielding (1.0, 1) and misclassifying it as a valid D16 signal. That is
+    # a silent-failure mode, not a valid D16 signal, so it must fail closed.
+    for eigs in (
+        np.array([0.0, np.nan, -1.0], dtype=complex),
+        np.array([0.0, np.inf, -1.0], dtype=complex),
+        np.array([0.0, complex(0.0, np.inf), -1.0], dtype=complex),
+    ):
+        with pytest.raises(ValueError, match="finite eigenvalues"):
+            lep_proximity(eigs)
+
+
+def test_compute_lep_layer_propagates_nonfinite_eigenvalue_error(pauli):
+    L = build_liouvillian(0.5 * pauli["X"], [pauli["Z"]], [0.3])
+    eigs = np.array([0.0, np.nan, -1.0], dtype=complex)
+    with pytest.raises(ValueError, match="finite eigenvalues"):
+        compute_lep_layer(L, eigs, beta_D_linear=0.6, gap=0.3, n_haar=4)
+
+
 def test_lep_proximity_candidate_loop_consistent_with_min_sep():
     # issue #70 A9: both loops apply the SAME data/window. A degenerate pair plus
     # a distant eigenvalue: the closest pair is the degenerate one (window=atol),

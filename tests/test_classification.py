@@ -320,19 +320,72 @@ def test_branch_a8_oscillatory_transient():
 
 
 @pytest.mark.parametrize("c", [0.001, 0.01, 0.1, 1.0, 10.0, 1000.0])
-def test_a8_f5_rule_is_scale_invariant_under_rescale(c):
-    # issue #70 A8 (metamorphic): rescaling the Liouvillian L -> cL rescales
-    # every RATE-dimensioned quantity by c -- the spectral gap, the GNS gap and
-    # the pseudospectral radius -- while dimensionless quantities (gap_to_gns
-    # ratio, henrici) are invariant. A dimension-coherent F5 rule must NOT flip
-    # the A10/F5 verdict under this rescale (the physics is unchanged; only the
-    # unit of time changed). The fixed rule compares the dimensionless reach
-    # radius/gap, which is scale-invariant.
+def test_a8_f5_decision_rule_invariant_under_exactly_scaled_evidence(c):
+    # issue #70 / #82 A8: this pins the DECISION RULE only, and deliberately
+    # feeds evidence whose RATE-dimensioned quantities (gap, gns_gap, kms_gap,
+    # pseudospectral_radius) are ALL hand-scaled by exactly ``c``. Given such
+    # idealised, exactly-scaled evidence the dimensionless reach ``radius/gap``
+    # is trivially constant, so ``_pick_a_class`` must NOT flip the A10/F5
+    # verdict. That is the intended dimensional coherence of the rule itself.
+    #
+    # NOTE (issue #82, anti-overclaim): this does NOT show that the full D13
+    # pipeline is scale-invariant. The real ``pseudospectral_radius`` is computed
+    # at a *fixed* ``eps`` and therefore only scales ~linearly under L -> cL, so
+    # the end-to-end reach drifts (it is scale-invariant to LEADING ORDER only).
+    # That real, bounded residual drift is measured separately in
+    # ``test_a8_f5_pseudospectral_reach_is_only_leading_order_scale_invariant``.
     spectral = _spectral(gap=0.5 * c, gns_gap=0.5 * c, kms_gap=0.5 * c)
     resolvent = _resolvent(pseudospectral_radius=5.0 * c)
     nonnorm = _nonnorm(henrici_eta=2.0)
     cls = _classify(spectral=spectral, resolvent=resolvent, nonnorm=nonnorm)
     assert (cls.a_class, cls.f_family) == ("A10", "F5")
+
+
+def test_a8_f5_pseudospectral_reach_is_only_leading_order_scale_invariant():
+    # issue #82 part 1: END-TO-END metamorphic probe that RECOMPUTES the D13
+    # pseudospectral radius from a genuinely rescaled operator ``c * M`` (rather
+    # than hand-scaling the stored evidence). It documents -- and bounds -- the
+    # real residual drift of the dimensionless reach ``radius / gap``.
+    #
+    # Physics: for eps-pseudospectra ``sigma_eps(cL) = c * sigma_{eps/c}(L)``.
+    # D13 (``resolvent.pseudospectral_radius``) uses a FIXED ``eps = 1e-3``, so
+    # the radius scales only ~linearly and ``radius/gap`` is NOT exactly
+    # invariant. As ``c`` grows the fixed eps becomes negligible and the reach
+    # converges to the true spectral-radius/gap; as ``c`` shrinks the fixed eps
+    # inflates the pseudospectrum and the reach grows. This test pins both the
+    # existence of that drift (the overclaim would be that there is none) and its
+    # boundedness (the leading-order claim that is actually true).
+    from liouscope.numerics.pseudospec import pseudospectral_radius
+
+    # Strongly non-normal operator, real eigenvalues {-1, -2, -3} (large upper
+    # off-diagonal coupling => strong non-normality). Slowest decay rate = 1.0
+    # is the spectral gap; it scales EXACTLY under M -> c*M. The true spectral
+    # radius is 3, so the exact (eps->0) reach would be 3/1 = 3.
+    g = 10.0
+    base = np.array(
+        [[-1.0, g, 0.0], [0.0, -2.0, g], [0.0, 0.0, -3.0]], dtype=complex
+    )
+    gap0 = 1.0
+    eps = 1.0e-3  # the fixed D13 default (resolvent.pseudospectral_radius_diag)
+
+    reaches = {
+        c: pseudospectral_radius(c * base, eps) / (c * gap0)
+        for c in (1.0e-3, 1.0e-2, 1.0e-1, 1.0, 1.0e1, 1.0e3)
+    }
+    reach_small = reaches[1.0e-3]
+    reach_large = reaches[1.0e3]
+
+    # (1) The reach is NOT scale-invariant: fixed eps inflates it at small scale.
+    # This is the concrete falsification of the old "scale-invariant" claim.
+    assert reach_small > reach_large * 1.05
+
+    # (2) But the drift is BOUNDED over six decades (leading-order invariance):
+    # the ratio of extremes stays well under 2x. (Measured ~1.34 here.)
+    assert reach_small / reach_large < 1.8
+
+    # (3) Mechanism check: at large scale the fixed eps is negligible, so the
+    # reach converges to the true spectral-radius/gap = 3.0.
+    assert reach_large == pytest.approx(3.0, rel=0.05)
 
 
 def test_a8_old_bare_radius_rule_would_have_flipped_under_rescale():

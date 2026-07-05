@@ -116,6 +116,27 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     coverage.
 
 ### Fixed
+- **D16 `lep_proximity` now fails closed on non-finite eigenvalues** (issue #82,
+  part 2). NaN / +-inf eigenvalues were silently swallowed by the pairwise
+  comparisons and yielded a finite `(proximity, count)` result -- e.g. a NaN
+  input returned `(1.0, 1)`, a spurious LEP classification instead of an error.
+  `lep_proximity` (and therefore `compute_lep_layer`) now raises `ValueError`,
+  listing the offending indices, before the scan. This closes a Silent-Failure-
+  Gate violation; the exact/full/sub-atol degeneracy behaviour is unchanged.
+  Pinned by new negative-path tests in `tests/test_lep.py`.
+- **A8/F5 scale-invariance test no longer overclaims** (issue #82, part 1). The
+  test `test_a8_f5_rule_is_scale_invariant_under_rescale` hand-scaled *both* the
+  gap and the pseudospectral radius by the same factor, making `radius/gap`
+  trivially constant, yet its name claimed full scale-invariance. It is renamed
+  to `test_a8_f5_decision_rule_invariant_under_exactly_scaled_evidence` (it pins
+  the *decision rule* on idealised evidence only) and a new end-to-end
+  metamorphic test recomputes the D13 pseudospectral radius from a genuinely
+  rescaled operator `c*M`. Because D13 uses a **fixed** `eps = 1e-3`, the reach
+  `radius/gap` is scale-invariant **to leading order only** (measured drift
+  ~1.34x over six decades, converging to the true spectral-radius/gap at large
+  scale); the classifier docstring already said "to leading order" -- only the
+  test/PR wording overclaimed. Relative-eps rescaling for exact invariance is a
+  physics-design follow-up, out of scope here.
 - **D19/A11 Mpemba detector no longer false-positives on trivially symmetric
   initial states** (issue #68). Three coupled defects were corrected:
   - `diagnostics/mpemba.py::overlap_c1` normalised the slowest-mode overlap by
