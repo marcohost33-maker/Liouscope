@@ -151,7 +151,22 @@ def diagnose(
         size_residual=None,
         bootstrap_B=bootstrap_B,
     )
-    input_hash = compute_input_hash(L_super, rho_initial)
+    # The input hash must cover *every* output-affecting argument, otherwise two
+    # runs that differ only in an analysis knob (e.g. ``bootstrap_B``, which
+    # changes the BCa CI) collide on an identical ``run_id`` and the manifest's
+    # reproducibility contract (MANIFEST_SCHEMA: "deterministically derived from
+    # input parameters") is violated. ``rho_initial``/``rho_steady_state`` are the
+    # already-resolved arrays, so caller-supplied and defaulted states hash the
+    # same when they are genuinely the same physical input.
+    input_hash = compute_input_hash(
+        L_super,
+        rho_initial,
+        rho_steady_state,
+        t_grid,
+        bootstrap_B,
+        include_mpemba,
+        solver_path,
+    )
     governance = build_manifest(
         input_hash=input_hash,
         seed=seed,

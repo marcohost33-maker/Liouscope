@@ -116,6 +116,50 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     coverage.
 
 ### Fixed
+- **`run_id` / `input_hash` now cover every output-affecting input.** Both
+  provenance keys were derived only from `(L_super, rho_initial)` (plus `seed`
+  and `framework_version` for `run_id`), so two `diagnose()` calls that differed
+  only in an analysis knob — `bootstrap_B`, `t_grid`, `include_mpemba`,
+  `solver_path`, or an explicitly-supplied `rho_steady_state` — produced
+  byte-different reports carrying an *identical* `run_id`. That is a collision:
+  the `MANIFEST_SCHEMA` documents `run_id` as "deterministically derived from
+  input parameters", but a larger `bootstrap_B` (wider BCa CI) reused the same
+  key, breaking archival keyed on `run_id`. `compute_input_hash` now folds all
+  output-affecting arguments; the `MANIFEST_SCHEMA` `run_id`/`input_hash`
+  descriptions are made accurate. Determinism for identical inputs is unchanged
+  (repeated runs still collide, as required). New regression
+  `tests/test_manifest.py::test_run_id_distinguishes_analysis_config`.
+- **`seed_everything` fails closed on out-of-range seeds** before mutating any
+  global state. Legacy `np.random.seed` only accepts `0 <= seed < 2**32`; a seed
+  of `2**32` passed the previous non-negative-int guard, then raised mid-function
+  *after* `PYTHONHASHSEED` and `random.seed` had already been changed (partial,
+  inconsistent state). The bound is now checked up front. New regression in
+  `tests/test_input_guards.py`.
+- **D14/D15 time grid stays strictly ascending under extreme non-normality.**
+  `_physics_time_grid` built its log-spaced early segment as
+  `geomspace(t_decay * 1e-6, t_early, …)`; when the numerical abscissa exceeds
+  the gap by more than six decades the start overtakes `t_early` and the segment
+  ran *backwards*, clustering the fine sampling after the transient peak instead
+  of before it. The start is now clamped below `t_early` in that regime (a no-op
+  for all normal spectra). New regression in `tests/test_transient.py`.
+- **D13 `pseudospectral_radius` fails closed on non-finite operators.** The
+  grid search fed `L` straight into `eigvals`/`svdvals` with no finite/square
+  guard, unlike the rest of `numerics` (`linalg.py`, `cptp.py`); a NaN/inf
+  operator surfaced as an opaque LAPACK error deep in the svd loop instead of a
+  located, argument-named `ValueError`. Added `require_finite_square_2d` at the
+  entry point. New regression in `tests/test_resolvent.py`.
+- **Metadata / provenance consistency.** `codemeta.json` no longer overclaims
+  "D21-D24 implemented" (it now matches `CITATION.cff`: D1-D20 + D2b/D7b/D11b +
+  the opt-in D24, with D21-D23 as reserved schema slots); `MANIFEST_SCHEMA.json`
+  `$id` points at the canonical `marcohost33-maker/Liouscope` repo instead of a
+  stale org; and `build_stability_report` casts `cp_choi_min_eig` through
+  `float()` like every other numeric it stores, so a `np.float32`/`np.longdouble`
+  input cannot break JSON serialization.
+- **Removed a dead classifier branch.** The A1 `gap_rate_consistency < 0.05 and
+  aicc_model == "M0"` pre-check returned the identical `("A1", "none")` that the
+  following `< 0.20` line already returns, and the A1 confidence keys on
+  `gap_rate_consistency` alone — so it changed neither label nor score. Deleting
+  it removes an implied distinction that does not exist (no behaviour change).
 - **D16 `lep_proximity` now fails closed on non-finite eigenvalues** (issue #82,
   part 2). NaN / +-inf eigenvalues were silently swallowed by the pairwise
   comparisons and yielded a finite `(proximity, count)` result -- e.g. a NaN

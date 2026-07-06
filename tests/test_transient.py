@@ -147,3 +147,19 @@ def test_numerical_abscissa_grid_free_sanity():
     L = build_liouvillian(2.0 * _SX, [_SM], [0.1])
     omega = numerical_abscissa(L)
     assert np.isfinite(omega)
+
+
+def test_physics_time_grid_strictly_ascending_extreme_nonnormality():
+    """When the numerical abscissa exceeds the gap by >6 decades, the nominal
+    log-segment start ``t_decay * 1e-6`` overtakes ``t_early`` and geomspace
+    would run backwards. The grid must remain strictly increasing (and finite)
+    so the sup-norm sampling still resolves the pre-peak rise."""
+    from liouscope.diagnostics.transient import _physics_time_grid
+
+    # Strongly non-normal 2x2 block: Hermitian part has omega ~ 2.5, paired with
+    # a deliberately tiny gap so omega/gap ~ 2.5e7 >> 1e6 (the broken regime).
+    L = np.array([[-1.0e-3, 5.0], [0.0, -1.0e-3]], dtype=complex)
+    grid = _physics_time_grid(L, gap=1.0e-7)
+    assert np.all(np.isfinite(grid))
+    assert grid[0] == 0.0
+    assert np.all(np.diff(grid) > 0.0), "time grid is not strictly ascending"

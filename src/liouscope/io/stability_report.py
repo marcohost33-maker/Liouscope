@@ -149,7 +149,7 @@ def build_stability_report(
     bundle = evidence_bundle or EvidenceBundle()
     g = report.governance
     inv: dict[str, float | None] = dict(invariant_residuals(L_super, rho_ss))
-    inv["cp_choi_min_eig"] = cp_choi_min_eig
+    inv["cp_choi_min_eig"] = None if cp_choi_min_eig is None else float(cp_choi_min_eig)
 
     spectral = report.spectral
     diagnostics: dict[str, Any] = {

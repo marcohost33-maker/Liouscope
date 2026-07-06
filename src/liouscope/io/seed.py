@@ -23,6 +23,12 @@ def seed_everything(seed: int = DEFAULT_SEED) -> np.random.Generator:
     seed_obj: object = seed
     if isinstance(seed_obj, bool) or not isinstance(seed_obj, int) or seed_obj < 0:
         raise ValueError(f"seed must be a non-negative int, got {seed!r}")
+    # Legacy ``np.random.seed`` only accepts 0 <= seed < 2**32 (MT19937 uint32
+    # seeding). Reject out-of-range seeds *before* mutating any global state so
+    # a bad seed fails closed instead of leaving PYTHONHASHSEED / random.seed
+    # partially applied while np.random.seed raises mid-function.
+    if seed >= 2**32:
+        raise ValueError(f"seed must be < 2**32 for legacy np.random.seed, got {seed}")
     os.environ["PYTHONHASHSEED"] = str(seed)
     random.seed(seed)
     np.random.seed(seed)

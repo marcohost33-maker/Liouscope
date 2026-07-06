@@ -15,6 +15,8 @@ from __future__ import annotations
 import numpy as np
 import scipy.linalg as sla
 
+from .linalg import require_finite_square_2d
+
 
 def pseudospectral_radius(
     L: np.ndarray,
@@ -35,7 +37,10 @@ def pseudospectral_radius(
         Tuples ``(lo, hi, n)`` defining the real/imaginary axis grid.
         Defaults pick a region around the spectrum.
     """
-    L = np.asarray(L)
+    # Fail closed on non-finite / non-square input (consistent with linalg.py and
+    # cptp.py) so a NaN/inf-laden operator surfaces a located, named error instead
+    # of an opaque LAPACK failure deep in the svd loop.
+    L = require_finite_square_2d(L, name="L")
     eigvals = sla.eigvals(L)
     if grid_re is None:
         re_max = float(np.max(np.real(eigvals)))

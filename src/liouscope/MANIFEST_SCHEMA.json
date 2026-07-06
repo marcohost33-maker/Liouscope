@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://github.com/coworker-research/liouscope/MANIFEST_SCHEMA.json",
+  "$id": "https://github.com/marcohost33-maker/Liouscope/MANIFEST_SCHEMA.json",
   "title": "LiouScope Run Manifest",
   "description": "Reproducibility manifest emitted on every diagnose() invocation.",
   "type": "object",
@@ -29,7 +29,7 @@
     "run_id": {
       "type": "string",
       "pattern": "^[0-9a-f]{64}$",
-      "description": "SHA-256 hash deterministically derived from input parameters."
+      "description": "SHA-256 deterministically derived from input_hash, seed and framework_version; two runs collide only when all output-affecting inputs match."
     },
     "timestamp": { "type": "string", "format": "date-time" },
     "python_version": { "type": "string" },
@@ -47,7 +47,8 @@
     },
     "input_hash": {
       "type": "string",
-      "pattern": "^[0-9a-f]{64}$"
+      "pattern": "^[0-9a-f]{64}$",
+      "description": "SHA-256 over every output-affecting input (Liouvillian, initial and steady states, time grid, bootstrap count, mpemba flag, solver path)."
     }
   },
   "additionalProperties": false

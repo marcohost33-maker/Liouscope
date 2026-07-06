@@ -60,6 +60,25 @@ def test_diagnose_run_id_deterministic(pauli):
     assert r1.governance.run_id == r2.governance.run_id
 
 
+def test_run_id_distinguishes_analysis_config(pauli):
+    """Two runs that differ only in an output-affecting analysis knob must get
+    distinct run_id / input_hash. Otherwise reports that differ (e.g. a wider
+    BCa CI from a larger bootstrap count) collide on the same provenance key,
+    breaking the manifest's reproducibility contract."""
+    L = build_liouvillian(0.5 * pauli["X"], [pauli["Z"]], [0.3])
+    plus = np.array([1, 1], dtype=complex) / np.sqrt(2)
+    rho0 = np.outer(plus, plus.conj())
+    r_small = diagnose(L, rho_initial=rho0, bootstrap_B=20, seed=42)
+    r_large = diagnose(L, rho_initial=rho0, bootstrap_B=80, seed=42)
+    assert r_small.governance.input_hash != r_large.governance.input_hash
+    assert r_small.governance.run_id != r_large.governance.run_id
+    # include_mpemba is likewise an output-affecting input.
+    r_no_mpemba = diagnose(
+        L, rho_initial=rho0, bootstrap_B=20, seed=42, include_mpemba=False
+    )
+    assert r_no_mpemba.governance.run_id != r_small.governance.run_id
+
+
 def test_dump_report_roundtrip(tmp_path: Path, pauli):
     L = build_liouvillian(0.5 * pauli["X"], [pauli["Z"]], [0.3])
     plus = np.array([1, 1], dtype=complex) / np.sqrt(2)
