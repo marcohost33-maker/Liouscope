@@ -49,7 +49,10 @@ def engineered_target_jumps(target_psi: np.ndarray) -> list[np.ndarray]:
     norm = float(np.linalg.norm(target))
     if norm <= 1.0e-12:
         raise ValueError("target_psi must be a non-zero state vector")
-    if not np.isclose(norm, 1.0, atol=1.0e-9):
+    # rtol=0 explicit: np.isclose defaults to rtol=1e-5, which would skip
+    # renormalisation for a state off unit norm by up to ~1e-5 (leaking into
+    # the rank-one jump operators). Gate strictly on the 1e-9 absolute atol.
+    if not np.isclose(norm, 1.0, rtol=0.0, atol=1.0e-9):
         target = np.asarray(target / norm, dtype=complex)
     d = target.size
     e0 = np.zeros((d, 1), dtype=complex)

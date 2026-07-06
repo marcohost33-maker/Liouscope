@@ -88,7 +88,11 @@ def build_liouvillian(
     if H.ndim != 2 or H.shape[0] != H.shape[1]:
         raise ValueError(f"H must be square, got {H.shape}")
     d = H.shape[0]
-    if not np.allclose(H, H.conj().T, atol=1.0e-9):
+    # rtol=0 explicit: np.allclose's default rtol=1e-5 would let an H that is
+    # non-Hermitian at ~1e-5*|entry| pass a gate the message advertises as
+    # 1e-9 absolute (physical Hamiltonians are Hermitian to machine precision,
+    # so a true 1e-9 gate rejects only genuinely malformed input).
+    if not np.allclose(H, H.conj().T, rtol=0.0, atol=1.0e-9):
         raise ValueError("H must be Hermitian within 1e-9 atol")
 
     if jump_ops is None:

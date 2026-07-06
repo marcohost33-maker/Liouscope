@@ -59,6 +59,19 @@ def test_is_density_matrix_false_negative():
     assert not is_density_matrix(rho)
 
 
+def test_is_hermitian_atol_is_absolute_not_relative():
+    # A matrix non-Hermitian at 1e-6 must be rejected by the advertised 1e-9
+    # atol. Regression against np.allclose's default rtol=1e-5 silently widening
+    # the gate to ~atol + 1e-5*|entry| (~1e-5 for O(1) entries).
+    rho = np.array([[0.5, 0.2 + 1.0e-6j], [0.2, 0.5]], dtype=complex)
+    assert np.max(np.abs(rho - rho.conj().T)) == pytest.approx(1.0e-6)
+    assert not is_hermitian(rho, atol=1.0e-9)
+    assert not is_density_matrix(rho)
+    # ...but a 1e-11 asymmetry (below atol) still passes.
+    rho_ok = np.array([[0.5, 0.5 + 1.0e-11j], [0.5, 0.5]], dtype=complex)
+    assert is_hermitian(rho_ok, atol=1.0e-9)
+
+
 def test_eig_nonhermitian_with_left_vectors():
     A = np.diag([1.0, 2.0, 3.0]).astype(complex)
     decomp = eig_nonhermitian(A, compute_left=True)
