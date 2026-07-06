@@ -175,9 +175,13 @@ def _pick_a_class(
     # Biexponential => metastable plateau or operator spreading
     if relaxation.aicc_model == "M2":
         return "A5", "none"
-    # Strong gap consistency (M0 winner, beta_D close to Delta)
-    if ev["gap_rate_consistency"] < 0.05 and relaxation.aicc_model == "M0":
-        return "A1", "none"
+    # Residual gap consistency: the linear-single-exp A1 branch above already
+    # claimed the strong (D17 < 0.05) single-mode case, so a plain
+    # ``gap_rate_consistency`` threshold is the only distinction left here. The
+    # former ``< 0.05 and aicc_model == "M0"`` pre-check was dead: it returned the
+    # identical ("A1", "none") that the ``< 0.20`` line below returns, and the A1
+    # confidence keys on ``gap_rate_consistency`` alone (not the aicc model), so
+    # it changed neither the label nor the score.
     if ev["gap_rate_consistency"] < 0.20:
         return "A1", "none"
     return "A12", "none"

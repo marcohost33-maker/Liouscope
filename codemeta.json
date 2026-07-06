@@ -3,7 +3,7 @@
   "@type": "SoftwareSourceCode",
   "name": "LiouScope",
   "version": "0.5.0",
-  "description": "Multi-diagnostic relaxation analysis for open quantum lattice systems. Implements 24 diagnostics D1-D24 (D1-D20 original submission set, D21-D24 post-submission additions; schema D1-D24-Übersicht-v3) and a twelve-class mechanism taxonomy A1-A12 covering Mori-Shirai overlap, Liouvillian skin effect, symmetrized gap, quantum Mpemba effect, and phantom relaxation.",
+  "description": "Multi-diagnostic relaxation analysis for open quantum lattice systems. Implements diagnostics D1-D20 plus sub-diagnostics D2b/D7b/D11b and the opt-in D24 Zhou mixing-time predictor (schema D1-D24-Übersicht-v3); D21-D23 are schema-defined reserved slots, not implemented diagnostics. Ships a twelve-class mechanism taxonomy A1-A12 covering Mori-Shirai overlap, Liouvillian skin effect, symmetrized gap, quantum Mpemba effect, and phantom relaxation.",
   "license": "https://spdx.org/licenses/Apache-2.0",
   "codeRepository": "https://github.com/marcohost33-maker/Liouscope",
   "programmingLanguage": "Python",

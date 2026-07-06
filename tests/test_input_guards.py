@@ -124,6 +124,22 @@ def test_seed_everything_rejects_bool():
         seed_everything(True)
 
 
+def test_seed_everything_rejects_out_of_range():
+    """Legacy np.random.seed only accepts 0 <= seed < 2**32; an out-of-range
+    seed must fail closed *before* any global state (PYTHONHASHSEED, random) is
+    mutated, not raise mid-function with a partially-applied seed."""
+    import os
+
+    from liouscope.io.seed import seed_everything
+
+    seed_everything(7)  # known-good baseline
+    hashseed_before = os.environ.get("PYTHONHASHSEED")
+    with pytest.raises(ValueError, match=r"2\*\*32"):
+        seed_everything(2**32)
+    # The rejected call must not have touched PYTHONHASHSEED.
+    assert os.environ.get("PYTHONHASHSEED") == hashseed_before
+
+
 def test_steady_state_accepts_integer_dtype():
     """Integer input used to crash np.finfo; must be cast, not rejected."""
     from liouscope.core.lindblad import steady_state

@@ -64,7 +64,16 @@ def _physics_time_grid(
     t_early = min(horizon / fast, t_decay)
     n_early = max(2, n_points // 2)
     n_late = max(2, n_points - n_early)
-    early = np.geomspace(t_decay * 1.0e-6, t_early, n_early)
+    # The early segment must ascend from a tiny time up to ``t_early`` to resolve
+    # a sharp growth peak. For extreme non-normality (numerical abscissa exceeding
+    # the gap by >6 decades) the nominal start ``t_decay * 1e-6`` overtakes
+    # ``t_early``, which would make ``geomspace`` run *backwards* and cluster the
+    # fine sampling after the peak instead of before it. Clamp the start below
+    # ``t_early`` in that regime; the guard is a no-op for all normal spectra.
+    early_start = t_decay * 1.0e-6
+    if early_start >= t_early:
+        early_start = t_early * 1.0e-3
+    early = np.geomspace(early_start, t_early, n_early)
     late = np.linspace(t_early, t_decay, n_late)
     # np.asarray keeps mypy happy on py3.10 numpy stubs (np.unique -> Any there).
     return np.asarray(np.unique(np.concatenate(([0.0], early, late))), dtype=np.float64)

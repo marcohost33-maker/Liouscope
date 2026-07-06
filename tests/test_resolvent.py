@@ -67,3 +67,13 @@ def test_resolvent_peak_curve_large_matches_dense(rng):
     # lower bound (documented ~1e-3), so the profile uses a looser tolerance.
     assert np.max(ref) == pytest.approx(np.max(norms), rel=1e-6)
     assert np.allclose(norms, ref, rtol=5e-3)
+
+
+def test_pseudospectral_radius_rejects_non_finite():
+    """D13's grid search must fail closed on a NaN/inf operator with a located,
+    named error rather than an opaque LAPACK failure inside the svd loop."""
+    from liouscope.numerics.pseudospec import pseudospectral_radius
+
+    bad = np.array([[np.nan, 0.0], [0.0, -1.0]], dtype=complex)
+    with pytest.raises(ValueError, match="L"):
+        pseudospectral_radius(bad)
