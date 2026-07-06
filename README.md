@@ -39,7 +39,7 @@ LiouScope addresses this with three deliberate choices:
    diagnostic set grouped by physical concept, not a scalar.
 2. **Explicit uncertainty.** Bootstrap CIs (BCa), GLS with AR(1) residuals, AICc model selection, and a
    parametric-bootstrap pipeline are first-class — not optional add-ons.
-3. **Auditable manifests.** Each run produces a SHA-256-stable JSON manifest (`MANIFEST_SCHEMA v1.2.0`)
+3. **Auditable manifests.** Each run produces a SHA-256-stable JSON manifest (`MANIFEST_SCHEMA v1.3.0`)
    that captures the seed, framework/schema/taxonomy versions, Python/NumPy/SciPy versions,
    platform, solver path, quality label and a run-invariant `input_hash`.
 
@@ -165,7 +165,7 @@ LiouScope is built for paper-grade reproducibility:
   BLAS threading is *not* controlled — bit-exactness across BLAS builds is out of scope.
 - **Run manifests are SHA-256 stable.** Every diagnostic run can emit a JSON manifest
   (`io.dump_manifest(report, path)`) validated against
-  [`MANIFEST_SCHEMA.json`](src/liouscope/MANIFEST_SCHEMA.json) (schema v1.2.0) via
+  [`MANIFEST_SCHEMA.json`](src/liouscope/MANIFEST_SCHEMA.json) (schema v1.3.0) via
   `io.validate_manifest(payload)`. The validator uses a cached
   `jsonschema.Draft202012Validator` when [`jsonschema`](https://python-jsonschema.readthedocs.io/)
   is installed, and falls back to a built-in subset check otherwise. **Two runs with the same

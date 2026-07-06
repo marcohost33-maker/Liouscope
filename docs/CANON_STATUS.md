@@ -12,7 +12,7 @@ sentence without qualification.
 |---|---|---|
 | Scientific/Drive canon | 0Liou+ v1.0 / consolidated report v2.0 FINAL / `LiouScope_Formelbuechlein_v1_0_2026-06-25` / A1-A12-v3.1 / D1-D24 | Drive-side canon and project archive |
 | Repo runtime canon | `liouscope.__version__ == 0.5.0` | `src/liouscope/_version.py` |
-| Manifest/report contracts | `MANIFEST_SCHEMA_VERSION == 1.2.0`; `StabilityReport v2.1` is a separate additive projection | `src/liouscope/MANIFEST_SCHEMA.json`, `_consts.py`, `STABILITY_REPORT_SCHEMA.json` |
+| Manifest/report contracts | `MANIFEST_SCHEMA_VERSION == 1.3.0` (bumped from 1.2.0 in [Unreleased]: run_id/input_hash derivation domain widened; hashes not comparable across schema_version); `StabilityReport v2.1` is a separate additive projection | `src/liouscope/MANIFEST_SCHEMA.json`, `_consts.py`, `STABILITY_REPORT_SCHEMA.json` |
 | Current code frontier | PRs #55-#57 merged to `main`; v0.5.0 release-prep cut; archive/provenance finalization open | GitHub PR state + `docs/RELEASE_AUDIT_v0.5.0.md` |
 
 ## 2. Operational rule
@@ -41,7 +41,7 @@ The following identifiers must remain synchronized or be explicitly version-bump
 
 - `TAXONOMY_VERSION = "A1-A12-v3.1"`
 - `DIAGNOSTIC_SCHEMA_VERSION = "D1-D24-Übersicht-v3-2026-04-24"`
-- `MANIFEST_SCHEMA_VERSION = "1.2.0"`
+- `MANIFEST_SCHEMA_VERSION = "1.3.0"`
 - `liouscope.__version__` from `src/liouscope/_version.py`
 - `CITATION.cff` top-level `version`
 - release notes / changelog version section

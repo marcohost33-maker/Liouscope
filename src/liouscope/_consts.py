@@ -10,7 +10,7 @@ from typing import Final
 
 TAXONOMY_VERSION: Final[str] = "A1-A12-v3.1"
 DIAGNOSTIC_SCHEMA_VERSION: Final[str] = "D1-D24-Übersicht-v3-2026-04-24"
-MANIFEST_SCHEMA_VERSION: Final[str] = "1.2.0"
+MANIFEST_SCHEMA_VERSION: Final[str] = "1.3.0"
 
 # Reserved diagnostic slots. The schema name spans D1-D24, but only D1-D20
 # (peer-review set) and D24 (opt-in Zhou mixing-time predictor) are implemented

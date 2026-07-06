@@ -26,6 +26,27 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   honest. Pinned by `tests/test_reserved_slots.py`.
 
 ### Changed
+- **`MANIFEST_SCHEMA_VERSION` bumped `1.2.0` -> `1.3.0` (provenance-derivation
+  contract change; MIGRATION NOTE).** The `run_id`/`input_hash` fix below widens
+  the set of hashed inputs, so **for the same physical input the derived
+  `input_hash` and `run_id` VALUES now differ from v0.5.0/main** (empirically:
+  input_hash `1ac0e089…` -> `20a2f552…`, run_id `face535e…` -> `43016c65…` on the
+  reference small system). This is intentional (it fixes the collision described
+  under *Fixed*), but it is **backward-incompatible for provenance**: a `run_id`
+  archived under schema `1.2.0` (v0.5.0 or earlier) does **NOT** re-derive under
+  `1.3.0` — the old key is stable and valid *within* `1.2.0`, it is simply not
+  comparable across the bump. The JSON manifest STRUCTURE (field list, types,
+  `additionalProperties:false`) is unchanged, so a `1.2.0` manifest still parses;
+  only the hash-derivation domain changed, which is exactly what the
+  `schema_version` bump signals. **Migration:** consumers that key archives or
+  reproducibility checks on `run_id`/`input_hash` must (a) treat hashes as
+  comparable only *within* a single `schema_version`, and (b) re-emit manifests
+  under `1.3.0` if a stable cross-version key is required — there is no value-level
+  back-migration (the pre-bump inputs were never hashed). The
+  `MANIFEST_SCHEMA.json` `run_id`/`input_hash` descriptions now state the
+  schema_version-scoping explicitly so the constraint is machine-discoverable.
+  (AGENTS.md Definition-of-Done #6: run-manifest contract touched -> schema bump +
+  migration note.)
 - **D17 gap-rate consistency is now dimension-coherent** (issue #69). D17 was
   `|beta_D - Delta| / Delta`, comparing the relative-entropy fit rate `beta_D`
   directly with the spectral gap `Delta`. Relative entropy near the steady state

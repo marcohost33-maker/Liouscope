@@ -106,7 +106,7 @@ def test_manifest_payload_carries_schema_versions():
     payload = manifest_payload(_small_report())
     assert payload["taxonomy_version"] == TAXONOMY_VERSION
     assert payload["diagnostic_schema_version"] == DIAGNOSTIC_SCHEMA_VERSION
-    assert payload["schema_version"] == "1.2.0"
+    assert payload["schema_version"] == "1.3.0"
     assert re.fullmatch(r"[0-9a-f]{64}", payload["run_id"])
 
 
@@ -168,7 +168,7 @@ def test_schema_loads_from_package():
     files = resources.files("liouscope")
     schema_text = files.joinpath("MANIFEST_SCHEMA.json").read_text(encoding="utf-8")
     schema = json.loads(schema_text)
-    assert schema["properties"]["schema_version"]["const"] == "1.2.0"
+    assert schema["properties"]["schema_version"]["const"] == "1.3.0"
     assert schema["properties"]["taxonomy_version"]["const"] == TAXONOMY_VERSION
     assert schema["properties"]["diagnostic_schema_version"]["const"] == DIAGNOSTIC_SCHEMA_VERSION
 
