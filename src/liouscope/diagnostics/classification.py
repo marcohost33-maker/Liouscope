@@ -13,10 +13,23 @@ reference:
 * F4 quantum Mpemba effect                (PRL 127, 060401, 2021)
 * F5 phantom relaxation                   (arXiv:2306.07876, 2023)
 
-Verdict in {CONFIRMED, EXCLUDED, CANDIDATE, NOT_EXCLUDED, UNDEFINED}.
-Tier in {PUBLICATION_GRADE, CONFIRMATION, EXPLORATION}.
+Verdict in {CONFIRMED, CANDIDATE, NOT_EXCLUDED, UNDEFINED} (issue #70 A5: the
+unreachable EXCLUDED verdict was removed). Tier in {PUBLICATION_GRADE,
+CONFIRMATION, EXPLORATION}.
 
 Anchor L: ``taxonomy_version`` is stamped on every ClassificationResult.
+
+Taxonomy coverage (issue #70 B3): three of the twelve A-classes -- A6, A7, A9 --
+have no decision branch yet and are recorded as a reserved, not-yet-reachable
+contract in ``_consts.RESERVED_A_CLASSES`` (see there for the per-class
+rationale). ``_pick_a_class`` therefore emits nine distinct classes; that gap is
+explicit, not silent.
+
+Advisory evidence (issue #70 B4): several diagnostics are surfaced in the
+``evidence`` dict for audit/serialisation but deliberately do NOT influence the
+class/verdict/confidence -- see ``ADVISORY_EVIDENCE_KEYS`` below. Wiring any of
+them is a class-influencing design decision with false-positive risk and belongs
+in a dedicated PR with anchor coverage + FP tests, not a blind hook-up here.
 """
 
 from __future__ import annotations
@@ -43,6 +56,30 @@ from .._types import (
     ResolventResult,
     SpectralResult,
     TransientResult,
+)
+
+# issue #70 B4: evidence keys that are gathered into the ``evidence`` dict (for
+# audit / serialisation) but are, by design, NOT read by any of the decision
+# functions ``_pick_a_class`` / ``_confidence`` / ``_pick_verdict_tier``. They are
+# advisory context, not classification drivers. Making the non-influence an
+# explicit, pinned contract (rather than an accidental gap) is the
+# behaviour-preserving resolution of the "gathered evidence unused" debt: it
+# changes no real-input result. A metamorphic test
+# (``tests/test_classifier_semantics_debt.py``) proves that perturbing any of
+# these keys leaves (a_class, f_family, verdict, confidence) invariant. Wiring
+# one into the decision -- e.g. D18 ``initial_state_sensitivity`` as a *confidence
+# dampener* for the state-dependent A1 label -- is a class-influencing change with
+# false-positive risk and must ship in a dedicated PR with anchor + FP coverage,
+# not be blind-hooked here. Note: the LEP layer also computes
+# ``lep_candidate_count``, ``initial_state_sensitivity`` (D18) and ``ridge_fwhm``
+# (D12) in their Result dataclasses; those are not even surfaced in ``evidence``
+# and so are a fortiori non-influencing (documented for completeness).
+ADVISORY_EVIDENCE_KEYS: frozenset[str] = frozenset(
+    {
+        "lep_proximity",           # D16 eigenvalue-coalescence proximity
+        "bohr_ap_length",          # D11 Bohr almost-periodicity depth
+        "mpemba_expansion_alpha",  # D20 Phi_n scaling exponent (present iff mpemba)
+    }
 )
 
 

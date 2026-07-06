@@ -7,6 +7,29 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Added
+- **Classifier semantics debt B3/B4 made explicit contracts** (issue #70,
+  completes the sub-findings PR #81 left open; A5/A6/A8/A9 already on main).
+  Both changes are **behaviour-preserving** -- no real-input classification
+  result changes; the sacred anchor suite (`tests/test_anchors.py`) and the
+  V1-V5 golden classification assertions stay byte-identical green.
+  - **B3 -- reserved A-classes A6/A7/A9.** The taxonomy `A1-A12-v3.1` defines
+    twelve classes but `_pick_a_class` emits only nine; A6 (accelerated-decay),
+    A7 (weak-dissipation singular, Mori 2024) and A9 (prethermalization/ETH) have
+    no decision branch yet. They are now recorded in `_consts.RESERVED_A_CLASSES`
+    as a discoverable code-level contract analogous to `RESERVED_DIAGNOSTIC_SLOTS`
+    (D21-D23), so the "12 classes" name stays honest instead of silently
+    unreachable. A static-AST reachability test forces the contract to stay in
+    lock-step with the code (wiring A6/A7/A9 later must update the reserved set).
+  - **B4 -- advisory (unused) evidence named.** `lep_proximity` (D16),
+    `bohr_ap_length` (D11) and `mpemba_expansion_alpha` (D20) are surfaced in the
+    `evidence` dict for audit but deliberately do NOT influence
+    class/verdict/confidence. `classification.ADVISORY_EVIDENCE_KEYS` names that
+    contract; a metamorphic test proves the non-influence (perturbing each key
+    across `{0, ±1e9, ±inf, nan}` leaves the decision invariant). Wiring any of
+    them (e.g. D18 `initial_state_sensitivity` as an A1 confidence *dampener*) is
+    a class-influencing design decision with false-positive risk and is left to a
+    dedicated PR with anchor + FP coverage -- not blind-hooked here. Pinned by
+    `tests/test_classifier_semantics_debt.py` (8 tests, executed).
 - **Anti-overfit gates wired into the claim vocabulary** (issue #71 B2). The
   residual-whiteness (Ljung-Box, `fitting/whiteness.py`) and temporal-holdout
   (`fitting/holdout.py`) gates were implemented and unit-tested but exported by

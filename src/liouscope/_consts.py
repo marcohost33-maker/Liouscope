@@ -74,6 +74,31 @@ A_CLASSES: Final[tuple[str, ...]] = (
     "A7", "A8", "A9", "A10", "A11", "A12",
 )
 
+# Reserved A-classes (issue #70 B3). The taxonomy ``A1-A12-v3.1`` defines twelve
+# mechanism classes, but the single-pass heuristic ``_pick_a_class`` currently
+# emits only nine of them: A6 (accelerated-decay / operator-spreading), A7
+# (weak-dissipation singular, Mori 2024) and A9 (prethermalization / ETH) have no
+# decision branch yet and would each require a diagnostic that does not exist in
+# this repository (A6: an accelerated-decay detector distinguishing it from the
+# A5 metastable plateau; A7: a dissipation-strength / singular-perturbation
+# probe; A9: ETH / level-statistics signals). Rather than let ``diagnose()``
+# silently never emit three advertised labels, they are recorded here as an
+# explicit, discoverable code-level contract -- exactly like
+# ``RESERVED_DIAGNOSTIC_SLOTS`` (D21-D23). Reserving a class is NOT a claim that
+# it is emitted: consumers must treat these ids as taxonomy-defined but
+# not-yet-reachable until a dedicated PR adds a branch WITH anchor coverage and
+# false-positive tests (``claim_status:pending`` until anchors confirm). This is
+# behaviour-preserving: no real-input classification result changes -- it only
+# names a pre-existing gap. Pinned by ``tests/test_classifier_semantics_debt.py``.
+RESERVED_A_CLASSES: Final[dict[str, str]] = {
+    "A6": "reserved (taxonomy A1-A12-v3.1; no classifier branch yet -- needs an "
+    "accelerated-decay / operator-spreading detector distinct from A5)",
+    "A7": "reserved (taxonomy A1-A12-v3.1; no classifier branch yet -- needs a "
+    "weak-dissipation singular-perturbation probe, Mori 2024)",
+    "A9": "reserved (taxonomy A1-A12-v3.1; no classifier branch yet -- needs "
+    "ETH / level-statistics signals for the prethermalization regime)",
+}
+
 F_FAMILIES: Final[tuple[str, ...]] = ("F1", "F2", "F3", "F4", "F5", "none")
 
 A_CLASS_DESCRIPTIONS: Final[dict[str, str]] = {
