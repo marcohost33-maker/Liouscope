@@ -1,8 +1,8 @@
 ---
 name: liouscope-agents-md
 description: AI coding agent instructions for LiouScope (open quantum lattice diagnostics)
-version: "1.4"
-last_updated: 2026-06-26
+version: "1.5"
+last_updated: 2026-07-07
 priority_when_in_conflict: 1
 ---
 
@@ -144,19 +144,18 @@ python examples/quickstart.py   # smoke run
   `claim_status:pending` for new diagnostics until anchors confirm them.
 - **A11 (quantum-Mpemba) single-state floor (issue #78 / decision E0706-13).**
   A single-state run that picks A11 on a **maximally mixed** steady state
-  (`rho_ss = I/d`, which collapses to a single eigenprojector, so the issue-#68
-  triviality guard — needing a non-trivial eigenprojector decomposition of
-  `rho_ss` — cannot fire; the maximally-mixed fixpoint alone is insufficient
-  evidence for an A11 claim) must report **UNDEFINED / EXPLORATION** (the
-  INSUFFICIENT-EVIDENCE floor), never CANDIDATE (over-claim) and never a hard
-  exclusion (a unital / doubly-stochastic multi-rate process *can* exhibit Mpemba
-  — hard exclusion was falsified cross-family). The floor is **conditional**:
-  reference-ensemble Mpemba confirmation across a thermal family
-  (`classify_mechanism(..., ensemble_confirmation=True)`, surfaced as the
-  `ensemble_confirmation` evidence key) suppresses the downgrade and re-permits
-  A11 CANDIDATE/CONFIRMED. Do not weaken this floor to CANDIDATE for a single
-  state, and do not strengthen it to EXCLUDED. Contract pinned in
-  `tests/test_classifier_semantics_debt.py`; behaviour in `tests/test_classification.py`.
+  (`rho_ss = I/d`) must report **UNDEFINED / EXPLORATION** unless a validated
+  `EnsembleEvidence` object supplies a passing reference-family comparison.
+  A bare `ensemble_confirmation=True` is a caller assertion, not evidence, and
+  must raise fail-closed. The evidence object must bind its manifest digest,
+  initial-state family and ordering parameter, paired run IDs/input hashes,
+  metric/test/uncertainty method, software version, gate status/reason code and
+  distinct producer/reviewer attestation digests. Only `gate_status="PASS"`
+  with reason `ENSEMBLE_MPEMBA_CONFIRMED` may suppress the floor; FAIL, REVIEW,
+  malformed or missing evidence must not. The canonical evidence SHA-256 must
+  enter the run input hash and the full payload must remain serialisable in the
+  report. Do not weaken the single-state floor to CANDIDATE and do not strengthen
+  it to EXCLUDED.
 - For any branch / history-touching operation, reference the 2026-05-16
   incident in the PR body as a reminder of why Backup-First
   exists (the backup-triple recovered ~20 files after an unverified
@@ -189,7 +188,7 @@ A change is "done" only when **all** of the following hold:
 | 8 | PR body contains Summary + Test plan checklist | manual review |
 
 A PR that misses any of 1-8 is not "ready". Anchor regressions (item 2) are
-the sacred gate — never merge with them red, even if the change is unrelated.
+sacred gate — never merge with them red, even if the change is unrelated.
 
 ---
 
