@@ -6,6 +6,23 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+- **SPEC 7 `rng` keyword, additive phase (a)** (issue #72 item 1).
+  `diagnose()`, `seed_everything()` and the D18 surface
+  (`compute_lep_layer` / `initial_state_sensitivity`) now accept a SPEC 7
+  `rng` argument (int, `numpy.random.SeedSequence`, `Generator` or
+  `BitGenerator`) alongside the legacy `seed`; supplying both raises
+  `ValueError`. `rng` inputs are normalised to a *derived integer seed* by the
+  new public bridge `liouscope.derive_seed` (re-exported from
+  `liouscope.io.seed` with the `SeedLike`/`RNGLike` aliases), and that derived
+  value is what the run manifest records -- the manifest `seed` field,
+  `make_run_id` derivation and schema version are unchanged, so a manifest
+  alone still reproduces the run. Passing a `Generator` consumes one draw from
+  the caller's generator (SPEC 7 consumption semantics). Legacy `seed`-only
+  and no-argument calls remain byte-identical (defaults 42 / 7 preserved).
+  `seed` stays fully supported in this phase; deprecation is a later,
+  separate SPEC 7 phase. Contract pinned in `tests/test_spec7_rng.py`.
+
 ### Changed
 - **Release identity and provenance hardening.** Released `v0.5.0` remains
   immutable; default-branch VCS installs now report `0.6.0.dev0`. Manifest

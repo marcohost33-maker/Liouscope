@@ -9,7 +9,7 @@ from .manifest import (
     manifest_payload,
     validate_manifest,
 )
-from .seed import seed_everything
+from .seed import RNGLike, SeedLike, derive_seed, seed_everything
 from .stability_report import (
     EvidenceBundle,
     build_stability_report,
@@ -20,9 +20,12 @@ from .stability_report import (
 
 __all__ = [
     "EvidenceBundle",
+    "RNGLike",
+    "SeedLike",
     "build_manifest",
     "build_stability_report",
     "compute_input_hash",
+    "derive_seed",
     "dump_manifest",
     "dump_report",
     "dump_stability_report",

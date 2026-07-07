@@ -44,7 +44,7 @@ from .ensemble import (
     ENSEMBLE_MPEMBA_CONFIRMED,
     EnsembleEvidence,
 )
-from .io.seed import seed_everything
+from .io.seed import derive_seed, seed_everything
 
 __all__ = [
     "A_CLASSES",
@@ -71,6 +71,7 @@ __all__ = [
     "__version__",
     "build_liouvillian",
     "classify_mechanism",
+    "derive_seed",
     "diagnose",
     "seed_everything",
     "steady_state",

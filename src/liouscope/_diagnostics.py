@@ -17,6 +17,7 @@ from .diagnostics.transient import compute_transient_layer
 from .diagnostics.uncertainty import compute_uncertainty_layer
 from .ensemble import EnsembleEvidence, reject_legacy_ensemble_confirmation
 from .io.manifest import build_manifest, compute_input_hash
+from .io.seed import RNGLike, SeedLike, derive_seed
 from .numerics.linalg import require_finite_square_2d
 
 _VALID_SOLVER_PATHS = {"dense", "sparse_arpack"}
@@ -50,7 +51,8 @@ def diagnose(
     t_grid: np.ndarray | None = None,
     include_mpemba: bool = True,
     bootstrap_B: int = 200,
-    seed: int = 42,
+    seed: int | None = None,
+    rng: RNGLike | SeedLike | None = None,
     solver_path: str = "dense",
     ensemble_evidence: EnsembleEvidence | None = None,
     ensemble_confirmation: bool | None = None,
@@ -72,7 +74,15 @@ def diagnose(
     bootstrap_B
         Number of parametric bootstrap resamples.
     seed
-        PRNG seed for any stochastic step (jackknife, bootstrap, Haar).
+        Legacy PRNG seed for any stochastic step (jackknife, bootstrap, Haar).
+        Defaults to 42 when neither ``seed`` nor ``rng`` is given. Mutually
+        exclusive with ``rng``.
+    rng
+        SPEC 7 random-state keyword (int, ``SeedSequence``, ``Generator`` or
+        ``BitGenerator``). Normalised to a derived integer seed via
+        :func:`liouscope.io.seed.derive_seed`; the derived value is what the
+        run manifest records, so manifest-based reproduction is preserved.
+        Mutually exclusive with ``seed``.
     solver_path
         ``"dense"`` (default). ``"sparse_arpack"`` is a reserved manifest value
         and currently raises ``NotImplementedError`` rather than silently running
@@ -94,6 +104,9 @@ def diagnose(
         A fully-populated frozen report with governance metadata.
     """
     reject_legacy_ensemble_confirmation(ensemble_confirmation)
+    # SPEC 7 phase (a): normalise rng/seed to the single integer the manifest
+    # records; seed-only and no-arg calls are byte-identical to before.
+    resolved_seed = derive_seed(rng, seed, default=42)
     _validate_solver_path(solver_path)
     # Fail-closed boundary guard: reject non-finite / non-square operators here
     # with a structured, argument-named error instead of letting NaN/inf flow
@@ -133,7 +146,7 @@ def diagnose(
         rho_steady_state=rho_steady_state,
         t_grid=t_grid,
         bootstrap_B=bootstrap_B,
-        seed=seed,
+        seed=resolved_seed,
     )
     transient = compute_transient_layer(L_super, spectral.gap)
     lep = compute_lep_layer(
@@ -142,7 +155,7 @@ def diagnose(
         beta_D_linear=relaxation.beta_D_linear,
         gap=spectral.gap,
         rho_steady_state=rho_steady_state,
-        seed=seed,
+        seed=resolved_seed,
     )
     mpemba: MpembaResult | None = None
     if include_mpemba:
@@ -185,7 +198,7 @@ def diagnose(
     input_hash = compute_input_hash(*hash_objects)
     governance = build_manifest(
         input_hash=input_hash,
-        seed=seed,
+        seed=resolved_seed,
         solver_path=solver_path,  # type: ignore[arg-type]
         tier=classification.tier,
     )
