@@ -51,6 +51,21 @@ EPS_TRACE: Final[float] = 1.0e-10
 # steady state simply follows the normal classification path.
 EPS_MAXMIX: Final[float] = 1.0e-9
 
+# Certification floor for the symmetrised (GNS) gap, RELATIVE to the spectral
+# gap Delta (issue #88). ``diagnostics.spectral.gns_gap`` deliberately floors
+# Delta_GNS to ~0 whenever the GNS symmetrisation cannot certify exponential
+# contraction (the documented 2026-07 audit-A1 behaviour for non-detailed-
+# balance steady states carrying coherences). That floored value is a
+# *sentinel* -- numerically it comes out at O(machine-eps) relative to the
+# operator scale (observed ~1e-11..1e-12 x Delta) -- and certifies the ABSENCE
+# of a GNS contraction bound, not a measured Mori-Shirai symmetrised-gap
+# reduction. The classifier therefore treats Delta_GNS as a MEASURED gap only
+# when ``gns_gap >= GNS_CERTIFIED_RTOL * gap``. The threshold sits far above
+# the eigensolver noise floor (O(d * 2.2e-16)) and far below any physically
+# resolvable reduction, so it separates "floored to numerical zero" from
+# "genuinely tiny but resolved" with a wide margin on both sides.
+GNS_CERTIFIED_RTOL: Final[float] = 1.0e-8
+
 # U1 (solver uncertainty) nominal floor. ``compute_uncertainty_layer`` reports
 # this constant for U1 unless the caller supplies a real ``solver_residual``
 # from an ODE-tolerance sweep. It is a *nominal placeholder* -- a conservative

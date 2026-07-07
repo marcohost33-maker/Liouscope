@@ -124,6 +124,35 @@ def test_gls_ar1_recovers_known_decay(rng):
     assert abs(fit.params[1] - alpha_true) < 0.05
 
 
+def test_gls_ar1_log_likelihood_is_exact_prais_winsten(rng):
+    # _whiten keeps observation 0 (Prais-Winsten), so the reported log-likelihood
+    # must include the transform's log-Jacobian 0.5*log(1-rho^2). Regression
+    # against the pre-fix hybrid value (conditional likelihood on an exact
+    # transform) that biased cross-model AICc toward under-fitting high-rho fits.
+    t = np.linspace(0, 6, 140)
+    rho_true = 0.6
+    nu = 0.05 * rng.standard_normal(t.size)
+    eps = np.empty(t.size)
+    eps[0] = nu[0] / np.sqrt(1.0 - rho_true**2)
+    for i in range(1, t.size):
+        eps[i] = rho_true * eps[i - 1] + nu[i]
+    y = 1.2 * np.exp(-0.7 * t) + eps
+    fit = fit_gls_ar1(M0, t, y, np.array([1.0, 0.5]))
+
+    rho = fit.rho_ar1
+    whitened = np.empty_like(fit.residuals)
+    whitened[0] = np.sqrt(max(1.0 - rho * rho, 1.0e-12)) * fit.residuals[0]
+    whitened[1:] = fit.residuals[1:] - rho * fit.residuals[:-1]
+    n = whitened.size
+    sig = fit.sigma
+    exact = (
+        -0.5 * n * np.log(2.0 * np.pi * sig**2)
+        - 0.5 * float(np.dot(whitened, whitened)) / sig**2
+        + 0.5 * np.log(1.0 - rho * rho)
+    )
+    assert fit.log_likelihood == pytest.approx(exact, rel=1e-9, abs=1e-9)
+
+
 def test_bootstrap_returns_correct_shape(rng):
     t = np.linspace(0, 5, 80)
     y = 1.0 * np.exp(-0.5 * t) + 0.02 * rng.standard_normal(t.size)

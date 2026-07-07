@@ -186,6 +186,88 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     coverage.
 
 ### Fixed
+- **A1 PUBLICATION_GRADE now requires a positive symmetrised-gap certificate,
+  not threshold exhaustiveness** (issue #80; classification-semantics change in
+  a dedicated PR per AGENTS.md §3; the twin of the #88 fix). The A1 early
+  branch awarded CONFIRMED/PUBLICATION_GRADE (confidence 0.95) whenever
+  `gap_rate_consistency < 0.05` + single-exp held and *none* of the F1-F5
+  thresholds fired — so the publication-grade claim rested on the
+  unprovable exhaustiveness of the F1-F5 threshold set (both #79 reviewers'
+  residual): a hypothetical weakly-non-normal gap failure below all thresholds
+  with a single-exp-at-gap trajectory would self-certify. The burden of proof
+  is now reversed (issue #80 to-do 2): a new evidence key
+  `sym_gap_corroborated` (1.0 iff a *measured* symmetrised gap shows no
+  F3-grade reduction — certified GNS `gap_to_gns_ratio <= 1.2`, or KMS
+  `gap_to_kms_ratio <= 1.2`) gates the 0.95 score; uncorroborated A1 caps at
+  **0.70 → CANDIDATE/CONFIRMATION** (honest grade: the single-exp-at-gap
+  observable is measured, operator-intrinsic gap control is not).
+  `gap_to_kms_ratio` thereby graduates from advisory (#89) to
+  class-influencing; using it as an F3 *veto* stays deferred.
+  **Anchor-preserving:** the gap-controlled thermal reference has
+  `Delta_GNS = Delta_KMS = Delta` exactly (corroborated → 0.95 unchanged);
+  V1-V5 golden labels are A5/A11 and never take the A1 confidence path; the
+  sacred anchor suite stays green. Synthetic adversary + KMS-certificate +
+  double-floored fail-closed tests added. `claim_status: pending` until
+  cross-family review confirms the semantics.
+- **A2/F3 no longer fires off the `gns_gap` conservative-floor sentinel**
+  (issue #88; classification-semantics change in a dedicated PR per AGENTS.md
+  §3). `diagnostics.spectral.gns_gap` deliberately floors `Delta_GNS` to ~0
+  when the GNS symmetrisation certifies no contraction (the documented 2026-07
+  audit-A1 behaviour for non-detailed-balance steady states carrying
+  coherences; that floor is unchanged). But `_gather_evidence` turned the
+  sentinel into `gap_to_gns_ratio ~ 1e10..inf`, and the F3 branch plus
+  `_confidence` promoted the exploded ratio straight to **A2/F3 CONFIRMED /
+  PUBLICATION_GRADE** — a publication-grade Mori-Shirai-2023 mechanism claim
+  keyed on the *absence* of a certificate, on inputs as tame as a textbook
+  Rabi-driven amplitude-damped qubit with `Delta_KMS == Delta` (provably no
+  real symmetrised-gap reduction). Fix (issue #88 option 1: positive-evidence
+  burden): the evidence dict now carries `gns_certified` (1.0 iff
+  `gns_gap >= GNS_CERTIFIED_RTOL * gap`, new named constant `1e-8` in
+  `_consts`), and both the F3 branch and the A2 high-confidence rule require
+  it — the uncertified sentinel falls through to the state-dependent shape
+  branches (honest floor: absence of evidence). `gap_to_kms_ratio` is now
+  surfaced as *advisory* audit context (issue #88 option 2 — wiring it as an
+  F3 veto is deferred to its own FP study); the advisory metamorphic contract
+  covers it. **Verdict flips (uncovered input class only):** the #88 repro
+  family (Rabi qubit, drives 0.3/0.7/1.5) flips A2/F3 CONFIRMED/
+  PUBLICATION_GRADE (0.85) → A8 or A10-via-M3a CANDIDATE/CONFIRMATION (≤0.70).
+  **Anchor-preserving:** V1/V3/V4 have diagonal steady states (finite,
+  certified `gns_gap`), V5 is caught by the Mpemba branch first; the sacred
+  anchor suite and all V1-V5 golden assertions stay green. A *certified*
+  reduction still fires A2/F3 at 0.85 (positive-control test). New e2e guard
+  `tests/test_classifier_f3_sentinel.py`; `claim_status: pending` until
+  cross-family review confirms the semantics.
+- **Hermiticity / normalisation validation gates are now absolute, not
+  ~10^4x looser than advertised.** `numerics.linalg.is_hermitian` (and
+  therefore `is_density_matrix`), the Hamiltonian Hermiticity check in
+  `core.lindblad.build_liouvillian` ("H must be Hermitian within 1e-9 atol"),
+  and the unit-norm check in `core.jumps.engineered_target_jumps` all called
+  `np.allclose`/`np.isclose` with only `atol=` set. NumPy's default
+  `rtol=1e-5` silently widened each gate to `atol + 1e-5*|entry|` (~1e-5 for
+  O(1) density matrices / Hamiltonians), so a matrix non-Hermitian at 1e-6 —
+  a thousand times the documented 1e-9 tolerance — passed as valid. All three
+  now pass `rtol=0.0` so the `atol` means exactly what the docstring/error
+  says. Behaviour-preserving for every physical operator (Hermitian to machine
+  precision); only genuinely malformed input near the old blind spot is now
+  rejected. New regression `tests/test_numerics.py::
+  test_is_hermitian_atol_is_absolute_not_relative`.
+- **GLS AR(1) log-likelihood is now the exact Prais-Winsten likelihood.**
+  `fitting.gls.fit_gls_ar1` whitens with the *exact* AR(1) transform (keeping
+  observation 0 scaled by `sqrt(1-rho^2)`, all `n` points), but reported
+  `gaussian_log_likelihood(whitened)` — the iid-Gaussian likelihood of the
+  whitened residuals, which omits the transform's log-Jacobian
+  `+0.5*log(1-rho^2)`. The reported value was therefore a hybrid of the exact
+  and conditional likelihoods. Because each model M0..M3b fits its own `rho`
+  and its per-model `log_likelihood` feeds `aicc()`/`choose_model` (which drives
+  mechanism classification), the missing rho-dependent term biased cross-model
+  AICc toward under-fitting high-`rho` fits. The Jacobian is now added.
+  **Anchor-preserving:** the sacred `tests/test_anchors.py` suite and the V1-V5
+  golden classification assertions stay green (the correction does not flip the
+  selected model on any canonical fixture); it only affects near-tied AICc
+  comparisons on other data. No manifest-contract or citable-claim change (the
+  run manifest does not record per-model likelihoods; `input_hash` is derived
+  from inputs, not outputs). New regression `tests/test_fitting.py::
+  test_gls_ar1_log_likelihood_is_exact_prais_winsten`.
 - **`run_id` / `input_hash` now cover every output-affecting input.** Both
   provenance keys were derived only from `(L_super, rho_initial)` (plus `seed`
   and `framework_version` for `run_id`), so two `diagnose()` calls that differed

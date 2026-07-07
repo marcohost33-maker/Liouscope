@@ -114,7 +114,13 @@ def fit_gls_ar1(
     whitened = _whiten(residuals_raw, rho)
     n = whitened.size
     sigma = float(np.sqrt(max(np.dot(whitened, whitened) / max(n, 1), 1.0e-30)))
-    log_lik = gaussian_log_likelihood(whitened, sigma=sigma)
+    # Prais-Winsten exact AR(1) likelihood: _whiten keeps observation 0
+    # (scaled by sqrt(1-rho^2)), so the transform has log-Jacobian
+    # 0.5*log(1-rho^2). Omitting it makes the reported value a hybrid of the
+    # exact and conditional likelihoods and biases cross-model AICc (each
+    # model fits its own rho) toward under-fitting high-rho models.
+    jac = 0.5 * float(np.log(max(1.0 - rho * rho, 1.0e-12)))
+    log_lik = gaussian_log_likelihood(whitened, sigma=sigma) + jac
     return GLSFitOutput(
         params=p,
         residuals=residuals_raw,

@@ -374,12 +374,38 @@ def test_branch_a2_symmetrised_gap():
     assert cls.confidence == pytest.approx(0.85)  # ratio also > 1.5
 
 
-def test_branch_a2_zero_gns_gap_infinite_ratio():
-    # gns_gap == 0 -> ratio is +inf (the guarded division branch).
+def test_branch_a2_zero_gns_gap_is_uncertified_not_a2():
+    # issue #88: gns_gap == 0 is the conservative floor sentinel ("GNS
+    # uncertified"), NOT a measured symmetrised-gap reduction. The infinite
+    # ratio stays in the evidence for audit, but it must no longer buy A2/F3.
     cls = _classify(spectral=_spectral(gns_gap=0.0))
-    assert cls.a_class == "A2"
+    assert cls.a_class != "A2"
     assert np.isinf(cls.evidence["gap_to_gns_ratio"])
     assert np.isinf(cls.evidence["kms_to_gns_ratio"])
+    assert cls.evidence["gns_certified"] == 0.0
+
+
+def test_branch_a2_floored_gns_sentinel_not_a2():
+    # issue #88 repro shape: gns_gap floored to O(machine-eps)*Delta
+    # (~1e-12 relative) -> exploded-but-finite ratio, uncertified -> no A2/F3,
+    # and in particular no CONFIRMED/PUBLICATION_GRADE off the sentinel.
+    cls = _classify(spectral=_spectral(gns_gap=5.0e-12))  # gap = 0.5
+    assert cls.a_class != "A2"
+    assert cls.evidence["gap_to_gns_ratio"] > 1.0e10
+    assert cls.evidence["gns_certified"] == 0.0
+    assert not (
+        cls.verdict == VERDICT_CONFIRMED and cls.tier == TIER_PUBLICATION
+    )
+
+
+def test_branch_a2_certified_tiny_gns_gap_still_fires():
+    # Positive control for the #88 gate: a genuinely tiny but RESOLVED
+    # Delta_GNS (well above GNS_CERTIFIED_RTOL * gap) is a measured dramatic
+    # reduction and must still classify A2/F3 at high confidence.
+    cls = _classify(spectral=_spectral(gns_gap=1.0e-4))  # gap/gns = 5e3, certified
+    assert (cls.a_class, cls.f_family) == ("A2", "F3")
+    assert cls.evidence["gns_certified"] == 1.0
+    assert cls.confidence == pytest.approx(0.85)
 
 
 def test_branch_a8_oscillatory_transient():
@@ -530,6 +556,56 @@ def test_a1_early_branch_reached_when_no_gap_failure_family():
     )
     assert (cls.a_class, cls.f_family) == ("A1", "none")  # issue #70 A6
     assert cls.verdict == VERDICT_CONFIRMED  # confidence 0.95 (D17 < 0.05)
+
+
+def test_a1_uncorroborated_sym_gap_caps_at_candidate():
+    # issue #80: the hypothetical adversary -- weakly non-normal (kreiss/
+    # petermann/henrici/trans all below the F1-F5 thresholds, the defaults),
+    # single-exp at the gap rate, BUT no positive symmetrised-gap certificate:
+    # GNS floored/uncertified (#88) and KMS measurably reduced (gap/kms > 1.2).
+    # Before #80 this earned A1 CONFIRMED / PUBLICATION_GRADE (0.95) purely off
+    # threshold exhaustiveness; now it caps at CANDIDATE / CONFIRMATION (0.70).
+    cls = _classify(
+        spectral=_spectral(gns_gap=5.0e-12, kms_gap=0.3),  # gap 0.5
+        relaxation=_relaxation(aicc_model="M0"),
+        lep=_lep(gap_rate_consistency=0.01),
+    )
+    assert (cls.a_class, cls.f_family) == ("A1", "none")
+    assert cls.evidence["sym_gap_corroborated"] == 0.0
+    assert cls.confidence == pytest.approx(0.70)
+    assert cls.verdict == VERDICT_CANDIDATE
+    assert cls.tier == TIER_CONFIRMATION
+
+
+def test_a1_kms_certificate_alone_corroborates():
+    # issue #80: with the GNS gap floored/uncertified (coherent steady state,
+    # #88 regime) a KMS gap EQUAL to Delta is still a measured, operator-
+    # intrinsic certificate of gap-controlled contraction -> 0.95 stands.
+    cls = _classify(
+        spectral=_spectral(gns_gap=5.0e-12, kms_gap=0.5),  # gap 0.5
+        relaxation=_relaxation(aicc_model="M0"),
+        lep=_lep(gap_rate_consistency=0.01),
+    )
+    assert (cls.a_class, cls.f_family) == ("A1", "none")
+    assert cls.evidence["sym_gap_corroborated"] == 1.0
+    assert cls.confidence == pytest.approx(0.95)
+    assert cls.verdict == VERDICT_CONFIRMED
+    assert cls.tier == TIER_PUBLICATION
+
+
+def test_a1_floored_kms_is_not_a_certificate():
+    # issue #80 fail-closed: BOTH symmetrised gaps floored to ~0 -> ratios
+    # explode -> no certificate; the A1 label survives (measured single-exp at
+    # the gap) but only at CANDIDATE grade.
+    cls = _classify(
+        spectral=_spectral(gns_gap=0.0, kms_gap=0.0),
+        relaxation=_relaxation(aicc_model="M0"),
+        lep=_lep(gap_rate_consistency=0.01),
+    )
+    assert cls.a_class == "A1"
+    assert cls.evidence["sym_gap_corroborated"] == 0.0
+    assert cls.confidence == pytest.approx(0.70)
+    assert cls.verdict == VERDICT_CANDIDATE
 
 
 def test_a1_early_branch_does_not_shadow_f5_phantom():

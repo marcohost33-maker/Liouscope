@@ -94,11 +94,17 @@ def require_finite_square_2d(A: np.ndarray, *, name: str = "matrix") -> np.ndarr
 
 
 def is_hermitian(A: np.ndarray, atol: float = EPS_HERMITICITY) -> bool:
-    """Return True iff ``A`` is Hermitian within ``atol``."""
+    """Return True iff ``A`` is Hermitian within ``atol``.
+
+    ``rtol=0`` is explicit: ``np.allclose`` defaults to ``rtol=1e-5``, which
+    would silently widen this gate to ``atol + 1e-5*|entry|`` (~1e-5 for O(1)
+    density matrices, ~10^4x the advertised ``atol``). A validation predicate
+    must mean exactly what its ``atol`` says, so the tolerance is absolute.
+    """
     A = np.asarray(A)
     if A.ndim != 2 or A.shape[0] != A.shape[1]:
         return False
-    return bool(np.allclose(A, A.conj().T, atol=atol))
+    return bool(np.allclose(A, A.conj().T, rtol=0.0, atol=atol))
 
 
 def is_density_matrix(
