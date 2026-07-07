@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import numpy as np
 
+from ._classify import classify_mechanism
 from ._types import DiagnosticReport, MpembaResult
 from .core.lindblad import steady_state
-from .diagnostics.classification import classify_mechanism
 from .diagnostics.lep import compute_lep_layer
 from .diagnostics.mpemba import compute_mpemba_layer
 from .diagnostics.nonnormality import compute_nonnormality_layer
@@ -15,6 +15,7 @@ from .diagnostics.resolvent import compute_resolvent_layer
 from .diagnostics.spectral import compute_spectral_layer
 from .diagnostics.transient import compute_transient_layer
 from .diagnostics.uncertainty import compute_uncertainty_layer
+from .ensemble import EnsembleEvidence, reject_legacy_ensemble_confirmation
 from .io.manifest import build_manifest, compute_input_hash
 from .numerics.linalg import require_finite_square_2d
 
@@ -51,7 +52,8 @@ def diagnose(
     bootstrap_B: int = 200,
     seed: int = 42,
     solver_path: str = "dense",
-    ensemble_confirmation: bool = False,
+    ensemble_evidence: EnsembleEvidence | None = None,
+    ensemble_confirmation: bool | None = None,
 ) -> DiagnosticReport:
     """Run the full six-layer multi-diagnostic pipeline on a Liouvillian.
 
@@ -75,18 +77,23 @@ def diagnose(
         ``"dense"`` (default). ``"sparse_arpack"`` is a reserved manifest value
         and currently raises ``NotImplementedError`` rather than silently running
         the dense path.
+    ensemble_evidence
+        Immutable, schema-validated evidence for a reference-family Mpemba
+        comparison. The A11 insufficient-evidence floor is suppressed only when
+        its gate status is ``PASS`` with reason
+        ``ENSEMBLE_MPEMBA_CONFIRMED``. The canonical evidence digest is included
+        in the reproducibility hash and the full payload is stored in
+        ``DiagnosticReport.extras``.
     ensemble_confirmation
-        Suppress the single-state maximally-mixed A11 insufficient-evidence floor
-        when a separate reference-ensemble / thermal-family analysis has already
-        confirmed Mpemba evidence. Defaults to ``False``. The default preserves
-        the legacy hash domain; when set, the override is included in the
-        reproducibility ``input_hash`` because it changes the output claim.
+        Deprecated compatibility trap. ``False``/``None`` are accepted as no-op;
+        ``True`` raises because a bare caller assertion is not ensemble evidence.
 
     Returns
     -------
     DiagnosticReport
         A fully-populated frozen report with governance metadata.
     """
+    reject_legacy_ensemble_confirmation(ensemble_confirmation)
     _validate_solver_path(solver_path)
     # Fail-closed boundary guard: reject non-finite / non-square operators here
     # with a structured, argument-named error instead of letting NaN/inf flow
@@ -151,7 +158,7 @@ def diagnose(
         transient=transient,
         lep=lep,
         mpemba=mpemba,
-        ensemble_confirmation=bool(ensemble_confirmation),
+        ensemble_evidence=ensemble_evidence,
     )
     uncertainty = compute_uncertainty_layer(
         relaxation,
@@ -159,10 +166,8 @@ def diagnose(
         size_residual=None,
         bootstrap_B=bootstrap_B,
     )
-    # The input hash must cover every output-affecting argument. The new
-    # ensemble-confirmation override is appended only when it is active, so
-    # default single-state runs preserve the legacy hash domain while override
-    # runs receive a distinct provenance key.
+    # The input hash must cover every output-affecting argument. Structured
+    # ensemble evidence is bound by its canonical SHA-256, not by a trust boolean.
     hash_objects: list[object] = [
         L_super,
         rho_initial,
@@ -172,8 +177,11 @@ def diagnose(
         include_mpemba,
         solver_path,
     ]
-    if ensemble_confirmation:
-        hash_objects.append(("ensemble_confirmation", True))
+    extras: dict[str, object] = {}
+    if ensemble_evidence is not None:
+        hash_objects.append(("ensemble_evidence_sha256", ensemble_evidence.sha256))
+        extras["ensemble_evidence"] = ensemble_evidence.to_payload()
+        extras["ensemble_evidence_sha256"] = ensemble_evidence.sha256
     input_hash = compute_input_hash(*hash_objects)
     governance = build_manifest(
         input_hash=input_hash,
@@ -192,6 +200,7 @@ def diagnose(
         classification=classification,
         governance=governance,
         mpemba=mpemba,
+        extras=extras,
     )
 
 
