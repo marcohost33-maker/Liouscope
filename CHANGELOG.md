@@ -160,6 +160,29 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     coverage.
 
 ### Fixed
+- **A1 PUBLICATION_GRADE now requires a positive symmetrised-gap certificate,
+  not threshold exhaustiveness** (issue #80; classification-semantics change in
+  a dedicated PR per AGENTS.md §3; the twin of the #88 fix). The A1 early
+  branch awarded CONFIRMED/PUBLICATION_GRADE (confidence 0.95) whenever
+  `gap_rate_consistency < 0.05` + single-exp held and *none* of the F1-F5
+  thresholds fired — so the publication-grade claim rested on the
+  unprovable exhaustiveness of the F1-F5 threshold set (both #79 reviewers'
+  residual): a hypothetical weakly-non-normal gap failure below all thresholds
+  with a single-exp-at-gap trajectory would self-certify. The burden of proof
+  is now reversed (issue #80 to-do 2): a new evidence key
+  `sym_gap_corroborated` (1.0 iff a *measured* symmetrised gap shows no
+  F3-grade reduction — certified GNS `gap_to_gns_ratio <= 1.2`, or KMS
+  `gap_to_kms_ratio <= 1.2`) gates the 0.95 score; uncorroborated A1 caps at
+  **0.70 → CANDIDATE/CONFIRMATION** (honest grade: the single-exp-at-gap
+  observable is measured, operator-intrinsic gap control is not).
+  `gap_to_kms_ratio` thereby graduates from advisory (#89) to
+  class-influencing; using it as an F3 *veto* stays deferred.
+  **Anchor-preserving:** the gap-controlled thermal reference has
+  `Delta_GNS = Delta_KMS = Delta` exactly (corroborated → 0.95 unchanged);
+  V1-V5 golden labels are A5/A11 and never take the A1 confidence path; the
+  sacred anchor suite stays green. Synthetic adversary + KMS-certificate +
+  double-floored fail-closed tests added. `claim_status: pending` until
+  cross-family review confirms the semantics.
 - **A2/F3 no longer fires off the `gns_gap` conservative-floor sentinel**
   (issue #88; classification-semantics change in a dedicated PR per AGENTS.md
   §3). `diagnostics.spectral.gns_gap` deliberately floors `Delta_GNS` to ~0
