@@ -80,11 +80,13 @@ ADVISORY_EVIDENCE_KEYS: frozenset[str] = frozenset(
         "lep_proximity",           # D16 eigenvalue-coalescence proximity
         "bohr_ap_length",          # D11 Bohr almost-periodicity depth
         "mpemba_expansion_alpha",  # D20 Phi_n scaling exponent (present iff mpemba)
-        "gap_to_kms_ratio",        # D2b audit context for the F3 decision (#88);
-        #                            wiring it as a veto/corroboration signal is
-        #                            issue #88 option 2 and needs its own FP study
     }
 )
+# NOTE (#80): ``gap_to_kms_ratio`` was advisory when introduced in #89 (#88
+# option 2 deferred). It is now class-INFLUENCING: it feeds the positive
+# ``sym_gap_corroborated`` certificate that gates A1 PUBLICATION_GRADE (see
+# ``_gather_evidence`` / ``_confidence``). Using it as an F3 *veto* remains
+# deferred to its own false-positive study.
 
 
 def _gather_evidence(
@@ -118,13 +120,33 @@ def _gather_evidence(
         if spectral.gap > 0.0 and spectral.gns_gap >= GNS_CERTIFIED_RTOL * spectral.gap
         else 0.0
     )
-    # Advisory audit context for the F3 decision (#88): a genuine Mori-Shirai
+    # KMS counterpart of the gap ratio (#88/#80): a genuine Mori-Shirai
     # symmetrised-gap reduction usually shows up in the KMS gap as well, while
-    # the repro class of #88 has Delta_KMS == Delta exactly. Surfaced for
-    # audit only -- NOT read by any decision function (see
-    # ADVISORY_EVIDENCE_KEYS); using it as an F3 veto is issue #88 option 2.
+    # the repro class of #88 has Delta_KMS == Delta exactly. Since #80 this is
+    # class-influencing via ``sym_gap_corroborated`` below (it is NOT an F3
+    # veto -- that remains deferred, see the ADVISORY_EVIDENCE_KEYS note).
     ev["gap_to_kms_ratio"] = (
         float(spectral.gap / spectral.kms_gap) if spectral.kms_gap > 0 else float("inf")
+    )
+    # Issue #80: POSITIVE certificate that the spectral gap really controls
+    # contraction, used to gate A1 CONFIRMED/PUBLICATION_GRADE. Rationale: the
+    # A1 early branch fires when no F1-F5 family fired, i.e. on the *absence*
+    # of failure triggers -- but threshold exhaustiveness cannot be proven
+    # (a hypothetical weakly-non-normal gap failure below ALL thresholds with
+    # a single-exp-at-gap trajectory would slip through). A *measured*
+    # symmetrised gap equal to Delta (no F3-grade reduction, <= 1.2) is
+    # operator-intrinsic positive evidence: it certifies exponential
+    # contraction at the gap rate in the GNS (certified only, #88) or KMS
+    # geometry. A floored/uncertified GNS and a reduced or floored KMS both
+    # fail this, fail-closed.
+    ev["sym_gap_corroborated"] = (
+        1.0
+        if spectral.gap > 0.0
+        and (
+            (ev["gns_certified"] > 0.5 and ev["gap_to_gns_ratio"] <= 1.2)
+            or ev["gap_to_kms_ratio"] <= 1.2
+        )
+        else 0.0
     )
     ev["has_complex_pairs"] = float(spectral.has_complex_pairs)
     ev["kreiss"] = float(nonnorm.kreiss)
@@ -295,7 +317,14 @@ def _confidence(ev: dict[str, float], a_class: str) -> float:
     """
     score = 0.5
     if a_class == "A1" and ev.get("gap_rate_consistency", 1.0) < 0.05:
-        score = 0.95
+        # Issue #80: A1 CONFIRMED/PUBLICATION_GRADE (0.95) requires the
+        # POSITIVE symmetrised-gap certificate, not merely the absence of all
+        # F1-F5 triggers. Without corroboration the honest grade is
+        # CANDIDATE/CONFIRMATION (0.70): the observable is single-exp at the
+        # gap rate (measured), but gap control is not operator-intrinsically
+        # certified, and F1-F5 threshold exhaustiveness must not carry a
+        # publication-grade claim alone.
+        score = 0.95 if ev.get("sym_gap_corroborated", 0.0) > 0.5 else 0.70
     elif (
         # A2 high confidence needs the ratio AND a certified (measured) GNS
         # gap -- defence in depth: _pick_a_class already refuses A2 off the
