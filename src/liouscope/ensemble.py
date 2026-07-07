@@ -1,6 +1,6 @@
 """Typed, immutable evidence contract for ensemble-level Mpemba claims.
 
-A single caller-controlled boolean is not evidence.  This module defines the
+A single caller-controlled boolean is not evidence. This module defines the
 minimum structured provenance required before the single-state maximally-mixed
 A11 insufficient-evidence floor may be lifted.
 """
@@ -35,10 +35,9 @@ def _require_sha256(name: str, value: str) -> None:
 class EnsembleEvidence:
     """Validated provenance for a reference-family Mpemba comparison.
 
-    The object is deliberately descriptive rather than self-certifying: it binds
-    the claim to immutable digests, run identities, the comparison method and two
-    attestations.  It does not prove that an attester is independent; repository
-    review and release policy remain separate controls.
+    The object binds the claim to immutable digests, run identities, the
+    comparison method and two attestations. It does not prove organizational
+    independence; repository review and release policy remain separate controls.
     """
 
     manifest_sha256: str
@@ -50,14 +49,13 @@ class EnsembleEvidence:
     comparison_test: str
     uncertainty_method: str
     software_version: str
-    gate_status: EnsembleGateStatus
+    gate_status: str
     reason_code: str
     producer_attestation_sha256: str
     reviewer_attestation_sha256: str
     schema_version: str = ENSEMBLE_EVIDENCE_SCHEMA_VERSION
 
     def __post_init__(self) -> None:
-        # Canonicalise sequence inputs even when a caller supplied lists.
         object.__setattr__(self, "run_ids", tuple(self.run_ids))
         object.__setattr__(self, "input_hashes", tuple(self.input_hashes))
 
@@ -142,7 +140,7 @@ class EnsembleEvidence:
         return hashlib.sha256(encoded).hexdigest()
 
 
-def reject_legacy_ensemble_confirmation(value: bool | None) -> None:
+def reject_legacy_ensemble_confirmation(value: object) -> None:
     """Reject the former trust-by-boolean override while tolerating false/no-op calls."""
 
     if value is None or value is False:
