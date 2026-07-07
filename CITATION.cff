@@ -6,8 +6,14 @@ authors:
   - name: "Coworker Research"
 version: "0.5.0"
 date-released: "2026-06-25"
-# doi: add only after the Zenodo record has been directly verified. Record the
-# immutable version DOI here and document the concept DOI separately if both exist.
+doi: 10.5281/zenodo.21246109
+# doi above = immutable *version* DOI for released v0.5.0. Directly verified against
+# the Zenodo record on 2026-07-08: title "LiouScope: Multi-Diagnostic Relaxation
+# Analysis for Open Quantum Lattice Systems", version v0.5.0, Coworker Research,
+# published 2026-07-07 (Zenodo). The concept DOI (spanning all versions) is to be
+# recorded separately once independently verified. Note: `date-released` above is
+# the software release date of tag v0.5.0; the Zenodo deposit date (2026-07-07)
+# differs and is documented in the release audit, not conflated here.
 # This citation describes released v0.5.0; VCS main uses a PEP 440 development
 # version until the next release is cut.
 license: Apache-2.0
@@ -36,6 +42,7 @@ preferred-citation:
     - name: "Coworker Research"
   title: "LiouScope: Multi-Diagnostic Relaxation Analysis for Open Quantum Lattice Systems"
   year: 2026
+  doi: 10.5281/zenodo.21246109
   url: "https://github.com/marcohost33-maker/Liouscope"
   notes: >-
     Cite the software via this CITATION.cff. A methods paper / preprint
