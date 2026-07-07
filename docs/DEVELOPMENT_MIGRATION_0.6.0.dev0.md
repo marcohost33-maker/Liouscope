@@ -14,6 +14,10 @@ Only a PASS gate with reason `ENSEMBLE_MPEMBA_CONFIRMED` can lift the single-sta
 
 The object is a provenance contract, not proof of organizational independence or scientific correctness. Repository review and release promotion remain separate gates.
 
+## Manifest migration
+
+`MANIFEST_SCHEMA_VERSION` moves from 1.3.0 to 1.4.0 because the input-hash derivation domain now includes the canonical ensemble-evidence digest when structured evidence is supplied. Run IDs and input hashes must be compared only within the same manifest schema version. Existing 1.3.0 manifests remain valid historical records but do not re-derive under 1.4.0 when ensemble evidence participates.
+
 ## PyPI release workflow
 
 Manual workflow dispatch is build and QA only and receives no OIDC token. The publish job runs only for a published GitHub Release and only when the repository publication flag is enabled. Before upload, both jobs verify source version, built-wheel version, release tag, checked-out commit and release event SHA.
