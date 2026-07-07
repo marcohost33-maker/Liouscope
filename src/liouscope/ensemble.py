@@ -145,13 +145,14 @@ class EnsembleEvidence:
 def reject_legacy_ensemble_confirmation(value: bool | None) -> None:
     """Reject the former trust-by-boolean override while tolerating false/no-op calls."""
 
-    if value not in (None, False, True):
-        raise TypeError("ensemble_confirmation must be bool or None")
+    if value is None or value is False:
+        return
     if value is True:
         raise ValueError(
             "ensemble_confirmation=True is no longer accepted: pass a validated "
             "EnsembleEvidence object via ensemble_evidence instead"
         )
+    raise TypeError("ensemble_confirmation must be bool or None")
 
 
 __all__ = [
