@@ -19,7 +19,7 @@
     "quality_label"
   ],
   "properties": {
-    "schema_version": { "type": "string", "const": "1.3.0" },
+    "schema_version": { "type": "string", "const": "1.4.0" },
     "framework_version": { "type": "string" },
     "taxonomy_version": { "type": "string", "const": "A1-A12-v3.1" },
     "diagnostic_schema_version": {
@@ -29,7 +29,7 @@
     "run_id": {
       "type": "string",
       "pattern": "^[0-9a-f]{64}$",
-      "description": "SHA-256 deterministically derived from input_hash, seed and framework_version; two runs collide only when all output-affecting inputs match. Derivation is schema_version-scoped: run_id values are NOT comparable across differing schema_version (a bump changes the derivation domain), so a run_id archived under an earlier schema_version does not re-derive under this one."
+      "description": "SHA-256 deterministically derived from input_hash, seed and framework_version; two runs collide only when all output-affecting inputs match. Derivation is schema_version-scoped: run_id values are not comparable across differing schema_version values."
     },
     "timestamp": { "type": "string", "format": "date-time" },
     "python_version": { "type": "string" },
@@ -48,7 +48,7 @@
     "input_hash": {
       "type": "string",
       "pattern": "^[0-9a-f]{64}$",
-      "description": "SHA-256 over every output-affecting input (Liouvillian, initial and steady states, time grid, bootstrap count, mpemba flag, solver path). Derivation is schema_version-scoped: the set of hashed inputs is fixed per schema_version, so input_hash values are NOT comparable across differing schema_version."
+      "description": "SHA-256 over every output-affecting input. Schema 1.4.0 adds the canonical EnsembleEvidence digest when structured ensemble evidence is supplied; hashes are comparable only within one schema_version."
     }
   },
   "additionalProperties": false

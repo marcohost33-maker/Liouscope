@@ -7,30 +7,24 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Changed
-- **A11 single-state maximally-mixed floor -> UNDETERMINED** (issue #78, decision
-  E0706-13; the ONE intended behaviour change). PR #77 stopped A11 self-certifying
-  PUBLICATION_GRADE/CONFIRMED, but when `rho_ss` is **maximally mixed** (`I/d`)
-  it collapses to a single eigenprojector, so the issue-#68 triviality guard
-  (which needs a non-trivial eigenprojector decomposition of `rho_ss`)
-  structurally cannot fire. The README quickstart `|+>` case (dephasing,
-  `rho_ss = I/2`) therefore still reached A11/F4 **CANDIDATE** (confidence 0.70),
-  which over-claims. A single initial state on a maximally mixed steady state is
-  now classified as **UNDEFINED / EXPLORATION** (the reused INSUFFICIENT-EVIDENCE
-  floor) -- NOT CANDIDATE (over-claim) and NOT hard-EXCLUDED (a unital /
-  doubly-stochastic Markov process with multiple relaxation rates CAN exhibit
-  Mpemba; hard exclusion was falsified cross-family). The A11/F4 best-fit label and
-  the confidence heuristic are preserved -- only the *verdict/tier* (the claim)
-  drop. The downgrade is **conditional**: a new keyword `ensemble_confirmation`
-  on `classify_mechanism` (surfaced as the `ensemble_confirmation` evidence key)
-  suppresses the floor, so a future reference-ensemble / thermal-family path plugs
-  in without re-touching this logic. Detection tolerance `EPS_MAXMIX = 1e-9`
-  (tight: triggers only on the exact `I/d` limit, absorbs ~1e-16 solver noise).
-  The same physics applies to the V2 dephasing reference (also `rho_ss = I/2`),
-  whose verdict likewise moves CANDIDATE -> UNDEFINED; its golden `a_class` (A11)
-  is unchanged and all other V1-V5 goldens and the sacred anchor suite stay
-  byte-identical green. Pinned by `tests/test_classification.py`,
-  `tests/test_classifier_semantics_debt.py` and the updated
-  `tests/test_mpemba.py::test_maximally_mixed_single_state_mpemba_is_undetermined`.
+- **Release identity and provenance hardening.** Released `v0.5.0` remains
+  immutable; default-branch VCS installs now report `0.6.0.dev0`. Manifest
+  schema `1.4.0` adds the canonical structured-ensemble-evidence digest to
+  the input-hash domain when evidence participates; hashes are comparable
+  only within one schema version.
+- **A11 typed evidence gate.** A single state on `rho_ss = I/d` remains
+  `UNDEFINED / EXPLORATION`. Public `ensemble_confirmation=True` is rejected
+  fail-closed. Only validated immutable `EnsembleEvidence` with `PASS` and
+  reason `ENSEMBLE_MPEMBA_CONFIRMED` may suppress the floor. The evidence
+  binds manifest/run/input digests, family ordering, comparison and
+  uncertainty methods, software version, and distinct producer/reviewer
+  attestations; its digest enters the run hash and its payload remains in
+  `DiagnosticReport.extras`.
+- **PyPI publication privilege-separated.** Manual dispatch is build/QA only
+  without OIDC. The upload job is restricted to a published release, explicit
+  tag checkout, the protected `pypi` environment, the enable flag, and repeated
+  source/artifact/tag/commit identity checks. External PyPI/Zenodo/SWHID gates
+  in issue #50 remain open.
 
 ### Added
 - **Classifier semantics debt B3/B4 made explicit contracts** (issue #70,

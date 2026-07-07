@@ -8,4 +8,4 @@ guaranteed to be one and the same string. Keep this a bare literal (no imports)
 so setuptools can read it statically at build time.
 """
 
-__version__ = "0.5.0"
+__version__ = "0.6.0.dev0"

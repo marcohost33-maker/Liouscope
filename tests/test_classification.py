@@ -8,8 +8,10 @@ import pytest
 from liouscope import (
     A_CLASSES,
     DIAGNOSTIC_SCHEMA_VERSION,
+    ENSEMBLE_MPEMBA_CONFIRMED,
     F_FAMILIES,
     TAXONOMY_VERSION,
+    EnsembleEvidence,
     build_liouvillian,
     classify_mechanism,
     diagnose,
@@ -215,6 +217,24 @@ def _mpemba(**kw) -> MpembaResult:
     return MpembaResult(**base)
 
 
+def _passing_ensemble_evidence() -> EnsembleEvidence:
+    return EnsembleEvidence(
+        manifest_sha256="1" * 64,
+        initial_state_family="thermal Gibbs family",
+        ordering_parameter="inverse_temperature_beta",
+        run_ids=("2" * 64, "3" * 64),
+        input_hashes=("4" * 64, "5" * 64),
+        relaxation_metric="trace_distance",
+        comparison_test="family_ordered_crossing_test",
+        uncertainty_method="BCa bootstrap 95% CI with multiplicity control",
+        software_version="0.6.0.dev0",
+        gate_status="PASS",
+        reason_code=ENSEMBLE_MPEMBA_CONFIRMED,
+        producer_attestation_sha256="6" * 64,
+        reviewer_attestation_sha256="7" * 64,
+    )
+
+
 def _classify(
     *,
     spectral=None,
@@ -224,7 +244,7 @@ def _classify(
     transient=None,
     lep=None,
     mpemba=None,
-    ensemble_confirmation=False,
+    ensemble_evidence=None,
 ):
     return classify_mechanism(
         spectral=spectral or _spectral(),
@@ -234,7 +254,7 @@ def _classify(
         transient=transient or _transient(),
         lep=lep or _lep(),
         mpemba=mpemba,
-        ensemble_confirmation=ensemble_confirmation,
+        ensemble_evidence=ensemble_evidence,
     )
 
 
@@ -303,16 +323,14 @@ def test_a11_single_state_maximally_mixed_is_undetermined():
     assert cls.evidence["ensemble_confirmation"] == 0.0
 
 
-def test_a11_maximally_mixed_ensemble_override_suppresses_floor():
-    # The exclusion is CONDITIONAL: a reference-ensemble Mpemba confirmation
-    # (ensemble_confirmation=True) suppresses the downgrade, so the SAME
-    # maximally-mixed A11 evidence is once again allowed to be a CANDIDATE. This
-    # pins the ensemble-override hook/contract (a future thermal-family path plugs
-    # in here without re-touching the floor logic).
+def test_a11_maximally_mixed_ensemble_evidence_suppresses_floor():
+    # The exclusion is CONDITIONAL: validated reference-family evidence may
+    # suppress the downgrade, so the same maximally-mixed A11 evidence is once
+    # again allowed to be a CANDIDATE. A caller-controlled Boolean is not enough.
     cls = _classify(
         spectral=_maxmix_spectral(2),
         mpemba=_mpemba(overlap_c1=1.0e-6),
-        ensemble_confirmation=True,
+        ensemble_evidence=_passing_ensemble_evidence(),
     )
     assert (cls.a_class, cls.f_family) == ("A11", "F4")
     assert cls.verdict == VERDICT_CANDIDATE

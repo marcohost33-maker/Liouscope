@@ -39,17 +39,25 @@ from ._types import (
     UncertaintyResult,
 )
 from ._version import __version__
+from .ensemble import (
+    ENSEMBLE_EVIDENCE_SCHEMA_VERSION,
+    ENSEMBLE_MPEMBA_CONFIRMED,
+    EnsembleEvidence,
+)
 from .io.seed import seed_everything
 
 __all__ = [
     "A_CLASSES",
     "A_CLASS_DESCRIPTIONS",
     "DIAGNOSTIC_SCHEMA_VERSION",
+    "ENSEMBLE_EVIDENCE_SCHEMA_VERSION",
+    "ENSEMBLE_MPEMBA_CONFIRMED",
     "F_FAMILIES",
     "F_FAMILY_DESCRIPTIONS",
     "TAXONOMY_VERSION",
     "ClassificationResult",
     "DiagnosticReport",
+    "EnsembleEvidence",
     "FitResult",
     "GovernanceMetadata",
     "LepResult",

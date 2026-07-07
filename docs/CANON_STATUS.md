@@ -1,6 +1,6 @@
 # LiouScope Canon Status
 
-Last updated: 2026-06-26
+Last updated: 2026-07-07
 Repository: `marcohost33-maker/Liouscope`
 
 ## 1. Canon layers
@@ -11,9 +11,9 @@ sentence without qualification.
 | Layer | Current status | Authority |
 |---|---|---|
 | Scientific/Drive canon | 0Liou+ v1.0 / consolidated report v2.0 FINAL / `LiouScope_Formelbuechlein_v1_0_2026-06-25` / A1-A12-v3.1 / D1-D24 | Drive-side canon and project archive |
-| Repo runtime canon | `liouscope.__version__ == 0.5.0` | `src/liouscope/_version.py` |
-| Manifest/report contracts | `MANIFEST_SCHEMA_VERSION == 1.3.0` (bumped from 1.2.0 in [Unreleased]: run_id/input_hash derivation domain widened; hashes not comparable across schema_version); `StabilityReport v2.1` is a separate additive projection | `src/liouscope/MANIFEST_SCHEMA.json`, `_consts.py`, `STABILITY_REPORT_SCHEMA.json` |
-| Current code frontier | PRs #55-#57 merged to `main`; v0.5.0 release-prep cut; archive/provenance finalization open | GitHub PR state + `docs/RELEASE_AUDIT_v0.5.0.md` |
+| Repo runtime canon | released `v0.5.0`; default branch `0.6.0.dev0` | tag/release plus `src/liouscope/_version.py` |
+| Manifest/report contracts | `MANIFEST_SCHEMA_VERSION == 1.4.0`; schema 1.4 adds the canonical structured-ensemble-evidence digest to the hash domain when such evidence is supplied; hashes remain comparable only within one schema version. `StabilityReport v2.1` is a separate additive projection | `src/liouscope/MANIFEST_SCHEMA.json`, `_consts.py`, `STABILITY_REPORT_SCHEMA.json` |
+| Current code frontier | v0.5.0 remains immutable and citable; default branch is the next development line; archive/provenance finalization remains open in issue #50 | GitHub release state + `docs/RELEASE_AUDIT_v0.5.0.md` |
 
 ## 2. Operational rule
 
@@ -29,10 +29,10 @@ Release canon is final only when metadata, CI, archive, and provenance gates all
 
 ```text
 Science baseline: GREEN for existing scope
-Runtime repo version: 0.5.0
-Release metadata: GREEN for engineering release (version/citation/changelog aligned)
+Released repo version: 0.5.0
+Default-branch development version: 0.6.0.dev0
+Release metadata: GREEN for the immutable engineering release; DOI still unverified
 Public/citable release: OPEN (archive/provenance gates pending — see RELEASE_AUDIT_v0.5.0)
-PRs #55-#57: merged to main; v0.5.0 changelog cut from the Unreleased section
 ```
 
 ## 4. No-drift invariants
@@ -41,27 +41,26 @@ The following identifiers must remain synchronized or be explicitly version-bump
 
 - `TAXONOMY_VERSION = "A1-A12-v3.1"`
 - `DIAGNOSTIC_SCHEMA_VERSION = "D1-D24-Übersicht-v3-2026-04-24"`
-- `MANIFEST_SCHEMA_VERSION = "1.3.0"`
+- `MANIFEST_SCHEMA_VERSION = "1.4.0"`
 - `liouscope.__version__` from `src/liouscope/_version.py`
-- `CITATION.cff` top-level `version`
-- release notes / changelog version section
+- released version metadata in `CITATION.cff`
+- release notes / development migration note
 - StabilityReport schema when the StabilityReport projection changes
 
 ## 5. Pending canon work
 
-- Update the Drive-side 0Liou+ canon to reflect the repo runtime moving to v0.5.0
-  and the Canon-v0.5 additive diagnostics / `StabilityReport v2.1` wave.
+- Update the Drive-side 0Liou+ canon to distinguish released v0.5.0 from the
+  default-branch 0.6.0 development line and manifest schema 1.4.
 - Keep the scientific report v2.0 FINAL as the baseline unless a new reviewed
   scientific report supersedes it.
 - Do not relabel D24 as an exact implementation of Zhou Eq.(16); keep the
   documented status as a related, generally coarser surrogate / reference-
   verified-bound-coarser claim.
 - A public/citable v0.5.0 still depends on the archive/provenance gates in
-  `docs/RELEASE_AUDIT_v0.5.0.md` §7–§8: GitHub Release/tag, clean wheel+sdist,
-  checksums, PyPI Trusted Publisher decision, Zenodo DOI or explicit no-Zenodo
-  decision, SWHID/public-source status, and evidence-lock update.
-- Resolve or supersede issue #50 so archive gating tracks v0.5.0 rather than the
-  now-stale v0.4.1 release envelope.
+  `docs/RELEASE_AUDIT_v0.5.0.md`: PyPI Trusted Publisher activation, direct
+  Zenodo DOI verification/backfill, SWHID/public-source status, and evidence-lock
+  update.
+- Keep issue #50 open until those external gates are directly verified.
 
 ## 6. Production rule for future changes
 

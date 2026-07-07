@@ -3,9 +3,16 @@
 from __future__ import annotations
 
 import numpy as np
+import pytest
 import scipy.linalg as sla
 
-from liouscope import build_liouvillian, diagnose, steady_state
+from liouscope import (
+    ENSEMBLE_MPEMBA_CONFIRMED,
+    EnsembleEvidence,
+    build_liouvillian,
+    diagnose,
+    steady_state,
+)
 from liouscope.diagnostics.mpemba import (
     compute_mpemba_layer,
     expansion_alpha,
@@ -175,6 +182,24 @@ def _readme_dephasing_mpemba_case():
     return L, rho0
 
 
+def _passing_ensemble_evidence() -> EnsembleEvidence:
+    return EnsembleEvidence(
+        manifest_sha256="1" * 64,
+        initial_state_family="thermal Gibbs family",
+        ordering_parameter="inverse_temperature_beta",
+        run_ids=("2" * 64, "3" * 64),
+        input_hashes=("4" * 64, "5" * 64),
+        relaxation_metric="trace_distance",
+        comparison_test="family_ordered_crossing_test",
+        uncertainty_method="BCa bootstrap 95% CI with multiplicity control",
+        software_version="0.6.0.dev0",
+        gate_status="PASS",
+        reason_code=ENSEMBLE_MPEMBA_CONFIRMED,
+        producer_attestation_sha256="6" * 64,
+        reviewer_attestation_sha256="7" * 64,
+    )
+
+
 def test_maximally_mixed_single_state_mpemba_is_undetermined():
     # GOLDEN FLIP (issue #78 / decision E0706-13). The README dephasing example
     # (rho_ss = I/2) is MAXIMALLY MIXED: it collapses to a single eigenprojector, so
@@ -195,18 +220,15 @@ def test_maximally_mixed_single_state_mpemba_is_undetermined():
     assert cls.verdict != "CANDIDATE"
 
 
-def test_public_diagnose_ensemble_confirmation_suppresses_maxmix_floor():
-    # Regression for the public API seam: PR #86 added the ensemble override to
-    # classify_mechanism(), but the top-level diagnose() orchestrator must expose
-    # and forward it as well. Otherwise reference-ensemble evidence could not
-    # suppress the single-state maximally-mixed A11 floor in normal user code.
+def test_public_diagnose_ensemble_evidence_suppresses_maxmix_floor():
     L, rho0 = _readme_dephasing_mpemba_case()
     floor = diagnose(L, rho_initial=rho0, bootstrap_B=50)
+    evidence = _passing_ensemble_evidence()
     override = diagnose(
         L,
         rho_initial=rho0,
         bootstrap_B=50,
-        ensemble_confirmation=True,
+        ensemble_evidence=evidence,
     )
     cls = override.classification
     assert (cls.a_class, cls.f_family) == ("A11", "F4")
@@ -215,3 +237,38 @@ def test_public_diagnose_ensemble_confirmation_suppresses_maxmix_floor():
     assert cls.evidence["maximally_mixed_steady_state"] == 1.0
     assert cls.evidence["ensemble_confirmation"] == 1.0
     assert floor.governance.input_hash != override.governance.input_hash
+    assert override.extras["ensemble_evidence_sha256"] == evidence.sha256
+    assert override.extras["ensemble_evidence"] == evidence.to_payload()
+
+
+def test_public_diagnose_rejects_legacy_boolean_override():
+    L, rho0 = _readme_dephasing_mpemba_case()
+    with pytest.raises(ValueError, match="EnsembleEvidence"):
+        diagnose(
+            L,
+            rho_initial=rho0,
+            bootstrap_B=50,
+            ensemble_confirmation=True,
+        )
+
+
+def test_nonpassing_ensemble_evidence_does_not_suppress_floor():
+    L, rho0 = _readme_dephasing_mpemba_case()
+    passing = _passing_ensemble_evidence()
+    review = EnsembleEvidence(
+        **{
+            **passing.to_payload(),
+            "run_ids": tuple(passing.run_ids),
+            "input_hashes": tuple(passing.input_hashes),
+            "gate_status": "REVIEW",
+        }
+    )
+    report = diagnose(
+        L,
+        rho_initial=rho0,
+        bootstrap_B=50,
+        ensemble_evidence=review,
+    )
+    assert report.classification.verdict == "UNDEFINED"
+    assert report.classification.tier == "EXPLORATION"
+    assert report.classification.evidence["ensemble_confirmation"] == 0.0

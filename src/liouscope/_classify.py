@@ -1,5 +1,5 @@
-"""Top-level re-export for the mechanism classifier."""
+"""Top-level re-export for the validated mechanism classifier."""
 
-from .diagnostics.classification import classify_mechanism
+from .diagnostics.api import classify_mechanism
 
 __all__ = ["classify_mechanism"]
