@@ -7,6 +7,7 @@ from dataclasses import FrozenInstanceError
 import pytest
 
 from liouscope import ENSEMBLE_MPEMBA_CONFIRMED, EnsembleEvidence
+from liouscope.diagnostics import classify_mechanism as package_classifier
 
 
 def _evidence(**overrides: object) -> EnsembleEvidence:
@@ -41,6 +42,19 @@ def test_override_requires_pass_and_specific_reason_code():
     assert _evidence().permits_claim_floor_override
     assert not _evidence(gate_status="REVIEW").permits_claim_floor_override
     assert not _evidence(reason_code="UNRELATED_PASS").permits_claim_floor_override
+
+
+def test_diagnostics_package_exports_validated_classifier():
+    with pytest.raises(ValueError, match="EnsembleEvidence"):
+        package_classifier(  # type: ignore[call-arg]
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            ensemble_confirmation=True,
+        )
 
 
 @pytest.mark.parametrize(
