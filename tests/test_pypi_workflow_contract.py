@@ -2,7 +2,6 @@
 
 from pathlib import Path
 
-
 _WORKFLOW = Path(__file__).resolve().parents[1] / ".github" / "workflows" / "pypi.yml"
 
 
