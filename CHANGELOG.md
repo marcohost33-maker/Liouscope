@@ -160,6 +160,34 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     coverage.
 
 ### Fixed
+- **A2/F3 no longer fires off the `gns_gap` conservative-floor sentinel**
+  (issue #88; classification-semantics change in a dedicated PR per AGENTS.md
+  §3). `diagnostics.spectral.gns_gap` deliberately floors `Delta_GNS` to ~0
+  when the GNS symmetrisation certifies no contraction (the documented 2026-07
+  audit-A1 behaviour for non-detailed-balance steady states carrying
+  coherences; that floor is unchanged). But `_gather_evidence` turned the
+  sentinel into `gap_to_gns_ratio ~ 1e10..inf`, and the F3 branch plus
+  `_confidence` promoted the exploded ratio straight to **A2/F3 CONFIRMED /
+  PUBLICATION_GRADE** — a publication-grade Mori-Shirai-2023 mechanism claim
+  keyed on the *absence* of a certificate, on inputs as tame as a textbook
+  Rabi-driven amplitude-damped qubit with `Delta_KMS == Delta` (provably no
+  real symmetrised-gap reduction). Fix (issue #88 option 1: positive-evidence
+  burden): the evidence dict now carries `gns_certified` (1.0 iff
+  `gns_gap >= GNS_CERTIFIED_RTOL * gap`, new named constant `1e-8` in
+  `_consts`), and both the F3 branch and the A2 high-confidence rule require
+  it — the uncertified sentinel falls through to the state-dependent shape
+  branches (honest floor: absence of evidence). `gap_to_kms_ratio` is now
+  surfaced as *advisory* audit context (issue #88 option 2 — wiring it as an
+  F3 veto is deferred to its own FP study); the advisory metamorphic contract
+  covers it. **Verdict flips (uncovered input class only):** the #88 repro
+  family (Rabi qubit, drives 0.3/0.7/1.5) flips A2/F3 CONFIRMED/
+  PUBLICATION_GRADE (0.85) → A8 or A10-via-M3a CANDIDATE/CONFIRMATION (≤0.70).
+  **Anchor-preserving:** V1/V3/V4 have diagonal steady states (finite,
+  certified `gns_gap`), V5 is caught by the Mpemba branch first; the sacred
+  anchor suite and all V1-V5 golden assertions stay green. A *certified*
+  reduction still fires A2/F3 at 0.85 (positive-control test). New e2e guard
+  `tests/test_classifier_f3_sentinel.py`; `claim_status: pending` until
+  cross-family review confirms the semantics.
 - **Hermiticity / normalisation validation gates are now absolute, not
   ~10^4x looser than advertised.** `numerics.linalg.is_hermitian` (and
   therefore `is_density_matrix`), the Hamiltonian Hermiticity check in

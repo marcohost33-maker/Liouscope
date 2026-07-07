@@ -38,6 +38,7 @@ import numpy as np
 
 from .._consts import (
     DIAGNOSTIC_SCHEMA_VERSION,
+    GNS_CERTIFIED_RTOL,
     TAXONOMY_VERSION,
     TIER_CONFIRMATION,
     TIER_EXPLORATION,
@@ -79,6 +80,9 @@ ADVISORY_EVIDENCE_KEYS: frozenset[str] = frozenset(
         "lep_proximity",           # D16 eigenvalue-coalescence proximity
         "bohr_ap_length",          # D11 Bohr almost-periodicity depth
         "mpemba_expansion_alpha",  # D20 Phi_n scaling exponent (present iff mpemba)
+        "gap_to_kms_ratio",        # D2b audit context for the F3 decision (#88);
+        #                            wiring it as a veto/corroboration signal is
+        #                            issue #88 option 2 and needs its own FP study
     }
 )
 
@@ -100,6 +104,27 @@ def _gather_evidence(
         float(spectral.kms_gap / spectral.gns_gap)
         if spectral.gns_gap > 0
         else float("inf")
+    )
+    # Issue #88: ``gns_gap`` deliberately floors to ~0 (O(machine-eps) relative
+    # to the operator scale) whenever the GNS symmetrisation cannot certify a
+    # contraction -- e.g. any non-detailed-balance system whose steady state
+    # carries coherences. That sentinel makes ``gap_to_gns_ratio`` explode
+    # (~1e10..inf) WITHOUT any measured symmetrised-gap reduction. The flag
+    # below distinguishes a MEASURED Delta_GNS (certified: resolved above the
+    # numerical noise floor relative to Delta) from the uncertified sentinel;
+    # decision branches keying on ``gap_to_gns_ratio`` must require it.
+    ev["gns_certified"] = (
+        1.0
+        if spectral.gap > 0.0 and spectral.gns_gap >= GNS_CERTIFIED_RTOL * spectral.gap
+        else 0.0
+    )
+    # Advisory audit context for the F3 decision (#88): a genuine Mori-Shirai
+    # symmetrised-gap reduction usually shows up in the KMS gap as well, while
+    # the repro class of #88 has Delta_KMS == Delta exactly. Surfaced for
+    # audit only -- NOT read by any decision function (see
+    # ADVISORY_EVIDENCE_KEYS); using it as an F3 veto is issue #88 option 2.
+    ev["gap_to_kms_ratio"] = (
+        float(spectral.gap / spectral.kms_gap) if spectral.kms_gap > 0 else float("inf")
     )
     ev["has_complex_pairs"] = float(spectral.has_complex_pairs)
     ev["kreiss"] = float(nonnorm.kreiss)
@@ -182,8 +207,19 @@ def _pick_a_class(
     # F2 skin effect: large trans-amplitude ratio + kappa_trans
     if ev["trans_amplitude_ratio"] > 5.0 and ev["kappa_trans"] > 2.0:
         return "A4", "F2"
-    # F3 symmetrised gap correction
-    if ev["gap_to_gns_ratio"] > 1.2:
+    # F3 symmetrised gap correction (issue #88). A2/F3 semantics are a
+    # *measured* Mori-Shirai symmetrised-gap reduction (Delta_GNS genuinely
+    # below Delta), so the branch must key on a CERTIFIED Delta_GNS. When
+    # ``gns_gap`` is the conservative floor sentinel (~0: the GNS
+    # symmetrisation certifies no contraction at all -- the documented 2026-07
+    # audit-A1 behaviour for non-detailed-balance steady states with
+    # coherences), the exploded ratio is an artefact of the sentinel, not
+    # positive mechanism evidence: firing F3 off it labelled a textbook
+    # Rabi-driven amplitude-damped qubit (Delta_KMS == Delta, no real
+    # reduction) as A2/F3 CONFIRMED / PUBLICATION_GRADE. Uncertified cases
+    # fall through to the state-dependent branches below (A1/A5/A8/...),
+    # which is the honest floor: "GNS uncertified" is absence of evidence.
+    if ev["gap_to_gns_ratio"] > 1.2 and ev.get("gns_certified", 0.0) > 0.5:
         return "A2", "F3"
     # A1 gap-controlled (LIOU-#69): the OBSERVABLE (linear trace-distance)
     # relaxation is a single exponential whose rate matches the spectral gap
@@ -260,7 +296,15 @@ def _confidence(ev: dict[str, float], a_class: str) -> float:
     score = 0.5
     if a_class == "A1" and ev.get("gap_rate_consistency", 1.0) < 0.05:
         score = 0.95
-    elif (a_class == "A2" and ev.get("gap_to_gns_ratio", 1.0) > 1.5) or (a_class == "A3" and ev.get("kreiss", 0.0) > 10.0) or (a_class == "A4" and ev.get("trans_amplitude_ratio", 0.0) > 10.0):
+    elif (
+        # A2 high confidence needs the ratio AND a certified (measured) GNS
+        # gap -- defence in depth: _pick_a_class already refuses A2 off the
+        # floor sentinel (issue #88), so an uncertified A2 cannot reach 0.85
+        # even if the branch guards drift apart.
+        a_class == "A2"
+        and ev.get("gap_to_gns_ratio", 1.0) > 1.5
+        and ev.get("gns_certified", 0.0) > 0.5
+    ) or (a_class == "A3" and ev.get("kreiss", 0.0) > 10.0) or (a_class == "A4" and ev.get("trans_amplitude_ratio", 0.0) > 10.0):
         score = 0.85
     elif a_class == "A10":
         score = 0.70
