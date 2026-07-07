@@ -177,7 +177,7 @@ def _readme_dephasing_mpemba_case():
 
 def test_maximally_mixed_single_state_mpemba_is_undetermined():
     # GOLDEN FLIP (issue #78 / decision E0706-13). The README dephasing example
-    # (rho_ss = I/2) is MAXIMALLY MIXED: there is no protecting symmetry sector, so
+    # (rho_ss = I/2) is MAXIMALLY MIXED: it collapses to a single eigenprojector, so
     # the issue-#68 triviality guard structurally cannot fire. A SINGLE initial
     # state on a maximally mixed steady state is INSUFFICIENT EVIDENCE for a Mpemba
     # claim -- the honest floor is UNDEFINED (UNDETERMINED), NOT the previous

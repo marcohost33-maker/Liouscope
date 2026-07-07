@@ -36,15 +36,19 @@ EPS_HERMITICITY: Final[float] = 1.0e-9
 EPS_TRACE: Final[float] = 1.0e-10
 
 # Maximally-mixed steady-state tolerance (issue #78 / decision E0706-13). A
-# steady state counts as maximally mixed (rho_ss = I/d, no protecting symmetry
-# sector) only when every entry matches I/d to within this absolute tolerance.
-# Set at the hermiticity/degeneracy scale (1e-9) -- the same order used for the
-# steady-state eigenprojector grouping in mpemba._steady_state_eigenprojectors --
-# so genuine solver noise on an exact I/d null space (~1e-16 in practice) is
-# absorbed, while any state with real structure (deviation >= 1e-9) is NOT flagged
-# and follows the normal classification path. Deliberately TIGHT: the A11 floor
-# must trigger ONLY on the exact maximally-mixed limit, never on a near-mixed but
-# structured steady state (which does carry a weak protecting sector).
+# PURELY NUMERICAL guard that identifies the EXACT ``rho_ss = I/d`` limit: a
+# steady state counts as maximally mixed only when every entry matches I/d to
+# within this absolute tolerance. Set at the hermiticity/degeneracy scale (1e-9)
+# -- the same order used for the steady-state eigenprojector grouping in
+# mpemba._steady_state_eigenprojectors -- so genuine solver noise on an exact I/d
+# null space (~1e-16 in practice) is absorbed. This is NOT a claim that a state
+# whose deviation from I/d exceeds the tolerance thereby carries a protecting
+# symmetry sector: protecting / decoherence-free sectors are properties of the
+# Liouvillian's structure, not of the fixpoint's distance from I/d (a finite-T
+# amplitude-damping qubit, rho_ss = diag(1/2+e, 1/2-e) with e > 1e-9, has no such
+# sector). The bound is deliberately TIGHT so the A11 insufficient-evidence floor
+# fires ONLY at the exact maximally-mixed limit; a near-mixed but structured
+# steady state simply follows the normal classification path.
 EPS_MAXMIX: Final[float] = 1.0e-9
 
 # U1 (solver uncertainty) nominal floor. ``compute_uncertainty_layer`` reports

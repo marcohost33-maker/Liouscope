@@ -91,13 +91,20 @@ ADVISORY_EVIDENCE_KEYS: frozenset[str] = frozenset(
 # issue #78 / decision E0706-13: the single-state maximally-mixed A11 floor.
 #
 # PR #77 stopped A11 self-certifying PUBLICATION_GRADE/CONFIRMED. Residual: when
-# ``rho_ss`` is MAXIMALLY MIXED (``rho_ss = I/d``) there is no protecting symmetry
-# sector, so the issue-#68 triviality guard (``is_trivial_overlap``, which needs a
-# non-trivial eigenprojector decomposition of ``rho_ss``) CANNOT fire -- a
-# maximally mixed steady state collapses to a single projector. The README
+# ``rho_ss`` is MAXIMALLY MIXED (``rho_ss = I/d``) it collapses to a single
+# degenerate eigenprojector, so the issue-#68 triviality guard
+# (``is_trivial_overlap``, which needs a NON-TRIVIAL eigenprojector decomposition
+# of ``rho_ss``) CANNOT fire -- there is no sector structure in the FIXPOINT for
+# the guard to test against. (This is a statement about the eigenprojectors of
+# ``rho_ss``, NOT a claim that the Liouvillian lacks a protecting / decoherence-
+# free sector: protecting sectors are properties of the Liouvillian's structure,
+# not of how far ``rho_ss`` sits from ``I/d`` -- a unital / pure-dephasing
+# Liouvillian can carry invariant structure even at ``rho_ss = I/d``.) The README
 # quickstart ``|+>`` case (dephasing, ``rho_ss = I/2``) therefore reached A11/F4
-# CANDIDATE (confidence 0.70), which OVER-claims: a single initial state on a
-# maximally mixed steady state carries insufficient evidence for a Mpemba claim.
+# CANDIDATE (confidence 0.70), which OVER-claims: a single initial state whose
+# steady state is maximally mixed supplies insufficient comparative/dynamical
+# evidence for a Mpemba claim. Mpemba depends on the Liouvillian spectrum, the
+# mode overlaps and the initial ensemble -- not on the fixpoint alone.
 #
 # DECIDED behaviour (physics FINAL, cross-family-corrected -- do NOT re-litigate):
 #   * Single-state maximally-mixed A11 -> VERDICT_UNDEFINED / EXPLORATION
@@ -129,8 +136,8 @@ def _is_maximally_mixed(rho_steady_state: np.ndarray, *, atol: float = EPS_MAXMI
     Returns ``True`` only for a genuine ``d x d`` density matrix with ``d >= 2``
     whose every entry matches ``I/d`` within ``atol``. ``d < 2`` (including the
     synthetic ``1x1`` placeholders used in the classifier unit tests) is never
-    flagged: maximal mixing / the missing-symmetry-sector argument is only
-    meaningful for ``d >= 2``.
+    flagged: maximal mixing -- and hence the single-state insufficient-evidence
+    floor it gates -- is only meaningful for ``d >= 2``.
     """
     rho = np.asarray(rho_steady_state, dtype=complex)
     if rho.ndim != 2 or rho.shape[0] != rho.shape[1] or rho.shape[0] < 2:

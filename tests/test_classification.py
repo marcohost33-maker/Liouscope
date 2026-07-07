@@ -286,8 +286,9 @@ def test_branch_a11_trivial_overlap_not_flagged():
 
 def test_a11_single_state_maximally_mixed_is_undetermined():
     # DECISION E0706-13: a SINGLE-STATE run that picks A11 on a MAXIMALLY MIXED
-    # steady state (rho_ss = I/d, no protecting symmetry sector so the issue-#68
-    # triviality guard cannot fire) is INSUFFICIENT EVIDENCE, not a CANDIDATE.
+    # steady state (rho_ss = I/d, which collapses to a single eigenprojector so
+    # the issue-#68 triviality guard cannot fire) is INSUFFICIENT EVIDENCE, not a
+    # CANDIDATE.
     # The verdict drops to UNDEFINED / EXPLORATION; the A11/F4 best-fit label and
     # the confidence heuristic are preserved (only the CLAIM changes).
     cls = _classify(

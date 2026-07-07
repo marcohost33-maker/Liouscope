@@ -144,8 +144,10 @@ python examples/quickstart.py   # smoke run
   `claim_status:pending` for new diagnostics until anchors confirm them.
 - **A11 (quantum-Mpemba) single-state floor (issue #78 / decision E0706-13).**
   A single-state run that picks A11 on a **maximally mixed** steady state
-  (`rho_ss = I/d`, no protecting symmetry sector, so the issue-#68 triviality
-  guard cannot fire) must report **UNDEFINED / EXPLORATION** (the
+  (`rho_ss = I/d`, which collapses to a single eigenprojector, so the issue-#68
+  triviality guard — needing a non-trivial eigenprojector decomposition of
+  `rho_ss` — cannot fire; the maximally-mixed fixpoint alone is insufficient
+  evidence for an A11 claim) must report **UNDEFINED / EXPLORATION** (the
   INSUFFICIENT-EVIDENCE floor), never CANDIDATE (over-claim) and never a hard
   exclusion (a unital / doubly-stochastic multi-rate process *can* exhibit Mpemba
   — hard exclusion was falsified cross-family). The floor is **conditional**:

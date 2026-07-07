@@ -10,7 +10,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **A11 single-state maximally-mixed floor -> UNDETERMINED** (issue #78, decision
   E0706-13; the ONE intended behaviour change). PR #77 stopped A11 self-certifying
   PUBLICATION_GRADE/CONFIRMED, but when `rho_ss` is **maximally mixed** (`I/d`)
-  there is no protecting symmetry sector, so the issue-#68 triviality guard
+  it collapses to a single eigenprojector, so the issue-#68 triviality guard
+  (which needs a non-trivial eigenprojector decomposition of `rho_ss`)
   structurally cannot fire. The README quickstart `|+>` case (dephasing,
   `rho_ss = I/2`) therefore still reached A11/F4 **CANDIDATE** (confidence 0.70),
   which over-claims. A single initial state on a maximally mixed steady state is
@@ -270,8 +271,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     not PUBLICATION_GRADE**: `A11` confidence is capped at 0.70 because
     confirmation needs a reference family (e.g. thermal states across
     temperatures) the single-state pipeline does not provide. The README
-    dephasing example (`rho_ss = I/2`, no protecting symmetry sector) stays
-    `A11` but as `CANDIDATE`/`CONFIRMATION`, no longer self-certifying.
+    dephasing example (`rho_ss = I/2`, which collapses to a single eigenprojector
+    so the triviality guard cannot fire) stays `A11` but as
+    `CANDIDATE`/`CONFIRMATION`, no longer self-certifying.
   - New/updated coverage in `tests/test_mpemba.py` (biorthogonal coefficient,
     guard truth table, a fine-tuned qutrit true-positive oracle, canonical
     false-positive regressions) and `tests/test_classification.py`.
