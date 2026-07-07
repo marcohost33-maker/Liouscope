@@ -160,6 +160,37 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     coverage.
 
 ### Fixed
+- **Hermiticity / normalisation validation gates are now absolute, not
+  ~10^4x looser than advertised.** `numerics.linalg.is_hermitian` (and
+  therefore `is_density_matrix`), the Hamiltonian Hermiticity check in
+  `core.lindblad.build_liouvillian` ("H must be Hermitian within 1e-9 atol"),
+  and the unit-norm check in `core.jumps.engineered_target_jumps` all called
+  `np.allclose`/`np.isclose` with only `atol=` set. NumPy's default
+  `rtol=1e-5` silently widened each gate to `atol + 1e-5*|entry|` (~1e-5 for
+  O(1) density matrices / Hamiltonians), so a matrix non-Hermitian at 1e-6 —
+  a thousand times the documented 1e-9 tolerance — passed as valid. All three
+  now pass `rtol=0.0` so the `atol` means exactly what the docstring/error
+  says. Behaviour-preserving for every physical operator (Hermitian to machine
+  precision); only genuinely malformed input near the old blind spot is now
+  rejected. New regression `tests/test_numerics.py::
+  test_is_hermitian_atol_is_absolute_not_relative`.
+- **GLS AR(1) log-likelihood is now the exact Prais-Winsten likelihood.**
+  `fitting.gls.fit_gls_ar1` whitens with the *exact* AR(1) transform (keeping
+  observation 0 scaled by `sqrt(1-rho^2)`, all `n` points), but reported
+  `gaussian_log_likelihood(whitened)` — the iid-Gaussian likelihood of the
+  whitened residuals, which omits the transform's log-Jacobian
+  `+0.5*log(1-rho^2)`. The reported value was therefore a hybrid of the exact
+  and conditional likelihoods. Because each model M0..M3b fits its own `rho`
+  and its per-model `log_likelihood` feeds `aicc()`/`choose_model` (which drives
+  mechanism classification), the missing rho-dependent term biased cross-model
+  AICc toward under-fitting high-`rho` fits. The Jacobian is now added.
+  **Anchor-preserving:** the sacred `tests/test_anchors.py` suite and the V1-V5
+  golden classification assertions stay green (the correction does not flip the
+  selected model on any canonical fixture); it only affects near-tied AICc
+  comparisons on other data. No manifest-contract or citable-claim change (the
+  run manifest does not record per-model likelihoods; `input_hash` is derived
+  from inputs, not outputs). New regression `tests/test_fitting.py::
+  test_gls_ar1_log_likelihood_is_exact_prais_winsten`.
 - **`run_id` / `input_hash` now cover every output-affecting input.** Both
   provenance keys were derived only from `(L_super, rho_initial)` (plus `seed`
   and `framework_version` for `run_id`), so two `diagnose()` calls that differed
