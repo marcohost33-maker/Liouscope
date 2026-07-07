@@ -35,6 +35,22 @@ EPS_GAP: Final[float] = 1.0e-10
 EPS_HERMITICITY: Final[float] = 1.0e-9
 EPS_TRACE: Final[float] = 1.0e-10
 
+# Maximally-mixed steady-state tolerance (issue #78 / decision E0706-13). A
+# PURELY NUMERICAL guard that identifies the EXACT ``rho_ss = I/d`` limit: a
+# steady state counts as maximally mixed only when every entry matches I/d to
+# within this absolute tolerance. Set at the hermiticity/degeneracy scale (1e-9)
+# -- the same order used for the steady-state eigenprojector grouping in
+# mpemba._steady_state_eigenprojectors -- so genuine solver noise on an exact I/d
+# null space (~1e-16 in practice) is absorbed. This is NOT a claim that a state
+# whose deviation from I/d exceeds the tolerance thereby carries a protecting
+# symmetry sector: protecting / decoherence-free sectors are properties of the
+# Liouvillian's structure, not of the fixpoint's distance from I/d (a finite-T
+# amplitude-damping qubit, rho_ss = diag(1/2+e, 1/2-e) with e > 1e-9, has no such
+# sector). The bound is deliberately TIGHT so the A11 insufficient-evidence floor
+# fires ONLY at the exact maximally-mixed limit; a near-mixed but structured
+# steady state simply follows the normal classification path.
+EPS_MAXMIX: Final[float] = 1.0e-9
+
 # Certification floor for the symmetrised (GNS) gap, RELATIVE to the spectral
 # gap Delta (issue #88). ``diagnostics.spectral.gns_gap`` deliberately floors
 # Delta_GNS to ~0 whenever the GNS symmetrisation cannot certify exponential

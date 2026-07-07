@@ -28,7 +28,15 @@ from pathlib import Path
 
 import numpy as np
 
-from liouscope._consts import A_CLASSES, RESERVED_A_CLASSES
+from liouscope._consts import (
+    A_CLASSES,
+    EPS_MAXMIX,
+    RESERVED_A_CLASSES,
+    TIER_CONFIRMATION,
+    TIER_EXPLORATION,
+    VERDICT_CANDIDATE,
+    VERDICT_UNDEFINED,
+)
 from liouscope._types import (
     LepResult,
     MpembaResult,
@@ -40,8 +48,12 @@ from liouscope._types import (
 )
 from liouscope.diagnostics.classification import (
     ADVISORY_EVIDENCE_KEYS,
+    ENSEMBLE_OVERRIDE_EVIDENCE_KEY,
+    SINGLE_STATE_MAXMIX_FLOOR_CLASS,
+    _apply_single_state_maxmix_floor,
     _confidence,
     _gather_evidence,
+    _is_maximally_mixed,
     _pick_a_class,
     _pick_verdict_tier,
 )
@@ -243,6 +255,79 @@ def test_advisory_keys_do_not_drive_the_decision():
                 f"advisory key {key!r}={val!r} changed the decision "
                 f"{(a0, f0, v0, t0, c0)} -> {(a, f, v, t, c)}"
             )
+
+
+# ---------------------------------------------------------------------------
+# issue #78 / decision E0706-13 -- single-state maximally-mixed A11 floor contract
+#
+# Pins the CONDITIONAL insufficient-evidence floor as an explicit, tested contract
+# (mirroring the RESERVED_A_CLASSES / ADVISORY_EVIDENCE_KEYS style above): the
+# downgrade to UNDEFINED fires on exactly (a_class == A11) AND (rho_ss = I/d) AND
+# (no ensemble confirmation), and nothing else.
+# ---------------------------------------------------------------------------
+
+
+def test_maxmix_floor_class_is_a11():
+    # The floor targets the Mpemba class only. If a future change repoints it, the
+    # contract must be updated in lock-step (this test forces that).
+    assert SINGLE_STATE_MAXMIX_FLOOR_CLASS == "A11"
+    assert SINGLE_STATE_MAXMIX_FLOOR_CLASS in A_CLASSES
+
+
+def test_ensemble_override_key_name_is_stable():
+    assert ENSEMBLE_OVERRIDE_EVIDENCE_KEY == "ensemble_confirmation"
+
+
+def test_is_maximally_mixed_detects_identity_over_d():
+    for d in (2, 3, 4):
+        assert _is_maximally_mixed(np.eye(d, dtype=complex) / d)
+    # A structured (diagonal, non-uniform) steady state is NOT maximally mixed.
+    assert not _is_maximally_mixed(np.diag([0.7, 0.3]).astype(complex))
+    # A pure state is not maximally mixed.
+    assert not _is_maximally_mixed(np.diag([1.0, 0.0]).astype(complex))
+
+
+def test_is_maximally_mixed_tolerance_is_tight():
+    # A deviation an order of magnitude ABOVE the tolerance is NOT flagged (the
+    # floor must not trigger on a merely near-mixed but structured state); solver
+    # noise well BELOW the tolerance still counts as maximally mixed.
+    d = 2
+    base = np.eye(d, dtype=complex) / d
+    structured = base.copy()
+    structured[0, 0] += 10.0 * EPS_MAXMIX
+    structured[1, 1] -= 10.0 * EPS_MAXMIX
+    assert not _is_maximally_mixed(structured)
+    noisy = base.copy()
+    noisy[0, 1] += 1.0e-2 * EPS_MAXMIX
+    assert _is_maximally_mixed(noisy)
+
+
+def test_is_maximally_mixed_ignores_sub_2d_placeholders():
+    # d < 2 (incl. the 1x1 synthetic placeholders used across the classifier unit
+    # tests) is never flagged: maximal mixing is only meaningful for d >= 2.
+    assert not _is_maximally_mixed(np.zeros((1, 1), dtype=complex))
+    assert not _is_maximally_mixed(np.ones((1, 1), dtype=complex))
+
+
+def test_maxmix_floor_truth_table():
+    # Exhaustive contract: (verdict, tier) is downgraded to (UNDEFINED, EXPLORATION)
+    # iff a_class == A11 AND maximally_mixed AND not ensemble_confirmation.
+    base_v, base_t = VERDICT_CANDIDATE, TIER_CONFIRMATION
+    for a_class in ("A11", "A10", "A1", "A12"):
+        for mm in (False, True):
+            for ens in (False, True):
+                v, t = _apply_single_state_maxmix_floor(
+                    a_class,
+                    base_v,
+                    base_t,
+                    maximally_mixed=mm,
+                    ensemble_confirmation=ens,
+                )
+                downgraded = (a_class == "A11") and mm and not ens
+                if downgraded:
+                    assert (v, t) == (VERDICT_UNDEFINED, TIER_EXPLORATION)
+                else:
+                    assert (v, t) == (base_v, base_t)
 
 
 def test_advisory_non_influence_holds_across_several_base_classes():

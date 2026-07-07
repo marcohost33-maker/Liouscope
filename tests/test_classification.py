@@ -224,6 +224,7 @@ def _classify(
     transient=None,
     lep=None,
     mpemba=None,
+    ensemble_confirmation=False,
 ):
     return classify_mechanism(
         spectral=spectral or _spectral(),
@@ -233,7 +234,14 @@ def _classify(
         transient=transient or _transient(),
         lep=lep or _lep(),
         mpemba=mpemba,
+        ensemble_confirmation=ensemble_confirmation,
     )
+
+
+def _maxmix_spectral(d: int = 2, **kw) -> SpectralResult:
+    """A spectral result whose steady state is the maximally mixed state I/d."""
+    kw.setdefault("steady_state", np.eye(d, dtype=complex) / d)
+    return _spectral(**kw)
 
 
 def test_branch_default_fallback_a12():
@@ -271,6 +279,69 @@ def test_branch_a11_trivial_overlap_not_flagged():
     assert cls.a_class != "A11"
     assert cls.evidence["mpemba_trivial_overlap"] == 1.0
     assert cls.evidence["mpemba_is_candidate"] == 0.0
+
+
+# --- issue #78 / decision E0706-13: single-state maximally-mixed A11 floor -----
+
+
+def test_a11_single_state_maximally_mixed_is_undetermined():
+    # DECISION E0706-13: a SINGLE-STATE run that picks A11 on a MAXIMALLY MIXED
+    # steady state (rho_ss = I/d, which collapses to a single eigenprojector so
+    # the issue-#68 triviality guard cannot fire) is INSUFFICIENT EVIDENCE, not a
+    # CANDIDATE.
+    # The verdict drops to UNDEFINED / EXPLORATION; the A11/F4 best-fit label and
+    # the confidence heuristic are preserved (only the CLAIM changes).
+    cls = _classify(
+        spectral=_maxmix_spectral(2),
+        mpemba=_mpemba(overlap_c1=1.0e-6),
+    )
+    assert (cls.a_class, cls.f_family) == ("A11", "F4")
+    assert cls.verdict == VERDICT_UNDEFINED
+    assert cls.tier == TIER_EXPLORATION
+    assert cls.confidence == pytest.approx(0.70)  # hypothesis strength unchanged
+    assert cls.evidence["maximally_mixed_steady_state"] == 1.0
+    assert cls.evidence["ensemble_confirmation"] == 0.0
+
+
+def test_a11_maximally_mixed_ensemble_override_suppresses_floor():
+    # The exclusion is CONDITIONAL: a reference-ensemble Mpemba confirmation
+    # (ensemble_confirmation=True) suppresses the downgrade, so the SAME
+    # maximally-mixed A11 evidence is once again allowed to be a CANDIDATE. This
+    # pins the ensemble-override hook/contract (a future thermal-family path plugs
+    # in here without re-touching the floor logic).
+    cls = _classify(
+        spectral=_maxmix_spectral(2),
+        mpemba=_mpemba(overlap_c1=1.0e-6),
+        ensemble_confirmation=True,
+    )
+    assert (cls.a_class, cls.f_family) == ("A11", "F4")
+    assert cls.verdict == VERDICT_CANDIDATE
+    assert cls.tier == TIER_CONFIRMATION
+    assert cls.confidence == pytest.approx(0.70)
+    assert cls.evidence["ensemble_confirmation"] == 1.0
+
+
+def test_a11_non_maximally_mixed_single_state_stays_candidate():
+    # Regression: the floor is TIGHT -- an A11 pick on a structured (NOT maximally
+    # mixed) steady state is unaffected and stays a CANDIDATE.
+    structured = _spectral(steady_state=np.diag([0.7, 0.3]).astype(complex))
+    cls = _classify(spectral=structured, mpemba=_mpemba(overlap_c1=1.0e-6))
+    assert (cls.a_class, cls.f_family) == ("A11", "F4")
+    assert cls.verdict == VERDICT_CANDIDATE
+    assert cls.evidence["maximally_mixed_steady_state"] == 0.0
+
+
+def test_maximally_mixed_floor_only_affects_a11():
+    # A maximally-mixed steady state must NOT touch a non-A11 verdict. Feed the
+    # A10/F5 phantom branch a maximally-mixed rho_ss: it stays A10 CANDIDATE.
+    cls = _classify(
+        spectral=_maxmix_spectral(2),
+        resolvent=_resolvent(pseudospectral_radius=5.0),
+        nonnorm=_nonnorm(henrici_eta=2.0),
+    )
+    assert (cls.a_class, cls.f_family) == ("A10", "F5")
+    assert cls.verdict == VERDICT_CANDIDATE
+    assert cls.evidence["maximally_mixed_steady_state"] == 1.0
 
 
 def test_branch_a10_phantom_relaxation():

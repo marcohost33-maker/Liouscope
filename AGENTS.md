@@ -142,6 +142,21 @@ python examples/quickstart.py   # smoke run
 - Do update `CHANGELOG.md` on feature merge.
 - Do reference the KANON anchor (`RESEARCH-LIOUSCOPE`) and
   `claim_status:pending` for new diagnostics until anchors confirm them.
+- **A11 (quantum-Mpemba) single-state floor (issue #78 / decision E0706-13).**
+  A single-state run that picks A11 on a **maximally mixed** steady state
+  (`rho_ss = I/d`, which collapses to a single eigenprojector, so the issue-#68
+  triviality guard — needing a non-trivial eigenprojector decomposition of
+  `rho_ss` — cannot fire; the maximally-mixed fixpoint alone is insufficient
+  evidence for an A11 claim) must report **UNDEFINED / EXPLORATION** (the
+  INSUFFICIENT-EVIDENCE floor), never CANDIDATE (over-claim) and never a hard
+  exclusion (a unital / doubly-stochastic multi-rate process *can* exhibit Mpemba
+  — hard exclusion was falsified cross-family). The floor is **conditional**:
+  reference-ensemble Mpemba confirmation across a thermal family
+  (`classify_mechanism(..., ensemble_confirmation=True)`, surfaced as the
+  `ensemble_confirmation` evidence key) suppresses the downgrade and re-permits
+  A11 CANDIDATE/CONFIRMED. Do not weaken this floor to CANDIDATE for a single
+  state, and do not strengthen it to EXCLUDED. Contract pinned in
+  `tests/test_classifier_semantics_debt.py`; behaviour in `tests/test_classification.py`.
 - For any branch / history-touching operation, reference the 2026-05-16
   incident in the PR body as a reminder of why Backup-First
   exists (the backup-triple recovered ~20 files after an unverified

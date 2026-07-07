@@ -15,7 +15,12 @@ reference:
 
 Verdict in {CONFIRMED, CANDIDATE, NOT_EXCLUDED, UNDEFINED} (issue #70 A5: the
 unreachable EXCLUDED verdict was removed). Tier in {PUBLICATION_GRADE,
-CONFIRMATION, EXPLORATION}.
+CONFIRMATION, EXPLORATION}. UNDEFINED doubles as the INSUFFICIENT-EVIDENCE floor:
+it is emitted when ``beta_D`` is non-finite AND (issue #78 / decision E0706-13)
+when a SINGLE-STATE run picks A11 on a MAXIMALLY MIXED steady state with no
+reference-ensemble confirmation -- see ``SINGLE_STATE_MAXMIX_FLOOR_CLASS`` /
+``_apply_single_state_maxmix_floor`` for the conditional ensemble-override
+contract.
 
 Anchor L: ``taxonomy_version`` is stamped on every ClassificationResult.
 
@@ -38,6 +43,7 @@ import numpy as np
 
 from .._consts import (
     DIAGNOSTIC_SCHEMA_VERSION,
+    EPS_MAXMIX,
     GNS_CERTIFIED_RTOL,
     TAXONOMY_VERSION,
     TIER_CONFIRMATION,
@@ -87,6 +93,91 @@ ADVISORY_EVIDENCE_KEYS: frozenset[str] = frozenset(
 # ``sym_gap_corroborated`` certificate that gates A1 PUBLICATION_GRADE (see
 # ``_gather_evidence`` / ``_confidence``). Using it as an F3 *veto* remains
 # deferred to its own false-positive study.
+
+# issue #78 / decision E0706-13: the single-state maximally-mixed A11 floor.
+#
+# PR #77 stopped A11 self-certifying PUBLICATION_GRADE/CONFIRMED. Residual: when
+# ``rho_ss`` is MAXIMALLY MIXED (``rho_ss = I/d``) it collapses to a single
+# degenerate eigenprojector, so the issue-#68 triviality guard
+# (``is_trivial_overlap``, which needs a NON-TRIVIAL eigenprojector decomposition
+# of ``rho_ss``) CANNOT fire -- there is no sector structure in the FIXPOINT for
+# the guard to test against. (This is a statement about the eigenprojectors of
+# ``rho_ss``, NOT a claim that the Liouvillian lacks a protecting / decoherence-
+# free sector: protecting sectors are properties of the Liouvillian's structure,
+# not of how far ``rho_ss`` sits from ``I/d`` -- a unital / pure-dephasing
+# Liouvillian can carry invariant structure even at ``rho_ss = I/d``.) The README
+# quickstart ``|+>`` case (dephasing, ``rho_ss = I/2``) therefore reached A11/F4
+# CANDIDATE (confidence 0.70), which OVER-claims: a single initial state whose
+# steady state is maximally mixed supplies insufficient comparative/dynamical
+# evidence for a Mpemba claim. Mpemba depends on the Liouvillian spectrum, the
+# mode overlaps and the initial ensemble -- not on the fixpoint alone.
+#
+# DECIDED behaviour (physics FINAL, cross-family-corrected -- do NOT re-litigate):
+#   * Single-state maximally-mixed A11 -> VERDICT_UNDEFINED / EXPLORATION
+#     (INSUFFICIENT EVIDENCE). NOT CANDIDATE (over-claim); NOT hard-EXCLUDED (a
+#     unital / doubly-stochastic Markov process with multiple relaxation rates CAN
+#     exhibit Mpemba -- hard exclusion was falsified cross-family).
+#   * The exclusion is CONDITIONAL and applies ONLY to the single-state path. If
+#     reference-ensemble Mpemba confirmation across a thermal family is present
+#     (evidence key ``ensemble_confirmation`` truthy), the downgrade is SUPPRESSED
+#     and A11 may still be confirmed/candidate. The current pipeline has no
+#     ensemble-evidence input, so ``ensemble_confirmation`` is an explicit,
+#     tested hook/contract: a future ensemble path sets it truthy and plugs in
+#     WITHOUT re-touching this branch.
+#
+# ``VERDICT_UNDEFINED`` (enum literal "UNDEFINED") is REUSED as the existing
+# insufficient-evidence floor (it is the same verdict emitted when ``beta_D`` is
+# non-finite); no new verdict is invented. The (class, family, confidence) are
+# preserved -- A11/F4 remains the best-fit mechanism HYPOTHESIS; only the VERDICT
+# (what we are willing to claim) drops to UNDEFINED. Pinned by
+# ``tests/test_classifier_semantics_debt.py`` (contract) and
+# ``tests/test_classification.py`` (behaviour).
+SINGLE_STATE_MAXMIX_FLOOR_CLASS: str = "A11"
+ENSEMBLE_OVERRIDE_EVIDENCE_KEY: str = "ensemble_confirmation"
+
+
+def _is_maximally_mixed(rho_steady_state: np.ndarray, *, atol: float = EPS_MAXMIX) -> bool:
+    """Is ``rho_ss`` the maximally mixed state ``I/d`` (to ``atol``)?
+
+    Returns ``True`` only for a genuine ``d x d`` density matrix with ``d >= 2``
+    whose every entry matches ``I/d`` within ``atol``. ``d < 2`` (including the
+    synthetic ``1x1`` placeholders used in the classifier unit tests) is never
+    flagged: maximal mixing -- and hence the single-state insufficient-evidence
+    floor it gates -- is only meaningful for ``d >= 2``.
+    """
+    rho = np.asarray(rho_steady_state, dtype=complex)
+    if rho.ndim != 2 or rho.shape[0] != rho.shape[1] or rho.shape[0] < 2:
+        return False
+    d = rho.shape[0]
+    # Pure ABSOLUTE tolerance (rtol=0): the default numpy rtol=1e-5 would swamp a
+    # 1e-9 atol and wrongly flag near-mixed states, defeating the tight-floor
+    # intent (only the exact I/d limit must trigger).
+    return bool(np.allclose(rho, np.eye(d, dtype=complex) / d, rtol=0.0, atol=atol))
+
+
+def _apply_single_state_maxmix_floor(
+    a_class: str,
+    verdict: str,
+    tier: str,
+    *,
+    maximally_mixed: bool,
+    ensemble_confirmation: bool,
+) -> tuple[str, str]:
+    """Conditional insufficient-evidence floor for single-state maximally-mixed A11.
+
+    See ``SINGLE_STATE_MAXMIX_FLOOR_CLASS`` above for the full rationale. Downgrades
+    ``(verdict, tier)`` to ``(VERDICT_UNDEFINED, TIER_EXPLORATION)`` iff the picked
+    class is A11, the steady state is maximally mixed, AND no reference-ensemble
+    Mpemba confirmation is present. Otherwise the verdict/tier pass through
+    unchanged -- in particular the ensemble override cleanly suppresses the floor.
+    """
+    if (
+        a_class == SINGLE_STATE_MAXMIX_FLOOR_CLASS
+        and maximally_mixed
+        and not ensemble_confirmation
+    ):
+        return VERDICT_UNDEFINED, TIER_EXPLORATION
+    return verdict, tier
 
 
 def _gather_evidence(
@@ -198,7 +289,12 @@ def _pick_a_class(
     # F4 Mpemba check first (high salience for current literature risk). The
     # candidate flag already folds in the non-triviality guard (issue #68), so a
     # symmetry-protected zero overlap (diagonal rho_0 vs a coherence slow mode)
-    # no longer reaches A11 -- only a genuine, fine-tuned skip does.
+    # no longer reaches A11 -- only a genuine, fine-tuned skip does. NOTE: A11 is
+    # still the best-fit mechanism label here; the SINGLE-STATE maximally-mixed
+    # case (rho_ss = I/d, where the issue-#68 guard structurally cannot fire) is
+    # handled downstream at the VERDICT level by _apply_single_state_maxmix_floor
+    # (issue #78) -- it drops the verdict to UNDEFINED (insufficient evidence)
+    # rather than suppressing the A11 label.
     if ev.get("mpemba_is_candidate", 0.0) > 0.5:
         return "A11", "F4"
     # F5 phantom relaxation (issue #70 A8). The rule must be dimension-coherent
@@ -358,14 +454,35 @@ def classify_mechanism(
     transient: TransientResult,
     lep: LepResult,
     mpemba: MpembaResult | None = None,
+    *,
+    ensemble_confirmation: bool = False,
 ) -> ClassificationResult:
-    """Classify the dominant relaxation mechanism into A1..A12 with F1..F5 tag."""
+    """Classify the dominant relaxation mechanism into A1..A12 with F1..F5 tag.
+
+    ``ensemble_confirmation`` (issue #78 / decision E0706-13) is the ensemble
+    override hook: when ``True`` it records that reference-ensemble Mpemba
+    confirmation across a thermal family is available, which SUPPRESSES the
+    single-state maximally-mixed A11 insufficient-evidence floor
+    (``_apply_single_state_maxmix_floor``). It defaults to ``False`` (the current
+    single-state pipeline supplies no ensemble evidence) and is surfaced in the
+    ``evidence`` dict under ``ensemble_confirmation`` for audit/serialisation.
+    """
     ev = _gather_evidence(
         spectral, nonnorm, relaxation, resolvent, transient, lep, mpemba
     )
+    maximally_mixed = _is_maximally_mixed(spectral.steady_state)
+    ev["maximally_mixed_steady_state"] = float(maximally_mixed)
+    ev[ENSEMBLE_OVERRIDE_EVIDENCE_KEY] = float(bool(ensemble_confirmation))
     a_class, f_family = _pick_a_class(ev, relaxation=relaxation)
     conf = _confidence(ev, a_class)
     verdict, tier = _pick_verdict_tier(a_class, relaxation, conf)
+    verdict, tier = _apply_single_state_maxmix_floor(
+        a_class,
+        verdict,
+        tier,
+        maximally_mixed=maximally_mixed,
+        ensemble_confirmation=bool(ensemble_confirmation),
+    )
     return ClassificationResult(
         a_class=a_class,
         f_family=f_family,

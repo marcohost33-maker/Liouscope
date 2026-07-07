@@ -122,9 +122,11 @@ def is_trivial_overlap(
 
     Using eigen*projectors* (not individual eigenvectors) keeps the test robust
     when ``rho_ss`` is degenerate. A maximally mixed ``rho_ss`` collapses to a
-    single projector (one block), so nothing is structurally decoupled and the
-    guard does not fire -- such a state has no protecting symmetry sector and is
-    handled by the (demoted) confidence tier instead.
+    single projector (one block), so no pair of blocks is disjoint, nothing is
+    structurally decoupled in the fixpoint, and the guard cannot fire -- this is
+    a property of the ``rho_ss`` eigenprojectors, NOT a claim that the Liouvillian
+    carries no protecting sector. The single-state maximally-mixed case is instead
+    handled by the (demoted) confidence tier / the issue-#78 evidence floor.
     """
     L_super = np.asarray(L_super)
     rho_initial = np.asarray(rho_initial, dtype=complex)

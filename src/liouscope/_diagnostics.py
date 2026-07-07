@@ -51,6 +51,7 @@ def diagnose(
     bootstrap_B: int = 200,
     seed: int = 42,
     solver_path: str = "dense",
+    ensemble_confirmation: bool = False,
 ) -> DiagnosticReport:
     """Run the full six-layer multi-diagnostic pipeline on a Liouvillian.
 
@@ -74,6 +75,12 @@ def diagnose(
         ``"dense"`` (default). ``"sparse_arpack"`` is a reserved manifest value
         and currently raises ``NotImplementedError`` rather than silently running
         the dense path.
+    ensemble_confirmation
+        Suppress the single-state maximally-mixed A11 insufficient-evidence floor
+        when a separate reference-ensemble / thermal-family analysis has already
+        confirmed Mpemba evidence. Defaults to ``False``. The default preserves
+        the legacy hash domain; when set, the override is included in the
+        reproducibility ``input_hash`` because it changes the output claim.
 
     Returns
     -------
@@ -144,6 +151,7 @@ def diagnose(
         transient=transient,
         lep=lep,
         mpemba=mpemba,
+        ensemble_confirmation=bool(ensemble_confirmation),
     )
     uncertainty = compute_uncertainty_layer(
         relaxation,
@@ -151,14 +159,11 @@ def diagnose(
         size_residual=None,
         bootstrap_B=bootstrap_B,
     )
-    # The input hash must cover *every* output-affecting argument, otherwise two
-    # runs that differ only in an analysis knob (e.g. ``bootstrap_B``, which
-    # changes the BCa CI) collide on an identical ``run_id`` and the manifest's
-    # reproducibility contract (MANIFEST_SCHEMA: "deterministically derived from
-    # input parameters") is violated. ``rho_initial``/``rho_steady_state`` are the
-    # already-resolved arrays, so caller-supplied and defaulted states hash the
-    # same when they are genuinely the same physical input.
-    input_hash = compute_input_hash(
+    # The input hash must cover every output-affecting argument. The new
+    # ensemble-confirmation override is appended only when it is active, so
+    # default single-state runs preserve the legacy hash domain while override
+    # runs receive a distinct provenance key.
+    hash_objects: list[object] = [
         L_super,
         rho_initial,
         rho_steady_state,
@@ -166,7 +171,10 @@ def diagnose(
         bootstrap_B,
         include_mpemba,
         solver_path,
-    )
+    ]
+    if ensemble_confirmation:
+        hash_objects.append(("ensemble_confirmation", True))
+    input_hash = compute_input_hash(*hash_objects)
     governance = build_manifest(
         input_hash=input_hash,
         seed=seed,

@@ -166,15 +166,52 @@ def test_canonical_amp_damping_not_classified_a11():
     assert cls.a_class != "A11"
 
 
-def test_maximally_mixed_mpemba_is_candidate_not_publication_grade():
-    # The README dephasing example (rho_ss = I/2) has no protecting symmetry
-    # sector, so its |+> initial state stays a Mpemba *candidate* -- but a single
-    # initial state must never self-certify as PUBLICATION_GRADE (issue #68).
+def _readme_dephasing_mpemba_case():
     sx = np.array([[0, 1], [1, 0]], dtype=complex)
     sz = np.array([[1, 0], [0, -1]], dtype=complex)
     L = build_liouvillian(0.5 * sx, [sz], [0.3])
     plus = np.array([1, 1], dtype=complex) / np.sqrt(2)
-    cls = diagnose(L, rho_initial=np.outer(plus, plus.conj()), bootstrap_B=50).classification
-    if cls.a_class == "A11":
-        assert cls.tier != "PUBLICATION_GRADE"
-        assert cls.verdict != "CONFIRMED"
+    rho0 = np.outer(plus, plus.conj())
+    return L, rho0
+
+
+def test_maximally_mixed_single_state_mpemba_is_undetermined():
+    # GOLDEN FLIP (issue #78 / decision E0706-13). The README dephasing example
+    # (rho_ss = I/2) is MAXIMALLY MIXED: it collapses to a single eigenprojector, so
+    # the issue-#68 triviality guard structurally cannot fire. A SINGLE initial
+    # state on a maximally mixed steady state is INSUFFICIENT EVIDENCE for a Mpemba
+    # claim -- the honest floor is UNDEFINED (UNDETERMINED), NOT the previous
+    # A11/F4 CANDIDATE (over-claim) and NOT hard-exclusion (a unital multi-rate
+    # process CAN exhibit Mpemba; hard-exclusion was falsified cross-family). The
+    # A11/F4 best-fit label is preserved; only the verdict/tier drop.
+    L, rho0 = _readme_dephasing_mpemba_case()
+    cls = diagnose(L, rho_initial=rho0, bootstrap_B=50).classification
+    assert (cls.a_class, cls.f_family) == ("A11", "F4")
+    assert cls.verdict == "UNDEFINED"
+    assert cls.tier == "EXPLORATION"
+    # a fortiori: never self-certifies as a confirmed / publication-grade claim.
+    assert cls.tier != "PUBLICATION_GRADE"
+    assert cls.verdict != "CONFIRMED"
+    assert cls.verdict != "CANDIDATE"
+
+
+def test_public_diagnose_ensemble_confirmation_suppresses_maxmix_floor():
+    # Regression for the public API seam: PR #86 added the ensemble override to
+    # classify_mechanism(), but the top-level diagnose() orchestrator must expose
+    # and forward it as well. Otherwise reference-ensemble evidence could not
+    # suppress the single-state maximally-mixed A11 floor in normal user code.
+    L, rho0 = _readme_dephasing_mpemba_case()
+    floor = diagnose(L, rho_initial=rho0, bootstrap_B=50)
+    override = diagnose(
+        L,
+        rho_initial=rho0,
+        bootstrap_B=50,
+        ensemble_confirmation=True,
+    )
+    cls = override.classification
+    assert (cls.a_class, cls.f_family) == ("A11", "F4")
+    assert cls.verdict == "CANDIDATE"
+    assert cls.tier == "CONFIRMATION"
+    assert cls.evidence["maximally_mixed_steady_state"] == 1.0
+    assert cls.evidence["ensemble_confirmation"] == 1.0
+    assert floor.governance.input_hash != override.governance.input_hash
