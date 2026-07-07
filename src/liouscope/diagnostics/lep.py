@@ -14,6 +14,7 @@ import scipy.linalg as sla
 from .._consts import EPS_GAP
 from .._types import LepResult
 from ..core.lindblad import steady_state
+from ..io.seed import RNGLike, SeedLike, derive_seed
 from ..numerics.kronecker import unvec, vec
 
 
@@ -102,22 +103,25 @@ def initial_state_sensitivity(
     *,
     n_samples: int = 10,
     t_eval: float = 1.0,
-    seed: int = 7,
+    seed: int | None = None,
+    rng: RNGLike | SeedLike | None = None,
 ) -> float:
     """D18: std of relaxation distance over a Haar-random initial-state ensemble.
 
     Samples ``n_samples`` Haar-random pure states, evolves to ``t_eval`` and
     measures
     ``||rho(t) - rho_ss||_F``. Returns the standard deviation across samples.
+    ``seed`` (legacy, default 7) and the SPEC 7 ``rng`` keyword are mutually
+    exclusive; ``rng`` is normalised via :func:`liouscope.io.seed.derive_seed`.
     """
     L_super = np.asarray(L_super)
     n2 = L_super.shape[0]
     d = int(round(np.sqrt(n2)))
-    rng = np.random.default_rng(seed)
+    gen = np.random.default_rng(derive_seed(rng, seed, default=7))
     expm_t = sla.expm(L_super * t_eval)
     distances = np.empty(n_samples)
     for k in range(n_samples):
-        psi = rng.normal(size=d) + 1j * rng.normal(size=d)
+        psi = gen.normal(size=d) + 1j * gen.normal(size=d)
         psi /= np.linalg.norm(psi)
         rho0 = np.outer(psi, psi.conj())
         rho_t = unvec(expm_t @ vec(rho0), d=d)
@@ -132,7 +136,8 @@ def compute_lep_layer(
     beta_D_linear: float,
     gap: float,
     rho_steady_state: np.ndarray | None = None,
-    seed: int = 7,
+    seed: int | None = None,
+    rng: RNGLike | SeedLike | None = None,
     n_haar: int = 10,
 ) -> LepResult:
     """Run D16, D17, D18 together.
@@ -140,7 +145,8 @@ def compute_lep_layer(
     ``beta_D_linear`` is the LINEAR-metric relaxation rate (from the trace-
     distance curve), which is dimension-coherent with the spectral ``gap``; see
     :func:`gap_rate_consistency` for why the relative-entropy rate must not be
-    used here (issue #69).
+    used here (issue #69). ``seed`` (legacy, default 7) and the SPEC 7 ``rng``
+    keyword are mutually exclusive and only feed the D18 Haar ensemble.
     """
     L_super = np.asarray(L_super)
     if rho_steady_state is None:
@@ -148,7 +154,7 @@ def compute_lep_layer(
     proximity, candidates = lep_proximity(eigenvalues)
     consistency = gap_rate_consistency(beta_D_linear, gap)
     sensitivity = initial_state_sensitivity(
-        L_super, rho_steady_state, n_samples=n_haar, seed=seed
+        L_super, rho_steady_state, n_samples=n_haar, seed=seed, rng=rng
     )
     return LepResult(
         lep_proximity=proximity if np.isfinite(proximity) else float("inf"),

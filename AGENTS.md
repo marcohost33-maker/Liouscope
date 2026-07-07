@@ -188,7 +188,7 @@ A change is "done" only when **all** of the following hold:
 | 8 | PR body contains Summary + Test plan checklist | manual review |
 
 A PR that misses any of 1-8 is not "ready". Anchor regressions (item 2) are
-sacred gate — never merge with them red, even if the change is unrelated.
+the sacred gate — never merge with them red, even if the change is unrelated.
 
 ---
 
