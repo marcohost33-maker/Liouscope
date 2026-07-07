@@ -1,4 +1,4 @@
-name: Pytest Diagnostic
+name: Classification Test Migration Artifact
 
 on:
   pull_request:
@@ -7,32 +7,141 @@ permissions:
   contents: read
 
 jobs:
-  capture:
+  prepare:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
         with:
           persist-credentials: false
-      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # v6.2.0
-        with:
-          python-version: "3.12"
-      - name: Install package
+      - name: Apply exact evidence-contract test migration
         run: |
-          python -m pip install --upgrade pip
-          pip install -e .[dev]
-      - name: Capture full CI test output
-        run: |
-          set +e
-          pytest --cov=liouscope --cov-report=term-missing --cov-fail-under=80 -v > pytest.log 2>&1
-          status=$?
-          cat pytest.log
-          printf '%s\n' "$status" > pytest-status.txt
-          exit 0
-      - name: Upload diagnostic
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path("tests/test_classification.py")
+          text = path.read_text(encoding="utf-8")
+
+          old_import = '''from liouscope import (
+              A_CLASSES,
+              DIAGNOSTIC_SCHEMA_VERSION,
+              F_FAMILIES,
+              TAXONOMY_VERSION,
+              build_liouvillian,
+              classify_mechanism,
+              diagnose,
+          )'''
+          new_import = '''from liouscope import (
+              A_CLASSES,
+              DIAGNOSTIC_SCHEMA_VERSION,
+              ENSEMBLE_MPEMBA_CONFIRMED,
+              F_FAMILIES,
+              TAXONOMY_VERSION,
+              EnsembleEvidence,
+              build_liouvillian,
+              classify_mechanism,
+              diagnose,
+          )'''
+
+          old_helper = '''def _classify(
+              *,
+              spectral=None,
+              nonnorm=None,
+              relaxation=None,
+              resolvent=None,
+              transient=None,
+              lep=None,
+              mpemba=None,
+              ensemble_confirmation=False,
+          ):
+              return classify_mechanism(
+                  spectral=spectral or _spectral(),
+                  nonnorm=nonnorm or _nonnorm(),
+                  relaxation=relaxation or _relaxation(),
+                  resolvent=resolvent or _resolvent(),
+                  transient=transient or _transient(),
+                  lep=lep or _lep(),
+                  mpemba=mpemba,
+                  ensemble_confirmation=ensemble_confirmation,
+              )'''
+          new_helper = '''def _passing_ensemble_evidence() -> EnsembleEvidence:
+              return EnsembleEvidence(
+                  manifest_sha256="1" * 64,
+                  initial_state_family="thermal Gibbs family",
+                  ordering_parameter="inverse_temperature_beta",
+                  run_ids=("2" * 64, "3" * 64),
+                  input_hashes=("4" * 64, "5" * 64),
+                  relaxation_metric="trace_distance",
+                  comparison_test="family_ordered_crossing_test",
+                  uncertainty_method="BCa bootstrap 95% CI with multiplicity control",
+                  software_version="0.6.0.dev0",
+                  gate_status="PASS",
+                  reason_code=ENSEMBLE_MPEMBA_CONFIRMED,
+                  producer_attestation_sha256="6" * 64,
+                  reviewer_attestation_sha256="7" * 64,
+              )
+
+
+          def _classify(
+              *,
+              spectral=None,
+              nonnorm=None,
+              relaxation=None,
+              resolvent=None,
+              transient=None,
+              lep=None,
+              mpemba=None,
+              ensemble_evidence=None,
+          ):
+              return classify_mechanism(
+                  spectral=spectral or _spectral(),
+                  nonnorm=nonnorm or _nonnorm(),
+                  relaxation=relaxation or _relaxation(),
+                  resolvent=resolvent or _resolvent(),
+                  transient=transient or _transient(),
+                  lep=lep or _lep(),
+                  mpemba=mpemba,
+                  ensemble_evidence=ensemble_evidence,
+              )'''
+
+          old_test = '''def test_a11_maximally_mixed_ensemble_override_suppresses_floor():
+              # The exclusion is CONDITIONAL: a reference-ensemble Mpemba confirmation
+              # (ensemble_confirmation=True) suppresses the downgrade, so the SAME
+              # maximally-mixed A11 evidence is once again allowed to be a CANDIDATE. This
+              # pins the ensemble-override hook/contract (a future thermal-family path plugs
+              # in here without re-touching the floor logic).
+              cls = _classify(
+                  spectral=_maxmix_spectral(2),
+                  mpemba=_mpemba(overlap_c1=1.0e-6),
+                  ensemble_confirmation=True,
+              )'''
+          new_test = '''def test_a11_maximally_mixed_ensemble_evidence_suppresses_floor():
+              # The exclusion is CONDITIONAL: validated reference-family evidence may
+              # suppress the downgrade, so the same maximally-mixed A11 evidence is once
+              # again allowed to be a CANDIDATE. A caller-controlled Boolean is not enough.
+              cls = _classify(
+                  spectral=_maxmix_spectral(2),
+                  mpemba=_mpemba(overlap_c1=1.0e-6),
+                  ensemble_evidence=_passing_ensemble_evidence(),
+              )'''
+
+          for old, new, label in (
+              (old_import, new_import, "import block"),
+              (old_helper, new_helper, "classification helper"),
+              (old_test, new_test, "A11 evidence test"),
+          ):
+              if text.count(old) != 1:
+                  raise SystemExit(f"expected exactly one {label}, found {text.count(old)}")
+              text = text.replace(old, new)
+
+          path.write_text(text, encoding="utf-8")
+          PY
+          git diff --check
+          git diff -- tests/test_classification.py > classification-test.patch
+      - name: Upload migrated file and review patch
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
         with:
-          name: pytest-diagnostic-${{ github.run_id }}
+          name: classification-test-migration-${{ github.run_id }}
           path: |
-            pytest.log
-            pytest-status.txt
+            tests/test_classification.py
+            classification-test.patch
           if-no-files-found: error
