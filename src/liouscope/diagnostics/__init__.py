@@ -1,7 +1,7 @@
 """Diagnostics D1-D20 organised in six layers S/N/R/U/C/G (D24 lives in
 ``liouscope._zhou``; see the diagnostic schema constant for the full set)."""
 
-from .classification import classify_mechanism
+from .api import classify_mechanism
 from .lep import compute_lep_layer
 from .mpemba import compute_mpemba_layer
 from .nonnormality import compute_nonnormality_layer
