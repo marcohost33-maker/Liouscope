@@ -1,0 +1,38 @@
+name: Pytest Diagnostic
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  capture:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # v6.2.0
+        with:
+          python-version: "3.12"
+      - name: Install package
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e .[dev]
+      - name: Capture changed-test output
+        run: |
+          set +e
+          pytest -q tests/test_ensemble_evidence.py tests/test_mpemba.py tests/test_manifest.py tests/test_pypi_workflow_contract.py > pytest.log 2>&1
+          status=$?
+          cat pytest.log
+          printf '%s\n' "$status" > pytest-status.txt
+          exit 0
+      - name: Upload diagnostic
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
+        with:
+          name: pytest-diagnostic-${{ github.run_id }}
+          path: |
+            pytest.log
+            pytest-status.txt
+          if-no-files-found: error
