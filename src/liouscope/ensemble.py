@@ -19,12 +19,12 @@ ENSEMBLE_MPEMBA_CONFIRMED = "ENSEMBLE_MPEMBA_CONFIRMED"
 _SHA256_RE = re.compile(r"^[0-9a-f]{64}$")
 
 
-def _require_nonempty(name: str, value: str) -> None:
+def _require_nonempty(name: str, value: object) -> None:
     if not isinstance(value, str) or not value.strip():
         raise ValueError(f"{name} must be a non-empty string")
 
 
-def _require_sha256(name: str, value: str) -> None:
+def _require_sha256(name: str, value: object) -> None:
     if not isinstance(value, str) or _SHA256_RE.fullmatch(value) is None:
         raise ValueError(
             f"{name} must be a 64-character lowercase hexadecimal SHA-256 digest"
