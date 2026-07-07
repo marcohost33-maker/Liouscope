@@ -1,0 +1,81 @@
+name: Apply Release Hardening Documentation Migration
+
+on:
+  pull_request:
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    if: github.event.pull_request.head.ref == 'codex/harden-release-and-ensemble-evidence'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+          persist-credentials: true
+      - name: Update README and changelog contracts
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import re
+
+          p = Path('README.md')
+          s = p.read_text(encoding='utf-8')
+          s = s.replace(
+              '> **Status:** Research / pre-clinical. Not for diagnostic or operational use on production\n'
+              '> hardware. The current version is whatever `liouscope.__version__` reports (single source:\n'
+              '> `src/liouscope/_version.py`). See [`CHANGELOG.md`](CHANGELOG.md) for version history and\n'
+              '> [`src/liouscope/MANIFEST_SCHEMA.json`](src/liouscope/MANIFEST_SCHEMA.json) for the run-manifest contract.',
+              '> **Status:** Research / pre-clinical. Not for diagnostic or operational use on production\n'
+              '> hardware. Released `v0.5.0` remains immutable and citable; the default branch reports\n'
+              '> `0.6.0.dev0` from `src/liouscope/_version.py`. See [`CHANGELOG.md`](CHANGELOG.md),\n'
+              '> [`docs/DEVELOPMENT_MIGRATION_0.6.0.dev0.md`](docs/DEVELOPMENT_MIGRATION_0.6.0.dev0.md), and\n'
+              '> [`src/liouscope/MANIFEST_SCHEMA.json`](src/liouscope/MANIFEST_SCHEMA.json).'
+          )
+          s = s.replace('MANIFEST_SCHEMA v1.3.0', 'MANIFEST_SCHEMA v1.4.0')
+          s = s.replace('(schema v1.3.0) via', '(schema v1.4.0) via')
+          s = s.replace(
+              '   platform, solver path, quality label and a run-invariant `input_hash`.',
+              '   platform, solver path, quality label and a run-invariant `input_hash`. Structured ensemble\n'
+              '   evidence, when supplied, is bound into that hash by its canonical digest.'
+          )
+          p.write_text(s, encoding='utf-8')
+
+          p = Path('CHANGELOG.md')
+          s = p.read_text(encoding='utf-8')
+          replacement = '''### Changed
+          - **Release identity and provenance hardening.** Released `v0.5.0` remains
+            immutable; default-branch VCS installs now report `0.6.0.dev0`. Manifest
+            schema `1.4.0` adds the canonical structured-ensemble-evidence digest to
+            the input-hash domain when evidence participates; hashes are comparable
+            only within one schema version.
+          - **A11 typed evidence gate.** A single state on `rho_ss = I/d` remains
+            `UNDEFINED / EXPLORATION`. Public `ensemble_confirmation=True` is rejected
+            fail-closed. Only validated immutable `EnsembleEvidence` with `PASS` and
+            reason `ENSEMBLE_MPEMBA_CONFIRMED` may suppress the floor. The evidence
+            binds manifest/run/input digests, family ordering, comparison and
+            uncertainty methods, software version, and distinct producer/reviewer
+            attestations; its digest enters the run hash and its payload remains in
+            `DiagnosticReport.extras`.
+          - **PyPI publication privilege-separated.** Manual dispatch is build/QA only
+            without OIDC. The upload job is restricted to a published release, explicit
+            tag checkout, the protected `pypi` environment, the enable flag, and repeated
+            source/artifact/tag/commit identity checks. External PyPI/Zenodo/SWHID gates
+            in issue #50 remain open.
+
+          ### Added'''
+          s, n = re.subn(r'### Changed\n.*?\n### Added', replacement, s, count=1, flags=re.S)
+          if n != 1:
+              raise SystemExit('could not replace Unreleased Changed section')
+          p.write_text(s, encoding='utf-8')
+          PY
+          git diff --check
+      - name: Commit documentation migration
+        run: |
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add README.md CHANGELOG.md
+          git commit -m 'docs: align release and evidence hardening contracts'
+          git push origin HEAD:${{ github.event.pull_request.head.ref }}
