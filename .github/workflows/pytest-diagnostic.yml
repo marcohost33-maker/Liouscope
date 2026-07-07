@@ -143,13 +143,12 @@ jobs:
               text = text.replace(old, new)
           path.write_text(text, encoding="utf-8")
           PY
-          git rm .github/workflows/pytest-diagnostic.yml
           git diff --check
           python -m py_compile tests/test_classification.py
-      - name: Commit exact migration and remove one-shot workflow
+      - name: Commit exact migration
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add tests/test_classification.py .github/workflows/pytest-diagnostic.yml
+          git add tests/test_classification.py
           git commit -m "test: migrate A11 override regression to typed evidence"
           git push origin HEAD:${{ github.event.pull_request.head.ref }}
