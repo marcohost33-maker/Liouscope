@@ -68,7 +68,7 @@ MINOR bump per SemVer: backward-compatible, additive API surface.
 | Area | Current state |
 |---|---|
 | Runtime version | `src/liouscope/_version.py` reports `0.5.0`; `importlib.metadata.version("liouscope") == 0.5.0` (single source, dynamic in `pyproject.toml`). |
-| Citation metadata | `CITATION.cff` reports `version: 0.5.0`, `date-released: 2026-06-25`; DOI staged (commented placeholder, no DOI minted). |
+| Citation metadata | `CITATION.cff` reports `version: 0.5.0`, `date-released: 2026-06-25`; DOI minted + verified: 10.5281/zenodo.21246109 (Zenodo record verified 2026-07-08 CEST); backfilled in CITATION.cff (PR #93). |
 | CodeMeta | `codemeta.json` `version`/`softwareVersion: 0.5.0`, `datePublished: 2026-06-25`. |
 | Diagnostic schema | D1-D24 (D1-D20 submission set; D21-D24 post-submission). Unchanged. |
 | Taxonomy | `A1-A12-v3.1`. Unchanged. |
@@ -135,7 +135,7 @@ guard, not a failure.
 | Engineering release | GREEN | Version/citation/codemeta/changelog aligned; full suite + anchors + qutip green locally on the CI command chain. |
 | Scientific claim safety | GREEN | Additive diagnostics, each pinned to an independent oracle; new diagnostics carry `claim_status="pending"`; no exact-Eq.(16) Zhou claim introduced. |
 | CI status | GREEN expected | Required checks (test 3.10–3.14 + qutip-cross-check 3.11/3.12) replicated locally; CI confirmation on PR head pending. |
-| Citation metadata | GREEN | `CITATION.cff`/`codemeta.json` synchronized to 0.5.0; DOI staged, not fabricated. |
+| Citation metadata | GREEN | `CITATION.cff`/`codemeta.json` synchronized to 0.5.0; DOI minted + verified (10.5281/zenodo.21246109); backfilled in CITATION.cff. |
 | PyPI publication | YELLOW / PENDING | Workflow ready + name free; gated off until Marco registers the Trusted Publisher and sets `PYPI_PUBLISH_ENABLED=true`. |
 | Public/citable release | YELLOW / OPEN | Requires GitHub Release, DOI/Zenodo decision, SWHID (private-repo limitation), evidence lock. |
 
@@ -147,7 +147,7 @@ guard, not a failure.
 [x] CITATION.cff version/date match v0.5.0 (2026-06-25)
 [x] codemeta.json version/softwareVersion/datePublished synchronized
 [x] Changelog has [0.5.0] section + fresh [Unreleased] + pinned compare-links
-[x] DOI staged without fabrication (commented placeholder)
+[x] DOI minted 10.5281/zenodo.21246109 (verified 2026-07-08 CEST) + backfilled in CITATION.cff (PR #93)
 
 [CI / QUALITY]
 [x] ruff check src tests benchmarks (exit 0)
@@ -167,7 +167,7 @@ guard, not a failure.
 
 [ARCHIVE / CITATION]
 [ ] Create + tag GitHub Release v0.5.0 (Vero, at finalization)
-[ ] Zenodo DOI prepared or explicit no-Zenodo decision; backfill CITATION.cff doi
+[x] Zenodo DOI minted (10.5281/zenodo.21246109) + backfilled CITATION.cff doi (PR #93, verified 2026-07-08 CEST)
 [ ] SWHID after public source availability, or record private-repo limitation
 [ ] Evidence lock register updated with release commit, tag, checksums, DOI/SWHID
 ```
@@ -178,7 +178,7 @@ guard, not a failure.
 |---|---:|---|
 | `PYPI_PUBLISH_ENABLED` guard retained on pypi.yml | DECISION | Kept fail-closed so a `v0.5.0` release tag does not fail-publish before the PyPI Trusted Publisher exists. Removing the guard activates publishing on the next release — only do so *after* the PyPI setup in §5. |
 | Release tag + GitHub Release | P1 | Not created in this PR (per envelope: Vero finalizes). The `[0.5.0]` compare-link resolves once `v0.5.0` is tagged. |
-| DOI placeholder | P2 | `CITATION.cff` `doi:` is a commented placeholder; backfill the real DOI at Zenodo release. No DOI fabricated. |
+| DOI backfilled | RESOLVED | `CITATION.cff` `doi:` now carries the verified version DOI 10.5281/zenodo.21246109 (Zenodo record verified 2026-07-08 CEST, PR #93). Concept DOI pending. |
 | SWHID while repo private | P2 | Capture only after public source availability; else record the private-repo limitation. |
 
 ## 9. Marco — zero-effort PyPI/Zenodo step list (at finalization)
