@@ -16,7 +16,7 @@ pip install -e .[dev,qutip]
 ## Running the test suite
 
 ```bash
-pytest --cov=liouscope --cov-fail-under=80
+pytest --cov=liouscope --cov-fail-under=90
 pytest tests/test_anchors.py            # correctness-anchor regression gate
 ```
 

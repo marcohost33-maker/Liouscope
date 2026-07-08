@@ -53,3 +53,6 @@ benchmarks/output/
 *.npz
 
 .ipynb_checkpoints/
+
+# Sphinx documentation build output
+docs/_build/

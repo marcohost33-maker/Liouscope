@@ -1,0 +1,7 @@
+# Documentation build dependencies (Read the Docs + local `sphinx-build`).
+# Mirrors the `docs` optional-dependency group in pyproject.toml; kept as a
+# plain requirements file because Read the Docs' `python.install` step reads it
+# directly. Pins are lower bounds; RTD resolves the latest compatible release.
+sphinx>=7.3
+furo>=2024.1.29
+myst-parser>=2.0
