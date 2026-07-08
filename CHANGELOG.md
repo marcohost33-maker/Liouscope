@@ -7,6 +7,21 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Added
+- **Sphinx + Read the Docs documentation skeleton** (issue #72 item 2).
+  A `docs/` Sphinx site (furo theme, MyST Markdown, `autodoc` + `napoleon`
+  API reference) organised along the Diátaxis structure
+  (tutorials / how-to / reference / explanation), plus a `.readthedocs.yaml`
+  (v2) and `docs/requirements.txt` / a `docs` optional-dependency group.
+  Builds clean under `sphinx-build -W` (warnings-as-errors); RTD mirrors that
+  gate via `fail_on_warning: true`. The Reference section is auto-generated
+  from the public `liouscope.__all__` surface; tutorials / how-to /
+  explanation are intentional stubs for a follow-up slice.
+- **JOSS paper skeleton** (issue #72 item 3). `paper/paper.md` +
+  `paper/paper.bib` following the JOSS 2026 section requirements (Summary,
+  Statement of need, State of the field, Software design, Research impact, AI
+  usage disclosure). All six bibliography DOIs are resolver-verified; author
+  identities/ORCIDs and research-impact evidence are flagged TODO (not
+  fabricated) and must be completed before submission.
 - **SPEC 7 `rng` keyword, additive phase (a)** (issue #72 item 1).
   `diagnose()`, `seed_everything()` and the D18 surface
   (`compute_lep_layer` / `initial_state_sensitivity`) now accept a SPEC 7
@@ -24,6 +39,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   separate SPEC 7 phase. Contract pinned in `tests/test_spec7_rng.py`.
 
 ### Changed
+- **Coverage ratchet 80 → 90** (issue #72 item 4). Measured branch coverage on
+  the baseline (Python 3.14) was 94.61%. The `--cov-fail-under` gate in CI and
+  the new `[tool.coverage.report] fail_under` in `pyproject.toml` are both set
+  conservatively to 90 (up from the previous fixed 80), leaving headroom for
+  cross-version variation on the 3.10–3.14 matrix. `CONTRIBUTING.md` updated to
+  match.
 - **Release identity and provenance hardening.** Released `v0.5.0` remains
   immutable; default-branch VCS installs now report `0.6.0.dev0`. Manifest
   schema `1.4.0` adds the canonical structured-ensemble-evidence digest to
