@@ -2,14 +2,21 @@
 
 *Learning-oriented, step-by-step lessons.*
 
-:::{note}
-Skeleton (issue #72). Full tutorials are planned for a follow-up slice. Until
-then, the runnable starting point is `examples/quickstart.py` in the repository,
-which builds a Liouvillian, finds the steady state and runs `diagnose()`.
-:::
+These tutorials assume a working install (`pip install -e .` from the
+repository root; add `[qutip]` for the optional cross-checks) and basic
+familiarity with NumPy. Every code block is runnable as-is.
 
-## Planned tutorials
+- {doc}`first-diagnostic-run` — build a GKSL generator, call
+  `diagnose()`, and read every layer of the resulting `DiagnosticReport`.
+- {doc}`reproducible-runs` — seeds, the SPEC 7 `rng` keyword, and the
+  SHA-256-stable run manifest.
 
-- **Your first diagnostic run** — build a GKSL generator, call `diagnose()`,
-  read a `DiagnosticReport`.
-- **Reproducible runs** — seeds, the SPEC 7 `rng` keyword and run manifests.
+The runnable companion script is `examples/quickstart.py` in the repository.
+
+```{toctree}
+:hidden:
+:maxdepth: 1
+
+first-diagnostic-run
+reproducible-runs
+```

@@ -7,6 +7,37 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Added
+- **Docs slice 2: Diátaxis sections written out** (issue #72 item 2,
+  follow-up slice). The Tutorials, How-to and Explanation stubs are replaced
+  with hand-written content: two tutorials (first diagnostic run;
+  reproducible runs with SPEC 7 `rng` and manifests), four how-to guides
+  (manifest export/validation, QuTiP cross-checks, A11 `EnsembleEvidence`,
+  D24 Zhou predictor) and three explanation pages (why "no single number",
+  D1–D24 layers + A1–A12 taxonomy + verdict vocabulary, auditable
+  reproducibility). All code snippets were executed against the current API
+  as part of the change; `sphinx-build -W` stays clean (MyST `dollarmath`
+  enabled for the math blocks).
+- **QuTiP dynamics differential oracle** (`tests/test_qutip_dynamics_oracle.py`,
+  007acc portfolio-audit 2026-07-07 ask). The spectral oracle suite never
+  exercised the time-domain propagation that the relaxation layer (D5–D7)
+  fits against. New coverage: closed-form trajectory oracles for amplitude
+  damping and pure dephasing, CPTP invariants (trace/Hermiticity/positivity)
+  at every propagated time point, and QuTiP differentials — `_evolve`
+  trajectories against `qutip.mesolve` (independent adaptive-ODE integrator)
+  and `expm(L t)` against the exponential of QuTiP's independently built
+  Liouvillian. 8 tests; the QuTiP half runs under the existing
+  `qutip` marker / `ci-qutip.yml` job.
+- **FAIR / registry badges in the README** (issue #72 item 5, "Kleinvieh").
+  PyPI version badge (the package is live on PyPI), Zenodo version-DOI badge
+  (10.5281/zenodo.21246109, verified 2026-07-08) and the fair-software.eu
+  badge at its honestly measured 4/5 (●●●●○: public repository, license,
+  registry, citation; the checklist dot requires an OpenSSF Best Practices
+  badge, which is future work). Badge state follows the `howfairis` checker
+  semantics (Zenodo does not count as *registry* there — PyPI does).
+  PEP 735 `[dependency-groups]` was evaluated and **deliberately not added**:
+  per the issue's own criterion it only pays off once CI moves to uv, and
+  mirroring the extras into groups today would create a second place for the
+  dependency list to drift.
 - **Sphinx + Read the Docs documentation skeleton** (issue #72 item 2).
   A `docs/` Sphinx site (furo theme, MyST Markdown, `autodoc` + `napoleon`
   API reference) organised along the Diátaxis structure

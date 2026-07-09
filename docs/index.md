@@ -7,11 +7,10 @@ relaxation-time predictor, replacing a single "decay rate" number with a layered
 auditable `DiagnosticReport`.
 
 :::{note}
-This documentation site is an initial skeleton introduced by issue #72. It is
-organised along the [Diátaxis](https://diataxis.fr/) framework
+This site is organised along the [Diátaxis](https://diataxis.fr/) framework
 (tutorials / how-to / reference / explanation). The Reference section is
 auto-generated from the package docstrings; the Tutorials, How-to and
-Explanation sections are stubs to be filled in follow-up slices.
+Explanation sections are hand-written (issue #72, slices 1–2).
 :::
 
 ## Where to start

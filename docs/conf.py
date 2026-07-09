@@ -66,6 +66,7 @@ napoleon_use_rtype = True
 myst_enable_extensions = [
     "colon_fence",
     "deflist",
+    "dollarmath",
 ]
 myst_heading_anchors = 3
 
