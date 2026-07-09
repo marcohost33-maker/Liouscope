@@ -2,16 +2,23 @@
 
 *Understanding-oriented background and design rationale.*
 
-:::{note}
-Skeleton (issue #72). In-depth methodology lives in the module docstrings (see
-{doc}`../reference/index`) and in `docs/RELEASE_AUDIT_v0.5.0.md`. This section
-will collect the conceptual narrative in a follow-up slice.
-:::
+These pages explain *why* LiouScope is shaped the way it is. The quantitative
+methodology lives in the module docstrings (see {doc}`../reference/index`);
+the release-gate audit trail lives in `docs/RELEASE_AUDIT_v0.5.0.md` in the
+repository.
 
-## Topics to cover
+- {doc}`no-single-number` — why the Liouvillian gap alone misleads, and why
+  every LiouScope result is a structured report instead of a rate.
+- {doc}`layers-and-taxonomy` — the D1–D24 diagnostic layers, the A1–A12
+  mechanism taxonomy and the evidence-graded verdict vocabulary.
+- {doc}`reproducibility` — the audit chain: seeds, SPEC 7, manifests and
+  fail-closed defaults.
 
-- **Why "no single number"** — the Liouvillian gap versus non-normal transient
-  amplification and pseudospectra.
-- **The D1–D24 diagnostic layers** and the A1–A12 mechanism taxonomy.
-- **Auditable reproducibility** — run manifests, seeds and the SPEC 7 `rng`
-  keyword.
+```{toctree}
+:hidden:
+:maxdepth: 1
+
+no-single-number
+layers-and-taxonomy
+reproducibility
+```

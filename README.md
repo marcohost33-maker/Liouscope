@@ -5,7 +5,10 @@
 [![CI](https://github.com/marcohost33-maker/Liouscope/actions/workflows/ci.yml/badge.svg)](https://github.com/marcohost33-maker/Liouscope/actions/workflows/ci.yml)
 [![License: Apache-2.0](https://img.shields.io/badge/License-Apache--2.0-blue.svg)](LICENSE)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue)](pyproject.toml)
+[![PyPI](https://img.shields.io/pypi/v/liouscope)](https://pypi.org/project/liouscope/)
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.21246109.svg)](https://doi.org/10.5281/zenodo.21246109)
 [![Citation metadata](https://img.shields.io/badge/citation-CITATION.cff-green)](CITATION.cff)
+[![fair-software.eu](https://img.shields.io/badge/fair--software.eu-%E2%97%8F%20%20%E2%97%8F%20%20%E2%97%8F%20%20%E2%97%8F%20%20%E2%97%8B-yellow)](https://fair-software.eu)
 
 LiouScope is a research framework for **time-homogeneous Markovian open quantum systems** described by
 Gorini-Kossakowski-Sudarshan-Lindblad (GKSL) generators. It quantifies *when and why the Liouvillian gap
