@@ -6,6 +6,18 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+- **Contributor-docs drift.** `CONTRIBUTING.md` still pointed the clone URL at
+  the defunct `coworker-research` org (the same drift the packaging metadata
+  fix already removed from `pyproject.toml`); it now points at
+  `marcohost33-maker/Liouscope`. The lint command was aligned with AGENTS.md
+  (`ruff check src tests benchmarks` — `benchmarks/` is part of the CI lint
+  gate and was missing from the contributor instructions).
+- **Support / governance statement in the README** (issue #72 item 3, JOSS
+  community gate). The Contributing section now states explicitly where to get
+  help (GitHub issues, no separate channel) and who makes maintainer decisions
+  (repository owner; methodology changes via `CHANGELOG.md` / ADRs).
+
 ### Added
 - **Docs slice 2: Diátaxis sections written out** (issue #72 item 2,
   follow-up slice). The Tutorials, How-to and Explanation stubs are replaced

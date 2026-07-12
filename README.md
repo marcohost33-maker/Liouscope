@@ -210,6 +210,14 @@ constants stable. Security-relevant findings → [`SECURITY.md`](SECURITY.md).
 This project follows the SemVer convention and uses the
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) format.
 
+**Getting help.** Questions, bug reports and feature requests all go through
+[GitHub issues](https://github.com/marcohost33-maker/Liouscope/issues) — use the
+bug-report / feature-request templates where they fit, or a blank issue for
+usage questions. There is no separate mailing list or chat channel. Maintainer
+decisions (releases, taxonomy/schema versioning, anchor changes) are made by the
+repository owner; substantial methodology changes are documented in
+`CHANGELOG.md` and, where architectural, as ADRs under `docs/adr/`.
+
 ---
 
 ## License
