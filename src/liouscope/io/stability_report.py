@@ -292,7 +292,10 @@ def dump_stability_report(payload: dict[str, Any], path: str | Path) -> None:
     validate_stability_report(payload)
     p = Path(path)
     p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
+    p.write_text(
+        json.dumps(payload, indent=2, sort_keys=True, allow_nan=False),
+        encoding="utf-8",
+    )
 
 
 __all__ = [

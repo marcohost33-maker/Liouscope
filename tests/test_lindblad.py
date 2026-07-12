@@ -96,8 +96,12 @@ def test_steady_state_full_rank_uses_smallest_singular_vector():
     # A full-rank superoperator has no exact null space, so steady_state falls
     # back to the smallest-singular-value direction (vh[:, -1]).
     # diag(1,2,3,4): smallest singular value is at index 0 -> rho = |0><0|.
+    # Hardening: the fallback is no longer silent -- the result is NOT a
+    # verified steady state (residual ||L rho|| = 1 here), so a RuntimeWarning
+    # carrying the residual is mandatory.
     L = np.diag([1.0, 2.0, 3.0, 4.0]).astype(complex)
-    rho = steady_state(L)
+    with pytest.warns(RuntimeWarning, match="NOT a verified steady state"):
+        rho = steady_state(L)
     expected = np.array([[1, 0], [0, 0]], dtype=complex)
     np.testing.assert_allclose(rho, expected, atol=1e-9)
 

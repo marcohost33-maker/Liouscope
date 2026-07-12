@@ -6,6 +6,94 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+- **Fail-closed hardening batch (2026-07-12 full-repo deep review).** Three
+  independent review passes (numerical core, classifier gates, IO/manifest/CI)
+  found paths where malformed or non-finite input could silently *upgrade* a
+  verdict, bypass a gate or fabricate a result. All fixes below are pinned in
+  `tests/test_failclosed_hardening.py` (25 tests) plus additions to
+  `tests/test_sparse.py` / `tests/test_lindblad.py` / `tests/test_export.py`;
+  methodology-gated findings that need physics decisions are tracked in
+  issue #97, not blind-fixed here.
+  - **A11 floor override now type-gated** (`diagnostics/api.py`). Any
+    duck-typed object exposing `permits_claim_floor_override=True` could lift
+    the single-state maximally-mixed A11 floor, bypassing all provenance
+    validation in `ensemble.py`; non-`EnsembleEvidence` input now raises
+    `TypeError` fail-closed.
+  - **Non-finite symmetrised gaps no longer grant the issue-#80 A1
+    certificate** (`diagnostics/classification.py`). `kms_gap=inf` (ratio
+    collapses to 0.0 <= 1.2) or `gns_gap=inf` (passes the `>=` floor test)
+    silently granted `sym_gap_corroborated` and upgraded A1 to
+    CONFIRMED/PUBLICATION_GRADE 0.95; both certificate legs now require
+    finite gaps.
+  - **F5 gapless phantom limit fires when the GNS gap is also floored**
+    (`diagnostics/classification.py`). With `gap=0` AND `gns_gap=0` (the
+    realistic gapless case) the old `inf > inf` comparison was False and the
+    documented gapless-phantom contract never fired, falling through to A12.
+  - **Malformed steady-state shapes fail closed in the maximally-mixed floor**
+    (`diagnostics/classification.py`). A still-vectorised `(d^2,)` steady
+    state read as "not maximally mixed" and silently disabled the A11 floor;
+    uninterpretable shapes now raise. The documented `d < 2` placeholder
+    behaviour is unchanged.
+  - **`EnsembleEvidence` rejects duplicate `input_hashes`** (`ensemble.py`).
+    Two paired runs with identical input hashes are the same system + initial
+    state (no ordering-parameter variation) and are structurally not a
+    reference-family comparison.
+  - **`build_liouvillian` / `build_sparse_liouvillian` input gates**
+    (`core/lindblad.py`, `sparse/build.py`). NaN/inf rates passed the sign
+    test (`NaN < 0` is False), an all-real ±inf diagonal H passed the
+    Hermiticity gate, and the sparse builder skipped Hermiticity/rate/shape
+    validation entirely (accepting non-GKSL generators the dense twin
+    rejects). Both builders now share the same fail-closed gates;
+    `examples.v4_thermal_two_level` additionally rejects non-finite
+    `beta`/`omega`.
+  - **`sparse_steady_state` degeneracy guard (sparse/dense parity, S1 audit
+    anchor)** (`sparse/arnoldi.py`). Pure-dephasing-like degenerate NESS
+    manifolds returned an arbitrary (not even PSD) ARPACK vector silently
+    while the dense path raised `DegenerateSteadyStateError`; the sparse path
+    now checks the two smallest-magnitude eigenvalues and fails closed, with
+    the same `allow_degenerate=True` escape hatch.
+  - **`steady_state` no-null-vector fallback is no longer silent**
+    (`core/lindblad.py`). An invertible superoperator (no steady state at
+    all) returned the smallest-singular-value direction with residual
+    `||L rho|| = O(1)` and no signal; the fallback now emits a
+    `RuntimeWarning` carrying the residual, the docstring describes the
+    actual mechanism (SVD direction, not "smallest-real-part eigenvector"),
+    and degenerate `(0, 0)` / non-2-D inputs get structured `ValueError`s
+    instead of a bare `IndexError`.
+  - **`diagnose()` validates `t_grid` like every other boundary input**
+    (`_diagnostics.py`). A NaN-contaminated grid propagated through
+    `expm(L t)` and still produced a finite, confident-looking `beta_D`;
+    non-finite, negative, unordered or non-1-D grids now raise.
+  - **Zhou predictor early return honours caller-supplied arguments**
+    (`_zhou.py`). The all-zero-modes return hard-coded `gap=0.0` /
+    `petermann_factor=nan`, overwriting explicitly passed values so the
+    manifest-grade record contradicted its own call.
+  - **`dump_report` writes RFC 8259-valid JSON** (`io/export.py`). The
+    default `allow_nan=True` emitted bare `Infinity`/`NaN` tokens (evidence
+    ratios are legitimately inf), which strict consumers (JavaScript
+    `JSON.parse`, Postgres `jsonb`, serde) reject; Python's lenient parser
+    hid it from the round-trip tests. Non-finite floats are now tagged
+    `{"__nonfinite__": "inf" | "-inf" | "nan"}` (mirroring the `__complex__`
+    tagging) and all three JSON writers (`dump_report`, `dump_manifest`,
+    `dump_stability_report`) enforce `allow_nan=False`.
+  - **CI/tooling drift.** The pre-commit ruff hook (v0.12.1) linted with a
+    materially different rule engine than the CI gate (ruff==0.15.20) — now
+    pinned together with a co-bump note. `docs/requirements.txt` was
+    lower-bound-only while RTD builds with `fail_on_warning: true`; the RTD
+    toolchain is now pinned exactly (sphinx 9.0.4 / furo 2025.12.19 /
+    myst-parser 5.1.0, verified clean under `sphinx-build -W`).
+- **Contributor-docs drift.** `CONTRIBUTING.md` still pointed the clone URL at
+  the defunct `coworker-research` org (the same drift the packaging metadata
+  fix already removed from `pyproject.toml`); it now points at
+  `marcohost33-maker/Liouscope`. The lint command was aligned with AGENTS.md
+  (`ruff check src tests benchmarks` — `benchmarks/` is part of the CI lint
+  gate and was missing from the contributor instructions).
+- **Support / governance statement in the README** (issue #72 item 3, JOSS
+  community gate). The Contributing section now states explicitly where to get
+  help (GitHub issues, no separate channel) and who makes maintainer decisions
+  (repository owner; methodology changes via `CHANGELOG.md` / ADRs).
+
 ### Added
 - **Docs slice 2: Diátaxis sections written out** (issue #72 item 2,
   follow-up slice). The Tutorials, How-to and Explanation stubs are replaced

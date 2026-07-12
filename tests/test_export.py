@@ -90,3 +90,63 @@ def test_dump_then_load_roundtrip_string_path(tmp_path: Path):
     dump_report(report, fname)
     loaded = load_report(fname)
     assert loaded["spectral"]["gap"] == report.spectral.gap
+
+
+# --- RFC 8259 validity (non-finite floats) -----------------------------------
+
+
+def _report_with_nonfinite_evidence():
+    """A report guaranteed to carry inf/-inf/nan evidence values.
+
+    Whether the plain fixture produces an inf ratio depends on how the GNS
+    floor sentinel resolves on a given NumPy/SciPy version (it did on the
+    3.11 baseline, not on the 3.14 matrix job), so the non-finite values are
+    injected deterministically: the evidence dict legitimately carries inf
+    ratios in the wild (gap_to_gns_ratio explodes whenever a gap floors to 0).
+    """
+    report = _report()
+    report.classification.evidence["__test_inf__"] = float("inf")
+    report.classification.evidence["__test_ninf__"] = float("-inf")
+    report.classification.evidence["__test_nan__"] = float("nan")
+    return report
+
+
+def test_dump_report_is_strict_rfc8259_json(tmp_path: Path):
+    """FAILS-BEFORE: ``json.dumps(..., allow_nan=True)`` emitted bare
+    ``Infinity`` tokens (evidence ratios are legitimately inf whenever a gap
+    floors to 0), which is not valid JSON and is rejected by strict
+    consumers (JavaScript JSON.parse, Postgres jsonb, serde). Python's own
+    lenient parser hid this from the round-trip tests."""
+    report = _report_with_nonfinite_evidence()
+    out = tmp_path / "strict.json"
+    dump_report(report, out)
+    text = out.read_text(encoding="utf-8")
+    # Bare (unquoted) Infinity/NaN tokens are exactly what allow_nan emits.
+    for token in ('": Infinity', '": -Infinity', '": NaN'):
+        assert token not in text
+    json.loads(text, parse_constant=_reject_nonfinite_constant)
+
+
+def _reject_nonfinite_constant(name: str) -> float:
+    raise AssertionError(f"non-RFC8259 constant {name!r} in dumped report")
+
+
+def test_dump_report_tags_nonfinite_floats(tmp_path: Path):
+    report = _report_with_nonfinite_evidence()
+    out = tmp_path / "tagged.json"
+    dump_report(report, out)
+    loaded = load_report(out)
+    evidence = loaded["classification"]["evidence"]
+    assert evidence["__test_inf__"] == {"__nonfinite__": "inf"}
+    assert evidence["__test_ninf__"] == {"__nonfinite__": "-inf"}
+    assert evidence["__test_nan__"] == {"__nonfinite__": "nan"}
+    # Every remaining evidence value survived as a plain finite JSON number.
+    rest = {
+        k: v
+        for k, v in evidence.items()
+        if not (isinstance(k, str) and k.startswith("__test_"))
+    }
+    assert all(
+        isinstance(v, (int, float)) or (isinstance(v, dict) and "__nonfinite__" in v)
+        for v in rest.values()
+    )

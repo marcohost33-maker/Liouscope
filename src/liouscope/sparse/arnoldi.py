@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import warnings
+
 import numpy as np
 import scipy.sparse as sp
 import scipy.sparse.linalg as spla
 
+from ..core.lindblad import DegenerateSteadyStateError
 from ..numerics.kronecker import unvec
 
 
@@ -14,17 +17,46 @@ def sparse_steady_state(
     *,
     tol: float = 1.0e-9,
     sigma_shift: complex = 1.0e-8 + 0.0j,
+    allow_degenerate: bool = False,
 ) -> np.ndarray:
     """Return the steady state via shift-invert ARPACK near zero.
 
     The smallest-magnitude eigenvalue corresponds to the steady state.
     ``sigma_shift`` is a tiny offset to keep the SuperLU factorisation of
     ``sigma*I - L`` non-singular when ``L`` has an exact zero eigenvalue.
+
+    Degeneracy guard (parity with the dense :func:`~liouscope.core.lindblad.
+    steady_state`, S1 audit 2026-06-04): the two smallest-magnitude
+    eigenvalues are computed, and if BOTH lie within ``tol`` of zero the
+    steady state is not unique -- an ARPACK vector would be an arbitrary
+    (typically not even positive semi-definite) point in the steady-state
+    manifold. That fails closed with :class:`DegenerateSteadyStateError`
+    unless ``allow_degenerate=True``, which returns one trace-normalised
+    representative together with a ``RuntimeWarning``.
     """
     L = sp.csc_matrix(L_sparse, dtype=complex)
     n2 = L.shape[0]
     d = int(round(np.sqrt(n2)))
-    vals, vecs = spla.eigs(L, k=1, sigma=sigma_shift, which="LM", tol=tol)
+    if L.shape[0] != L.shape[1] or d * d != n2:
+        raise ValueError(
+            f"L superoperator must be square with square-d dimension, got {L.shape}"
+        )
+    # k=2 so the guard can see a second null mode (ARPACK needs k < n2).
+    k = 2 if n2 > 2 else 1
+    vals, vecs = spla.eigs(L, k=k, sigma=sigma_shift, which="LM", tol=tol)
+    order = np.argsort(np.abs(vals))
+    vals, vecs = vals[order], vecs[:, order]
+    null_dim = int(np.sum(np.abs(vals) <= max(tol, abs(sigma_shift))))
+    if null_dim > 1:
+        if not allow_degenerate:
+            raise DegenerateSteadyStateError(null_dim)
+        warnings.warn(
+            f"Sparse Liouvillian null space has dimension >= {null_dim} > 1: "
+            "the steady state is not unique. Returning one arbitrary "
+            "trace-normalised representative (allow_degenerate=True).",
+            RuntimeWarning,
+            stacklevel=2,
+        )
     rho = unvec(vecs[:, 0], d=d)
     rho = 0.5 * (rho + rho.conj().T)
     tr = np.trace(rho)

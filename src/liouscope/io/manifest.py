@@ -161,7 +161,9 @@ def dump_manifest(report: DiagnosticReport, path: str | Path) -> None:
     p = Path(path)
     p.parent.mkdir(parents=True, exist_ok=True)
     p.write_text(
-        json.dumps(manifest_payload(report), indent=2, sort_keys=True),
+        json.dumps(
+            manifest_payload(report), indent=2, sort_keys=True, allow_nan=False
+        ),
         encoding="utf-8",
     )
 

@@ -128,13 +128,21 @@ def compute_zhou_predictor(
         eigvals, vl, vr = sla.eig(L_super, left=True, right=True)
         nonzero = np.abs(eigvals) > EPS_GAP
         if not nonzero.any():
+            # Honour caller-supplied values in the unconverged record:
+            # hard-coding gap=0.0 here silently overwrote an explicitly
+            # passed ``gap``/``petermann_factor``, so the returned
+            # (manifest-grade) result contradicted its own call arguments.
             return ZhouPredictorResult(
                 mixing_time_lower=float("inf"),
                 mixing_time_upper=float("inf"),
                 epsilon=epsilon,
                 converged=False,
-                gap=0.0,
-                petermann_factor=float("nan"),
+                gap=float(gap) if gap is not None else 0.0,
+                petermann_factor=(
+                    float(petermann_factor)
+                    if petermann_factor is not None
+                    else float("nan")
+                ),
             )
         eigvals_nz = eigvals[nonzero]
         if gap is None:
