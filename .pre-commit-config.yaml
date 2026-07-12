@@ -20,8 +20,12 @@ repos:
         args: [--markdown-linebreak-ext=md]
       - id: detect-private-key
 
+  # rev must track the exact ruff pin in pyproject.toml's dev extra (currently
+  # 0.15.20): lint behaviour changed between 0.15.14 and 0.15.20 (I001
+  # heuristic), so a drifting hook rev passes locally what the CI gate rejects
+  # (or vice versa). Bump both together.
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.12.1
+    rev: v0.15.20
     hooks:
       - id: ruff-check
         args: [src, tests, benchmarks]

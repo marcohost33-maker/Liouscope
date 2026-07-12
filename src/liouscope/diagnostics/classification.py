@@ -146,7 +146,15 @@ def _is_maximally_mixed(rho_steady_state: np.ndarray, *, atol: float = EPS_MAXMI
     floor it gates -- is only meaningful for ``d >= 2``.
     """
     rho = np.asarray(rho_steady_state, dtype=complex)
-    if rho.ndim != 2 or rho.shape[0] != rho.shape[1] or rho.shape[0] < 2:
+    if rho.ndim != 2 or rho.shape[0] != rho.shape[1]:
+        # Fail closed: an uninterpretable steady-state shape (e.g. a still-
+        # vectorised (d^2,) array) must not silently DISABLE the A11
+        # insufficient-evidence floor by reading as "not maximally mixed".
+        raise ValueError(
+            "steady_state must be a square 2-D density matrix to evaluate the "
+            f"maximally-mixed floor, got shape {rho.shape}"
+        )
+    if rho.shape[0] < 2:
         return False
     d = rho.shape[0]
     # Pure ABSOLUTE tolerance (rtol=0): the default numpy rtol=1e-5 would swamp a
@@ -206,9 +214,16 @@ def _gather_evidence(
     # below distinguishes a MEASURED Delta_GNS (certified: resolved above the
     # numerical noise floor relative to Delta) from the uncertified sentinel;
     # decision branches keying on ``gap_to_gns_ratio`` must require it.
+    # Finiteness is part of the certificate: a non-finite gns_gap would pass
+    # the >= floor test (inf >= anything) and, downstream, drive
+    # gap_to_gns_ratio to 0.0 -- silently *granting* the corroboration
+    # certificate below. Non-finite input must fail closed, not upgrade.
     ev["gns_certified"] = (
         1.0
-        if spectral.gap > 0.0 and spectral.gns_gap >= GNS_CERTIFIED_RTOL * spectral.gap
+        if np.isfinite(spectral.gap)
+        and np.isfinite(spectral.gns_gap)
+        and spectral.gap > 0.0
+        and spectral.gns_gap >= GNS_CERTIFIED_RTOL * spectral.gap
         else 0.0
     )
     # KMS counterpart of the gap ratio (#88/#80): a genuine Mori-Shirai
@@ -230,12 +245,17 @@ def _gather_evidence(
     # contraction at the gap rate in the GNS (certified only, #88) or KMS
     # geometry. A floored/uncertified GNS and a reduced or floored KMS both
     # fail this, fail-closed.
+    # Both legs additionally require a FINITE symmetrised gap: with e.g.
+    # ``kms_gap = inf`` the ratio collapses to 0.0 <= 1.2 and the certificate
+    # would be granted by garbage -- the exact inversion of fail-closed. A
+    # non-finite gap is not a measurement and certifies nothing (#80).
     ev["sym_gap_corroborated"] = (
         1.0
-        if spectral.gap > 0.0
+        if np.isfinite(spectral.gap)
+        and spectral.gap > 0.0
         and (
             (ev["gns_certified"] > 0.5 and ev["gap_to_gns_ratio"] <= 1.2)
-            or ev["gap_to_kms_ratio"] <= 1.2
+            or (np.isfinite(spectral.kms_gap) and ev["gap_to_kms_ratio"] <= 1.2)
         )
         else 0.0
     )
@@ -313,10 +333,20 @@ def _pick_a_class(
     # as c). A vanishing gap (no spectral gap) is treated as inf reach: a
     # gapless, strongly non-normal operator is the phantom/critical limit.
     _gap = ev.get("gap", 0.0)
-    _psr_reach = (
-        ev["pseudospectral_radius"] / _gap if _gap > 0.0 else float("inf")
-    )
-    if _psr_reach > 2.0 * ev.get("gap_to_gns_ratio", 1.0) and ev["henrici_eta"] > 1.0:
+    if _gap > 0.0:
+        _psr_fires = (
+            ev["pseudospectral_radius"] / _gap > 2.0 * ev.get("gap_to_gns_ratio", 1.0)
+        )
+    else:
+        # Gapless limit: infinite reach dominates ANY ratio. The former
+        # ``inf > 2*ratio`` comparison silently failed when the GNS gap was
+        # ALSO floored (ratio = inf, and ``inf > inf`` is False) -- i.e. in the
+        # realistic gapless case, since ``gns_certified`` requires gap > 0 and
+        # the sentinel floors there. The documented contract (gapless +
+        # strongly non-normal = phantom/critical limit) now holds
+        # unconditionally on the reach side; henrici still gates below.
+        _psr_fires = True
+    if _psr_fires and ev["henrici_eta"] > 1.0:
         return "A10", "F5"
     # F1 overlap/eigenvector amplification (Mori-Shirai 2020): non-normal
     # amplification flagged by high Kreiss constant + Petermann factor

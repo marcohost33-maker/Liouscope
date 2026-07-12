@@ -87,6 +87,11 @@ def build_liouvillian(
     H = np.asarray(H, dtype=complex)
     if H.ndim != 2 or H.shape[0] != H.shape[1]:
         raise ValueError(f"H must be square, got {H.shape}")
+    # Explicit finiteness gate: NaN entries happen to fail the Hermiticity
+    # comparison below, but an all-real +/-inf diagonal is "Hermitian" to
+    # np.allclose and would propagate silently into the superoperator.
+    if not np.all(np.isfinite(H)):
+        raise ValueError("H contains non-finite entries")
     d = H.shape[0]
     # rtol=0 explicit: np.allclose's default rtol=1e-5 would let an H that is
     # non-Hermitian at ~1e-5*|entry| pass a gate the message advertises as
@@ -101,6 +106,8 @@ def build_liouvillian(
     for L in jump_ops:
         if L.shape != (d, d):
             raise ValueError(f"jump_op shape {L.shape} != ({d}, {d})")
+        if not np.all(np.isfinite(L)):
+            raise ValueError("jump_op contains non-finite entries")
     if rates is None:
         rates = [1.0] * len(jump_ops)
     rates = list(rates)
@@ -109,6 +116,10 @@ def build_liouvillian(
             f"len(rates)={len(rates)} != len(jump_ops)={len(jump_ops)}"
         )
     for g in rates:
+        # ``NaN < 0`` is False, so the sign test alone would wave NaN (and
+        # +inf) rates through into an all-NaN/inf Liouvillian.
+        if not np.isfinite(g):
+            raise ValueError(f"rate {g} must be finite")
         if g < 0:
             raise ValueError(f"rate {g} must be non-negative")
 
@@ -138,8 +149,12 @@ def steady_state(
 ) -> np.ndarray:
     """Return the steady state ``rho_ss`` with ``L rho_ss = 0`` and unit trace.
 
-    Uses null-space extraction on the superoperator. Falls back to the
-    smallest-real-part eigenvector if SVD finds no exact null vector.
+    Uses null-space extraction on the superoperator. If the SVD finds no
+    singular value below tolerance (no null vector: the generator has no
+    steady state at this tolerance), the smallest-singular-value direction is
+    returned as a best-effort proxy together with a :class:`RuntimeWarning`
+    carrying the residual ``||L rho|| = s_min`` -- the result is then NOT a
+    verified steady state and must not be treated as one.
 
     Parameters
     ----------
@@ -166,9 +181,13 @@ def steady_state(
     L_super = np.asarray(L_super)
     if not np.issubdtype(L_super.dtype, np.inexact):
         L_super = L_super.astype(complex)
+    if L_super.ndim != 2 or L_super.shape[0] != L_super.shape[1]:
+        raise ValueError(
+            f"L superoperator must be a square 2-D array, got shape {L_super.shape}"
+        )
     n2 = L_super.shape[0]
     d = int(round(np.sqrt(n2)))
-    if d * d != n2:
+    if d < 1 or d * d != n2:
         raise ValueError(f"L superoperator must have square-d dimension, got {n2}")
 
     # Right null space of L: solve via SVD.
@@ -189,7 +208,19 @@ def steady_state(
             stacklevel=2,
         )
     if null_indices.size == 0:
-        # Smallest singular-value direction
+        # No singular value below tolerance: the generator has no verified
+        # steady state, and the smallest-singular-value direction is only a
+        # proxy with residual ||L rho|| = s[-1] > tol. Returning it SILENTLY
+        # would fabricate a steady state (the fail-open mirror image of the
+        # degeneracy guard above), so the caller is warned with the residual.
+        warnings.warn(
+            f"No Liouvillian null vector within tolerance {tol:.3e}: the "
+            f"returned matrix is the smallest-singular-value direction with "
+            f"residual ||L rho|| = {s[-1]:.3e} and is NOT a verified steady "
+            "state.",
+            RuntimeWarning,
+            stacklevel=2,
+        )
         rho_vec = vh.conj().T[:, -1]
     else:
         rho_vec = vh.conj().T[:, null_indices[0]]

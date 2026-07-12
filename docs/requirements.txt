@@ -1,7 +1,12 @@
 # Documentation build dependencies (Read the Docs + local `sphinx-build`).
-# Mirrors the `docs` optional-dependency group in pyproject.toml; kept as a
-# plain requirements file because Read the Docs' `python.install` step reads it
-# directly. Pins are lower bounds; RTD resolves the latest compatible release.
-sphinx>=7.3
-furo>=2024.1.29
-myst-parser>=2.0
+# Kept as a plain requirements file because Read the Docs' `python.install`
+# step reads it directly. Pinned EXACTLY: RTD builds with
+# `fail_on_warning: true`, so an unpinned toolchain means a new Sphinx/MyST
+# release can break the docs build with zero repo change and yesterday's
+# green build is not reproducible today. The `docs` optional-dependency group
+# in pyproject.toml keeps the loose lower bounds for local convenience; this
+# file is the reproducible-build source of truth. Verified clean with
+# `sphinx-build -W` on 2026-07-12.
+sphinx==9.0.4
+furo==2025.12.19
+myst-parser==5.1.0

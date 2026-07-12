@@ -33,14 +33,33 @@ def build_sparse_liouvillian(
     d = H_sp.shape[0]
     if H_sp.shape != (d, d):
         raise ValueError(f"H must be square, got {H_sp.shape}")
+    # Physics gates in parity with the dense builder (core/lindblad.py): the
+    # sparse path previously accepted non-Hermitian H, negative/non-finite
+    # rates and mis-shaped jump operators silently, producing a generator
+    # that is not GKSL at all while the dense twin raised.
+    if H_sp.nnz and not np.all(np.isfinite(H_sp.data)):
+        raise ValueError("H contains non-finite entries")
+    herm_defect = H_sp - H_sp.conj().T
+    if herm_defect.nnz and np.max(np.abs(herm_defect.data)) > 1.0e-9:
+        raise ValueError("H must be Hermitian within 1e-9 atol")
     if jump_ops is None:
         jump_ops = []
     sparse_jumps = [sp.csr_matrix(L, dtype=complex) for L in jump_ops]
+    for L_op in sparse_jumps:
+        if L_op.shape != (d, d):
+            raise ValueError(f"jump_op shape {L_op.shape} != ({d}, {d})")
+        if L_op.nnz and not np.all(np.isfinite(L_op.data)):
+            raise ValueError("jump_op contains non-finite entries")
     if rates is None:
         rates = [1.0] * len(sparse_jumps)
     rates = list(rates)
     if len(rates) != len(sparse_jumps):
         raise ValueError("len(rates) != len(jump_ops)")
+    for g in rates:
+        if not np.isfinite(g):
+            raise ValueError(f"rate {g} must be finite")
+        if g < 0:
+            raise ValueError(f"rate {g} must be non-negative")
 
     eye = sp.identity(d, dtype=complex, format="csr")
     # Coherent part

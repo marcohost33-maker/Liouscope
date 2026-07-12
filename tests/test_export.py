@@ -90,3 +90,41 @@ def test_dump_then_load_roundtrip_string_path(tmp_path: Path):
     dump_report(report, fname)
     loaded = load_report(fname)
     assert loaded["spectral"]["gap"] == report.spectral.gap
+
+
+# --- RFC 8259 validity (non-finite floats) -----------------------------------
+
+
+def test_dump_report_is_strict_rfc8259_json(tmp_path: Path):
+    """FAILS-BEFORE: ``json.dumps(..., allow_nan=True)`` emitted bare
+    ``Infinity`` tokens (the amplitude-damping evidence ratios are
+    legitimately inf), which is not valid JSON and is rejected by strict
+    consumers (JavaScript JSON.parse, Postgres jsonb, serde). Python's own
+    lenient parser hid this from the round-trip tests."""
+    report = _report()
+    # Precondition: this report really does carry a non-finite evidence value.
+    assert any(
+        not np.isfinite(v) for v in report.classification.evidence.values()
+    ), "fixture must exercise the non-finite path"
+    out = tmp_path / "strict.json"
+    dump_report(report, out)
+    text = out.read_text(encoding="utf-8")
+    # Bare (unquoted) Infinity/NaN tokens are exactly what allow_nan emits.
+    for token in ('": Infinity', '": -Infinity', '": NaN'):
+        assert token not in text
+    json.loads(text, parse_constant=_reject_nonfinite_constant)
+
+
+def _reject_nonfinite_constant(name: str) -> float:
+    raise AssertionError(f"non-RFC8259 constant {name!r} in dumped report")
+
+
+def test_dump_report_tags_nonfinite_floats(tmp_path: Path):
+    report = _report()
+    out = tmp_path / "tagged.json"
+    dump_report(report, out)
+    loaded = load_report(out)
+    evidence = loaded["classification"]["evidence"]
+    tags = [v for v in evidence.values() if isinstance(v, dict) and "__nonfinite__" in v]
+    assert tags, "inf evidence values must be tagged, not dropped"
+    assert all(t["__nonfinite__"] in ("inf", "-inf", "nan") for t in tags)

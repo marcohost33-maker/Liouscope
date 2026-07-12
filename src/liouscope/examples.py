@@ -97,10 +97,13 @@ def v4_thermal_two_level(beta: float = 1.0, omega: float = 1.0) -> System:
     sx_plus = sx_minus.conj().T
     # sx_minus = [[0,1],[0,0]] is the lowering operator already.
     # sx_plus = [[0,0],[1,0]] raises.
-    if beta * omega <= 0.0:
+    # ``nan <= 0.0`` is False, so the sign test alone would let a NaN beta or
+    # omega through into silently-NaN thermal rates.
+    if not np.isfinite(beta * omega) or beta * omega <= 0.0:
         raise ValueError(
-            f"beta*omega must be > 0 for a thermal occupation (got beta={beta}, "
-            f"omega={omega}); the infinite-temperature limit beta=0 diverges."
+            f"beta*omega must be finite and > 0 for a thermal occupation (got "
+            f"beta={beta}, omega={omega}); the infinite-temperature limit "
+            "beta=0 diverges."
         )
     n_th = 1.0 / (np.exp(beta * omega) - 1.0)
     g_down = (1.0 + n_th) * 0.5

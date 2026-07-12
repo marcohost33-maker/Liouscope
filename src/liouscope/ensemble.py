@@ -96,6 +96,11 @@ class EnsembleEvidence:
             raise ValueError("run_ids and input_hashes must have equal length")
         if len(set(self.run_ids)) != len(self.run_ids):
             raise ValueError("run_ids must be unique")
+        # Two runs sharing an input hash are the SAME system + initial state:
+        # no variation along the ordering parameter, hence structurally not a
+        # reference-family comparison. Such "evidence" must not lift the floor.
+        if len(set(self.input_hashes)) != len(self.input_hashes):
+            raise ValueError("input_hashes must be unique")
         for index, digest in enumerate(self.run_ids):
             _require_sha256(f"run_ids[{index}]", digest)
         for index, digest in enumerate(self.input_hashes):

@@ -55,22 +55,69 @@ def test_sparse_zero_rate_jump_is_skipped(pauli):
     np.testing.assert_allclose(with_zero.toarray(), coherent.toarray(), atol=1e-12)
 
 
-def test_sparse_steady_state(pauli):
-    L_sparse = build_sparse_liouvillian(0.5 * pauli["X"], [pauli["Z"]], [0.3])
-    # Need a system with > 4x4 superoperator for ARPACK; build a 3-qubit example.
-    sz_chain = []
-    for i in range(3):
-        op_list = [np.eye(2, dtype=complex)] * 3
-        op_list[i] = pauli["Z"]
-        op = op_list[0]
+def _site_ops(op: np.ndarray, n_sites: int = 3) -> list[np.ndarray]:
+    ops = []
+    for i in range(n_sites):
+        op_list = [np.eye(2, dtype=complex)] * n_sites
+        op_list[i] = op
+        full = op_list[0]
         for o in op_list[1:]:
-            op = np.kron(op, o)
-        sz_chain.append(op)
+            full = np.kron(full, o)
+        ops.append(full)
+    return ops
+
+
+def test_sparse_steady_state(pauli):
+    # Need a system with > 4x4 superoperator for ARPACK; build a 3-qubit chain
+    # with amplitude damping on every site -> UNIQUE steady state |000><000|.
+    sm = 0.5 * (pauli["X"] + 1j * pauli["Y"])  # |0><1| lowers to ground.
+    sz_chain = _site_ops(pauli["Z"])
+    sm_chain = _site_ops(sm)
     H = sum(0.3 * sz_chain[i] @ sz_chain[(i + 1) % 3] for i in range(3))
-    L_sparse = build_sparse_liouvillian(H, sz_chain, [0.1] * 3)
+    L_sparse = build_sparse_liouvillian(H, sm_chain, [0.1] * 3)
     rho_ss = sparse_steady_state(L_sparse, tol=1e-6)
     tr = float(np.real(np.trace(rho_ss)))
     assert abs(tr - 1.0) < 1e-5
+    expected = np.zeros((8, 8), dtype=complex)
+    expected[0, 0] = 1.0
+    np.testing.assert_allclose(rho_ss, expected, atol=1e-5)
+
+
+def test_sparse_steady_state_degenerate_fails_closed(pauli):
+    """FAILS-BEFORE (sparse/dense divergence): pure dephasing conserves the
+    populations, so the null space is multi-dimensional and the pre-guard
+    sparse path silently returned an arbitrary, not-even-PSD representative
+    while the dense path raised DegenerateSteadyStateError."""
+    from liouscope.core.lindblad import DegenerateSteadyStateError
+
+    sz_chain = _site_ops(pauli["Z"])
+    H = sum(0.3 * sz_chain[i] @ sz_chain[(i + 1) % 3] for i in range(3))
+    L_sparse = build_sparse_liouvillian(H, sz_chain, [0.1] * 3)
+    with pytest.raises(DegenerateSteadyStateError):
+        sparse_steady_state(L_sparse, tol=1e-6)
+    with pytest.warns(RuntimeWarning, match="not unique"):
+        rho = sparse_steady_state(L_sparse, tol=1e-6, allow_degenerate=True)
+    assert abs(float(np.real(np.trace(rho))) - 1.0) < 1e-5
+
+
+def test_sparse_builder_rejects_non_hermitian_h():
+    """FAILS-BEFORE: the sparse builder skipped the dense builder's physics
+    gates (Hermiticity, rate sign/finiteness, jump shapes)."""
+    bad_h = np.array([[0.0, 1.0], [0.0, 0.0]], dtype=complex)
+    with pytest.raises(ValueError, match="Hermitian"):
+        build_sparse_liouvillian(bad_h)
+
+
+def test_sparse_builder_rejects_negative_and_nonfinite_rates(pauli):
+    with pytest.raises(ValueError, match="non-negative"):
+        build_sparse_liouvillian(pauli["Z"], [pauli["Z"]], [-1.0])
+    with pytest.raises(ValueError, match="finite"):
+        build_sparse_liouvillian(pauli["Z"], [pauli["Z"]], [float("nan")])
+
+
+def test_sparse_builder_rejects_misshaped_jump_op(pauli):
+    with pytest.raises(ValueError, match="jump_op shape"):
+        build_sparse_liouvillian(pauli["Z"], [np.eye(3, dtype=complex)], [0.1])
 
 
 def test_sparse_spectrum_returns_k_modes(pauli):

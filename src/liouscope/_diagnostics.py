@@ -132,6 +132,23 @@ def diagnose(
                 f"rho_steady_state shape {rho_steady_state.shape} != ({d}, {d})"
             )
 
+    if t_grid is not None:
+        # Same fail-closed boundary as L_super/rho_*: a NaN (or negative /
+        # unordered) time grid propagates through expm(L t) into the fit
+        # curves and still yields a finite, confident-looking beta_D --
+        # corrupted input must be rejected here, not laundered into a rate.
+        t_grid = np.asarray(t_grid, dtype=float)
+        if t_grid.ndim != 1 or t_grid.size < 2:
+            raise ValueError(
+                f"t_grid must be a 1-D array with >= 2 points, got shape {t_grid.shape}"
+            )
+        if not np.all(np.isfinite(t_grid)):
+            raise ValueError("t_grid contains non-finite entries")
+        if t_grid[0] < 0.0:
+            raise ValueError("t_grid must be non-negative (forward propagation only)")
+        if not np.all(np.diff(t_grid) > 0.0):
+            raise ValueError("t_grid must be strictly increasing")
+
     if rho_steady_state is None:
         rho_steady_state = steady_state(L_super)
     if rho_initial is None:
