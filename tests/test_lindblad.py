@@ -144,9 +144,10 @@ def test_steady_state_degenerate_nullspace_raises(pauli):
     """
     H = np.zeros((2, 2), dtype=complex)
     L = build_liouvillian(H, [pauli["Z"]], [0.5])
-    # Confirm the null space really is degenerate (two zero singular values).
+    # Confirm the null space really is degenerate (two zero singular values),
+    # mirroring the scale-relative tolerance used by steady_state (#97 item 5).
     s = np.linalg.svd(L, compute_uv=False)
-    tol = max(1e-9, L.shape[0] * np.finfo(L.dtype).eps * s[0])
+    tol = max(1e-9, L.shape[0] * np.finfo(L.dtype).eps) * s[0]
     assert int(np.sum(s <= tol)) == 2, "fixture must have a 2D null space"
     with pytest.raises(DegenerateSteadyStateError) as excinfo:
         steady_state(L)
@@ -171,6 +172,49 @@ def test_steady_state_unique_ness_unaffected(pauli):
     L = build_liouvillian(H, [pauli["Z"]], [0.3])
     rho_ss = steady_state(L)
     np.testing.assert_allclose(rho_ss, 0.5 * np.eye(2, dtype=complex), atol=1e-9)
+
+
+def test_steady_state_diagnosis_invariant_under_rate_rescaling(pauli):
+    """FAILS-BEFORE (#97 item 5): absolute tolerance floor in rate units.
+
+    The steady state of ``c * L`` is the steady state of ``L`` for any
+    ``c > 0`` -- a pure change of units. The old ``atol=1e-9`` absolute floor
+    swallowed every singular value of ``1e-10 * L`` for the (unique!)
+    amplitude-damping steady state and raised DegenerateSteadyStateError with
+    a wrong "null space has dimension 4" diagnosis; with
+    ``allow_degenerate=True`` it returned a wrong state plus a warning
+    asserting non-uniqueness as fact. The scale-relative tolerance must
+    resolve |0><0| identically at every scale.
+    """
+    sm = 0.5 * (pauli["X"] + 1j * pauli["Y"])
+    L = build_liouvillian(np.zeros((2, 2), dtype=complex), [sm], [0.4])
+    expected = np.array([[1, 0], [0, 0]], dtype=complex)
+    for c in (1e-10, 1e-3, 1.0, 1e3, 1e10):
+        rho_ss = steady_state(c * L)
+        np.testing.assert_allclose(rho_ss, expected, atol=1e-9, err_msg=f"c={c}")
+
+
+def test_steady_state_degeneracy_still_detected_at_small_scale(pauli):
+    """Genuine degeneracy must survive rescaling: fail-closed is scale-free."""
+    H = np.zeros((2, 2), dtype=complex)
+    L = build_liouvillian(H, [pauli["Z"]], [0.5])
+    for c in (1e-10, 1.0, 1e10):
+        with pytest.raises(DegenerateSteadyStateError) as excinfo:
+            steady_state(c * L)
+        assert excinfo.value.null_dim == 2, f"c={c}"
+
+
+def test_steady_state_atol_is_an_opt_in_absolute_floor(pauli):
+    """Passing atol restores an absolute cutoff in the caller's rate units.
+
+    On the tiny-scale unique system the old default floor (atol=1e-9)
+    swallows the whole spectrum -- exactly the misdiagnosis of #97 item 5,
+    now reproducible only on explicit request.
+    """
+    sm = 0.5 * (pauli["X"] + 1j * pauli["Y"])
+    L = 1e-10 * build_liouvillian(np.zeros((2, 2), dtype=complex), [sm], [0.4])
+    with pytest.raises(DegenerateSteadyStateError):
+        steady_state(L, atol=1e-9)
 
 
 @qutip_required

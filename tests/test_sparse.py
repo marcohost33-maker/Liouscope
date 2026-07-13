@@ -100,6 +100,32 @@ def test_sparse_steady_state_degenerate_fails_closed(pauli):
     assert abs(float(np.real(np.trace(rho))) - 1.0) < 1e-5
 
 
+def test_sparse_steady_state_diagnosis_invariant_under_rate_rescaling(pauli):
+    """FAILS-BEFORE (#97 item 5, sparse parity): absolute guard in rate units.
+
+    The old guard threshold ``max(tol, |sigma_shift|)`` and the fixed shift
+    ``sigma_shift=1e-8`` were absolute in the caller's rate units, so a pure
+    change of units ``L -> c L`` flipped the uniqueness diagnosis. The
+    scale-relative guard must resolve |000><000| identically at every scale,
+    and genuine degeneracy must survive rescaling.
+    """
+    from liouscope.core.lindblad import DegenerateSteadyStateError
+
+    sm = 0.5 * (pauli["X"] + 1j * pauli["Y"])
+    sz_chain = _site_ops(pauli["Z"])
+    sm_chain = _site_ops(sm)
+    H = sum(0.3 * sz_chain[i] @ sz_chain[(i + 1) % 3] for i in range(3))
+    L_unique = build_sparse_liouvillian(H, sm_chain, [0.1] * 3)
+    L_degen = build_sparse_liouvillian(H, sz_chain, [0.1] * 3)
+    expected = np.zeros((8, 8), dtype=complex)
+    expected[0, 0] = 1.0
+    for c in (1e-10, 1.0, 1e10):
+        rho_ss = sparse_steady_state(c * L_unique, tol=1e-6)
+        np.testing.assert_allclose(rho_ss, expected, atol=1e-5, err_msg=f"c={c}")
+        with pytest.raises(DegenerateSteadyStateError):
+            sparse_steady_state(c * L_degen, tol=1e-6)
+
+
 def test_sparse_builder_rejects_non_hermitian_h():
     """FAILS-BEFORE: the sparse builder skipped the dense builder's physics
     gates (Hermiticity, rate sign/finiteness, jump shapes)."""

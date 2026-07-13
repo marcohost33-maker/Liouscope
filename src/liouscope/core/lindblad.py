@@ -26,6 +26,11 @@ import numpy as np
 
 from ..numerics.kronecker import unvec, vec
 
+# Near-zero-trace threshold for the unit-2-norm null-vector candidate in
+# steady_state(). The candidate's trace is dimensionless (bounded by sqrt(d)),
+# so this is deliberately NOT tied to the rate-unit null-space tolerances.
+_TRACE_TOL = 1.0e-9
+
 
 class DegenerateSteadyStateError(ValueError):
     """Raised when the Liouvillian null space has dimension > 1.
@@ -144,7 +149,8 @@ def build_liouvillian(
 def steady_state(
     L_super: np.ndarray,
     *,
-    atol: float = 1.0e-9,
+    rtol: float = 1.0e-9,
+    atol: float = 0.0,
     allow_degenerate: bool = False,
 ) -> np.ndarray:
     """Return the steady state ``rho_ss`` with ``L rho_ss = 0`` and unit trace.
@@ -156,13 +162,30 @@ def steady_state(
     carrying the residual ``||L rho|| = s_min`` -- the result is then NOT a
     verified steady state and must not be treated as one.
 
+    Tolerance semantics (scale-relative, issue #97 item 5)
+    ------------------------------------------------------
+    The null-space tolerance is *relative to the largest singular value*:
+    ``tol = max(atol, max(rtol, n2 * eps) * s[0])``. A Liouvillian has rate
+    dimension, so its singular values scale linearly under a pure change of
+    units ``L -> c L`` while the null space (and hence the steady-state
+    diagnosis) is unit-independent; a relative tolerance is invariant under
+    that rescaling. The previous absolute floor (``atol = 1e-9`` in arbitrary
+    rate units) misdiagnosed small-scale *unique* systems as degenerate --
+    e.g. ``1e-10 * L`` for amplitude damping, whose every singular value fell
+    below the floor -- and would conversely have masked genuine near-
+    degeneracy in large-scale systems.
+
     Parameters
     ----------
     L_super
         ``d^2 x d^2`` Liouvillian superoperator.
+    rtol
+        Relative null-space tolerance, applied as ``rtol * s[0]`` (unit-free;
+        never below the SVD noise floor ``n2 * eps * s[0]``).
     atol
-        Absolute floor for the singular-value null-space tolerance. The
-        effective tolerance is ``max(atol, n2 * eps * s[0])``.
+        Optional absolute floor in the caller's rate units, default ``0.0``
+        (no absolute floor). Pass a positive value only when the physical
+        rate scale is known and an absolute cutoff is genuinely intended.
     allow_degenerate
         Guard against a degenerate steady state (multi-dimensional null
         space). When ``False`` (default, fail-closed), a null space of
@@ -190,9 +213,11 @@ def steady_state(
     if d < 1 or d * d != n2:
         raise ValueError(f"L superoperator must have square-d dimension, got {n2}")
 
-    # Right null space of L: solve via SVD.
+    # Right null space of L: solve via SVD. The tolerance is relative to
+    # s[0] so the diagnosis is invariant under a change of rate units
+    # L -> c L (see docstring); atol is an opt-in absolute floor only.
     u, s, vh = np.linalg.svd(L_super)
-    tol = max(atol, n2 * np.finfo(L_super.dtype).eps * s[0])
+    tol = max(atol, max(rtol, n2 * np.finfo(L_super.dtype).eps) * s[0])
     null_indices = np.where(s <= tol)[0]
     # Degeneracy guard: a null space of dimension > 1 means rho_ss is NOT
     # unique. Picking null_indices[0] would return an arbitrary point in the
@@ -225,17 +250,20 @@ def steady_state(
     else:
         rho_vec = vh.conj().T[:, null_indices[0]]
     rho = unvec(rho_vec, d=d)
-    # Hermitise and project to unit trace
+    # Hermitise and project to unit trace. The candidate vector has unit
+    # 2-norm (SVD/eig convention), so its trace is dimensionless and bounded
+    # by sqrt(d) -- the near-zero-trace test is therefore scale-free and must
+    # NOT reuse the rate-unit ``atol`` (which now defaults to 0.0).
     rho = 0.5 * (rho + rho.conj().T)
     tr = np.trace(rho)
-    if abs(tr) < atol:
+    if abs(tr) < _TRACE_TOL:
         # Try flipping the global phase via the leading eigenvector
         eigvals, eigvecs = np.linalg.eig(L_super)
         idx = int(np.argmin(np.abs(eigvals)))
         rho = unvec(eigvecs[:, idx], d=d)
         rho = 0.5 * (rho + rho.conj().T)
         tr = np.trace(rho)
-        if abs(tr) < atol:
+        if abs(tr) < _TRACE_TOL:
             raise RuntimeError("Cannot normalise steady state: trace too small")
     rho = rho / tr
     # Force Hermitian projection one more time

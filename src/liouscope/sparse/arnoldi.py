@@ -16,7 +16,7 @@ def sparse_steady_state(
     L_sparse: sp.spmatrix,
     *,
     tol: float = 1.0e-9,
-    sigma_shift: complex = 1.0e-8 + 0.0j,
+    sigma_shift: complex | None = None,
     allow_degenerate: bool = False,
 ) -> np.ndarray:
     """Return the steady state via shift-invert ARPACK near zero.
@@ -24,15 +24,27 @@ def sparse_steady_state(
     The smallest-magnitude eigenvalue corresponds to the steady state.
     ``sigma_shift`` is a tiny offset to keep the SuperLU factorisation of
     ``sigma*I - L`` non-singular when ``L`` has an exact zero eigenvalue.
+    When ``None`` (default) it is chosen *relative to the spectral scale* of
+    ``L`` as ``1e-8 * scale``, where ``scale = sqrt(||L||_1 ||L||_inf)`` is a
+    cheap upper bound on the largest singular value.
 
     Degeneracy guard (parity with the dense :func:`~liouscope.core.lindblad.
     steady_state`, S1 audit 2026-06-04): the two smallest-magnitude
-    eigenvalues are computed, and if BOTH lie within ``tol`` of zero the
-    steady state is not unique -- an ARPACK vector would be an arbitrary
-    (typically not even positive semi-definite) point in the steady-state
-    manifold. That fails closed with :class:`DegenerateSteadyStateError`
-    unless ``allow_degenerate=True``, which returns one trace-normalised
-    representative together with a ``RuntimeWarning``.
+    eigenvalues are computed, and if BOTH lie within the guard threshold of
+    zero the steady state is not unique -- an ARPACK vector would be an
+    arbitrary (typically not even positive semi-definite) point in the
+    steady-state manifold. That fails closed with
+    :class:`DegenerateSteadyStateError` unless ``allow_degenerate=True``,
+    which returns one trace-normalised representative together with a
+    ``RuntimeWarning``.
+
+    Tolerance semantics (scale-relative, issue #97 item 5): the guard
+    threshold is ``max(tol * scale, |sigma_shift|)`` -- relative to the
+    spectral scale of ``L`` so the diagnosis is invariant under a change of
+    rate units ``L -> c L``, and never finer than the ARPACK convergence
+    tolerance ``tol`` (itself relative), so eigenvalues cannot slip past the
+    guard on numerical noise. The previous absolute threshold (rate units)
+    misdiagnosed small-scale unique systems as degenerate.
     """
     L = sp.csc_matrix(L_sparse, dtype=complex)
     n2 = L.shape[0]
@@ -41,12 +53,20 @@ def sparse_steady_state(
         raise ValueError(
             f"L superoperator must be square with square-d dimension, got {L.shape}"
         )
+    # Spectral scale: sqrt(||L||_1 ||L||_inf) >= s_max is a cheap, sparse-
+    # friendly upper bound on the largest singular value (within sqrt(n2)).
+    abs_L = abs(L)
+    norm_1 = float(abs_L.sum(axis=0).max()) if L.nnz else 0.0
+    norm_inf = float(abs_L.sum(axis=1).max()) if L.nnz else 0.0
+    scale = float(np.sqrt(norm_1 * norm_inf))
+    if sigma_shift is None:
+        sigma_shift = (1.0e-8 * scale if scale > 0.0 else 1.0e-8) + 0.0j
     # k=2 so the guard can see a second null mode (ARPACK needs k < n2).
     k = 2 if n2 > 2 else 1
     vals, vecs = spla.eigs(L, k=k, sigma=sigma_shift, which="LM", tol=tol)
     order = np.argsort(np.abs(vals))
     vals, vecs = vals[order], vecs[:, order]
-    null_dim = int(np.sum(np.abs(vals) <= max(tol, abs(sigma_shift))))
+    null_dim = int(np.sum(np.abs(vals) <= max(tol * scale, abs(sigma_shift))))
     if null_dim > 1:
         if not allow_degenerate:
             raise DegenerateSteadyStateError(null_dim)
