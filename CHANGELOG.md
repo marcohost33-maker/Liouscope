@@ -24,6 +24,33 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   explanation) updated to `1.5.0`.
 
 ### Fixed
+- **`steady_state` / `sparse_steady_state` tolerance is now scale-relative
+  (issue #97 item 5).** The dense null-space tolerance was
+  `max(atol, n2·eps·s[0])` with a default **absolute** floor `atol = 1e-9` in
+  arbitrary rate units; a Liouvillian has rate dimension, so a pure change of
+  units `L → c·L` flipped the uniqueness diagnosis. Symptom: `1e-10 · L` for
+  amplitude damping (unique steady state `|0⟩⟨0|`) raised
+  `DegenerateSteadyStateError` with a wrong "null space has dimension 4"
+  diagnosis, and with `allow_degenerate=True` returned a wrong state plus a
+  warning asserting non-uniqueness as fact. The tolerance is now
+  `max(atol, max(rtol, n2·eps) · s[0])` with `rtol = 1e-9` (relative, new
+  keyword) and `atol = 0.0` (absolute floor now **opt-in**); the near-zero-trace
+  check inside the normaliser is decoupled from `atol` (the null-vector
+  candidate has unit 2-norm, so that check is dimensionless). The sparse guard
+  in `sparse_steady_state` gets the same semantics: guard threshold
+  `max(tol·scale, |sigma_shift|)` with `scale = sqrt(‖L‖₁‖L‖∞)` (cheap upper
+  bound on `s_max`) and a default `sigma_shift` chosen relative to that scale
+  (`None` → `1e-8·scale`) instead of the fixed absolute `1e-8`. Fail-closed
+  direction preserved: genuine degeneracy is detected at every scale. Pinned in
+  `tests/test_lindblad.py` (`…_invariant_under_rate_rescaling`,
+  `…_degeneracy_still_detected_at_small_scale`, `…_atol_is_an_opt_in_absolute_floor`)
+  and `tests/test_sparse.py`
+  (`test_sparse_steady_state_diagnosis_invariant_under_rate_rescaling`).
+  API note: `steady_state(..., atol=…)` keeps its absolute-floor meaning but no
+  longer doubles as the trace threshold; `sparse_steady_state(..., sigma_shift=…)`
+  keeps its meaning when passed explicitly. Anchors unaffected (verified
+  2026-07-13: `pytest tests/test_anchors.py` green, all canonical fixtures are
+  O(1)-scaled where relative ≈ old absolute tolerance).
 - **D7b `entanglement_asymmetry` now computes the Rylands charge-sector measure
   (issue #97 item 1).** The previous implementation applied a full single-qubit
   Pauli twirl, which maximally mixes the twirled qubit and yields an entropy
