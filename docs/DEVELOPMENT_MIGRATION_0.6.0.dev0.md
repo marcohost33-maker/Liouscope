@@ -16,7 +16,9 @@ The object is a provenance contract, not proof of organizational independence or
 
 ## Manifest migration
 
-`MANIFEST_SCHEMA_VERSION` moves from 1.3.0 to 1.4.0 because the input-hash derivation domain now includes the canonical ensemble-evidence digest when structured evidence is supplied. Run IDs and input hashes must be compared only within the same manifest schema version. Existing 1.3.0 manifests remain valid historical records but do not re-derive under 1.4.0 when ensemble evidence participates.
+`MANIFEST_SCHEMA_VERSION` moved from 1.3.0 to 1.4.0 because the input-hash derivation domain now includes the canonical ensemble-evidence digest when structured evidence is supplied. Run IDs and input hashes must be compared only within the same manifest schema version. Existing 1.3.0 manifests remain valid historical records but do not re-derive under 1.4.0 when ensemble evidence participates.
+
+`MANIFEST_SCHEMA_VERSION` then moves from 1.4.0 to 1.5.0 because `compute_input_hash` now absorbs each input object as a length-framed, type-tagged field instead of a bare `repr`/byte concatenation. The old encoding was not injective: distinct input tuples could collide when their serialised forms concatenated to the same byte stream (for example `compute_input_hash(12, 3)` and `compute_input_hash(1, 23)`; issue #97 item 4). Within `diagnose()` the fixed arity and types made this practically unreachable, but `compute_input_hash` is public API, so the derivation is hardened. As with every schema step, 1.4.0 run IDs / input hashes do not re-derive under 1.5.0; compare provenance keys only within one schema version.
 
 ## PyPI release workflow
 

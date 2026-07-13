@@ -129,30 +129,48 @@ def trace_distance(rho: np.ndarray, sigma: np.ndarray) -> float:
 
 
 def entanglement_asymmetry(rho: np.ndarray) -> float:
-    """D7b: Rylands et al. 2024 entanglement-asymmetry measure (single block).
+    r"""D7b: Rylands et al. 2024 entanglement-asymmetry measure (single block).
 
-    For a 2-site reduced state this returns the SU(2) symmetry-breaking
-    Delta S_A defined via the symmetrised state. Returns ``nan`` outside
-    the supported 2-qubit (d=4) case; the report layer maps that to
+    The entanglement asymmetry of a subsystem state ``rho`` with respect to a
+    U(1) charge ``Q`` (here the total magnetisation of the block) is
+
+    .. math::
+
+        \Delta S_A \;=\; S(\rho_Q) - S(\rho),
+        \qquad \rho_Q \;=\; \sum_q \Pi_q\, \rho\, \Pi_q,
+
+    where ``\Pi_q`` projects onto the eigenspace of ``Q`` with eigenvalue ``q``.
+    Block-dephasing ``rho -> rho_Q`` removes exactly the coherences *between*
+    distinct charge sectors, so ``\Delta S_A >= 0`` and ``\Delta S_A = 0`` iff
+    ``rho`` commutes with ``Q`` (i.e. the state is symmetric). This is the
+    published Ares-Murciano-Calabrese / Rylands construction, and it differs
+    from a full single-qubit Pauli twirl, which would instead maximally mix the
+    twirled qubit and report an entropy *deficit* rather than a symmetry breaking
+    (a Bell state ``(|01> + |10>)/sqrt2`` lives in the single sector ``q = 1`` and
+    is therefore exactly symmetric, ``\Delta S_A = 0``).
+
+    For the supported two-qubit block (``d = 4``) the charge is the number
+    operator ``Q = n_1 + n_2`` in the computational basis, with sectors
+    ``q in {0, 1, 2}`` (basis-state populations by Hamming weight). Returns
+    ``nan`` outside the supported ``d = 4`` case; the report layer maps that to
     ``entanglement_asymmetry=None``.
     """
     rho = np.asarray(rho)
     d = rho.shape[0]
     if d not in (4,):
         return float("nan")
-    # Symmetrise by averaging over Pauli twirl on second qubit.
-    paulis = [
-        np.eye(2, dtype=complex),
-        np.array([[0, 1], [1, 0]], dtype=complex),
-        np.array([[0, -1j], [1j, 0]], dtype=complex),
-        np.array([[1, 0], [0, -1]], dtype=complex),
-    ]
-    rho_sym = np.zeros_like(rho)
-    for P in paulis:
-        op = np.kron(np.eye(2, dtype=complex), P)
-        rho_sym += op @ rho @ op.conj().T
-    rho_sym /= 4.0
-    return float(max(von_neumann_entropy(rho_sym) - von_neumann_entropy(rho), 0.0))
+    # Charge = total magnetisation / particle number of the 2-qubit block:
+    # basis index i in {0,1,2,3} -> Hamming weight (00->0, 01/10->1, 11->2).
+    charge = np.array([bin(i).count("1") for i in range(d)])
+    # rho_Q = sum_q Pi_q rho Pi_q keeps only the intra-sector (equal-charge)
+    # blocks of rho; inter-sector coherences are projected out. Because the
+    # computational basis diagonalises Q, this is the Hadamard mask that zeroes
+    # every entry rho[i, j] with charge[i] != charge[j].
+    mask = charge[:, None] == charge[None, :]
+    rho_q = np.where(mask, rho, 0.0)
+    # von_neumann_entropy Hermitises defensively; the mask preserves Hermiticity
+    # exactly (it is symmetric), so rho_q stays a valid density operator.
+    return float(max(von_neumann_entropy(rho_q) - von_neumann_entropy(rho), 0.0))
 
 
 def _fit_with_model(

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import numpy as np
+import pytest
 
 from liouscope import build_liouvillian
 from liouscope.diagnostics.relaxation import (
@@ -68,6 +69,34 @@ def test_d7b_entanglement_asymmetry_two_qubit_smoke():
     rho = np.diag([0.25, 0.25, 0.25, 0.25]).astype(complex)
     val = entanglement_asymmetry(rho)
     assert val >= 0 or np.isnan(val)
+
+
+def test_d7b_entanglement_asymmetry_is_rylands_charge_measure():
+    """D7b must be the Rylands charge-sector asymmetry, not a Pauli twirl.
+
+    A single-sector state is symmetric (Delta S_A = 0); a coherent
+    superposition spanning two charge sectors breaks the symmetry by exactly
+    the sector entropy. The superseded full single-qubit Pauli twirl reported
+    2 ln 2 for the symmetric Bell state -- the bug fixed here (issue #97 item 1).
+    """
+    # Bell (|01> + |10>)/sqrt2 lives entirely in the q=1 sector -> symmetric.
+    psi = np.zeros(4, dtype=complex)
+    psi[1] = psi[2] = 1.0
+    psi /= np.sqrt(2)
+    bell = np.outer(psi, psi.conj())
+    assert entanglement_asymmetry(bell) == pytest.approx(0.0, abs=1e-12)
+
+    # (|00> + |11>)/sqrt2 spans sectors q=0 and q=2 -> broken by ln 2.
+    cat = np.zeros(4, dtype=complex)
+    cat[0] = cat[3] = 1.0
+    cat /= np.sqrt(2)
+    cat_rho = np.outer(cat, cat.conj())
+    assert entanglement_asymmetry(cat_rho) == pytest.approx(np.log(2.0), abs=1e-9)
+
+    # Symmetry is basis-diagonal charge invariance: I/4 is symmetric.
+    assert entanglement_asymmetry(np.eye(4, dtype=complex) / 4) == pytest.approx(
+        0.0, abs=1e-12
+    )
 
 
 def test_compute_relaxation_layer_returns_result(pauli):

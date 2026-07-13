@@ -45,7 +45,9 @@ assert payload["run_id"] == g.run_id           # same inputs + seed + version
 ```
 
 - `input_hash` is a SHA-256 over the run inputs (and, since schema `1.4.0`,
-  the canonical digest of any structured ensemble evidence that participated).
+  the canonical digest of any structured ensemble evidence that participated);
+  since schema `1.5.0` the inputs are absorbed as length-framed, type-tagged
+  fields so the derivation is injective (no concatenation collisions).
 - `run_id` is derived from `input_hash`, the resolved seed and the framework
   version — never from the clock.
 
