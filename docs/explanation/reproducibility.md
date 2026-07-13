@@ -52,7 +52,8 @@ follow:
   auditable fields. Extending the schema requires a version bump plus a
   changelog migration note, precisely so that hash domains stay comparable
   only within one schema version (schema `1.4.0` added the
-  ensemble-evidence digest to the hash domain this way).
+  ensemble-evidence digest to the hash domain this way; schema `1.5.0`
+  switched to a length-framed, injective input-hash encoding).
 
 ## Fail-closed as a reproducibility feature
 

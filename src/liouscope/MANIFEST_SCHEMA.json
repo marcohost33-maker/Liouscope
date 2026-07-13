@@ -19,7 +19,7 @@
     "quality_label"
   ],
   "properties": {
-    "schema_version": { "type": "string", "const": "1.4.0" },
+    "schema_version": { "type": "string", "const": "1.5.0" },
     "framework_version": { "type": "string" },
     "taxonomy_version": { "type": "string", "const": "A1-A12-v3.1" },
     "diagnostic_schema_version": {
@@ -48,7 +48,7 @@
     "input_hash": {
       "type": "string",
       "pattern": "^[0-9a-f]{64}$",
-      "description": "SHA-256 over every output-affecting input. Schema 1.4.0 adds the canonical EnsembleEvidence digest when structured ensemble evidence is supplied; hashes are comparable only within one schema_version."
+      "description": "SHA-256 over every output-affecting input, absorbed as length-framed type-tagged fields so the derivation is injective (distinct input tuples never collide by concatenation ambiguity). Schema 1.4.0 added the canonical EnsembleEvidence digest when structured ensemble evidence is supplied; schema 1.5.0 introduced the length-framed encoding. Hashes are comparable only within one schema_version."
     }
   },
   "additionalProperties": false

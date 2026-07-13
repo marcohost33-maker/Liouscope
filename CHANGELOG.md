@@ -6,7 +6,51 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+- **`MANIFEST_SCHEMA_VERSION` 1.4.0 → 1.5.0 — injective input-hash encoding
+  (issue #97 item 4).** `compute_input_hash` now absorbs each input object as a
+  *length-framed, type-tagged* field (`tag || len(payload) || payload`) instead
+  of a bare `repr`/byte concatenation. The old encoding was not injective:
+  distinct input tuples could collide when their serialised forms concatenated
+  to the same byte stream — e.g. `compute_input_hash(12, 3)` and
+  `compute_input_hash(1, 23)` both hashed `"123"`. Within `diagnose()` (fixed
+  arity/types) the collision was practically unreachable, but `compute_input_hash`
+  is exported public API, so the derivation is hardened and the schema stepped.
+  Migration: input hashes and run IDs are, as always, comparable only within one
+  `schema_version`; 1.4.0 manifests remain valid historical records but do not
+  re-derive under 1.5.0. Pinned in `tests/test_manifest.py`
+  (`test_input_hash_framing_is_injective`). Docs (`README`, `docs/CANON_STATUS`,
+  `docs/DEVELOPMENT_MIGRATION_0.6.0.dev0`, reproducibility tutorial/how-to/
+  explanation) updated to `1.5.0`.
+
 ### Fixed
+- **D7b `entanglement_asymmetry` now computes the Rylands charge-sector measure
+  (issue #97 item 1).** The previous implementation applied a full single-qubit
+  Pauli twirl, which maximally mixes the twirled qubit and yields an entropy
+  *deficit* `S(rho_1) + ln2 − S(rho)` rather than the published
+  Ares–Murciano–Calabrese / Rylands entanglement asymmetry
+  `ΔS_A = S(Σ_q Π_q ρ Π_q) − S(ρ)` with U(1) charge-sector projectors. The
+  symptom: a Bell state `(|01⟩+|10⟩)/√2`, which lives entirely in the single
+  charge sector `q=1` and is therefore exactly symmetric (`ΔS_A = 0`), was
+  reported as `2 ln2 ≈ 1.386`. D7b is now the charge-block-dephasing measure
+  (total magnetisation `Q = n_1 + n_2` for the supported `d=4` block). D7b is
+  advisory-only — it never feeds a classifier verdict — and is not an anchor
+  fixture, so this changes no `tests/test_anchors.py` behaviour and no gate
+  outcome; it corrects a mislabelled report value. Pinned in
+  `tests/test_relaxation.py::test_d7b_entanglement_asymmetry_is_rylands_charge_measure`.
+  `CITATION.cff` stays pinned to released v0.5.0 per its own policy (the citable
+  diagnostic surface — that D7b exists — is unchanged); the corrected methodology
+  is recorded here for the next release's citation.
+- **AR(1) bias-correction docstrings corrected to match measured behaviour
+  (issue #97 item 3, §6 Reality-Anchor).** `fitting/neff.py` claimed the raw
+  lag-1 estimator is biased by `−(1+3ρ)/n` and that the frozen first-order
+  correction `(ρ̂(n−1)+1)/(n−3)` "removes the leading O(1/n) bias term". Monte-Carlo
+  (40k reps) shows the raw bias is empirically closer to `−(1+4ρ)/n` and the
+  correction leaves a residual `O(1/n)` downward bias of order `−2ρ/n`
+  (e.g. `−0.013` at `n=80, ρ=0.5`). The **formula is unchanged** — it stays the
+  audit-frozen first-order closed form — but the docstrings now state the true
+  cancelled/residual terms and tie the residual to the existing small-`n`
+  warning, so the documented claim matches the code. No numerical/result change.
 - **Fail-closed hardening batch (2026-07-12 full-repo deep review).** Three
   independent review passes (numerical core, classifier gates, IO/manifest/CI)
   found paths where malformed or non-finite input could silently *upgrade* a

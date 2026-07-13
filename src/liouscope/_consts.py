@@ -10,7 +10,7 @@ from typing import Final
 
 TAXONOMY_VERSION: Final[str] = "A1-A12-v3.1"
 DIAGNOSTIC_SCHEMA_VERSION: Final[str] = "D1-D24-Übersicht-v3-2026-04-24"
-MANIFEST_SCHEMA_VERSION: Final[str] = "1.4.0"
+MANIFEST_SCHEMA_VERSION: Final[str] = "1.5.0"
 
 RESERVED_DIAGNOSTIC_SLOTS: Final[dict[str, str]] = {
     "D21": "reserved (canon schema D1-D24-Übersicht-v3; not implemented here)",

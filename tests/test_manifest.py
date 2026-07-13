@@ -44,6 +44,26 @@ def test_input_hash_deterministic():
     assert h1 != h3
 
 
+def test_input_hash_framing_is_injective():
+    """Length-framed encoding (schema 1.5.0) removes concatenation collisions.
+
+    Before framing, objects were absorbed via bare ``repr`` concatenation, so
+    ``(12, 3)`` and ``(1, 23)`` both hashed the stream "123". The length-framed,
+    type-tagged encoding must keep distinct input tuples distinct regardless of
+    how the boundary between adjacent fields falls.
+    """
+    assert compute_input_hash(12, 3) != compute_input_hash(1, 23)
+    assert compute_input_hash("a", "bc") != compute_input_hash("ab", "c")
+    # Re-grouping array content across the shape boundary must not alias either.
+    assert compute_input_hash(np.array([1.0, 2.0]), np.array([3.0])) != (
+        compute_input_hash(np.array([1.0]), np.array([2.0, 3.0]))
+    )
+    # A raw ndarray byte block must not alias a repr that shares its bytes.
+    assert compute_input_hash(np.array([1], dtype=np.int8)) != compute_input_hash(
+        b"\x01"
+    )
+
+
 def test_run_id_format():
     rid = make_run_id("a" * 64, 42, "0.2.0")
     assert len(rid) == 64
@@ -106,7 +126,7 @@ def test_manifest_payload_carries_schema_versions():
     payload = manifest_payload(_small_report())
     assert payload["taxonomy_version"] == TAXONOMY_VERSION
     assert payload["diagnostic_schema_version"] == DIAGNOSTIC_SCHEMA_VERSION
-    assert payload["schema_version"] == "1.4.0"
+    assert payload["schema_version"] == "1.5.0"
     assert re.fullmatch(r"[0-9a-f]{64}", payload["run_id"])
 
 
@@ -168,7 +188,7 @@ def test_schema_loads_from_package():
     files = resources.files("liouscope")
     schema_text = files.joinpath("MANIFEST_SCHEMA.json").read_text(encoding="utf-8")
     schema = json.loads(schema_text)
-    assert schema["properties"]["schema_version"]["const"] == "1.4.0"
+    assert schema["properties"]["schema_version"]["const"] == "1.5.0"
     assert schema["properties"]["taxonomy_version"]["const"] == TAXONOMY_VERSION
     assert schema["properties"]["diagnostic_schema_version"]["const"] == DIAGNOSTIC_SCHEMA_VERSION
 

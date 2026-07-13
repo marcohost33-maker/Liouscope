@@ -79,9 +79,13 @@ def ar1_correlation(residuals: np.ndarray) -> float:
 
     This is the biased plug-in estimator. For AR(1) whitening / CI work use
     :func:`ar1_correlation_corrected`, which applies a small-sample
-    bias-correction; the raw estimator is downward-biased by ~``-(1+3 rho)/n``
+    bias-correction; the raw estimator is downward-biased at ``O(1/n)``
     (Marriott & Pope 1954; Kendall 1954), so the raw value yields
-    over-confident confidence intervals at small ``n``.
+    over-confident confidence intervals at small ``n``. For this mean-subtracted
+    plug-in estimator the leading bias is empirically close to ``-(1+4 rho)/n``
+    in Monte-Carlo (e.g. ``-0.077`` at ``n=40, rho=0.5``); the exact leading
+    coefficient is estimator-convention dependent, so treat it as indicative
+    rather than a pinned analytic identity.
     """
     x = np.asarray(residuals, dtype=float) - float(np.mean(residuals))
     if x.size < 2:
@@ -99,32 +103,39 @@ def ar1_correlation_corrected(
     """Return a small-sample bias-corrected lag-1 autocorrelation.
 
     The raw plug-in estimator ``rho_hat`` (see :func:`ar1_correlation`) is
-    downward-biased at small ``n`` (E[rho_hat] - rho ~ -(1 + 3 rho)/n), which
-    makes any AR(1)-whitened variance / confidence interval too narrow. We
-    apply the closed-form first-order correction
+    downward-biased at small ``n`` (``E[rho_hat] - rho = O(1/n)``), which makes
+    any AR(1)-whitened variance / confidence interval too narrow. We apply the
+    closed-form first-order correction
 
         rho_corr = (rho_hat * (n - 1) + 1) / (n - 3)
 
-    which removes the leading O(1/n) bias term while staying inside a sensible
-    range. The corrected value is clipped to ``[-0.999, 0.999]`` so downstream
-    whitening (``sqrt(1 - rho^2)``) stays well defined.
+    which cancels the constant ``-1/n`` term and the bulk of the ``rho``-linear
+    ``O(1/n)`` bias while staying inside a sensible range. The corrected value is
+    clipped to ``[-0.999, 0.999]`` so downstream whitening (``sqrt(1 - rho^2)``)
+    stays well defined.
 
     Validity / range of trust
     -------------------------
     This is a *first-order* correction (Kendall / Marriott-Pope family): it
-    cancels only the leading ``O(1/n)`` term of the bias expansion. It is
-    reliable up to roughly ``rho ~ 0.85``; beyond that a residual bias remains,
-    set by the (truncated) order of the series expansion, and grows as ``rho``
-    approaches 1. For strongly autocorrelated series (``rho`` near 1) treat the
-    returned value as a mildly conservative estimate and prefer the
-    Geyer-IPS-based ``N_eff`` (:func:`estimate_neff_geyer`) for variance work.
+    removes the constant and most of the ``rho``-linear part of the leading
+    ``O(1/n)`` bias, but it does **not** cancel that term in full. A residual
+    downward bias of the same ``O(1/n)`` order remains -- empirically of order
+    ``-2 rho / n`` in Monte-Carlo (e.g. ``rho_corr - rho ~ -0.013`` at
+    ``n=80, rho=0.5``, versus ``-0.037`` raw) -- and it grows as ``rho`` approaches
+    1. That residual is exactly why :func:`ar1_correlation_corrected` still emits
+    the small-``n`` warning: the correction narrows, but does not close, the
+    optimism of AR(1)-whitened CIs. The correction is reliable up to roughly
+    ``rho ~ 0.85``; beyond that the residual grows and the Geyer-IPS-based
+    ``N_eff`` (:func:`estimate_neff_geyer`) is the preferred variance route.
 
-    A higher-order Kendall variant was tested and is marginally more accurate
-    at high ``rho`` / large ``n`` (smaller residual bias near ``rho ~ 0.9``),
-    but it was **deliberately not adopted**: the audit pins this first-order
-    closed form (item 3 / S2 audit) so the AR(1)-whitening path stays
-    bit-stable and auditable across versions. The marginal accuracy gain does
-    not justify breaking the frozen audit formula.
+    An exact-to-``O(1/n)`` closed form ``(n * rho_hat + 1)/(n - 3)`` and a
+    higher-order Kendall variant were both tested and are marginally more
+    accurate (the exact form roughly halves the residual bias, to ``~ -rho/n``),
+    but neither was adopted: the audit pins this first-order closed form
+    (item 3 / S2 audit) so the AR(1)-whitening path stays bit-stable and
+    auditable across versions. The marginal accuracy gain does not justify
+    breaking the frozen audit formula; the residual bias is disclosed here and
+    guarded by the small-``n`` warning rather than silently corrected.
 
     References
     ----------

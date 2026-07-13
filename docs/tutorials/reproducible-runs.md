@@ -107,7 +107,8 @@ script at the recorded `framework_version`). The workflow:
 
 One boundary to be aware of: manifest `input_hash` values are comparable only
 within one `schema_version`. Schema `1.4.0` added the structured
-ensemble-evidence digest to the hash domain (when evidence participates), so
+ensemble-evidence digest to the hash domain (when evidence participates) and
+schema `1.5.0` made the input-hash encoding injective via length framing, so
 hashes must not be compared across schema versions.
 
 For the design rationale behind the manifest contract, see

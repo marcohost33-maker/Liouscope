@@ -28,21 +28,50 @@ from .._types import DiagnosticReport, GovernanceMetadata, QualityLabel, SolverP
 from .._version import __version__
 
 
+def _feed(h: Any, tag: bytes, payload: bytes) -> None:
+    """Absorb one length-framed, type-tagged field into the running hash.
+
+    Each field is written as ``tag || len(payload) as 8-byte big-endian ||
+    payload``. The length prefix makes the concatenation *injective* (prefix-
+    free): the decoder for any field can find its own boundary without a
+    delimiter, so no two distinct field sequences can produce the same byte
+    stream. The type tag additionally domain-separates fields of different
+    kinds, so a raw ``ndarray`` byte block can never alias a ``repr`` string
+    that happens to share the same bytes.
+    """
+    h.update(tag)
+    h.update(len(payload).to_bytes(8, "big"))
+    h.update(payload)
+
+
 def compute_input_hash(*objects: object) -> str:
     """Return a deterministic SHA-256 hash of the given input objects.
 
-    NumPy arrays are hashed via their byte content (cast to C-contiguous
-    canonical-dtype form). Other objects are hashed via repr.
+    Every object is absorbed as one or more *length-framed, type-tagged*
+    fields (see :func:`_feed`). NumPy arrays contribute three framed fields
+    (canonical dtype, shape, C-contiguous bytes); any other object contributes
+    one framed ``repr`` field. Length framing guarantees the encoding is
+    injective, so distinct input tuples never collide by concatenation ambiguity
+    -- e.g. ``compute_input_hash(12, 3)`` and ``compute_input_hash(1, 23)`` are
+    distinct, whereas an unframed ``repr`` concatenation ("123") aliased them.
+    The per-object index is also framed so re-ordering or re-grouping the
+    same fields cannot alias.
+
+    .. note::
+       This derivation is scoped to ``MANIFEST_SCHEMA_VERSION``. The framing was
+       introduced in schema ``1.5.0``; input hashes / run IDs are comparable only
+       within one schema version (see :file:`MANIFEST_SCHEMA.json`).
     """
     h = hashlib.sha256()
-    for obj in objects:
+    for index, obj in enumerate(objects):
+        _feed(h, b"idx", index.to_bytes(8, "big"))
         if isinstance(obj, np.ndarray):
             arr = np.ascontiguousarray(obj)
-            h.update(arr.dtype.str.encode())
-            h.update(str(arr.shape).encode())
-            h.update(arr.tobytes())
+            _feed(h, b"ndarray-dtype", arr.dtype.str.encode())
+            _feed(h, b"ndarray-shape", repr(arr.shape).encode())
+            _feed(h, b"ndarray-data", arr.tobytes())
         else:
-            h.update(repr(obj).encode())
+            _feed(h, b"repr", repr(obj).encode())
     return h.hexdigest()
 
 
