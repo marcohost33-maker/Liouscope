@@ -1,17 +1,17 @@
 """Heisenberg-XXZ boundary-dephasing relaxation benchmark.
 
-Runs a small dense demonstration for ``N = 2..5``.  The apparent log-log slope
+Runs a small dense demonstration for ``N = 2..5``. The apparent log-log slope
 is descriptive only: four small-system points do not establish a thermodynamic
 scaling exponent.
 
 Physics scope
 -------------
-The boundary collapse operators are ``sigma_z`` dephasers.  They and the XXZ
+The boundary collapse operators are ``sigma_z`` dephasers. They and the XXZ
 Hamiltonian commute with total magnetisation
 ``Sz_tot = sum_i sigma_z_i / 2``, so the operator dynamics decomposes into
-invariant charge blocks.  This symmetry alone does *not* prove that the full
+invariant charge blocks. This symmetry alone does *not* prove that the full
 Liouvillian kernel has exactly ``N + 1`` dimensions or that every charge block
-has a unique attractor.  For this specific fixed fixture and the tested sizes we
+has a unique attractor. For this specific fixed fixture and the tested sizes we
 therefore verify both statements numerically:
 
 * the full nullity is ``N + 1``;
@@ -20,7 +20,7 @@ therefore verify both statements numerically:
 * ``P_m / tr(P_m)`` has a scale-relative stationarity residual below tolerance.
 
 The script is a symmetry-resolved relaxation demo, not a spin-conductivity or
-boundary-driven transport benchmark.  Conserving total magnetisation does not
+boundary-driven transport benchmark. Conserving total magnetisation does not
 forbid Hamiltonian spin transport; rather, pure boundary dephasing supplies no
 magnetisation bias or pumping that would define a current-carrying NESS.
 """
@@ -63,13 +63,18 @@ def _nullity(
     """Return numerical nullity with a rate-scale-relative SVD threshold.
 
     The default has no absolute floor, so ``nullity(c * A) == nullity(A)`` for
-    positive finite ``c`` up to floating-point limits.  This mirrors the
+    positive finite ``c`` up to floating-point limits. This mirrors the
     production ``steady_state`` tolerance contract introduced in PR #99.
     """
-    arr = np.asarray(matrix)
+    arr = np.asarray(matrix, dtype=complex)
     if arr.ndim != 2:
         raise ValueError(f"matrix must be 2-D, got shape {arr.shape}")
-    if rtol < 0.0 or atol < 0.0 or not np.isfinite(rtol) or not np.isfinite(atol):
+    if (
+        rtol < 0.0
+        or atol < 0.0
+        or not np.isfinite(rtol)
+        or not np.isfinite(atol)
+    ):
         raise ValueError("rtol and atol must be finite and non-negative")
     if not np.all(np.isfinite(arr)):
         raise ValueError("matrix must contain only finite values")
@@ -130,9 +135,13 @@ def _sector_states(N: int) -> tuple[np.ndarray, np.ndarray]:
 
 
 def _relative_stationarity_residual(L: np.ndarray, rho: np.ndarray) -> float:
-    """Return ``||L vec(rho)|| / (||L||_2 ||vec(rho)||_2)``."""
+    """Return ``||L vec(rho)||_2 / (||L||_F ||vec(rho)||_2)``.
+
+    The Frobenius scale is sufficient for a dimensionless residual and avoids a
+    second expensive dense spectral-norm SVD after the nullity calculation.
+    """
     rho_vec = vec(rho)
-    denominator = float(np.linalg.norm(L, ord=2) * np.linalg.norm(rho_vec))
+    denominator = float(np.linalg.norm(L, ord="fro") * np.linalg.norm(rho_vec))
     numerator = float(np.linalg.norm(L @ rho_vec))
     if denominator == 0.0:
         return 0.0 if numerator == 0.0 else float("inf")
