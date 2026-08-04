@@ -4,12 +4,13 @@ Run::
 
     python benchmarks/reproduce_paper.py
 
-The emitted SHA-256 is an integrity/determinism digest of the exact summary
-payload for a fixed code/environment/seed/parameter set. Performance metadata
-is outside the hash domain. The digest is not a substitute for per-run
-LiouScope manifests and is not an approximate cross-platform equivalence test:
-scientific reproduction across BLAS/LAPACK builds must compare the reported
-metrics with declared numerical tolerances.
+The emitted SHA-256 is an unkeyed integrity/determinism checksum of the exact
+summary payload for a fixed code/environment/seed/parameter set. Performance
+metadata is outside the hash domain. The checksum is neither authentication nor
+a signature: anyone able to change the artefact can recompute it. It is also not
+a substitute for per-run LiouScope manifests or an approximate cross-platform
+equivalence test; scientific reproduction across BLAS/LAPACK builds must compare
+the reported metrics with declared numerical tolerances.
 """
 
 from __future__ import annotations
@@ -33,6 +34,7 @@ _HASH_CONTRACT = {
     "domain": _HASH_DOMAIN.rstrip(b"\x00").decode("ascii"),
     "canonicalization": "python-json-sort-keys-utf8-v1",
     "numeric_semantics": "exact serialized finite float values",
+    "security_semantics": "unkeyed integrity checksum; not authentication",
 }
 _HASHED_FIELDS = (
     "hash_contract",
@@ -100,7 +102,7 @@ def canonical_payload_bytes(payload: Mapping[str, Any]) -> bytes:
 
 
 def digest_payload(payload: Mapping[str, Any]) -> str:
-    """Return a domain-separated SHA-256 of the deterministic payload."""
+    """Return a domain-separated SHA-256 integrity checksum."""
     digest_input = _HASH_DOMAIN + canonical_payload_bytes(payload)
     return hashlib.sha256(digest_input).hexdigest()
 
@@ -110,7 +112,7 @@ def build_artifact(
     *,
     perf: Mapping[str, Any],
 ) -> dict[str, Any]:
-    """Return a backward-compatible flat artefact with authenticated payload."""
+    """Return a backward-compatible flat artefact with a payload checksum."""
     digest = digest_payload(payload)
     return {
         **dict(payload),
@@ -120,7 +122,7 @@ def build_artifact(
 
 
 def payload_from_artifact(artifact: Mapping[str, Any]) -> dict[str, Any]:
-    """Extract the authenticated projection from a written summary artefact."""
+    """Extract the integrity-covered projection from a summary artefact."""
     missing = [field for field in _HASHED_FIELDS if field not in artifact]
     if missing:
         raise ValueError(f"summary artefact missing hashed fields: {missing}")
@@ -128,7 +130,7 @@ def payload_from_artifact(artifact: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def verify_artifact(artifact: Mapping[str, Any]) -> bool:
-    """Return whether the stored SHA-256 matches the authenticated projection."""
+    """Return whether the stored checksum matches the covered projection."""
     stored = artifact.get("sha256")
     if not isinstance(stored, str) or len(stored) != 64:
         return False
@@ -175,7 +177,7 @@ def main(seed: int = 42, bootstrap_B: int = 100) -> int:
                 f"{environment!r} != {report_environment!r}"
             )
 
-        # Exact finite values are hashed for artefact-integrity checks. They are
+        # Exact finite values are covered for artefact-integrity checks. They are
         # intentionally not rounded into a false cross-platform equality claim.
         rows.append(
             {
@@ -226,7 +228,7 @@ def main(seed: int = 42, bootstrap_B: int = 100) -> int:
         },
     )
     if not verify_artifact(artifact):
-        raise RuntimeError("internal error: summary artefact digest did not verify")
+        raise RuntimeError("internal error: summary artefact checksum did not verify")
 
     out_path = OUT_DIR / "reproduce_paper.json"
     out_path.write_text(
