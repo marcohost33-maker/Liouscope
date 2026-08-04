@@ -164,26 +164,6 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   community gate). The Contributing section now states explicitly where to get
   help (GitHub issues, no separate channel) and who makes maintainer decisions
   (repository owner; methodology changes via `CHANGELOG.md` / ADRs).
-- **`benchmarks/reproduce_paper.py` reproducibility hash was non-deterministic.**
-  Per-system wall-clock time (`wall_seconds`) was included in the hashed
-  `rows`/payload, so the advertised SHA-256 changed on every run. Timing is a
-  platform metric, not a physics result: the hash now covers only run-invariant
-  fields (rounded result arrays, seed, framework/taxonomy/schema versions) via
-  `build_payload` / `digest_payload`, and timing is recorded separately under a
-  non-hashed `perf` block. Two runs on the same platform now yield an identical
-  digest.
-- **`benchmarks/benchmark_heisenberg_scaling.py` crashed with
-  `DegenerateSteadyStateError`.** The boundary sigma_z (dephasing) bath conserves
-  total magnetisation (`[L_k, Sz_tot] = [H, Sz_tot] = 0` exactly), so the
-  Liouvillian kernel is `(N+1)`-fold degenerate -- one steady state per total-`Sz`
-  sector. This is an expected U(1) invariant, not a solver bug. The benchmark now
-  asserts `dim(ker L) == N+1`, hands `diagnose` the symmetry-consistent NESS
-  `rho_ss = P_m / tr(P_m)` (the maximally mixed state within the initial state's
-  `Sz` sector, verified to be exactly stationary), and documents that it measures
-  the integrable regime gap (cf. Znidaric, arXiv:1507.07773), **not** diffusive
-  transport (which would require U(1)-breaking sigma^+/sigma^- driving). No
-  scaling exponent is claimed from the small-N fit. New regression tests in
-  `tests/test_benchmark_reproducibility.py`.
 
 ### Added
 - **Docs slice 2: Diátaxis sections written out** (issue #72 item 2,
