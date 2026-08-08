@@ -6,7 +6,47 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+- **Scale-relative non-normality/pseudospectrum diagnostics (issue #101
+  slice A, `claim_status: pending`).** One shared operator rate scale
+  `liouscope.numerics.scale.rate_scale(L) = ||L||_F` (documented zero-operator
+  semantics, fail-closed on non-finite input) now underpins additive,
+  dimensionless variants of the rate-dimensioned legacy diagnostics: D8b
+  `henrici_relative = η_N/||L||_F` in `[0, 1]` (clip-tolerance fail-closed),
+  D10b `kreiss_grid_lower_bound` (dimensionless grid, local refinement, edge-
+  maximizer + convergence metadata in the new `KreissGridEstimate`), scale-
+  relative D11b/D12 (`resolvent_peak_scaled`, `ridge_fwhm_rel`), D13 with
+  `eps_abs = eps_rel · rate_scale` (`pseudospectral_radius_rel`) and the new
+  gap-directed intrusion diagnostic `pseudospectral_abscissa(_rel)` via
+  `numerics.pseudospec.pseudospectrum_extent` (single-sweep radius+abscissa,
+  NaN "under-resolved" marker instead of a fake `0.0`). All are exactly
+  invariant under a positive unit rescale `L → cL` for
+  `c ∈ {1e-10 … 1e10}` — pinned by the new slice-B conformance suite
+  `tests/test_scale_conformance.py` (invariance, rate-valued `~c` scaling,
+  D14 `t → t/c` metamorphic agreement, zero/normal/gapless-normal/Jordan
+  oracles, unitary-basis invariance, fail-closed guards). The new fields are
+  additive with NaN/False defaults on `NonNormalityResult`/`ResolventResult`
+  (older callers and serialised results stay valid), surfaced as **advisory**
+  evidence keys (`ADVISORY_EVIDENCE_KEYS` extended; the pinned metamorphic
+  non-influence test covers them) and as pending-stamped
+  `D8b_henrici_relative`/`D10b_kreiss_scaled` entries in the stability
+  report. **No classifier/verdict behaviour changed**: per #101, the F5 gate
+  switch is deferred to the preregistered calibration study + independent
+  physics review. No manifest-contract change (run manifest fields
+  unchanged, schema stays 1.5.0).
+
 ### Changed
+- **Estimator labelling for D10 (issue #101 re-audit).** The docstrings of
+  `kreiss_constant` and the non-normality module no longer describe the
+  legacy grid search as "Mitchell 2020": the value is a finite-grid **lower
+  bound** without globality certificate. Values are byte-identical; docs
+  only.
+- **Docs honesty (issues #101/#102 release policy).** `confidence` is now
+  documented as a deterministic heuristic support score (NOT calibrated; the
+  tutorial's "calibrated 0..1" claim is fixed) and the docs state explicitly
+  that the A10/F5 verdict path is not yet rate-unit invariant, with the new
+  scale-relative diagnostics listed as pending advisory evidence
+  (`docs/explanation/layers-and-taxonomy.md`).
 - **`MANIFEST_SCHEMA_VERSION` 1.4.0 → 1.5.0 — injective input-hash encoding
   (issue #97 item 4).** `compute_input_hash` now absorbs each input object as a
   *length-framed, type-tagged* field (`tag || len(payload) || payload`) instead

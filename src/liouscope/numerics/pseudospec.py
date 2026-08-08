@@ -65,3 +65,56 @@ def pseudospectral_radius(
             if sv_min <= eps and abs(z) > radius:
                 radius = float(abs(z))
     return radius
+
+
+def pseudospectrum_extent(
+    L: np.ndarray,
+    eps: float,
+    *,
+    grid_re: tuple[float, float, int],
+    grid_im: tuple[float, float, int],
+) -> tuple[float, float]:
+    """Return ``(radius, abscissa)`` of the grid eps-pseudospectrum in ONE sweep.
+
+    * ``radius   = max{|z|   : z in grid, sigma_min(z I - L) <= eps}`` -- the
+      D13 maximum-modulus quantity;
+    * ``abscissa = max{Re(z) : z in grid, sigma_min(z I - L) <= eps}`` -- the
+      gap-directed intrusion diagnostic (issue #101 slice A item 5): how far the
+      eps-pseudospectrum reaches toward (or past) the imaginary axis. For
+      slow/phantom relaxation the literature ties transient behaviour to this
+      abscissa/intrusion rather than to the maximum modulus, which can be
+      dominated by fast modes far from the origin.
+
+    Both values are GRID LOWER-BOUND ESTIMATES of the true suprema (finite
+    sampling; no globality certificate). If NO grid point belongs to the
+    eps-pseudospectrum the sweep is under-resolved for this ``eps`` and
+    ``(nan, nan)`` is returned -- an honest "not measured" marker instead of a
+    fake ``0.0`` (fail-visible; note the legacy :func:`pseudospectral_radius`
+    keeps its historical ``0.0`` behaviour unchanged).
+
+    Unlike the legacy function, the caller MUST supply both grids explicitly:
+    this keeps the numerics kernel free of absolute span floors -- the
+    scale-relative grid policy lives in
+    :func:`liouscope.diagnostics.resolvent.compute_resolvent_layer`.
+    """
+    L = require_finite_square_2d(L, name="L")
+    res = np.linspace(*grid_re)
+    ims = np.linspace(*grid_im)
+    radius = float("nan")
+    abscissa = float("nan")
+    found = False
+    n = L.shape[0]
+    eye = np.eye(n, dtype=complex)
+    for re in res:
+        for im in ims:
+            z = re + 1j * im
+            sv_min = float(sla.svdvals(z * eye - L)[-1])
+            if sv_min <= eps:
+                if not found:
+                    radius = float(abs(z))
+                    abscissa = float(re)
+                    found = True
+                else:
+                    radius = max(radius, float(abs(z)))
+                    abscissa = max(abscissa, float(re))
+    return radius, abscissa

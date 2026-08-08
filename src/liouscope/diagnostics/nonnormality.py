@@ -20,8 +20,28 @@ pairs are INCLUDED.
     LIOU-NG-001: non-normality measures are corroborating signals, not single
     proofs).
 
-D10 -- :func:`kreiss_constant`. Mitchell SIMAX 41(4) (2020) discrete-grid
-algorithm: ``K = sup_{sigma > 0, omega} sigma ||((sigma + i omega) I - L)^{-1}||``.
+D10 -- :func:`kreiss_constant`. Finite-grid LOWER-BOUND estimate of
+``K = sup_{sigma > 0, omega} sigma ||((sigma + i omega) I - L)^{-1}||``.
+Estimator label (issue #101 re-audit): this evaluates a finite, hand-chosen
+``(sigma, omega)`` grid. It is NOT Mitchell's (SIMAX 41(4), 2020) globally
+convergent algorithm and carries no globality certificate; the returned value
+is a grid lower bound of the true Kreiss constant. Its ``sigma`` grid floor is
+ABSOLUTE (``1e-3`` in rate units), so the legacy value is not invariant under a
+unit rescale ``L -> cL``; it is preserved unchanged for backward compatibility.
+
+D10b -- :func:`kreiss_grid_lower_bound`. Scale-relative successor (issue #101
+slice A): same supremum, but the grid is built in DIMENSIONLESS coordinates
+relative to ``rate_scale(L) = ||L||_F``, so the (dimensionless) estimate is
+exactly invariant under ``L -> cL`` (``c > 0``). Returns grid/refinement
+metadata (:class:`liouscope._types.KreissGridEstimate`) so coarse-grid results
+are auditable as estimates, not certified constants. ``claim_status: pending``
+until anchors confirm it.
+
+D8b -- :func:`henrici_relative`. Dimensionless Henrici index
+``eta_N(L) / ||L||_F`` in ``[0, 1]``; exactly invariant under a positive unit
+rescale (issue #101 slice A / issue #97 item 2). Additive: legacy D8
+``henrici_eta`` (rate-dimensioned) is preserved unchanged. ``claim_status:
+pending``; the classifier does NOT consume it (advisory evidence only).
 
 D11 -- :func:`bohr_arithmetic_progression`. Basso arXiv:2510.07267 (2025)
 length of the longest arithmetic-progression of imaginary parts in the
@@ -36,7 +56,18 @@ import numpy as np
 import scipy.linalg as sla
 
 from .._consts import EPS_DIV, EPS_GAP
-from .._types import NonNormalityResult
+from .._types import KreissGridEstimate, NonNormalityResult
+from ..numerics.linalg import require_finite_square_2d
+from ..numerics.resolvent import resolvent_norm
+from ..numerics.scale import rate_scale
+
+# Fail-closed ceiling for the dimensionless Henrici index: mathematically
+# ``eta_N <= ||L||_F`` (Schur unitary invariance), so ``henrici_relative`` can
+# exceed 1 only by rounding of order ``n * machine-eps``. Violations within this
+# relative tolerance are clipped to 1.0; anything larger indicates a broken
+# Schur decomposition and raises instead of silently clamping (issue #97
+# 2026-08-05 re-audit, implementation slice item 2).
+HENRICI_REL_CLIP_TOL = 1.0e-9
 
 
 def henrici_eta_n(A: np.ndarray) -> float:
@@ -51,6 +82,180 @@ def henrici_eta_n(A: np.ndarray) -> float:
         for j in range(i + 1, n):
             fro_squared += abs(T[i, j]) ** 2
     return float(np.sqrt(fro_squared))
+
+
+def henrici_relative(A: np.ndarray) -> float:
+    """D8b: dimensionless Henrici index ``eta_N(A) / ||A||_F`` in ``[0, 1]``.
+
+    Scale-relative counterpart of :func:`henrici_eta_n` (issue #101 slice A /
+    issue #97 item 2): the legacy Henrici departure ``eta_N`` carries rate
+    dimension and transforms as ``eta_N(cA) = |c| eta_N(A)``, so any absolute
+    threshold on it is unit-dependent. Dividing by the shared operator rate
+    scale ``rate_scale(A) = ||A||_F`` yields a dimensionless index that is
+    exactly invariant under a positive unit rescale ``A -> cA`` and lies in
+    ``[0, 1]``: ``0`` for normal matrices, approaching ``1`` when the whole
+    Frobenius mass sits in the non-normal (strictly upper Schur) part.
+
+    Zero-operator semantics (documented, issue #101 slice A item 1): the zero
+    operator has no rate scale and is trivially normal, so the index is ``0.0``.
+
+    Fail-closed: non-finite input raises via :func:`rate_scale`; a computed
+    ratio exceeding ``1 + HENRICI_REL_CLIP_TOL`` (broken Schur decomposition)
+    raises instead of being silently clamped. Values within the tolerance are
+    clipped to the mathematical range ``[0, 1]``.
+
+    ``claim_status: pending`` -- advisory evidence only; no classifier branch
+    consumes this value (the F5 gate calibration is issue #101 slice C).
+    """
+    A = np.asarray(A)
+    fro = rate_scale(A, name="A")
+    if fro == 0.0:
+        return 0.0
+    rel = henrici_eta_n(A) / fro
+    if rel > 1.0 + HENRICI_REL_CLIP_TOL:
+        raise ValueError(
+            "henrici_relative: eta_N / ||A||_F = "
+            f"{rel:.17g} exceeds 1 beyond numerical tolerance "
+            f"({HENRICI_REL_CLIP_TOL:g}); the Schur decomposition is unreliable "
+            "for this input"
+        )
+    return float(min(max(rel, 0.0), 1.0))
+
+
+def kreiss_grid_lower_bound(
+    L_super: np.ndarray,
+    *,
+    n_sigma: int = 24,
+    n_omega: int = 25,  # ungerade -> das Gitter enthaelt omega=0 (Peak-Lage)
+    refine_levels: int = 1,
+) -> KreissGridEstimate:
+    """D10b: scale-relative grid LOWER BOUND of the Kreiss constant.
+
+    Estimates ``K = sup_{sigma > 0, omega} sigma ||((sigma + i omega) I - L)^{-1}||``
+    with ``sigma`` measured from the spectral abscissa (as in the legacy D10).
+
+    Differences from the legacy :func:`kreiss_constant` (issue #101 slice A
+    items 3/6 and the 2026-08-05 re-audit addendum):
+
+    * the ``(sigma, omega)`` grid lives in DIMENSIONLESS coordinates relative to
+      ``rate_scale(L) = ||L||_F`` and is converted to absolute rate units only
+      per evaluation point, so the (dimensionless) estimate is exactly invariant
+      under a positive unit rescale ``L -> cL`` (up to floating-point rounding);
+    * the result is honestly labelled: a :class:`KreissGridEstimate` carrying
+      the grid ranges/resolution, whether the maximiser sits on a grid EDGE
+      (then the sup plausibly lies outside the sampled window), and the relative
+      change contributed by local grid refinement (convergence metadata);
+    * ``refine_levels`` local zoom passes around the coarse maximiser tighten
+      the lower bound without a global re-sweep.
+
+    The exact continuous-time Kreiss constant is invariant under ``L -> cL``;
+    a certified global computation (Mitchell 2020) is NOT implemented -- the
+    returned value is a lower bound, never a certificate.
+
+    Zero-operator semantics: ``K(0) = sup_sigma sigma * 1/sigma = 1`` exactly;
+    returned with NaN grid metadata (there is no grid).
+
+    ``claim_status: pending`` -- advisory evidence only.
+    """
+    L_super = require_finite_square_2d(L_super, name="L_super")
+    if n_sigma < 2 or n_omega < 2:
+        raise ValueError(
+            f"n_sigma and n_omega must each be >= 2, got {n_sigma}, {n_omega}"
+        )
+    if refine_levels < 0:
+        raise ValueError(f"refine_levels must be >= 0, got {refine_levels}")
+    scale = rate_scale(L_super)
+    if scale == 0.0:
+        return KreissGridEstimate(
+            value=1.0,
+            coarse_value=1.0,
+            edge_maximizer=False,
+            refinement_delta=0.0,
+            sigma_rel_lo=float("nan"),
+            sigma_rel_hi=float("nan"),
+            omega_rel_max=float("nan"),
+            n_sigma=n_sigma,
+            n_omega=n_omega,
+            rate_scale=0.0,
+        )
+
+    eigvals = sla.eigvals(L_super)
+    re_max_rel = float(np.max(np.real(eigvals))) / scale
+    re_min_rel = float(np.min(np.real(eigvals))) / scale
+    im_abs_rel = float(np.max(np.abs(np.imag(eigvals)))) / scale
+    sigma_rel_lo = 1.0e-3
+    sigma_rel_hi = max(1.0, abs(re_min_rel) + 1.0)
+    omega_rel_max = max(1.0, im_abs_rel + 1.0)
+
+    def _k_value(sigma_rel: float, omega_rel: float) -> float:
+        # sigma is measured from the spectral abscissa (legacy D10 semantics);
+        # the evaluation point must lie right of the spectrum.
+        shift_rel = sigma_rel + re_max_rel
+        if shift_rel <= 0.0:
+            return 0.0
+        z_abs = complex(shift_rel * scale, omega_rel * scale)
+        try:
+            norm = resolvent_norm(L_super, z_abs)
+        except np.linalg.LinAlgError:
+            return 0.0
+        return float(sigma_rel * scale * norm)
+
+    def _sweep(
+        sigmas: np.ndarray, omegas: np.ndarray
+    ) -> tuple[np.ndarray, float, int, int]:
+        values = np.empty((sigmas.size, omegas.size))
+        for i, s in enumerate(sigmas):
+            for j, w in enumerate(omegas):
+                values[i, j] = _k_value(float(s), float(w))
+        flat = int(np.argmax(values))
+        bi, bj = divmod(flat, omegas.size)
+        return values, float(values[bi, bj]), bi, bj
+
+    sigmas = np.geomspace(sigma_rel_lo, sigma_rel_hi, n_sigma)
+    omegas = np.linspace(-omega_rel_max, omega_rel_max, n_omega)
+    values, coarse, bi, bj = _sweep(sigmas, omegas)
+    # Edge flag with a tie tolerance: on a near-flat plateau (e.g. normal
+    # operators, where sigma * ||R|| -> 1 from below as sigma grows) rounding
+    # decides WHICH of many near-equal grid points is the argmax, so a strict
+    # argmax-on-edge test would jitter under exact unit rescales. Flag instead
+    # whether ANY grid point within a small relative band of the maximum sits
+    # on the grid boundary -- that is the physically meaningful statement "the
+    # sup plausibly continues beyond the sampled window".
+    tie_band = values >= coarse * (1.0 - 1.0e-9)
+    edge = bool(
+        tie_band[0, :].any()
+        or tie_band[-1, :].any()
+        or tie_band[:, 0].any()
+        or tie_band[:, -1].any()
+    )
+
+    best = coarse
+    for _ in range(refine_levels):
+        s_lo = float(sigmas[max(bi - 1, 0)])
+        s_hi = float(sigmas[min(bi + 1, sigmas.size - 1)])
+        w_lo = float(omegas[max(bj - 1, 0)])
+        w_hi = float(omegas[min(bj + 1, omegas.size - 1)])
+        if s_hi <= s_lo or w_hi <= w_lo:
+            break
+        sigmas = np.geomspace(s_lo, s_hi, n_sigma)
+        omegas = np.linspace(w_lo, w_hi, n_omega)
+        _, refined, bi, bj = _sweep(sigmas, omegas)
+        if refined > best:
+            best = refined
+
+    delta = (best - coarse) / best if best > 0.0 else 0.0
+    return KreissGridEstimate(
+        value=best,
+        coarse_value=coarse,
+        edge_maximizer=edge,
+        refinement_delta=float(delta),
+        sigma_rel_lo=sigma_rel_lo,
+        sigma_rel_hi=sigma_rel_hi,
+        omega_rel_max=omega_rel_max,
+        n_sigma=n_sigma,
+        n_omega=n_omega,
+        rate_scale=scale,
+    )
 
 
 def petermann_factors(
@@ -97,11 +302,19 @@ def kreiss_constant(
     n_sigma: int = 24,
     n_omega: int = 25,  # ungerade -> das Default-Gitter enthaelt omega=0 (Peak-Lage)
 ) -> float:
-    """Kreiss constant via Mitchell 2020 grid search.
+    """Legacy D10: finite-grid LOWER-BOUND estimate of the Kreiss constant.
 
-    Estimates ``K = sup_{sigma > 0, omega} sigma * ||((sigma + i omega) I - L)^{-1}||``.
-
-    The grid is set adaptively from the spectrum.
+    Estimates ``K = sup_{sigma > 0, omega} sigma * ||((sigma + i omega) I - L)^{-1}||``
+    by evaluating a finite ``(sigma, omega)`` grid (partially adapted to the
+    spectrum). Estimator label (issue #101 re-audit): this is NOT Mitchell's
+    (SIMAX 41(4), 2020) globally convergent algorithm and carries no globality
+    certificate -- the returned value is a grid lower bound of the true Kreiss
+    constant, with no edge/refinement metadata. The ``sigma`` grid floor
+    (``1e-3``) and the ``sigma``/``omega`` caps (``>= 1``) are ABSOLUTE rate
+    constants, so this legacy value is not invariant under a unit rescale
+    ``L -> cL``. It is preserved byte-identically for backward compatibility;
+    use :func:`kreiss_grid_lower_bound` (D10b) for the scale-relative,
+    metadata-carrying successor.
     """
     L_super = np.asarray(L_super)
     eigvals = sla.eigvals(L_super)
@@ -182,12 +395,19 @@ def bohr_arithmetic_progression(
 
 
 def compute_nonnormality_layer(L_super: np.ndarray) -> NonNormalityResult:
-    """Run D8, D9, D10, D11 together."""
+    """Run D8, D8b, D9, D10, D10b, D11 together.
+
+    Legacy fields (``henrici_eta``, ``kreiss`` ...) are computed exactly as
+    before; the scale-relative D8b/D10b additions (issue #101 slice A) are
+    purely additive and stamped ``claim_status: pending`` at the report level.
+    """
     L_super = np.asarray(L_super)
     eta_n = henrici_eta_n(L_super)
+    eta_rel = henrici_relative(L_super)
     eigvals_filt, K_factors = petermann_factors(L_super)
     K_max = float(np.max(K_factors)) if K_factors.size else 1.0
     K = kreiss_constant(L_super)
+    K_scaled = kreiss_grid_lower_bound(L_super)
     n2 = L_super.shape[0]
     d = int(round(np.sqrt(n2)))
     ap_length, pauli_bound = bohr_arithmetic_progression(eigvals_filt, d)
@@ -198,4 +418,8 @@ def compute_nonnormality_layer(L_super: np.ndarray) -> NonNormalityResult:
         kreiss=K,
         bohr_ap_length=ap_length,
         bohr_ap_pauli_bound=pauli_bound,
+        henrici_relative=eta_rel,
+        kreiss_scaled=K_scaled.value,
+        kreiss_scaled_edge_maximizer=K_scaled.edge_maximizer,
+        kreiss_scaled_refinement_delta=K_scaled.refinement_delta,
     )

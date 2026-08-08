@@ -86,6 +86,16 @@ ADVISORY_EVIDENCE_KEYS: frozenset[str] = frozenset(
         "lep_proximity",           # D16 eigenvalue-coalescence proximity
         "bohr_ap_length",          # D11 Bohr almost-periodicity depth
         "mpemba_expansion_alpha",  # D20 Phi_n scaling exponent (present iff mpemba)
+        # Issue #101 slice A: scale-relative candidate diagnostics for the F5
+        # evidence path. Deliberately ADVISORY: #101 explicitly forbids any
+        # classifier/verdict change before the preregistered calibration study
+        # (slice C) and independent physics review. Promoting any of these to a
+        # decision driver is a class-influencing change and must ship in a
+        # dedicated PR with FP/TP calibration + anchor coverage.
+        "henrici_relative",             # D8b eta_N / ||L||_F (dimensionless)
+        "kreiss_scaled",                # D10b scale-relative grid lower bound
+        "pseudospectral_radius_rel",    # D13 radius / rate_scale (eps_rel grid)
+        "pseudospectral_abscissa_rel",  # gap-directed intrusion / rate_scale
     }
 )
 # NOTE (#80): ``gap_to_kms_ratio`` was advisory when introduced in #89 (#88
@@ -292,6 +302,13 @@ def _gather_evidence(
     )
     ev["resolvent_peak"] = float(resolvent.resolvent_peak)
     ev["pseudospectral_radius"] = float(resolvent.pseudospectral_radius)
+    # Issue #101 slice A: scale-relative variants, surfaced for audit /
+    # serialisation only (see ADVISORY_EVIDENCE_KEYS -- no decision function
+    # reads them; the metamorphic non-influence test pins that contract).
+    ev["henrici_relative"] = float(nonnorm.henrici_relative)
+    ev["kreiss_scaled"] = float(nonnorm.kreiss_scaled)
+    ev["pseudospectral_radius_rel"] = float(resolvent.pseudospectral_radius_rel)
+    ev["pseudospectral_abscissa_rel"] = float(resolvent.pseudospectral_abscissa_rel)
     if mpemba is not None:
         ev["mpemba_overlap_c1"] = float(mpemba.overlap_c1)
         ev["mpemba_expansion_alpha"] = float(mpemba.expansion_alpha)

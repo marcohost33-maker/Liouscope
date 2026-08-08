@@ -91,3 +91,33 @@ Every classification carries a verdict and a tier:
 The design rule behind all three bullets is the same: **fail closed.**
 When evidence is missing, malformed, or merely asserted, the report degrades
 to the weaker claim rather than trusting the caller.
+
+## `confidence` is a heuristic support score, not a probability
+
+`ClassificationResult.confidence` is a **deterministic, rule-based support
+score** in `[0, 1]` (fixed values such as `0.70`, `0.85`, `0.95` attached to
+specific evidence combinations). It is **not** a posterior probability and it
+has **not** been calibrated against held-out labelled reference families — do
+not read `0.85` as "85 % probability the label is right". Calibrated,
+hypothesis-wise evidence reporting is tracked in issue #102; until that
+lands, treat the number as an ordinal ranking of rule strength and rely on
+the *verdict/tier* vocabulary (which is evidence-graded and fail-closed) for
+claims.
+
+## Known limitation: the F5 decision path is not rate-unit invariant
+
+The A10/F5 (phantom relaxation) verdict currently consumes the
+**rate-dimensioned** legacy diagnostics: the absolute `henrici_eta > 1.0`
+gate and grid-based D10/D11b/D13 estimates whose default grids contain
+absolute rate constants. Under a pure change of rate units `L → cL` these
+values move beyond the physical `~c` scaling, so **LiouScope does not claim
+that the A10/F5 verdict is invariant under a change of rate units** (issue
+#101 release gate). The scale-relative successors — `henrici_relative`
+(D8b), `kreiss_scaled` (D10b), `pseudospectral_radius_rel` /
+`pseudospectral_abscissa_rel` (D13) — are computed on every run, are exactly
+invariant under `L → cL` (pinned by `tests/test_scale_conformance.py`), and
+are surfaced as **advisory evidence** with `claim_status: pending`. They do
+not influence any verdict yet: the switch requires the preregistered
+calibration study and independent physics review specified in issue #101
+(slice C), including gapless-normal negative controls, before any threshold
+is chosen.

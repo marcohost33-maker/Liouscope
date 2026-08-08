@@ -107,7 +107,7 @@ in this repository**; D24 ships as an opt-in module.
 |---|---|---|---|
 | **S — Spectral** | D1-D4 (+D2b) | gap, GNS-symmetrised gap, KMS gap, oscillating-mode gap, spectral spread | `diagnostics/spectral.py` |
 | **R — Relaxation** | D5-D7 (+D7b) | von-Neumann entropy, relative entropy, Uhlmann fidelity, entanglement asymmetry | `diagnostics/relaxation.py` |
-| **N — Non-normality** | D8-D13 (+D11b) | Henrici departure, Petermann factors, Kreiss constant, Bohr-AP, resolvent peak/FWHM, pseudospectral radius | `diagnostics/nonnormality.py`, `diagnostics/resolvent.py` |
+| **N — Non-normality** | D8-D13 (+D8b, D10b, D11b) | Henrici departure (+ dimensionless `henrici_relative`), Petermann factors, Kreiss grid lower bound (+ scale-relative `kreiss_scaled`), Bohr-AP, resolvent peak/FWHM, pseudospectral radius (+ scale-relative radius & abscissa) | `diagnostics/nonnormality.py`, `diagnostics/resolvent.py` |
 | **T — Transient** | D14-D15 | sup-norm transient amplification, numerical-abscissa ratio | `diagnostics/transient.py` |
 | **C — Classification** | D16-D20 | LEP proximity, gap-rate consistency, initial-state sensitivity, Mpemba overlap/scaling; A1-A12 mechanism classifier on top | `diagnostics/lep.py`, `diagnostics/mpemba.py`, `diagnostics/classification.py` |
 | **U/G — Uncertainty & Governance** | U0-U2, D24 | BCa CIs, AICc model selection M0..M3b, GLS+AR(1); manifest export; Zhou mixing-time predictor (opt-in, frozen) | `fitting/`, `diagnostics/uncertainty.py`, `io/manifest.py`, `_zhou.py` |
@@ -232,3 +232,13 @@ LiouScope is a **research framework**. It does not constitute a medical device, 
 a clinical decision aid, or an instrument fit for safety-of-life applications. Numerical results
 require physics-domain interpretation; no claim of universality is made beyond the regimes
 covered by the V1-V5 validation systems.
+
+Two honesty notes on the classifier surface (tracked in issues #101/#102):
+`classification.confidence` is a deterministic **heuristic support score**,
+not a calibrated probability; and the A10/F5 (phantom-relaxation) verdict
+path is **not yet invariant under a change of rate units** — the
+scale-relative successor diagnostics (`henrici_relative`, `kreiss_scaled`,
+`pseudospectral_radius_rel`, `pseudospectral_abscissa_rel`) are computed on
+every run with `claim_status: pending` but are advisory-only until the
+preregistered calibration study and independent physics review complete.
+See `docs/explanation/layers-and-taxonomy.md` for details.

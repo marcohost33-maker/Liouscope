@@ -39,15 +39,47 @@ class SpectralResult:
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
-class NonNormalityResult:
-    """Non-normality layer N: D8, D9, D10, D11."""
+class KreissGridEstimate:
+    """D10b: scale-relative Kreiss grid lower bound with audit metadata.
 
-    henrici_eta: float          # D8
+    Issue #101 slice A / 2026-08-05 re-audit: coarse-grid results must be
+    labelled as estimates (lower bounds), not certified constants, and must
+    record grid ranges/resolution, whether the maximiser sat on a grid edge,
+    and refinement-convergence information. ``claim_status: pending``.
+    """
+
+    value: float                # refined grid lower bound (dimensionless)
+    coarse_value: float         # pre-refinement grid lower bound
+    edge_maximizer: bool        # coarse maximiser on a grid edge -> sup may lie outside
+    refinement_delta: float     # (value - coarse_value) / value; convergence metadata
+    sigma_rel_lo: float         # dimensionless sigma grid range (units of rate_scale)
+    sigma_rel_hi: float
+    omega_rel_max: float        # dimensionless omega grid half-span
+    n_sigma: int
+    n_omega: int
+    rate_scale: float           # ||L||_F used to (de)dimensionalise the grid
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class NonNormalityResult:
+    """Non-normality layer N: D8 (+D8b), D9, D10 (+D10b), D11.
+
+    The scale-relative D8b/D10b fields (issue #101 slice A) are additive and
+    defaulted to NaN/False so older callers and serialised results stay valid;
+    they are ``claim_status: pending`` and advisory-only (no classifier branch
+    consumes them).
+    """
+
+    henrici_eta: float          # D8 (rate-dimensioned, legacy)
     petermann_max: float        # D9 max K_j
     petermann_factors: np.ndarray
-    kreiss: float               # D10
+    kreiss: float               # D10 (legacy absolute-grid lower bound)
     bohr_ap_length: int         # D11 Bohr arithmetic-progression depth
     bohr_ap_pauli_bound: float
+    henrici_relative: float = float("nan")   # D8b eta_N / ||L||_F in [0, 1]
+    kreiss_scaled: float = float("nan")      # D10b scale-relative grid lower bound
+    kreiss_scaled_edge_maximizer: bool = False
+    kreiss_scaled_refinement_delta: float = float("nan")
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -91,12 +123,26 @@ class RelaxationResult:
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class ResolventResult:
-    """Resolvent layer: D11b, D12, D13."""
+    """Resolvent layer: D11b, D12, D13 (+ scale-relative variants).
 
-    resolvent_peak: float                 # D11b
-    ridge_fwhm: float                     # D12
-    pseudospectral_radius: float          # D13 eps-pseudospectrum radius
+    The scale-relative fields (issue #101 slice A) are additive and defaulted
+    to NaN so older callers/serialised results stay valid; they are
+    ``claim_status: pending`` and advisory-only. ``rate_scale == 0`` (zero
+    operator) leaves all of them NaN by documented semantics.
+    """
+
+    resolvent_peak: float                 # D11b (legacy absolute sigma)
+    ridge_fwhm: float                     # D12 (legacy)
+    pseudospectral_radius: float          # D13 eps-pseudospectrum radius (legacy)
     pseudospec_eps: float
+    rate_scale: float = float("nan")               # ||L||_F shared scale
+    sigma_rel: float = float("nan")                # dimensionless D11b offset
+    resolvent_peak_scaled: float = float("nan")    # rate_scale * peak (dimensionless)
+    ridge_fwhm_rel: float = float("nan")           # fwhm / rate_scale
+    pseudospec_eps_rel: float = float("nan")       # eps_abs = eps_rel * rate_scale
+    pseudospectral_radius_rel: float = float("nan")  # radius / rate_scale
+    pseudospectral_abscissa: float = float("nan")    # max Re z in sigma_eps (rate-valued)
+    pseudospectral_abscissa_rel: float = float("nan")  # abscissa / rate_scale
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)

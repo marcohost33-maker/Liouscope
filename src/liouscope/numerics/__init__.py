@@ -9,8 +9,9 @@ from .linalg import (
     is_hermitian,
     support_check,
 )
-from .pseudospec import pseudospectral_radius
+from .pseudospec import pseudospectral_radius, pseudospectrum_extent
 from .resolvent import resolvent_apply_superlu, resolvent_norm
+from .scale import rate_scale
 
 __all__ = [
     "EigenDecomposition",
@@ -20,6 +21,8 @@ __all__ = [
     "is_density_matrix",
     "is_hermitian",
     "pseudospectral_radius",
+    "pseudospectrum_extent",
+    "rate_scale",
     "resolvent_apply_superlu",
     "resolvent_norm",
     "support_check",
