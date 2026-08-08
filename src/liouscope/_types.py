@@ -277,8 +277,14 @@ class ClassificationResult:
     f_family: str                         # "F1" .. "F5" or "none"
     verdict: Verdict
     tier: Tier
-    confidence: float                     # 0..1
+    confidence: float                     # 0..1 — HEURISTIC support score, not
+    #                                       a posterior probability (issue #102)
     evidence: dict[str, float]
+    # Issue #102: every hypothesis that fired, in priority order, each flagged
+    # ``shadowed`` when a higher rung already won. The dominant class above is a
+    # convenience projection; without this the branch chain silently erases
+    # concurrently supported mechanisms. Report only — no verdict consumes it.
+    triggered_hypotheses: tuple[dict[str, object], ...] = ()
     taxonomy_version: str = TAXONOMY_VERSION
     schema_version: str = DIAGNOSTIC_SCHEMA_VERSION
 
