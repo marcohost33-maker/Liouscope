@@ -38,6 +38,18 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     its own contractivity control.
   No classifier change: the F2 branch keeps consuming the legacy D14 until the
   preregistered calibration study in issue #102.
+
+  Hardened after cross-family review of PR #105: the peripheral cutoff is the
+  Schur **backward error** `n·eps·||L||_F`, not `sqrt(eps)` (the latter absorbed
+  genuinely resolved slow modes — a generator with rates 1 and 1e-8 reported
+  rank 4 instead of 1); only genuinely zero modes count as stationary, and an
+  **oscillatory** peripheral mode fails closed because `e^{tL}` has no
+  time-independent limit then; the new diagnostics validate their time grids
+  (finite, non-negative, strictly increasing — a backward-time grid evaluates
+  the non-CPTP inverse and would fake a contractivity violation); their default
+  grids include `t = 0`; the run seed is threaded into D14c and recorded in
+  `TransientResult.transient_seed`; and `compute_transient_layer` computes the
+  propagator sweep **once** and shares it across the variants.
 - **Scale-relative non-normality/pseudospectrum diagnostics (issue #101
   slice A, `claim_status: pending`).** One shared operator rate scale
   `liouscope.numerics.scale.rate_scale(L) = ||L||_F` (documented zero-operator

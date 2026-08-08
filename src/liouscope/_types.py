@@ -227,6 +227,7 @@ class TransientResult:
     steady_projector_rank: int = -1                     # dim of the asymptotic subspace
     steady_projector_semisimple: bool = False           # False => D14b is NaN (fail-closed)
     trans_amplitude_operational: float = float("nan")   # D14c trace-norm LOWER BOUND
+    transient_seed: int = -1                            # D14c sampling seed (manifest-relevant)
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)

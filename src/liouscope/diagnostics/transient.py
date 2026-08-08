@@ -181,6 +181,26 @@ def trans_amplitude_ratio(
     return sup
 
 
+def _validated_time_grid(t_grid) -> np.ndarray:
+    """Finite, non-negative, strictly increasing time samples.
+
+    The D14c contractivity contract (``<= 1`` for CPTP dynamics) only holds for
+    FORWARD evolution. A negative time evaluates the inverse map, which is not
+    CPTP, and would report amplification -- a valid generator would then look
+    like a contract violation. Unordered grids additionally make ``t_min``,
+    ``t_max`` and ``edge_maximizer`` meaningless.
+    """
+    g = np.asarray(t_grid, dtype=float)
+    if g.ndim != 1 or g.size == 0:
+        raise ValueError("time grid must be a non-empty 1-D array")
+    if not np.all(np.isfinite(g)):
+        raise ValueError("time grid contains non-finite entries")
+    if np.any(g < 0.0):
+        raise ValueError("time grid must be non-negative (forward evolution only)")
+    if np.any(np.diff(g) <= 0.0):
+        raise ValueError("time grid must be strictly increasing")
+    return g
+
 def steady_projector(
     L_super: np.ndarray,
     *,
@@ -217,9 +237,13 @@ def steady_projector(
     scale = float(np.linalg.norm(L, "fro"))
     if tol is None:
         # Relative to the operator scale so the split is rate-unit invariant
-        # (issue #101): an absolute threshold would reclassify modes under
-        # L -> cL. n * eps**0.5 is the usual conservative eigenvalue floor.
-        tol = scale * float(n) * float(np.sqrt(np.finfo(float).eps))
+        # (issue #101). The magnitude is the BACKWARD ERROR of the Schur
+        # computation, ``n * eps * ||L||_F``, not ``sqrt(eps)``: the latter is
+        # ~1e-7 relative and would swallow genuinely resolved slow modes. A
+        # three-level generator with rates 1 and 1e-8 has a rank-1 steady
+        # projector; under a sqrt(eps) cutoff its -1e-8 mode would be absorbed
+        # into P_inf and D14b/D14d would silently delete real relaxation.
+        tol = scale * float(n) * float(np.finfo(float).eps)
     if scale == 0.0:
         # Zero generator: e^{tL} = I for all t, the whole space is stationary.
         return SteadyProjectorResult(
@@ -228,7 +252,13 @@ def steady_projector(
             tolerance=float(tol), separation=float("inf"),
         )
 
-    T, Z, sdim = sla.schur(L, output="complex", sort=lambda x: bool(abs(x.real) <= tol))
+    # Only genuinely ZERO modes are stationary. A mode on the imaginary axis
+    # with |Im| > tol is peripheral but oscillatory: e^{tL} does not converge,
+    # so no time-independent asymptotic projector exists and subtracting one
+    # would be meaningless. Detected below and failed closed.
+    T, Z, sdim = sla.schur(L, output="complex", sort=lambda x: bool(abs(x) <= tol))
+    eigs_all = np.linalg.eigvals(L)
+    oscillatory = bool(np.any((np.abs(eigs_all.real) <= tol) & (np.abs(eigs_all.imag) > tol)))
     k = int(sdim)
     eigs = np.diag(T).copy()
     peripheral = eigs[:k]
@@ -237,13 +267,13 @@ def steady_projector(
 
     if k == 0:
         return SteadyProjectorResult(
-            projector=np.zeros((n, n), dtype=complex), rank=0, semisimple=True,
+            projector=np.zeros((n, n), dtype=complex), rank=0, semisimple=not oscillatory,
             peripheral_eigenvalues=peripheral, tolerance=float(tol), separation=separation,
         )
     if k == n:
         return SteadyProjectorResult(
             projector=np.eye(n, dtype=complex), rank=n,
-            semisimple=_peripheral_is_semisimple(L, peripheral, tol),
+            semisimple=(not oscillatory) and _peripheral_is_semisimple(L, peripheral, tol),
             peripheral_eigenvalues=peripheral, tolerance=float(tol), separation=separation,
         )
 
@@ -257,7 +287,7 @@ def steady_projector(
 
     return SteadyProjectorResult(
         projector=P, rank=k,
-        semisimple=_peripheral_is_semisimple(L, peripheral, tol),
+        semisimple=(not oscillatory) and _peripheral_is_semisimple(L, peripheral, tol),
         peripheral_eigenvalues=peripheral, tolerance=float(tol), separation=separation,
     )
 
@@ -276,8 +306,12 @@ def _peripheral_is_semisimple(
     remaining = list(peripheral)
     while remaining:
         lam = remaining[0]
-        cluster = [z for z in remaining if abs(z - lam) <= max(tol, 1e-12)]
-        remaining = [z for z in remaining if abs(z - lam) > max(tol, 1e-12)]
+        # Relative cluster width: an absolute 1e-12 floor would merge distinct
+        # peripheral frequencies once the whole spectrum is scaled down, which
+        # breaks the rate-unit invariance the tolerance itself is built for.
+        cluster_tol = max(tol, abs(lam) * 1e-8)
+        cluster = [z for z in remaining if abs(z - lam) <= cluster_tol]
+        remaining = [z for z in remaining if abs(z - lam) > cluster_tol]
         algebraic = len(cluster)
         centre = complex(np.mean(cluster))
         svals = sla.svdvals(L - centre * np.eye(n))
@@ -294,12 +328,18 @@ def centered_transient_amplitude(
     gap: float | None = None,
     t_grid: np.ndarray | None = None,
     projector: SteadyProjectorResult | None = None,
+    propagators: list[np.ndarray] | None = None,
 ) -> CenteredTransientEstimate:
     """D14b: ``sup_t ||e^{tL} - P_inf||_2`` — issue #103.
 
-    Removes the asymptotic projector baseline from D14, so a value above one
-    means genuine transient growth of the DECAYING part rather than a pure
-    steady state inflating the norm.
+    **This does NOT remove the projector baseline.** The supremum includes
+    ``t = 0``, where the expression is ``||I - P_inf||``, and for a non-trivial
+    oblique projector ``||I - P|| = ||P||``. Amplitude damping therefore yields
+    ``sqrt(2)`` here with no transient growth whatsoever.
+
+    It is reported because the issue specifies it; the difference to
+    :func:`decaying_transient_amplitude` (D14d, which does start at 1) is
+    itself the diagnostic information.
 
     Fail-closed on a defective peripheral mode: ``value`` is NaN and
     ``semisimple`` is False.
@@ -310,10 +350,15 @@ def centered_transient_amplitude(
     p_norm = float(sla.svdvals(P)[0]) if proj.rank > 0 else 0.0
 
     if t_grid is None:
+        # t=0 must be in the grid: the supremum over forward time is at least
+        # ||e^{0L}||, and D14d claims to start exactly at 1. The legacy D14
+        # fallback starts at 0.01 for backward compatibility; copying it here
+        # would make the new diagnostics undershoot their own definition.
         t_grid = (
-            _physics_time_grid(L, gap) if gap is not None else np.linspace(0.01, 5.0, 30)
+            _physics_time_grid(L, gap) if gap is not None
+            else np.concatenate(([0.0], np.linspace(0.01, 5.0, 30)))
         )
-    t_grid = np.asarray(t_grid, dtype=float)
+    t_grid = _validated_time_grid(t_grid)
 
     if not proj.semisimple:
         return CenteredTransientEstimate(
@@ -322,9 +367,8 @@ def centered_transient_amplitude(
             n_points=int(t_grid.size), edge_maximizer=False,
         )
 
-    norms = np.array(
-        [float(sla.svdvals(sla.expm(L * t) - P)[0]) for t in t_grid]
-    )
+    props = propagators if propagators is not None else [sla.expm(L * t) for t in t_grid]
+    norms = np.array([float(sla.svdvals(pt - P)[0]) for pt in props])
     return CenteredTransientEstimate(
         value=float(norms.max()), projector_norm=p_norm, rank=proj.rank,
         semisimple=True, t_min=float(t_grid[0]), t_max=float(t_grid[-1]),
@@ -366,16 +410,21 @@ def decaying_transient_amplitude(
     n = L.shape[0]
     scale = float(np.linalg.norm(L, "fro"))
     if tol is None:
-        tol = scale * float(n) * float(np.sqrt(np.finfo(float).eps))
+        tol = scale * float(n) * float(np.finfo(float).eps)
 
     proj = steady_projector(L, tol=tol)
     p_norm = float(sla.svdvals(proj.projector)[0]) if proj.rank > 0 else 0.0
 
     if t_grid is None:
+        # t=0 must be in the grid: the supremum over forward time is at least
+        # ||e^{0L}||, and D14d claims to start exactly at 1. The legacy D14
+        # fallback starts at 0.01 for backward compatibility; copying it here
+        # would make the new diagnostics undershoot their own definition.
         t_grid = (
-            _physics_time_grid(L, gap) if gap is not None else np.linspace(0.01, 5.0, 30)
+            _physics_time_grid(L, gap) if gap is not None
+            else np.concatenate(([0.0], np.linspace(0.01, 5.0, 30)))
         )
-    t_grid = np.asarray(t_grid, dtype=float)
+    t_grid = _validated_time_grid(t_grid)
 
     if not proj.semisimple or proj.rank == n:
         # Defective peripheral mode, or nothing decays at all.
@@ -386,7 +435,7 @@ def decaying_transient_amplitude(
         )
 
     # Decaying spectrum first -> leading block IS the restriction.
-    T, _Z, sdim = sla.schur(L, output="complex", sort=lambda x: bool(abs(x.real) > tol))
+    T, _Z, sdim = sla.schur(L, output="complex", sort=lambda x: bool(abs(x) > tol))
     k = int(sdim)
     T_decay = T[:k, :k]
     norms = np.array([float(sla.svdvals(sla.expm(T_decay * t))[0]) for t in t_grid])
@@ -440,6 +489,7 @@ def operational_trace_amplitude(
     t_grid: np.ndarray | None = None,
     seed: int = 0,
     n_random: int = 16,
+    propagators: list[np.ndarray] | None = None,
 ) -> OperationalTransientEstimate:
     """D14c: trace-norm amplification on physical state differences — issue #103.
 
@@ -461,10 +511,15 @@ def operational_trace_amplitude(
         )
 
     if t_grid is None:
+        # t=0 must be in the grid: the supremum over forward time is at least
+        # ||e^{0L}||, and D14d claims to start exactly at 1. The legacy D14
+        # fallback starts at 0.01 for backward compatibility; copying it here
+        # would make the new diagnostics undershoot their own definition.
         t_grid = (
-            _physics_time_grid(L, gap) if gap is not None else np.linspace(0.01, 5.0, 30)
+            _physics_time_grid(L, gap) if gap is not None
+            else np.concatenate(([0.0], np.linspace(0.01, 5.0, 30)))
         )
-    t_grid = np.asarray(t_grid, dtype=float)
+    t_grid = _validated_time_grid(t_grid)
 
     states = _physical_difference_states(d, seed=seed, n_random=n_random)
     if not states:
@@ -475,9 +530,10 @@ def operational_trace_amplitude(
 
     # Column-stacking (order='F') — Anchor A convention of build_liouvillian.
     V = np.column_stack([X.reshape(-1, order="F") for X in states])
+    props = propagators if propagators is not None else [sla.expm(L * t) for t in t_grid]
     per_time = np.empty(t_grid.size)
-    for idx, t in enumerate(t_grid):
-        Y = sla.expm(L * t) @ V
+    for idx, pt in enumerate(props):
+        Y = pt @ V
         per_time[idx] = max(
             float(np.sum(sla.svdvals(Y[:, c].reshape(d, d, order="F"))))
             for c in range(Y.shape[1])
@@ -505,6 +561,7 @@ def compute_transient_layer(
     gap: float,
     *,
     t_grid: np.ndarray | None = None,
+    seed: int = 0,
 ) -> TransientResult:
     """Run D14, D15 with the spectral gap from D1.
 
@@ -520,9 +577,23 @@ def compute_transient_layer(
     # geometry from the legacy unstructured value. Both are advisory
     # (claim_status: pending) and are NOT consumed by the classifier — F2 keeps
     # using the legacy D14 until the calibration study in #102.
-    centered = centered_transient_amplitude(L_super, gap=gap, t_grid=t_grid)
-    decaying = decaying_transient_amplitude(L_super, gap=gap, t_grid=t_grid)
-    operational = operational_trace_amplitude(L_super, gap=gap, t_grid=t_grid)
+    # One shared grid and ONE set of propagators for the additive diagnostics:
+    # each exponential is cubic in the Liouville dimension, and computing the
+    # same sweep three times would make the advisory layer dominate the cost of
+    # every diagnose() call.
+    # ``gap`` is a required argument here, so the physics-scaled grid always
+    # applies; the t=0-bearing fallback only matters for direct callers of the
+    # individual diagnostics.
+    shared_grid = _validated_time_grid(
+        t_grid if t_grid is not None else _physics_time_grid(L_super, gap)
+    )
+    props = [sla.expm(np.asarray(L_super) * tt) for tt in shared_grid]
+
+    centered = centered_transient_amplitude(
+        L_super, t_grid=shared_grid, propagators=props)
+    decaying = decaying_transient_amplitude(L_super, t_grid=shared_grid)
+    operational = operational_trace_amplitude(
+        L_super, t_grid=shared_grid, seed=seed, propagators=props)
 
     return TransientResult(
         trans_amplitude_ratio=ratio,
@@ -534,4 +605,5 @@ def compute_transient_layer(
         steady_projector_rank=centered.rank,
         steady_projector_semisimple=centered.semisimple,
         trans_amplitude_operational=operational.value,
+        transient_seed=operational.seed,
     )

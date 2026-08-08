@@ -36,6 +36,9 @@ keywords:
   - non-normal dynamics
   - pseudospectrum
   - quantum relaxation
+  - spectral projector
+  - transient amplification
+  - trace distance contractivity
 preferred-citation:
   type: software
   authors:

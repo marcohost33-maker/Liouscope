@@ -269,3 +269,76 @@ def test_transient_layer_exposes_the_new_fields_without_changing_legacy():
     assert res.trans_amplitude_centered == pytest.approx(np.sqrt(2.0), rel=1e-6)
     assert res.trans_amplitude_decaying <= 1.0 + 1e-9
     assert res.trans_amplitude_operational <= 1.0 + 1e-8
+
+
+# --- Cross-Family-Review zu PR #105: je Befund ein Regressionstest ----------
+
+def test_slow_decaying_mode_is_not_absorbed_into_the_projector():
+    """BEFUND #222: eine sqrt(eps)-Schwelle verschluckt echte langsame Moden.
+
+    Rates 1 und 1e-8: der stationaere Projektor hat Rang 1. Unter der alten
+    Schwelle (~2.3e-7 * ||L||_F) waeren die -5e-9/-1e-8-Moden als stationaer
+    eingestuft worden, und D14b/D14d haetten echte Relaxation weggerechnet.
+    """
+    A = np.diag([0.0, -1.0, -5e-9, -1e-8]).astype(complex)
+    proj = steady_projector(A)
+    assert proj.rank == 1
+    assert proj.semisimple
+
+
+def test_oscillatory_peripheral_mode_fails_closed():
+    """BEFUND #231: rein imaginaere Moden haben keinen statischen Grenzwert.
+
+    Ein rein hamiltonscher Qubit-Liouvillian oszilliert ewig; e^{tL} konvergiert
+    nicht, also existiert kein zeitunabhaengiger asymptotischer Projektor.
+    """
+    sz = np.array([[1, 0], [0, -1]], dtype=complex)
+    L = build_liouvillian(sz, [])          # nur Hamiltonteil -> Moden auf iR
+    proj = steady_projector(L)
+    assert proj.semisimple is False
+    assert np.isnan(centered_transient_amplitude(L, gap=1.0, projector=proj).value)
+
+
+def test_semisimplicity_verdict_is_invariant_under_rate_rescale():
+    """BEFUND #280: die Clusterbreite darf nicht absolut sein.
+
+    Nach dem Fix zu #231 besteht die Peripherie nur noch aus Nullmoden, womit
+    der urspruenglich genannte Fall (mehrere getrennte Frequenzen) gar nicht
+    mehr auftritt. Was bleibt und geprueft gehoert: das Semisimplizitaets-
+    Verdikt darf sich unter L -> cL nicht aendern.
+    """
+    D = np.diag([0.0, 0.0, -1.0, -2.0]).astype(complex)
+    base = steady_projector(D)
+    assert base.semisimple is True
+    assert base.rank == 2
+    for c in (1e-13, 1e-6, 1e6, 1e13):
+        scaled = steady_projector(D * c)
+        assert scaled.semisimple is base.semisimple
+        assert scaled.rank == base.rank
+
+
+def test_fallback_grid_contains_time_zero():
+    """BEFUND #377: ohne gap/t_grid begann das Gitter bei 0.01 und unterbot 1."""
+    L = _amplitude_damping()
+    est = decaying_transient_amplitude(L)          # weder gap noch t_grid
+    assert est.t_min == 0.0
+    assert est.value >= 1.0 - 1e-12
+
+
+def test_backward_time_grid_is_rejected():
+    """BEFUND #467: negative Zeiten werten die nicht-CPTP-Inverse aus."""
+    L = _amplitude_damping()
+    with pytest.raises(ValueError):
+        operational_trace_amplitude(L, t_grid=np.array([-1.0, 0.0, 1.0]))
+    with pytest.raises(ValueError):
+        centered_transient_amplitude(L, t_grid=np.array([1.0, 0.5, 2.0]))
+    with pytest.raises(ValueError):
+        decaying_transient_amplitude(L, t_grid=np.array([0.0, np.inf]))
+
+
+def test_run_seed_reaches_the_sampling_diagnostic():
+    """BEFUND #525: das Manifest hielt seed=123 fest, D14c wuerfelte mit 0."""
+    L = _amplitude_damping()
+    gap = liouvillian_gap(np.linalg.eigvals(L))
+    res = compute_transient_layer(L, gap, seed=123)
+    assert res.transient_seed == 123
