@@ -161,6 +161,18 @@ def build_stability_report(
         "D9_petermann_max": float(report.nonnorm.petermann_max),
         "D10_kreiss": float(report.nonnorm.kreiss),
     }
+    # Issue #101 slice A: scale-relative variants are surfaced with an explicit
+    # pending claim status (not yet anchor-confirmed) and their value attached,
+    # so audits see both the number and its evidentiary standing. NaN (e.g. the
+    # zero-operator case) is serialised as None -- dump uses allow_nan=False.
+    for did, val in (
+        ("D8b_henrici_relative", float(report.nonnorm.henrici_relative)),
+        ("D10b_kreiss_scaled", float(report.nonnorm.kreiss_scaled)),
+    ):
+        diagnostics[did] = {
+            "value": None if np.isnan(val) else val,
+            "claim_status": "pending",
+        }
     for did in pending_diagnostics:
         diagnostics[did] = {"claim_status": "pending"}
 
