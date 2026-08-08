@@ -7,6 +7,49 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Added
+- **D14 transient amplitude: projector baseline and norm geometry separated
+  (issue #103, `claim_status: pending`).** The legacy D14
+  `trans_amplitude_ratio = sup_t ||e^{tL}||_2` conflated three questions. It is
+  preserved byte-identically and re-documented precisely as an *unstructured
+  Hilbert-Schmidt semigroup norm estimate over the full complex Liouville
+  space* — not a state-amplitude ratio. Three additive, advisory fields split
+  the confounds apart:
+  - `steady_projector(L)` builds the asymptotic Riesz projector `P_inf` from an
+    **ordered Schur decomposition plus a Sylvester solve**, not from a single
+    arbitrary null vector, so a degenerate stationary manifold yields the
+    correct rank-`k` conditional expectation. Semisimplicity of every
+    peripheral mode is verified via rank deficiency of `L - λI`; a defective
+    zero mode is **fail-closed** (`semisimple=False`, downstream value `NaN`).
+    The peripheral tolerance is relative to `||L||_F`, so the split is
+    rate-unit invariant (consistent with issue #101).
+  - D14b `centered_transient_amplitude` = `sup_t ||e^{tL} − P_inf||_2`, and
+    D14d `decaying_transient_amplitude` = `sup_t ||e^{tL}|_decay||_2` on the
+    decaying invariant subspace in an orthonormal basis.
+    **These are not equivalent**, contrary to the wording of issue #103: at
+    `t = 0` the centred form is `||I − P_inf||`, and for a non-trivial oblique
+    projector `||I − P|| = ||P||`, so centring alone still carries exactly the
+    baseline it was meant to remove. Only the restricted semigroup starts at
+    `1`. Both are reported so the difference stays visible; a regression test
+    pins the identity.
+  - D14c `operational_trace_amplitude` evaluates trace-norm amplification on
+    traceless-Hermitian **differences of density matrices**, recorded as an
+    explicit lower bound on the induced 1→1 norm (state family, seed and time
+    grid are reported). For CPTP dynamics it must not exceed 1, which makes it
+    its own contractivity control.
+  No classifier change: the F2 branch keeps consuming the legacy D14 until the
+  preregistered calibration study in issue #102.
+
+  Hardened after cross-family review of PR #105: the peripheral cutoff is the
+  Schur **backward error** `n·eps·||L||_F`, not `sqrt(eps)` (the latter absorbed
+  genuinely resolved slow modes — a generator with rates 1 and 1e-8 reported
+  rank 4 instead of 1); only genuinely zero modes count as stationary, and an
+  **oscillatory** peripheral mode fails closed because `e^{tL}` has no
+  time-independent limit then; the new diagnostics validate their time grids
+  (finite, non-negative, strictly increasing — a backward-time grid evaluates
+  the non-CPTP inverse and would fake a contractivity violation); their default
+  grids include `t = 0`; the run seed is threaded into D14c and recorded in
+  `TransientResult.transient_seed`; and `compute_transient_layer` computes the
+  propagator sweep **once** and shares it across the variants.
 - **Scale-relative non-normality/pseudospectrum diagnostics (issue #101
   slice A, `claim_status: pending`).** One shared operator rate scale
   `liouscope.numerics.scale.rate_scale(L) = ||L||_F` (documented zero-operator
