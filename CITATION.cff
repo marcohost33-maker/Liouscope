@@ -27,7 +27,12 @@ abstract: >-
   computes D1-D20, plus sub-diagnostics D2b/D7b/D11b, and the opt-in D24 Zhou
   mixing-time predictor; D21-D23 are schema-defined reserved slots, not
   implemented diagnostics in this repository. Mechanism labels use the
-  A1-A12-v3.1 taxonomy.
+  A1-A12-v3.1 taxonomy; alongside the single dominant label, every
+  concurrently supported mechanism hypothesis is reported with its
+  priority-shadowing status, so a system exhibiting several mechanisms at
+  once is not reduced to the highest-priority one. The reported support
+  score is a documented deterministic heuristic, not a calibrated
+  probability.
 keywords:
   - open quantum systems
   - Lindblad
@@ -39,6 +44,8 @@ keywords:
   - spectral projector
   - transient amplification
   - trace distance contractivity
+  - mechanism classification
+  - competing hypotheses
 preferred-citation:
   type: software
   authors:
