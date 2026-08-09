@@ -27,12 +27,17 @@ abstract: >-
   computes D1-D20, plus sub-diagnostics D2b/D7b/D11b, and the opt-in D24 Zhou
   mixing-time predictor; D21-D23 are schema-defined reserved slots, not
   implemented diagnostics in this repository. Mechanism labels use the
-  A1-A12-v3.1 taxonomy; alongside the single dominant label, every
-  concurrently supported mechanism hypothesis is reported with its
-  priority-shadowing status, so a system exhibiting several mechanisms at
-  once is not reduced to the highest-priority one. The reported support
-  score is a documented deterministic heuristic, not a calibrated
-  probability.
+  A1-A12-v3.1 taxonomy.
+# CONVENTION (added 2026-08-09): `abstract` describes the surface of the CITED
+# release only -- the one named by `version` and the immutable version DOI above.
+# Capability sentences for work that is merged but not yet released do NOT belong
+# here; they would credit the published artifact with results it cannot produce.
+# Record them in CHANGELOG.md under [Unreleased] and move them into this abstract
+# when the release is cut. Pending for the next cut: concurrently supported
+# mechanism hypotheses are reported alongside the dominant label with their
+# priority-shadowing status (`ClassificationResult.triggered_hypotheses`,
+# issue #102), and the support score is a documented deterministic heuristic
+# rather than a calibrated probability.
 keywords:
   - open quantum systems
   - Lindblad
