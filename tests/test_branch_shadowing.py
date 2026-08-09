@@ -7,6 +7,8 @@ derived from the SAME ladder as the decision, and changes nothing.
 
 from __future__ import annotations
 
+import dataclasses
+
 import numpy as np
 import pytest
 
@@ -141,6 +143,35 @@ def test_shadow_report_does_not_change_the_decision():
     before = _pick_a_class(ev, relaxation=rel)
     triggered_hypotheses(ev, relaxation=rel)     # must be side-effect free
     assert _pick_a_class(ev, relaxation=rel) == before
+
+
+def test_report_survives_dataclass_and_json_round_trip():
+    """The field is public API, so consumers will serialise it.
+
+    Nothing in the library forces the rung values to stay primitive — a future
+    rung that stores a numpy scalar would serialise as an opaque object or fail
+    outright, and the break would surface in a consumer, not here. Pinning plain
+    JSON round-tripping keeps that failure in this suite.
+    """
+    import dataclasses
+    import json
+
+    ev = _ev(mpemba_is_candidate=1.0, kreiss=10.0, petermann_max=10.0)
+    fired = triggered_hypotheses(ev, relaxation=_Rel())
+    assert fired, "case must fire at least one rung, else the test proves nothing"
+
+    restored = json.loads(json.dumps(dataclasses.asdict(_Rep(fired))))["triggered_hypotheses"]
+    assert [h["rule_id"] for h in restored] == [h["rule_id"] for h in fired]
+    for h in restored:
+        assert isinstance(h["shadowed"], bool)
+        assert isinstance(h["a_class"], str) and isinstance(h["f_family"], str)
+
+
+@dataclasses.dataclass
+class _Rep:
+    """Minimal carrier so the round-trip test does not need a full diagnose run."""
+
+    triggered_hypotheses: tuple
 
 
 def test_every_rung_has_a_stable_identifier():
