@@ -76,7 +76,33 @@ report = lp.diagnose(L, rho_initial=rho_0, bootstrap_B=100, seed=42)
 print(report.classification.a_class)         # one of "A1".."A12"
 print(report.relaxation.beta_D, "in",
       report.relaxation.bca_ci_beta)         # (lo, hi)
+
+# Every mechanism hypothesis that fired -- not just the dominant one
+for h in report.classification.triggered_hypotheses:
+    print(h["rule_id"], h["a_class"], h["f_family"], h["shadowed"])
 ```
+
+`a_class` is one dominant label chosen by a priority chain, so a system showing
+several mechanisms at once would otherwise report only the highest-priority one.
+`triggered_hypotheses` (issue #102) lists **every** rung that fired, in decision
+order:
+
+| key | meaning |
+|---|---|
+| `rule_id` | stable identifier of the decision rule, e.g. `F4_MPEMBA` |
+| `a_class` / `f_family` | the class and family that rung would assign |
+| `shadowed` | `True` when priority suppressed a **different** mechanism |
+
+`shadowed` keys on the (class, family) pair, not on position: several rules can
+reach the same conclusion (the strong and the residual A1 rung, for instance),
+and that is corroboration rather than a suppressed mechanism. To count real
+conflicts, count `shadowed` entries; to see every supporting rule, read the
+whole tuple.
+
+It is **report-only**: no verdict, class, family or confidence consumes it.
+Letting it drive decisions is deferred to the preregistered calibration study
+in issue #102. The field is additive and defaults to `()`, so results
+serialised by older versions stay valid.
 
 The same example with a 1D lattice geometry:
 

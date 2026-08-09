@@ -447,22 +447,33 @@ def triggered_hypotheses(
     The classifier returns ONE dominant class. When a system simultaneously
     shows, say, Mpemba overlap and pseudospectral phantom evidence, the
     priority chain reports only the first and the second becomes invisible.
-    This function reports all of them, each marked ``shadowed`` if a
-    higher-priority rung already fired.
+    This function reports all of them, each marked ``shadowed`` when priority
+    suppressed a genuinely DIFFERENT mechanism.
+
+    ``shadowed`` keys on the (class, family) pair, not on ladder position.
+    Several rungs can reach the SAME conclusion -- ``gap_rate_consistency <
+    0.05`` (with D17) and the residual ``< 0.20`` rung both yield ``A1/none``,
+    and the strong one implies the broad one -- so position alone would mark
+    A1 as shadowed by A1 and report a mechanism conflict where none exists.
+    Every firing rung is still listed: two rules supporting one conclusion is
+    corroboration worth seeing, it is simply not shadowing. Consumers counting
+    suppressed mechanisms should count ``shadowed`` entries; consumers listing
+    supporting rules get the full ladder.
 
     It is a REPORT, not a decision: the verdict, class, family and confidence
     are untouched. Consuming it as evidence would be a classifier change and
     belongs behind the calibration study of issue #102.
     """
     fired = [r for r in _hypothesis_ladder(ev, relaxation=relaxation) if r[3]]
+    winner = (fired[0][1], fired[0][2]) if fired else None
     return tuple(
         {
             "rule_id": rid,
             "a_class": a_class,
             "f_family": f_family,
-            "shadowed": index > 0,
+            "shadowed": (a_class, f_family) != winner,
         }
-        for index, (rid, a_class, f_family, _fires) in enumerate(fired)
+        for rid, a_class, f_family, _fires in fired
     )
 
 

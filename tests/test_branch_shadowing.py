@@ -88,6 +88,36 @@ def test_no_mechanism_yields_an_empty_report():
     assert triggered_hypotheses(_ev(), relaxation=_Rel()) == ()
 
 
+def test_a_class_is_never_shadowed_by_itself():
+    """Two rungs, one conclusion -- corroboration, not a mechanism conflict.
+
+    ``gap_rate_consistency = 0.01`` fires the strong A1 rung (with D17) and
+    NECESSARILY the residual ``< 0.20`` rung too. Marking the second shadowed
+    would report a suppressed mechanism where none exists, so a consumer
+    counting conflicts would see a false one.
+    """
+    ev = _ev(gap_rate_consistency=0.01, d17_linear_single_exp=1.0)
+    fired = triggered_hypotheses(ev, relaxation=_Rel())
+
+    assert [h["rule_id"] for h in fired] == ["A1_LINEAR_SINGLE_EXP", "A1_GAP_CONSISTENT"]
+    assert {h["a_class"] for h in fired} == {"A1"}
+    assert not any(h["shadowed"] for h in fired)
+
+
+def test_shadowed_marks_a_different_mechanism_not_a_later_rung():
+    """A genuinely different class below the winner IS shadowed."""
+    ev = _ev(
+        kreiss=10.0, petermann_max=10.0,                # F1 -> A3, wins
+        trans_amplitude_ratio=10.0, kappa_trans=5.0,    # F2 -> A4, suppressed
+        gap_rate_consistency=0.01,                      # A1, also suppressed
+    )
+    fired = triggered_hypotheses(ev, relaxation=_Rel())
+    by_class = {h["a_class"]: h["shadowed"] for h in fired}
+    assert by_class["A3"] is False
+    assert by_class["A4"] is True
+    assert by_class["A1"] is True
+
+
 def test_shadow_report_does_not_change_the_decision():
     """Metamorphic: the report is derived, never consulted."""
     ev = _ev(mpemba_is_candidate=1.0, henrici_eta=2.0, pseudospectral_radius=10.0)

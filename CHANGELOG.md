@@ -14,8 +14,15 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   pseudospectral phantom evidence reported only the first — the concurrently
   supported mechanism was silently erased. The new additive field reports
   **every** hypothesis that fires, in decision order, each as
-  `{rule_id, a_class, f_family, shadowed}` with `shadowed=True` for every rung
-  below the winner.
+  `{rule_id, a_class, f_family, shadowed}`.
+  `shadowed` keys on the (class, family) pair, **not** on ladder position:
+  several rungs can reach the same conclusion — `gap_rate_consistency < 0.05`
+  (with D17) fires the strong A1 rung and necessarily the residual `< 0.20`
+  rung too — and marking the second one shadowed would report a mechanism
+  conflict where none exists. Every firing rung is still listed, so two rules
+  supporting one conclusion stay visible as corroboration; only a genuinely
+  different suppressed (class, family) counts as shadowing. Documented on the
+  public README surface.
   To keep the report from drifting away from the decision it describes, the
   priority chain was extracted into a single `_hypothesis_ladder()` that
   evaluates all rungs and returns `(rule_id, a_class, f_family, fires)`;
