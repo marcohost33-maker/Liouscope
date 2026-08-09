@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import ast
 import math
+import re
 from pathlib import Path
 
 import numpy as np
@@ -68,25 +69,33 @@ _CLF_SRC = (
 
 
 def _returned_a_classes_via_ast() -> set[str]:
-    """Statically collect every A-class literal ``_pick_a_class`` can return.
+    """Statically collect every A-class literal the decision can emit.
 
     Reads the real module source so the reachability contract cannot silently
-    drift from the code: adding/removing a ``return "Ax", ...`` branch changes
-    this set and forces ``RESERVED_A_CLASSES`` to be updated in lock-step.
+    drift from the code: adding/removing a decision branch changes this set and
+    forces ``RESERVED_A_CLASSES`` to be updated in lock-step.
+
+    Issue #102 moved the branch conditions out of ``_pick_a_class`` and into
+    ``_hypothesis_ladder``, which is now the single source for BOTH the winning
+    class and the shadow report. The scan follows: any ``"Ax"`` literal in
+    either function counts. Rule identifiers such as ``"A1_LINEAR_SINGLE_EXP"``
+    are excluded by the strict pattern, so they cannot inflate the set.
     """
     tree = ast.parse(_CLF_SRC.read_text(encoding="utf-8"))
+    a_class_re = re.compile(r"^A(?:[1-9]|1[0-2])$")
     returned: set[str] = set()
     for node in ast.walk(tree):
-        if isinstance(node, ast.FunctionDef) and node.name == "_pick_a_class":
+        if isinstance(node, ast.FunctionDef) and node.name in {
+            "_pick_a_class",
+            "_hypothesis_ladder",
+        }:
             for inner in ast.walk(node):
-                if isinstance(inner, ast.Return) and isinstance(
-                    inner.value, ast.Tuple
+                if (
+                    isinstance(inner, ast.Constant)
+                    and isinstance(inner.value, str)
+                    and a_class_re.match(inner.value)
                 ):
-                    first = inner.value.elts[0]
-                    if isinstance(first, ast.Constant) and isinstance(
-                        first.value, str
-                    ):
-                        returned.add(first.value)
+                    returned.add(inner.value)
     return returned
 
 
