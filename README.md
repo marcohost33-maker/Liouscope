@@ -95,9 +95,20 @@ order:
 
 `shadowed` keys on the (class, family) pair, not on position: several rules can
 reach the same conclusion (the strong and the residual A1 rung, for instance),
-and that is corroboration rather than a suppressed mechanism. To count real
-conflicts, count `shadowed` entries; to see every supporting rule, read the
-whole tuple.
+and that is corroboration rather than a suppressed mechanism.
+
+The tuple is **rule-level**, so one suppressed mechanism can appear in more than
+one entry — `A1` via both its rungs, `A10/F5` via the pseudospectral and the M3a
+rung. Counting entries therefore overcounts conflicts. Count distinct pairs:
+
+```python
+tri = report.classification.triggered_hypotheses
+suppressed = {(h["a_class"], h["f_family"]) for h in tri if h["shadowed"]}
+len(suppressed)          # how many mechanisms priority actually suppressed
+```
+
+Read the whole tuple when you want every supporting rule rather than the
+mechanism count.
 
 It is **report-only**: no verdict, class, family or confidence consumes it.
 Letting it drive decisions is deferred to the preregistered calibration study

@@ -104,6 +104,22 @@ def test_a_class_is_never_shadowed_by_itself():
     assert not any(h["shadowed"] for h in fired)
 
 
+def test_one_suppressed_mechanism_can_occupy_several_rule_entries():
+    """The tuple is rule-level: count distinct pairs, not entries.
+
+    Mpemba wins; both A1 rungs fire and are suppressed. That is ONE suppressed
+    mechanism reported through TWO rules. Pinning the difference keeps the
+    README's counting recipe honest -- counting entries would report two
+    conflicts where there is one.
+    """
+    ev = _ev(mpemba_is_candidate=1.0, gap_rate_consistency=0.01, d17_linear_single_exp=1.0)
+    fired = triggered_hypotheses(ev, relaxation=_Rel())
+
+    shadowed = [h for h in fired if h["shadowed"]]
+    assert len(shadowed) == 2, "both A1 rungs must stay visible as separate rules"
+    assert {(h["a_class"], h["f_family"]) for h in shadowed} == {("A1", "none")}
+
+
 def test_shadowed_marks_a_different_mechanism_not_a_later_rung():
     """A genuinely different class below the winner IS shadowed."""
     ev = _ev(

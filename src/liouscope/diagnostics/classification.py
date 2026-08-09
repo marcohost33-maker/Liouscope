@@ -456,9 +456,15 @@ def triggered_hypotheses(
     and the strong one implies the broad one -- so position alone would mark
     A1 as shadowed by A1 and report a mechanism conflict where none exists.
     Every firing rung is still listed: two rules supporting one conclusion is
-    corroboration worth seeing, it is simply not shadowing. Consumers counting
-    suppressed mechanisms should count ``shadowed`` entries; consumers listing
-    supporting rules get the full ladder.
+    corroboration worth seeing, it is simply not shadowing.
+
+    The tuple is RULE-level, so one suppressed mechanism can occupy several
+    entries -- ``A1`` through both its rungs, ``A10/F5`` through the
+    pseudospectral and the M3a rung. Counting entries therefore overcounts
+    conflicts; count distinct ``(a_class, f_family)`` pairs among the shadowed
+    ones instead. The tuple is deliberately NOT deduplicated: dropping a rung
+    would hide a rule that genuinely fired, and which rules fired is the audit
+    handle this report exists for.
 
     It is a REPORT, not a decision: the verdict, class, family and confidence
     are untouched. Consuming it as evidence would be a classifier change and
