@@ -23,8 +23,8 @@ This module pins the two REMAINING, behaviour-PRESERVING sub-findings:
 from __future__ import annotations
 
 import ast
-import re
 import math
+import re
 from pathlib import Path
 
 import numpy as np
@@ -90,9 +90,12 @@ def _returned_a_classes_via_ast() -> set[str]:
             "_hypothesis_ladder",
         }:
             for inner in ast.walk(node):
-                if isinstance(inner, ast.Constant) and isinstance(inner.value, str):
-                    if a_class_re.match(inner.value):
-                        returned.add(inner.value)
+                if (
+                    isinstance(inner, ast.Constant)
+                    and isinstance(inner.value, str)
+                    and a_class_re.match(inner.value)
+                ):
+                    returned.add(inner.value)
     return returned
 
 

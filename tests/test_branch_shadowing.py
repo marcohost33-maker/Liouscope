@@ -113,7 +113,13 @@ def test_model_driven_rungs_still_fire(model, expected):
 
 
 def test_result_carries_the_report():
-    """The field is populated on a real classify_mechanism run."""
+    """The field is populated on a real ``diagnose`` run.
+
+    Asserting non-emptiness is the point: the field defaults to ``()``, so a
+    version that never populates it would satisfy an ``isinstance(..., tuple)``
+    check. The amplitude-damped qubit below fires exactly one rung
+    (``A5_BIEXPONENTIAL``), so an empty report means the wiring is gone.
+    """
     from liouscope import diagnose
     from liouscope.core.lindblad import build_liouvillian
 
@@ -121,8 +127,11 @@ def test_result_carries_the_report():
     L = build_liouvillian(np.zeros((2, 2), dtype=complex), [sm])
     rho0 = np.array([[0.0, 0.0], [0.0, 1.0]], dtype=complex)
     rep = diagnose(L, rho_initial=rho0, t_grid=np.linspace(0.0, 5.0, 64))
-    assert isinstance(rep.classification.triggered_hypotheses, tuple)
-    if rep.classification.triggered_hypotheses:
-        first = rep.classification.triggered_hypotheses[0]
-        assert first["a_class"] == rep.classification.a_class
-        assert first["shadowed"] is False
+
+    fired = rep.classification.triggered_hypotheses
+    assert isinstance(fired, tuple)
+    assert fired, "classify_mechanism did not populate triggered_hypotheses"
+    assert fired[0]["rule_id"] == "A5_BIEXPONENTIAL"
+    assert fired[0]["a_class"] == rep.classification.a_class
+    assert fired[0]["f_family"] == rep.classification.f_family
+    assert fired[0]["shadowed"] is False

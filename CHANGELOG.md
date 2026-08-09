@@ -7,6 +7,31 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Added
+- **Branch-shadowing report: `ClassificationResult.triggered_hypotheses`
+  (issue #102 slice "assess branch shadowing", `claim_status: pending`).** The
+  classifier resolves by PRIORITY and returns exactly one dominant `a_class`,
+  so a system that simultaneously shows, say, Mpemba overlap *and*
+  pseudospectral phantom evidence reported only the first — the concurrently
+  supported mechanism was silently erased. The new additive field reports
+  **every** hypothesis that fires, in decision order, each as
+  `{rule_id, a_class, f_family, shadowed}` with `shadowed=True` for every rung
+  below the winner.
+  To keep the report from drifting away from the decision it describes, the
+  priority chain was extracted into a single `_hypothesis_ladder()` that
+  evaluates all rungs and returns `(rule_id, a_class, f_family, fires)`;
+  **both** `_pick_a_class()` (first firing rung, else `A12`) and
+  `triggered_hypotheses()` are derived from that one list, so there is no
+  second copy of the conditions to fall out of sync.
+  **No verdict behaviour changed**: class, family, verdict, tier and
+  confidence are computed exactly as before (the ladder preserves the decision
+  order; only the early `return`s became eager evaluation, and every directly
+  indexed evidence key is unconditionally populated by `_gather_evidence`).
+  The report is deliberately **not** consumed by any decision — letting it
+  drive verdicts would be a classifier change and belongs behind the
+  preregistered calibration study of issue #102. The `confidence` field is
+  re-documented in `_types.py` as a heuristic support score, not a posterior
+  probability; the `confidence` → `support_score` rename remains open.
+  Serialised older results stay valid (default `()`).
 - **D14 transient amplitude: projector baseline and norm geometry separated
   (issue #103, `claim_status: pending`).** The legacy D14
   `trans_amplitude_ratio = sup_t ||e^{tL}||_2` conflated three questions. It is
