@@ -6,7 +6,127 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+- **Branch-shadowing report: `ClassificationResult.triggered_hypotheses`
+  (issue #102 slice "assess branch shadowing", `claim_status: pending`).** The
+  classifier resolves by PRIORITY and returns exactly one dominant `a_class`,
+  so a system that simultaneously shows, say, Mpemba overlap *and*
+  pseudospectral phantom evidence reported only the first — the concurrently
+  supported mechanism was silently erased. The new additive field reports
+  **every** hypothesis that fires, in decision order, each as
+  `{rule_id, a_class, f_family, shadowed}`.
+  `shadowed` keys on the (class, family) pair, **not** on ladder position:
+  several rungs can reach the same conclusion — `gap_rate_consistency < 0.05`
+  (with D17) fires the strong A1 rung and necessarily the residual `< 0.20`
+  rung too — and marking the second one shadowed would report a mechanism
+  conflict where none exists. Every firing rung is still listed, so two rules
+  supporting one conclusion stay visible as corroboration; only a genuinely
+  different suppressed (class, family) counts as shadowing.
+  The tuple is rule-level and deliberately **not** deduplicated — one
+  suppressed mechanism can occupy several entries (`A1` via both its rungs,
+  `A10/F5` via the pseudospectral and the M3a rung) — so the count of
+  suppressed mechanisms is the number of distinct `(a_class, f_family)` pairs
+  among the shadowed entries, not the number of entries. Documented with the
+  counting recipe on the public README surface.
+  To keep the report from drifting away from the decision it describes, the
+  priority chain was extracted into a single `_hypothesis_ladder()` that
+  evaluates all rungs and returns `(rule_id, a_class, f_family, fires)`;
+  **both** `_pick_a_class()` (first firing rung, else `A12`) and
+  `triggered_hypotheses()` are derived from that one list, so there is no
+  second copy of the conditions to fall out of sync.
+  **No verdict behaviour changed**: class, family, verdict, tier and
+  confidence are computed exactly as before (the ladder preserves the decision
+  order; only the early `return`s became eager evaluation, and every directly
+  indexed evidence key is unconditionally populated by `_gather_evidence`).
+  The report is deliberately **not** consumed by any decision — letting it
+  drive verdicts would be a classifier change and belongs behind the
+  preregistered calibration study of issue #102. The `confidence` field is
+  re-documented in `_types.py` as a heuristic support score, not a posterior
+  probability; the `confidence` → `support_score` rename remains open.
+  Serialised older results stay valid (default `()`).
+- **D14 transient amplitude: projector baseline and norm geometry separated
+  (issue #103, `claim_status: pending`).** The legacy D14
+  `trans_amplitude_ratio = sup_t ||e^{tL}||_2` conflated three questions. It is
+  preserved byte-identically and re-documented precisely as an *unstructured
+  Hilbert-Schmidt semigroup norm estimate over the full complex Liouville
+  space* — not a state-amplitude ratio. Three additive, advisory fields split
+  the confounds apart:
+  - `steady_projector(L)` builds the asymptotic Riesz projector `P_inf` from an
+    **ordered Schur decomposition plus a Sylvester solve**, not from a single
+    arbitrary null vector, so a degenerate stationary manifold yields the
+    correct rank-`k` conditional expectation. Semisimplicity of every
+    peripheral mode is verified via rank deficiency of `L - λI`; a defective
+    zero mode is **fail-closed** (`semisimple=False`, downstream value `NaN`).
+    The peripheral tolerance is relative to `||L||_F`, so the split is
+    rate-unit invariant (consistent with issue #101).
+  - D14b `centered_transient_amplitude` = `sup_t ||e^{tL} − P_inf||_2`, and
+    D14d `decaying_transient_amplitude` = `sup_t ||e^{tL}|_decay||_2` on the
+    decaying invariant subspace in an orthonormal basis.
+    **These are not equivalent**, contrary to the wording of issue #103: at
+    `t = 0` the centred form is `||I − P_inf||`, and for a non-trivial oblique
+    projector `||I − P|| = ||P||`, so centring alone still carries exactly the
+    baseline it was meant to remove. Only the restricted semigroup starts at
+    `1`. Both are reported so the difference stays visible; a regression test
+    pins the identity.
+  - D14c `operational_trace_amplitude` evaluates trace-norm amplification on
+    traceless-Hermitian **differences of density matrices**, recorded as an
+    explicit lower bound on the induced 1→1 norm (state family, seed and time
+    grid are reported). For CPTP dynamics it must not exceed 1, which makes it
+    its own contractivity control.
+  No classifier change: the F2 branch keeps consuming the legacy D14 until the
+  preregistered calibration study in issue #102.
+
+  Hardened after cross-family review of PR #105: the peripheral cutoff is the
+  Schur **backward error** `n·eps·||L||_F`, not `sqrt(eps)` (the latter absorbed
+  genuinely resolved slow modes — a generator with rates 1 and 1e-8 reported
+  rank 4 instead of 1); only genuinely zero modes count as stationary, and an
+  **oscillatory** peripheral mode fails closed because `e^{tL}` has no
+  time-independent limit then; the new diagnostics validate their time grids
+  (finite, non-negative, strictly increasing — a backward-time grid evaluates
+  the non-CPTP inverse and would fake a contractivity violation); their default
+  grids include `t = 0`; the run seed is threaded into D14c and recorded in
+  `TransientResult.transient_seed`; and `compute_transient_layer` computes the
+  propagator sweep **once** and shares it across the variants.
+- **Scale-relative non-normality/pseudospectrum diagnostics (issue #101
+  slice A, `claim_status: pending`).** One shared operator rate scale
+  `liouscope.numerics.scale.rate_scale(L) = ||L||_F` (documented zero-operator
+  semantics, fail-closed on non-finite input) now underpins additive,
+  dimensionless variants of the rate-dimensioned legacy diagnostics: D8b
+  `henrici_relative = η_N/||L||_F` in `[0, 1]` (clip-tolerance fail-closed),
+  D10b `kreiss_grid_lower_bound` (dimensionless grid, local refinement, edge-
+  maximizer + convergence metadata in the new `KreissGridEstimate`), scale-
+  relative D11b/D12 (`resolvent_peak_scaled`, `ridge_fwhm_rel`), D13 with
+  `eps_abs = eps_rel · rate_scale` (`pseudospectral_radius_rel`) and the new
+  gap-directed intrusion diagnostic `pseudospectral_abscissa(_rel)` via
+  `numerics.pseudospec.pseudospectrum_extent` (single-sweep radius+abscissa,
+  NaN "under-resolved" marker instead of a fake `0.0`). All are exactly
+  invariant under a positive unit rescale `L → cL` for
+  `c ∈ {1e-10 … 1e10}` — pinned by the new slice-B conformance suite
+  `tests/test_scale_conformance.py` (invariance, rate-valued `~c` scaling,
+  D14 `t → t/c` metamorphic agreement, zero/normal/gapless-normal/Jordan
+  oracles, unitary-basis invariance, fail-closed guards). The new fields are
+  additive with NaN/False defaults on `NonNormalityResult`/`ResolventResult`
+  (older callers and serialised results stay valid), surfaced as **advisory**
+  evidence keys (`ADVISORY_EVIDENCE_KEYS` extended; the pinned metamorphic
+  non-influence test covers them) and as pending-stamped
+  `D8b_henrici_relative`/`D10b_kreiss_scaled` entries in the stability
+  report. **No classifier/verdict behaviour changed**: per #101, the F5 gate
+  switch is deferred to the preregistered calibration study + independent
+  physics review. No manifest-contract change (run manifest fields
+  unchanged, schema stays 1.5.0).
+
 ### Changed
+- **Estimator labelling for D10 (issue #101 re-audit).** The docstrings of
+  `kreiss_constant` and the non-normality module no longer describe the
+  legacy grid search as "Mitchell 2020": the value is a finite-grid **lower
+  bound** without globality certificate. Values are byte-identical; docs
+  only.
+- **Docs honesty (issues #101/#102 release policy).** `confidence` is now
+  documented as a deterministic heuristic support score (NOT calibrated; the
+  tutorial's "calibrated 0..1" claim is fixed) and the docs state explicitly
+  that the A10/F5 verdict path is not yet rate-unit invariant, with the new
+  scale-relative diagnostics listed as pending advisory evidence
+  (`docs/explanation/layers-and-taxonomy.md`).
 - **`MANIFEST_SCHEMA_VERSION` 1.4.0 → 1.5.0 — injective input-hash encoding
   (issue #97 item 4).** `compute_input_hash` now absorbs each input object as a
   *length-framed, type-tagged* field (`tag || len(payload) || payload`) instead

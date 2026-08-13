@@ -93,7 +93,7 @@ print(r.classification.a_class)    # one of "A1".."A12"
 print(r.classification.f_family)   # gap-failure family "F1".."F5" or "none"
 print(r.classification.verdict)    # CONFIRMED / CANDIDATE / NOT_EXCLUDED / UNDEFINED
 print(r.classification.tier)       # e.g. EXPLORATION vs PUBLICATION_GRADE
-print(r.classification.confidence) # calibrated 0..1
+print(r.classification.confidence) # heuristic support score 0..1 (NOT calibrated)
 ```
 
 How to read the classification:

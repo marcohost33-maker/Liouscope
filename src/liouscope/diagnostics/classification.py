@@ -86,6 +86,16 @@ ADVISORY_EVIDENCE_KEYS: frozenset[str] = frozenset(
         "lep_proximity",           # D16 eigenvalue-coalescence proximity
         "bohr_ap_length",          # D11 Bohr almost-periodicity depth
         "mpemba_expansion_alpha",  # D20 Phi_n scaling exponent (present iff mpemba)
+        # Issue #101 slice A: scale-relative candidate diagnostics for the F5
+        # evidence path. Deliberately ADVISORY: #101 explicitly forbids any
+        # classifier/verdict change before the preregistered calibration study
+        # (slice C) and independent physics review. Promoting any of these to a
+        # decision driver is a class-influencing change and must ship in a
+        # dedicated PR with FP/TP calibration + anchor coverage.
+        "henrici_relative",             # D8b eta_N / ||L||_F (dimensionless)
+        "kreiss_scaled",                # D10b scale-relative grid lower bound
+        "pseudospectral_radius_rel",    # D13 radius / rate_scale (eps_rel grid)
+        "pseudospectral_abscissa_rel",  # gap-directed intrusion / rate_scale
     }
 )
 # NOTE (#80): ``gap_to_kms_ratio`` was advisory when introduced in #89 (#88
@@ -292,6 +302,13 @@ def _gather_evidence(
     )
     ev["resolvent_peak"] = float(resolvent.resolvent_peak)
     ev["pseudospectral_radius"] = float(resolvent.pseudospectral_radius)
+    # Issue #101 slice A: scale-relative variants, surfaced for audit /
+    # serialisation only (see ADVISORY_EVIDENCE_KEYS -- no decision function
+    # reads them; the metamorphic non-influence test pins that contract).
+    ev["henrici_relative"] = float(nonnorm.henrici_relative)
+    ev["kreiss_scaled"] = float(nonnorm.kreiss_scaled)
+    ev["pseudospectral_radius_rel"] = float(resolvent.pseudospectral_radius_rel)
+    ev["pseudospectral_abscissa_rel"] = float(resolvent.pseudospectral_abscissa_rel)
     if mpemba is not None:
         ev["mpemba_overlap_c1"] = float(mpemba.overlap_c1)
         ev["mpemba_expansion_alpha"] = float(mpemba.expansion_alpha)
@@ -305,7 +322,29 @@ def _pick_a_class(
     *,
     relaxation: RelaxationResult,
 ) -> tuple[str, str]:
-    """Return ``(a_class, f_family)`` based on evidence priorities."""
+    """Return ``(a_class, f_family)`` — the winner of :func:`_hypothesis_ladder`."""
+    for rung in _hypothesis_ladder(ev, relaxation=relaxation):
+        if rung[3]:
+            return rung[1], rung[2]
+    return "A12", "none"
+
+
+def _hypothesis_ladder(
+    ev: dict[str, float],
+    *,
+    relaxation: RelaxationResult,
+) -> list[tuple[str, str, str, bool]]:
+    """The full priority ladder as ``(rule_id, a_class, f_family, fires)``.
+
+    Issue #102: the classifier resolves by PRIORITY, so a system that shows
+    several mechanisms at once reports only the first. Evaluating every rung
+    here — and deriving both the winner (:func:`_pick_a_class`) and the
+    shadow report (:func:`triggered_hypotheses`) from this one list — makes the
+    suppressed hypotheses visible without changing any verdict, and without a
+    second copy of the conditions that could drift from the decision itself.
+
+    Order is the decision order; do not reorder without a physics rationale.
+    """
     # F4 Mpemba check first (high salience for current literature risk). The
     # candidate flag already folds in the non-triviality guard (issue #68), so a
     # symmetry-protected zero overlap (diagonal rho_0 vs a coherence slow mode)
@@ -315,8 +354,8 @@ def _pick_a_class(
     # handled downstream at the VERDICT level by _apply_single_state_maxmix_floor
     # (issue #78) -- it drops the verdict to UNDEFINED (insufficient evidence)
     # rather than suppressing the A11 label.
-    if ev.get("mpemba_is_candidate", 0.0) > 0.5:
-        return "A11", "F4"
+    rungs: list[tuple[str, str, str, bool]] = []
+    rungs.append(("F4_MPEMBA", "A11", "F4", ev.get("mpemba_is_candidate", 0.0) > 0.5))
     # F5 phantom relaxation (issue #70 A8). The rule must be dimension-coherent
     # AND scale-invariant. ``pseudospectral_radius`` (D13) is the max modulus
     # max{|z| : z in sigma_eps(L)} -- a RATE-dimensioned quantity that scales
@@ -346,15 +385,12 @@ def _pick_a_class(
         # strongly non-normal = phantom/critical limit) now holds
         # unconditionally on the reach side; henrici still gates below.
         _psr_fires = True
-    if _psr_fires and ev["henrici_eta"] > 1.0:
-        return "A10", "F5"
+    rungs.append(("F5_PSEUDOSPECTRAL", "A10", "F5", bool(_psr_fires and ev["henrici_eta"] > 1.0)))
     # F1 overlap/eigenvector amplification (Mori-Shirai 2020): non-normal
     # amplification flagged by high Kreiss constant + Petermann factor
-    if ev["kreiss"] > 5.0 and ev["petermann_max"] > 5.0:
-        return "A3", "F1"
+    rungs.append(("F1_OVERLAP_AMPLIFICATION", "A3", "F1", bool(ev["kreiss"] > 5.0 and ev["petermann_max"] > 5.0)))
     # F2 skin effect: large trans-amplitude ratio + kappa_trans
-    if ev["trans_amplitude_ratio"] > 5.0 and ev["kappa_trans"] > 2.0:
-        return "A4", "F2"
+    rungs.append(("F2_SKIN", "A4", "F2", bool(ev["trans_amplitude_ratio"] > 5.0 and ev["kappa_trans"] > 2.0)))
     # F3 symmetrised gap correction (issue #88). A2/F3 semantics are a
     # *measured* Mori-Shirai symmetrised-gap reduction (Delta_GNS genuinely
     # below Delta), so the branch must key on a CERTIFIED Delta_GNS. When
@@ -367,8 +403,7 @@ def _pick_a_class(
     # reduction) as A2/F3 CONFIRMED / PUBLICATION_GRADE. Uncertified cases
     # fall through to the state-dependent branches below (A1/A5/A8/...),
     # which is the honest floor: "GNS uncertified" is absence of evidence.
-    if ev["gap_to_gns_ratio"] > 1.2 and ev.get("gns_certified", 0.0) > 0.5:
-        return "A2", "F3"
+    rungs.append(("F3_SYMMETRISED_GAP", "A2", "F3", bool(ev["gap_to_gns_ratio"] > 1.2 and ev.get("gns_certified", 0.0) > 0.5)))
     # A1 gap-controlled (LIOU-#69): the OBSERVABLE (linear trace-distance)
     # relaxation is a single exponential whose rate matches the spectral gap
     # (dimension-coherent D17 < 0.05). This takes priority over the M2/M3a/M3b
@@ -382,20 +417,15 @@ def _pick_a_class(
     # gap mode yields a clean single-exp at the gap rate; awarding A1/"none"
     # CONFIRMED there would shadow the true A10/F5 (or A3/A4) mechanism. So the
     # gap-failure families are decided first; A1 is reached only when none fire.
-    if (
+    rungs.append(("A1_LINEAR_SINGLE_EXP", "A1", "none", bool(
         ev.get("gap_rate_consistency", float("inf")) < 0.05
-        and ev.get("d17_linear_single_exp", 0.0) > 0.5
-    ):
-        return "A1", "none"
+        and ev.get("d17_linear_single_exp", 0.0) > 0.5)))
     # Oscillatory transient
-    if ev["has_complex_pairs"] > 0 and relaxation.aicc_model == "M3b":
-        return "A8", "none"
+    rungs.append(("A8_OSCILLATORY", "A8", "none", bool(ev["has_complex_pairs"] > 0 and relaxation.aicc_model == "M3b")))
     # Jordan-block / LEP (M3a winner)
-    if relaxation.aicc_model == "M3a":
-        return "A10", "F5"
+    rungs.append(("A10_JORDAN_M3A", "A10", "F5", relaxation.aicc_model == "M3a"))
     # Biexponential => metastable plateau or operator spreading
-    if relaxation.aicc_model == "M2":
-        return "A5", "none"
+    rungs.append(("A5_BIEXPONENTIAL", "A5", "none", relaxation.aicc_model == "M2"))
     # Residual gap consistency: the linear-single-exp A1 branch above already
     # claimed the strong (D17 < 0.05) single-mode case, so a plain
     # ``gap_rate_consistency`` threshold is the only distinction left here. The
@@ -403,9 +433,54 @@ def _pick_a_class(
     # identical ("A1", "none") that the ``< 0.20`` line below returns, and the A1
     # confidence keys on ``gap_rate_consistency`` alone (not the aicc model), so
     # it changed neither the label nor the score.
-    if ev["gap_rate_consistency"] < 0.20:
-        return "A1", "none"
-    return "A12", "none"
+    rungs.append(("A1_GAP_CONSISTENT", "A1", "none", bool(ev["gap_rate_consistency"] < 0.20)))
+    return rungs
+
+
+def triggered_hypotheses(
+    ev: dict[str, float],
+    *,
+    relaxation: RelaxationResult,
+) -> tuple[dict[str, object], ...]:
+    """Every hypothesis that fires, in priority order — issue #102.
+
+    The classifier returns ONE dominant class. When a system simultaneously
+    shows, say, Mpemba overlap and pseudospectral phantom evidence, the
+    priority chain reports only the first and the second becomes invisible.
+    This function reports all of them, each marked ``shadowed`` when priority
+    suppressed a genuinely DIFFERENT mechanism.
+
+    ``shadowed`` keys on the (class, family) pair, not on ladder position.
+    Several rungs can reach the SAME conclusion -- ``gap_rate_consistency <
+    0.05`` (with D17) and the residual ``< 0.20`` rung both yield ``A1/none``,
+    and the strong one implies the broad one -- so position alone would mark
+    A1 as shadowed by A1 and report a mechanism conflict where none exists.
+    Every firing rung is still listed: two rules supporting one conclusion is
+    corroboration worth seeing, it is simply not shadowing.
+
+    The tuple is RULE-level, so one suppressed mechanism can occupy several
+    entries -- ``A1`` through both its rungs, ``A10/F5`` through the
+    pseudospectral and the M3a rung. Counting entries therefore overcounts
+    conflicts; count distinct ``(a_class, f_family)`` pairs among the shadowed
+    ones instead. The tuple is deliberately NOT deduplicated: dropping a rung
+    would hide a rule that genuinely fired, and which rules fired is the audit
+    handle this report exists for.
+
+    It is a REPORT, not a decision: the verdict, class, family and confidence
+    are untouched. Consuming it as evidence would be a classifier change and
+    belongs behind the calibration study of issue #102.
+    """
+    fired = [r for r in _hypothesis_ladder(ev, relaxation=relaxation) if r[3]]
+    winner = (fired[0][1], fired[0][2]) if fired else None
+    return tuple(
+        {
+            "rule_id": rid,
+            "a_class": a_class,
+            "f_family": f_family,
+            "shadowed": (a_class, f_family) != winner,
+        }
+        for rid, a_class, f_family, _fires in fired
+    )
 
 
 def _pick_verdict_tier(
@@ -520,6 +595,7 @@ def classify_mechanism(
         tier=tier,        # type: ignore[arg-type]
         confidence=conf,
         evidence=ev,
+        triggered_hypotheses=triggered_hypotheses(ev, relaxation=relaxation),
         taxonomy_version=TAXONOMY_VERSION,
         schema_version=DIAGNOSTIC_SCHEMA_VERSION,
     )

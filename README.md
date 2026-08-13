@@ -76,7 +76,44 @@ report = lp.diagnose(L, rho_initial=rho_0, bootstrap_B=100, seed=42)
 print(report.classification.a_class)         # one of "A1".."A12"
 print(report.relaxation.beta_D, "in",
       report.relaxation.bca_ci_beta)         # (lo, hi)
+
+# Every mechanism hypothesis that fired -- not just the dominant one
+for h in report.classification.triggered_hypotheses:
+    print(h["rule_id"], h["a_class"], h["f_family"], h["shadowed"])
 ```
+
+`a_class` is one dominant label chosen by a priority chain, so a system showing
+several mechanisms at once would otherwise report only the highest-priority one.
+`triggered_hypotheses` (issue #102) lists **every** rung that fired, in decision
+order:
+
+| key | meaning |
+|---|---|
+| `rule_id` | stable identifier of the decision rule, e.g. `F4_MPEMBA` |
+| `a_class` / `f_family` | the class and family that rung would assign |
+| `shadowed` | `True` when priority suppressed a **different** mechanism |
+
+`shadowed` keys on the (class, family) pair, not on position: several rules can
+reach the same conclusion (the strong and the residual A1 rung, for instance),
+and that is corroboration rather than a suppressed mechanism.
+
+The tuple is **rule-level**, so one suppressed mechanism can appear in more than
+one entry — `A1` via both its rungs, `A10/F5` via the pseudospectral and the M3a
+rung. Counting entries therefore overcounts conflicts. Count distinct pairs:
+
+```python
+tri = report.classification.triggered_hypotheses
+suppressed = {(h["a_class"], h["f_family"]) for h in tri if h["shadowed"]}
+len(suppressed)          # how many mechanisms priority actually suppressed
+```
+
+Read the whole tuple when you want every supporting rule rather than the
+mechanism count.
+
+It is **report-only**: no verdict, class, family or confidence consumes it.
+Letting it drive decisions is deferred to the preregistered calibration study
+in issue #102. The field is additive and defaults to `()`, so results
+serialised by older versions stay valid.
 
 The same example with a 1D lattice geometry:
 
@@ -107,7 +144,7 @@ in this repository**; D24 ships as an opt-in module.
 |---|---|---|---|
 | **S — Spectral** | D1-D4 (+D2b) | gap, GNS-symmetrised gap, KMS gap, oscillating-mode gap, spectral spread | `diagnostics/spectral.py` |
 | **R — Relaxation** | D5-D7 (+D7b) | von-Neumann entropy, relative entropy, Uhlmann fidelity, entanglement asymmetry | `diagnostics/relaxation.py` |
-| **N — Non-normality** | D8-D13 (+D11b) | Henrici departure, Petermann factors, Kreiss constant, Bohr-AP, resolvent peak/FWHM, pseudospectral radius | `diagnostics/nonnormality.py`, `diagnostics/resolvent.py` |
+| **N — Non-normality** | D8-D13 (+D8b, D10b, D11b) | Henrici departure (+ dimensionless `henrici_relative`), Petermann factors, Kreiss grid lower bound (+ scale-relative `kreiss_scaled`), Bohr-AP, resolvent peak/FWHM, pseudospectral radius (+ scale-relative radius & abscissa) | `diagnostics/nonnormality.py`, `diagnostics/resolvent.py` |
 | **T — Transient** | D14-D15 | sup-norm transient amplification, numerical-abscissa ratio | `diagnostics/transient.py` |
 | **C — Classification** | D16-D20 | LEP proximity, gap-rate consistency, initial-state sensitivity, Mpemba overlap/scaling; A1-A12 mechanism classifier on top | `diagnostics/lep.py`, `diagnostics/mpemba.py`, `diagnostics/classification.py` |
 | **U/G — Uncertainty & Governance** | U0-U2, D24 | BCa CIs, AICc model selection M0..M3b, GLS+AR(1); manifest export; Zhou mixing-time predictor (opt-in, frozen) | `fitting/`, `diagnostics/uncertainty.py`, `io/manifest.py`, `_zhou.py` |
@@ -232,3 +269,13 @@ LiouScope is a **research framework**. It does not constitute a medical device, 
 a clinical decision aid, or an instrument fit for safety-of-life applications. Numerical results
 require physics-domain interpretation; no claim of universality is made beyond the regimes
 covered by the V1-V5 validation systems.
+
+Two honesty notes on the classifier surface (tracked in issues #101/#102):
+`classification.confidence` is a deterministic **heuristic support score**,
+not a calibrated probability; and the A10/F5 (phantom-relaxation) verdict
+path is **not yet invariant under a change of rate units** — the
+scale-relative successor diagnostics (`henrici_relative`, `kreiss_scaled`,
+`pseudospectral_radius_rel`, `pseudospectral_abscissa_rel`) are computed on
+every run with `claim_status: pending` but are advisory-only until the
+preregistered calibration study and independent physics review complete.
+See `docs/explanation/layers-and-taxonomy.md` for details.

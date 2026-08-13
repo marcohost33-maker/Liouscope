@@ -39,15 +39,109 @@ class SpectralResult:
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
-class NonNormalityResult:
-    """Non-normality layer N: D8, D9, D10, D11."""
+class SteadyProjectorResult:
+    """Asymptotic spectral (Riesz) projector of a Liouvillian — issue #103.
 
-    henrici_eta: float          # D8
+    Built from an ORDERED Schur decomposition plus a Sylvester solve, not from
+    a single arbitrary null vector: for a degenerate stationary manifold the
+    latter picks one basis vector of the kernel and silently misrepresents the
+    asymptotic conditional expectation.
+
+    ``semisimple`` is fail-closed. A defective zero/peripheral mode has no
+    spectral projector onto a complementary invariant subspace in the sense
+    used here, so downstream centred quantities must report NaN rather than a
+    plausible-looking number. ``claim_status: pending``.
+    """
+
+    projector: np.ndarray       # P_inf on the vectorised space (order='F')
+    rank: int                   # dim of the peripheral/asymptotic subspace
+    semisimple: bool            # every peripheral mode diagonalisable
+    peripheral_eigenvalues: np.ndarray
+    tolerance: float            # |Re lambda| <= tolerance counts as peripheral
+    separation: float           # gap to the fastest peripheral-excluded mode
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class CenteredTransientEstimate:
+    """D14b: ``sup_t ||e^{tL} - P_inf||_2`` with grid audit metadata (#103).
+
+    A finite time grid yields a LOWER BOUND. ``edge_maximizer`` records that
+    the sampled maximum sat on the last grid point, i.e. the true peak may lie
+    beyond the window. ``claim_status: pending``.
+    """
+
+    value: float
+    projector_norm: float
+    rank: int
+    semisimple: bool
+    t_min: float
+    t_max: float
+    n_points: int
+    edge_maximizer: bool
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class OperationalTransientEstimate:
+    """D14c: trace-norm amplification on the traceless-Hermitian subspace (#103).
+
+    Evaluated over a finite, recorded family of PHYSICAL state differences
+    (differences of density matrices), so the value is an explicit LOWER BOUND
+    on the induced 1->1 norm, never a certified supremum. For a CPTP semigroup
+    it must not exceed 1 within tolerance — that contractivity control is the
+    diagnostic's own sanity check. ``claim_status: pending``.
+    """
+
+    value: float
+    n_states: int
+    seed: int
+    t_min: float
+    t_max: float
+    n_points: int
+    edge_maximizer: bool
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class KreissGridEstimate:
+    """D10b: scale-relative Kreiss grid lower bound with audit metadata.
+
+    Issue #101 slice A / 2026-08-05 re-audit: coarse-grid results must be
+    labelled as estimates (lower bounds), not certified constants, and must
+    record grid ranges/resolution, whether the maximiser sat on a grid edge,
+    and refinement-convergence information. ``claim_status: pending``.
+    """
+
+    value: float                # refined grid lower bound (dimensionless)
+    coarse_value: float         # pre-refinement grid lower bound
+    edge_maximizer: bool        # coarse maximiser on a grid edge -> sup may lie outside
+    refinement_delta: float     # (value - coarse_value) / value; convergence metadata
+    sigma_rel_lo: float         # dimensionless sigma grid range (units of rate_scale)
+    sigma_rel_hi: float
+    omega_rel_max: float        # dimensionless omega grid half-span
+    n_sigma: int
+    n_omega: int
+    rate_scale: float           # ||L||_F used to (de)dimensionalise the grid
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class NonNormalityResult:
+    """Non-normality layer N: D8 (+D8b), D9, D10 (+D10b), D11.
+
+    The scale-relative D8b/D10b fields (issue #101 slice A) are additive and
+    defaulted to NaN/False so older callers and serialised results stay valid;
+    they are ``claim_status: pending`` and advisory-only (no classifier branch
+    consumes them).
+    """
+
+    henrici_eta: float          # D8 (rate-dimensioned, legacy)
     petermann_max: float        # D9 max K_j
     petermann_factors: np.ndarray
-    kreiss: float               # D10
+    kreiss: float               # D10 (legacy absolute-grid lower bound)
     bohr_ap_length: int         # D11 Bohr arithmetic-progression depth
     bohr_ap_pauli_bound: float
+    henrici_relative: float = float("nan")   # D8b eta_N / ||L||_F in [0, 1]
+    kreiss_scaled: float = float("nan")      # D10b scale-relative grid lower bound
+    kreiss_scaled_edge_maximizer: bool = False
+    kreiss_scaled_refinement_delta: float = float("nan")
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -91,21 +185,49 @@ class RelaxationResult:
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class ResolventResult:
-    """Resolvent layer: D11b, D12, D13."""
+    """Resolvent layer: D11b, D12, D13 (+ scale-relative variants).
 
-    resolvent_peak: float                 # D11b
-    ridge_fwhm: float                     # D12
-    pseudospectral_radius: float          # D13 eps-pseudospectrum radius
+    The scale-relative fields (issue #101 slice A) are additive and defaulted
+    to NaN so older callers/serialised results stay valid; they are
+    ``claim_status: pending`` and advisory-only. ``rate_scale == 0`` (zero
+    operator) leaves all of them NaN by documented semantics.
+    """
+
+    resolvent_peak: float                 # D11b (legacy absolute sigma)
+    ridge_fwhm: float                     # D12 (legacy)
+    pseudospectral_radius: float          # D13 eps-pseudospectrum radius (legacy)
     pseudospec_eps: float
+    rate_scale: float = float("nan")               # ||L||_F shared scale
+    sigma_rel: float = float("nan")                # dimensionless D11b offset
+    resolvent_peak_scaled: float = float("nan")    # rate_scale * peak (dimensionless)
+    ridge_fwhm_rel: float = float("nan")           # fwhm / rate_scale
+    pseudospec_eps_rel: float = float("nan")       # eps_abs = eps_rel * rate_scale
+    pseudospectral_radius_rel: float = float("nan")  # radius / rate_scale
+    pseudospectral_abscissa: float = float("nan")    # max Re z in sigma_eps (rate-valued)
+    pseudospectral_abscissa_rel: float = float("nan")  # abscissa / rate_scale
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
 class TransientResult:
     """Transient layer: D14, D15."""
 
-    trans_amplitude_ratio: float          # D14 sup_t ||e^{tL}|| / ||rho_0||
+    trans_amplitude_ratio: float          # D14 sup_t ||e^{tL}||_2 (UNSTRUCTURED HS)
     kappa_trans: float                    # D15 omega(L) / Delta
     numerical_abscissa: float             # omega(L)
+    # Issue #103: D14 above is an unstructured Hilbert-Schmidt semigroup norm
+    # over the full complex Liouville space. It carries the asymptotic
+    # projector baseline (||P_inf||_2 = sqrt(d * Tr rho_ss^2) in [1, sqrt(d)])
+    # and its extremiser need not be Hermitian, traceless or a difference of
+    # physical states. The fields below separate those two confounds. Additive
+    # and defaulted so synthetic callers stay valid; ``claim_status: pending``,
+    # no classifier consumption until calibration (#102).
+    trans_amplitude_centered: float = float("nan")      # D14b sup_t ||e^{tL} - P_inf||_2
+    trans_amplitude_decaying: float = float("nan")      # D14d sup_t ||e^{tL}|_decay||_2
+    steady_projector_norm: float = float("nan")         # ||P_inf||_2 (the removed baseline)
+    steady_projector_rank: int = -1                     # dim of the asymptotic subspace
+    steady_projector_semisimple: bool = False           # False => D14b is NaN (fail-closed)
+    trans_amplitude_operational: float = float("nan")   # D14c trace-norm LOWER BOUND
+    transient_seed: int = -1                            # D14c sampling seed (manifest-relevant)
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -155,8 +277,14 @@ class ClassificationResult:
     f_family: str                         # "F1" .. "F5" or "none"
     verdict: Verdict
     tier: Tier
-    confidence: float                     # 0..1
+    confidence: float                     # 0..1 — HEURISTIC support score, not
+    #                                       a posterior probability (issue #102)
     evidence: dict[str, float]
+    # Issue #102: every hypothesis that fired, in priority order, each flagged
+    # ``shadowed`` when a higher rung already won. The dominant class above is a
+    # convenience projection; without this the branch chain silently erases
+    # concurrently supported mechanisms. Report only — no verdict consumes it.
+    triggered_hypotheses: tuple[dict[str, object], ...] = ()
     taxonomy_version: str = TAXONOMY_VERSION
     schema_version: str = DIAGNOSTIC_SCHEMA_VERSION
 
