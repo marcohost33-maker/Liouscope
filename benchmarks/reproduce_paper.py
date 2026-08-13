@@ -20,8 +20,9 @@ import hmac
 import json
 import sys
 import time
+from collections.abc import Mapping
 from pathlib import Path
-from typing import Any, Mapping
+from typing import Any
 
 import liouscope as ls
 from liouscope.examples import all_systems
