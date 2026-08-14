@@ -20,6 +20,8 @@ from ._consts import (
     DIAGNOSTIC_SCHEMA_VERSION,
     F_FAMILIES,
     F_FAMILY_DESCRIPTIONS,
+    REACHABLE_A_CLASSES,
+    RESERVED_A_CLASSES,
     TAXONOMY_VERSION,
 )
 from ._diagnostics import diagnose
@@ -54,6 +56,8 @@ __all__ = [
     "ENSEMBLE_MPEMBA_CONFIRMED",
     "F_FAMILIES",
     "F_FAMILY_DESCRIPTIONS",
+    "REACHABLE_A_CLASSES",
+    "RESERVED_A_CLASSES",
     "TAXONOMY_VERSION",
     "ClassificationResult",
     "DiagnosticReport",

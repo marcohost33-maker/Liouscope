@@ -7,6 +7,55 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Added
+- **Hypothesis-wise evidence matrix + `support_score` + reachability gate
+  (issue #102, additive, `claim_status: pending`, no verdict change).**
+  - `ClassificationResult.hypothesis_matrix` reports one entry for **every**
+    hypothesis of the A1-A12 taxonomy: each decision rung, the A12 fallback,
+    and the schema-reserved A6/A7/A9. Each entry records `status`
+    (`SUPPORTED`/`NOT_SUPPORTED`/`UNEVALUABLE`/`RESERVED`), the `supporting`
+    conditions with the evidence values they read, the failing conditions as
+    `counterevidence`, `missing` required evidence keys, an explicit
+    fail-closed `claim_floor` and the per-class ordinal `support_score`.
+    Claim-floor rules: `RESERVED`/`UNEVALUABLE` → `UNDEFINED` (no rule / no
+    evidence — no claim); `NOT_SUPPORTED` → `NOT_EXCLUDED` (a threshold that
+    did not fire is absence of support, not proof of absence, issue #70 A5);
+    `SUPPORTED` → the verdict the hypothesis would receive were it the winner
+    (via the unchanged `_confidence` → `_pick_verdict_tier` → A11
+    maximally-mixed-floor pipeline), so the winner's floor equals the
+    reported verdict exactly (pinned by test).
+  - To keep the matrix from drifting away from the decision, the priority
+    chain is now defined **declaratively**: `_ladder_spec()` returns rungs of
+    atomic `_Condition` predicates (each naming the evidence keys it reads),
+    and `_hypothesis_ladder` (winner + shadow report) and
+    `hypothesis_evidence_matrix` are both derived from that one spec.
+    Behaviour-preserving: conditions, order, short-circuit evaluation and all
+    (class, family, verdict, tier, confidence) outputs are unchanged
+    (669-test baseline green, anchors untouched).
+  - **`ClassificationResult.support_score` (issue #102 "rename" option 1):**
+    the honestly-named twin of `confidence`, with documented, explicitly
+    NON-probabilistic ordinal semantics (`0.20 < 0.50 < 0.70 < 0.85 < 0.95`
+    ranks rule strength; no calibration evidence exists). `confidence` stays
+    as the legacy alias carrying the identical value (pinned equal by test);
+    a *calibrated* replacement remains gated on the preregistered validation
+    design in issue #102. Additive + defaulted (`NaN`) so serialised older
+    results stay valid.
+  - **Reachability/ontology gate:** new `liouscope.REACHABLE_A_CLASSES`
+    (taxonomy minus `RESERVED_A_CLASSES`, 9 classes) is the coverage
+    denominator for any "n of N classes" statement; reserved classes appear
+    in the matrix as `RESERVED` with a permanent `UNDEFINED` floor and are
+    excluded from claims. `RESERVED_A_CLASSES` is now exported too.
+  - The per-hypothesis numerical-uncertainty and perturbation-robustness
+    columns from the issue-#102 wishlist are deliberately **not faked**; they
+    remain open in the issue. No `MANIFEST_SCHEMA` bump: the run-manifest
+    contract is untouched (report fields are additive with defaults).
+  - Docs: `docs/explanation/layers-and-taxonomy.md` gains the matrix
+    vocabulary and the reachable-denominator rule; README documents
+    `hypothesis_matrix`; the tutorial prints `support_score`.
+  - Tests: `tests/test_hypothesis_matrix.py` (57 tests: taxonomy coverage,
+    SUPPORTED ⟺ ladder-fires metamorphic equivalence, claim-floor truth
+    table incl. non-finite `beta_D` and the A11 ensemble override, RFC-8259
+    serialisation with `inf` evidence, report-only non-influence, legacy
+    default contract).
 - **Branch-shadowing report: `ClassificationResult.triggered_hypotheses`
   (issue #102 slice "assess branch shadowing", `claim_status: pending`).** The
   classifier resolves by PRIORITY and returns exactly one dominant `a_class`,

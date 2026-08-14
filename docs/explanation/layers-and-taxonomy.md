@@ -92,17 +92,62 @@ The design rule behind all three bullets is the same: **fail closed.**
 When evidence is missing, malformed, or merely asserted, the report degrades
 to the weaker claim rather than trusting the caller.
 
-## `confidence` is a heuristic support score, not a probability
+## `support_score` (né `confidence`) is ordinal, not a probability
 
-`ClassificationResult.confidence` is a **deterministic, rule-based support
+`ClassificationResult.support_score` is a **deterministic, rule-based support
 score** in `[0, 1]` (fixed values such as `0.70`, `0.85`, `0.95` attached to
 specific evidence combinations). It is **not** a posterior probability and it
 has **not** been calibrated against held-out labelled reference families — do
-not read `0.85` as "85 % probability the label is right". Calibrated,
-hypothesis-wise evidence reporting is tracked in issue #102; until that
-lands, treat the number as an ordinal ranking of rule strength and rely on
-the *verdict/tier* vocabulary (which is evidence-graded and fail-closed) for
-claims.
+not read `0.85` as "85 % probability the label is right". Treat the number as
+an *ordinal ranking of rule strength* (`0.20 < 0.50 < 0.70 < 0.85 < 0.95`)
+and rely on the *verdict/tier* vocabulary (which is evidence-graded and
+fail-closed) for claims.
+
+`confidence` is the **legacy alias** for the same value: issue #102 offered
+rename-with-honest-semantics or calibrate, and the rename shipped first
+(option 1). Both fields carry identical values (pinned by test); a genuinely
+*calibrated* score would have to pass the preregistered validation design in
+issue #102 (family-split calibration/holdout sets, reliability curves,
+adversarial negatives) before it may replace the ordinal one.
+
+## The hypothesis evidence matrix
+
+`ClassificationResult.hypothesis_matrix` (issue #102) reports, for **every**
+hypothesis of the taxonomy — each decision rung, the A12 fallback, and the
+schema-reserved classes — one entry with:
+
+| key | meaning |
+|---|---|
+| `status` | `SUPPORTED` / `NOT_SUPPORTED` / `UNEVALUABLE` / `RESERVED` |
+| `supporting` | atomic conditions that hold, with the evidence values read |
+| `counterevidence` | conditions that fail, with their values |
+| `missing` | required evidence keys absent from this run |
+| `claim_floor` | what this run could claim about the hypothesis |
+| `support_score` | the ordinal score this class would receive |
+
+The claim floor follows explicit, fail-closed rules: `RESERVED` and
+`UNEVALUABLE` floor to `UNDEFINED` (no rule / no evidence — no claim);
+`NOT_SUPPORTED` floors to `NOT_EXCLUDED` (a threshold that did not fire is
+absence of support, **not** proof of absence); `SUPPORTED` receives the
+verdict the hypothesis would get were it the winner — so for the reported
+class the floor equals the reported verdict exactly (pinned by test).
+
+Both the decision ladder and the matrix are derived from one declarative
+rung specification (`_ladder_spec`), so the audit surface cannot drift from
+the decision. The matrix is **report-only**: no verdict consumes it, and the
+per-hypothesis numerical-uncertainty / perturbation-robustness columns from
+the issue-#102 wishlist are *not faked* — they remain open until the
+underlying machinery exists.
+
+### Reserved classes are excluded from coverage denominators
+
+A6/A7/A9 have no code-backed decision rule (`RESERVED_A_CLASSES` records the
+per-class rationale). They appear in the matrix as `RESERVED` with a
+permanent `UNDEFINED` claim floor, and any "n of N classes" coverage
+statement must use the reachable denominator
+`liouscope.REACHABLE_A_CLASSES` (9 classes), not the full taxonomy — the
+reachability contract is pinned by an AST-level test that scans the actual
+decision source.
 
 ## Known limitation: the F5 decision path is not rate-unit invariant
 

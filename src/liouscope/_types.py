@@ -280,11 +280,28 @@ class ClassificationResult:
     confidence: float                     # 0..1 — HEURISTIC support score, not
     #                                       a posterior probability (issue #102)
     evidence: dict[str, float]
+    # Issue #102 option 1 ("rename"): ``support_score`` is the honestly-named
+    # field for the SAME deterministic, rule-based ordinal value as
+    # ``confidence``. Semantics are explicitly NON-probabilistic: the value
+    # ranks rule strength (0.20 < 0.50 < 0.70 < 0.85 < 0.95) and carries no
+    # calibration evidence — do not read it as P(label is right). ``confidence``
+    # is retained as a legacy alias for serialised-report and API compatibility;
+    # a calibrated replacement (option 2) stays gated on the preregistered
+    # validation design in issue #102. Additive + defaulted (NaN) so results
+    # serialised by older versions stay valid; ``classify_mechanism`` always
+    # populates it, and the two fields are pinned equal in tests.
+    support_score: float = float("nan")
     # Issue #102: every hypothesis that fired, in priority order, each flagged
     # ``shadowed`` when a higher rung already won. The dominant class above is a
     # convenience projection; without this the branch chain silently erases
     # concurrently supported mechanisms. Report only — no verdict consumes it.
     triggered_hypotheses: tuple[dict[str, object], ...] = ()
+    # Issue #102: hypothesis-wise evidence matrix over the FULL A1-A12 taxonomy
+    # (decision rungs + A12 fallback + schema-reserved A6/A7/A9). Each entry
+    # records supporting measurements, counterevidence, missing required
+    # evidence, an explicit claim floor and the ordinal support score — see
+    # ``hypothesis_evidence_matrix``. Report only — no decision consumes it.
+    hypothesis_matrix: tuple[dict[str, object], ...] = ()
     taxonomy_version: str = TAXONOMY_VERSION
     schema_version: str = DIAGNOSTIC_SCHEMA_VERSION
 

@@ -35,9 +35,25 @@ Advisory evidence (issue #70 B4): several diagnostics are surfaced in the
 class/verdict/confidence -- see ``ADVISORY_EVIDENCE_KEYS`` below. Wiring any of
 them is a class-influencing design decision with false-positive risk and belongs
 in a dedicated PR with anchor coverage + FP tests, not a blind hook-up here.
+
+Hypothesis-wise evidence matrix (issue #102): the priority chain is defined
+declaratively in ``_ladder_spec`` (rungs of atomic ``_Condition`` predicates).
+``_hypothesis_ladder`` (decision + shadow report) and
+``hypothesis_evidence_matrix`` (per-hypothesis supporting/counter/missing
+evidence with explicit claim floors over the FULL A1-A12 taxonomy, reserved
+classes included) are both derived from that one spec, so the audit surface
+cannot drift from the decision. The matrix is report-only: no decision function
+consumes it. ``support_score`` is the honestly-named ordinal twin of the legacy
+``confidence`` field (issue #102 option 1); both carry the same deterministic,
+non-probabilistic value until a calibrated replacement passes the preregistered
+validation design.
 """
 
 from __future__ import annotations
+
+from collections.abc import Callable
+from dataclasses import dataclass, field
+from typing import Final
 
 import numpy as np
 
@@ -45,6 +61,7 @@ from .._consts import (
     DIAGNOSTIC_SCHEMA_VERSION,
     EPS_MAXMIX,
     GNS_CERTIFIED_RTOL,
+    RESERVED_A_CLASSES,
     TAXONOMY_VERSION,
     TIER_CONFIRMATION,
     TIER_EXPLORATION,
@@ -329,6 +346,295 @@ def _pick_a_class(
     return "A12", "none"
 
 
+@dataclass(frozen=True)
+class _Condition:
+    """One atomic requirement of a decision rung (issue #102).
+
+    ``keys`` names the evidence-dict entries the predicate reads, so the
+    hypothesis evidence matrix can report *which* measurement supported or
+    contradicted the rung, and can mark the rung UNEVALUABLE when a required
+    key is absent (e.g. the Mpemba layer was not run). ``relaxation_fields``
+    names any :class:`RelaxationResult` attributes read, for the same audit
+    purpose. ``fn`` MUST reproduce the decision predicate exactly — it is the
+    single source both the ladder and the matrix evaluate.
+    """
+
+    description: str
+    keys: tuple[str, ...]
+    fn: Callable[[dict[str, float], RelaxationResult], bool]
+    relaxation_fields: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class _Rung:
+    """One priority rung: fires iff ALL of its conditions hold."""
+
+    rule_id: str
+    a_class: str
+    f_family: str
+    conditions: tuple[_Condition, ...] = field(default_factory=tuple)
+
+
+def _f5_reach(ev: dict[str, float], relaxation: RelaxationResult) -> bool:
+    # F5 reach leg (issue #70 A8). ``pseudospectral_radius`` (D13) is the max
+    # modulus max{|z| : z in sigma_eps(L)} -- a RATE-dimensioned quantity that
+    # scales ~linearly under a uniform Liouvillian rescale L -> cL (all
+    # eigenvalues, and the bracketing grid, scale by c). ``gap_to_gns_ratio``
+    # is a pure dimensionless number (Delta / Delta_s), invariant under
+    # L -> cL. Comparing a rate directly against a dimensionless ratio (the
+    # pre-#70 rule) was incoherent: rescaling L -> cL flipped the A10/F5
+    # verdict even though the physics is unchanged. Normalising the radius by
+    # the spectral gap Delta yields the dimensionless pseudospectral reach
+    # (radius / Delta) -- how far the eps-pseudospectrum extends relative to
+    # the asymptotic decay rate -- which is the physically meaningful
+    # phantom-relaxation signature (Znidaric 2023) and is scale-invariant to
+    # leading order (both radius and gap scale as c). A vanishing gap (no
+    # spectral gap) is treated as inf reach: a gapless, strongly non-normal
+    # operator is the phantom/critical limit.
+    _gap = ev.get("gap", 0.0)
+    if _gap > 0.0:
+        return bool(
+            ev["pseudospectral_radius"] / _gap > 2.0 * ev.get("gap_to_gns_ratio", 1.0)
+        )
+    # Gapless limit: infinite reach dominates ANY ratio. The former
+    # ``inf > 2*ratio`` comparison silently failed when the GNS gap was
+    # ALSO floored (ratio = inf, and ``inf > inf`` is False) -- i.e. in the
+    # realistic gapless case, since ``gns_certified`` requires gap > 0 and
+    # the sentinel floors there. The documented contract (gapless +
+    # strongly non-normal = phantom/critical limit) now holds
+    # unconditionally on the reach side; henrici still gates in the second
+    # condition. NOTE (#101 addendum): treating a vanishing gap as positive
+    # reach evidence is a known blind spot -- the gapless-abstention rule is
+    # gated on the slice-C calibration study and NOT changed here.
+    return True
+
+
+def _ladder_spec() -> tuple[_Rung, ...]:
+    """The priority ladder as declarative rungs (issue #102).
+
+    Single source of truth for the decision: :func:`_hypothesis_ladder`
+    (winner + shadow report) and :func:`hypothesis_evidence_matrix`
+    (per-hypothesis supporting/counter/missing evidence) are BOTH derived from
+    this spec, so there is no second copy of the conditions to drift.
+
+    Order is the decision order; do not reorder without a physics rationale.
+    The per-rung physics rationale (F4 salience first, operator-intrinsic
+    F-families before the state-dependent A1 branches, ...) is documented on
+    the conditions and in the docstrings below; behaviour is pinned by
+    ``tests/test_branch_shadowing.py`` and the anchor suite.
+    """
+    # F4 Mpemba check first (high salience for current literature risk). The
+    # candidate flag already folds in the non-triviality guard (issue #68), so a
+    # symmetry-protected zero overlap (diagonal rho_0 vs a coherence slow mode)
+    # no longer reaches A11 -- only a genuine, fine-tuned skip does. NOTE: A11 is
+    # still the best-fit mechanism label here; the SINGLE-STATE maximally-mixed
+    # case (rho_ss = I/d, where the issue-#68 guard structurally cannot fire) is
+    # handled downstream at the VERDICT level by _apply_single_state_maxmix_floor
+    # (issue #78) -- it drops the verdict to UNDEFINED (insufficient evidence)
+    # rather than suppressing the A11 label.
+    f4 = _Rung(
+        rule_id="F4_MPEMBA",
+        a_class="A11",
+        f_family="F4",
+        conditions=(
+            _Condition(
+                description="mpemba_is_candidate > 0.5 (D19 slow-mode skip, "
+                "non-triviality guard folded in)",
+                keys=("mpemba_is_candidate",),
+                fn=lambda ev, rel: ev.get("mpemba_is_candidate", 0.0) > 0.5,
+            ),
+        ),
+    )
+    # F5 phantom relaxation: dimensionless reach leg + (legacy, rate-
+    # dimensioned) Henrici gate. The gate's missing unit invariance is the
+    # documented #101 limitation; it is reported, not silently fixed here.
+    f5 = _Rung(
+        rule_id="F5_PSEUDOSPECTRAL",
+        a_class="A10",
+        f_family="F5",
+        conditions=(
+            _Condition(
+                description="pseudospectral reach: radius/gap > 2 * gap_to_gns_ratio "
+                "(gapless => infinite reach; see #101 gapless blind spot)",
+                keys=("pseudospectral_radius", "gap", "gap_to_gns_ratio"),
+                fn=_f5_reach,
+            ),
+            _Condition(
+                description="henrici_eta > 1.0 (D8; rate-dimensioned legacy gate, "
+                "not unit-invariant -- #101 known limitation)",
+                keys=("henrici_eta",),
+                fn=lambda ev, rel: bool(ev["henrici_eta"] > 1.0),
+            ),
+        ),
+    )
+    # F1 overlap/eigenvector amplification (Mori-Shirai 2020): non-normal
+    # amplification flagged by high Kreiss constant + Petermann factor
+    f1 = _Rung(
+        rule_id="F1_OVERLAP_AMPLIFICATION",
+        a_class="A3",
+        f_family="F1",
+        conditions=(
+            _Condition(
+                description="kreiss > 5.0 (D10 grid lower bound)",
+                keys=("kreiss",),
+                fn=lambda ev, rel: bool(ev["kreiss"] > 5.0),
+            ),
+            _Condition(
+                description="petermann_max > 5.0 (D9)",
+                keys=("petermann_max",),
+                fn=lambda ev, rel: bool(ev["petermann_max"] > 5.0),
+            ),
+        ),
+    )
+    # F2 skin effect: large trans-amplitude ratio + kappa_trans
+    f2 = _Rung(
+        rule_id="F2_SKIN",
+        a_class="A4",
+        f_family="F2",
+        conditions=(
+            _Condition(
+                description="trans_amplitude_ratio > 5.0 (D14, unstructured HS norm)",
+                keys=("trans_amplitude_ratio",),
+                fn=lambda ev, rel: bool(ev["trans_amplitude_ratio"] > 5.0),
+            ),
+            _Condition(
+                description="kappa_trans > 2.0 (D15)",
+                keys=("kappa_trans",),
+                fn=lambda ev, rel: bool(ev["kappa_trans"] > 2.0),
+            ),
+        ),
+    )
+    # F3 symmetrised gap correction (issue #88). A2/F3 semantics are a
+    # *measured* Mori-Shirai symmetrised-gap reduction (Delta_GNS genuinely
+    # below Delta), so the branch must key on a CERTIFIED Delta_GNS. When
+    # ``gns_gap`` is the conservative floor sentinel (~0: the GNS
+    # symmetrisation certifies no contraction at all -- the documented 2026-07
+    # audit-A1 behaviour for non-detailed-balance steady states with
+    # coherences), the exploded ratio is an artefact of the sentinel, not
+    # positive mechanism evidence: firing F3 off it labelled a textbook
+    # Rabi-driven amplitude-damped qubit (Delta_KMS == Delta, no real
+    # reduction) as A2/F3 CONFIRMED / PUBLICATION_GRADE. Uncertified cases
+    # fall through to the state-dependent branches below (A1/A5/A8/...),
+    # which is the honest floor: "GNS uncertified" is absence of evidence.
+    f3 = _Rung(
+        rule_id="F3_SYMMETRISED_GAP",
+        a_class="A2",
+        f_family="F3",
+        conditions=(
+            _Condition(
+                description="gap_to_gns_ratio > 1.2 (D1/D2 measured reduction)",
+                keys=("gap_to_gns_ratio",),
+                fn=lambda ev, rel: bool(ev["gap_to_gns_ratio"] > 1.2),
+            ),
+            _Condition(
+                description="gns_certified > 0.5 (Delta_GNS measured, not the "
+                "floor sentinel -- #88)",
+                keys=("gns_certified",),
+                fn=lambda ev, rel: ev.get("gns_certified", 0.0) > 0.5,
+            ),
+        ),
+    )
+    # A1 gap-controlled (LIOU-#69): the OBSERVABLE (linear trace-distance)
+    # relaxation is a single exponential whose rate matches the spectral gap
+    # (dimension-coherent D17 < 0.05). This takes priority over the M2/M3a/M3b
+    # SHAPE branches below -- the relative-entropy curve carries a metric
+    # multiplier and can prefer a bi-exponential even for single-mode dynamics.
+    # It must NOT precede the F1-F5 gap-failure families (Equalita #79 review):
+    # gap_rate_consistency + linear_fit_model come from the initial-state-
+    # DEPENDENT trace-distance curve, whereas pseudospectral_radius / henrici /
+    # trans_amplitude / kreiss / petermann are operator-INTRINSIC. A strongly
+    # non-normal phantom/skin operator with an rho_0 that excites only the slow
+    # gap mode yields a clean single-exp at the gap rate; awarding A1/"none"
+    # CONFIRMED there would shadow the true A10/F5 (or A3/A4) mechanism. So the
+    # gap-failure families are decided first; A1 is reached only when none fire.
+    a1_strong = _Rung(
+        rule_id="A1_LINEAR_SINGLE_EXP",
+        a_class="A1",
+        f_family="none",
+        conditions=(
+            _Condition(
+                description="gap_rate_consistency < 0.05 (D17, dimension-coherent)",
+                keys=("gap_rate_consistency",),
+                fn=lambda ev, rel: ev.get("gap_rate_consistency", float("inf")) < 0.05,
+            ),
+            _Condition(
+                description="linear trace-distance relaxation is single-exponential "
+                "(M0/M1 winner)",
+                keys=("d17_linear_single_exp",),
+                fn=lambda ev, rel: ev.get("d17_linear_single_exp", 0.0) > 0.5,
+            ),
+        ),
+    )
+    # Oscillatory transient
+    a8 = _Rung(
+        rule_id="A8_OSCILLATORY",
+        a_class="A8",
+        f_family="none",
+        conditions=(
+            _Condition(
+                description="has_complex_pairs (D3 oscillating modes present)",
+                keys=("has_complex_pairs",),
+                fn=lambda ev, rel: bool(ev["has_complex_pairs"] > 0),
+            ),
+            _Condition(
+                description="AICc winner is M3b (damped-oscillation model)",
+                keys=(),
+                fn=lambda ev, rel: rel.aicc_model == "M3b",
+                relaxation_fields=("aicc_model",),
+            ),
+        ),
+    )
+    # Jordan-block / LEP (M3a winner)
+    a10_m3a = _Rung(
+        rule_id="A10_JORDAN_M3A",
+        a_class="A10",
+        f_family="F5",
+        conditions=(
+            _Condition(
+                description="AICc winner is M3a (polynomial-times-exponential, "
+                "Jordan/LEP signature)",
+                keys=(),
+                fn=lambda ev, rel: rel.aicc_model == "M3a",
+                relaxation_fields=("aicc_model",),
+            ),
+        ),
+    )
+    # Biexponential => metastable plateau or operator spreading
+    a5 = _Rung(
+        rule_id="A5_BIEXPONENTIAL",
+        a_class="A5",
+        f_family="none",
+        conditions=(
+            _Condition(
+                description="AICc winner is M2 (biexponential / metastable plateau)",
+                keys=(),
+                fn=lambda ev, rel: rel.aicc_model == "M2",
+                relaxation_fields=("aicc_model",),
+            ),
+        ),
+    )
+    # Residual gap consistency: the linear-single-exp A1 branch above already
+    # claimed the strong (D17 < 0.05) single-mode case, so a plain
+    # ``gap_rate_consistency`` threshold is the only distinction left here. The
+    # former ``< 0.05 and aicc_model == "M0"`` pre-check was dead: it returned the
+    # identical ("A1", "none") that the ``< 0.20`` line below returns, and the A1
+    # confidence keys on ``gap_rate_consistency`` alone (not the aicc model), so
+    # it changed neither the label nor the score.
+    a1_residual = _Rung(
+        rule_id="A1_GAP_CONSISTENT",
+        a_class="A1",
+        f_family="none",
+        conditions=(
+            _Condition(
+                description="gap_rate_consistency < 0.20 (D17 residual consistency)",
+                keys=("gap_rate_consistency",),
+                fn=lambda ev, rel: bool(ev["gap_rate_consistency"] < 0.20),
+            ),
+        ),
+    )
+    return (f4, f5, f1, f2, f3, a1_strong, a8, a10_m3a, a5, a1_residual)
+
+
 def _hypothesis_ladder(
     ev: dict[str, float],
     *,
@@ -343,98 +649,19 @@ def _hypothesis_ladder(
     suppressed hypotheses visible without changing any verdict, and without a
     second copy of the conditions that could drift from the decision itself.
 
-    Order is the decision order; do not reorder without a physics rationale.
+    The rungs and their conditions come from :func:`_ladder_spec`; a rung
+    fires iff ALL of its conditions hold (short-circuit evaluation, matching
+    the historical inline ``and`` chains exactly).
     """
-    # F4 Mpemba check first (high salience for current literature risk). The
-    # candidate flag already folds in the non-triviality guard (issue #68), so a
-    # symmetry-protected zero overlap (diagonal rho_0 vs a coherence slow mode)
-    # no longer reaches A11 -- only a genuine, fine-tuned skip does. NOTE: A11 is
-    # still the best-fit mechanism label here; the SINGLE-STATE maximally-mixed
-    # case (rho_ss = I/d, where the issue-#68 guard structurally cannot fire) is
-    # handled downstream at the VERDICT level by _apply_single_state_maxmix_floor
-    # (issue #78) -- it drops the verdict to UNDEFINED (insufficient evidence)
-    # rather than suppressing the A11 label.
-    rungs: list[tuple[str, str, str, bool]] = []
-    rungs.append(("F4_MPEMBA", "A11", "F4", ev.get("mpemba_is_candidate", 0.0) > 0.5))
-    # F5 phantom relaxation (issue #70 A8). The rule must be dimension-coherent
-    # AND scale-invariant. ``pseudospectral_radius`` (D13) is the max modulus
-    # max{|z| : z in sigma_eps(L)} -- a RATE-dimensioned quantity that scales
-    # ~linearly under a uniform Liouvillian rescale L -> cL (all eigenvalues,
-    # and the bracketing grid, scale by c). ``gap_to_gns_ratio`` is a pure
-    # dimensionless number (Delta / Delta_s), invariant under L -> cL. Comparing
-    # a rate directly against a dimensionless ratio (the pre-#70 rule) was
-    # incoherent: rescaling L -> cL flipped the A10/F5 verdict even though the
-    # physics is unchanged. Normalising the radius by the spectral gap Delta
-    # yields the dimensionless pseudospectral reach (radius / Delta) -- how far
-    # the eps-pseudospectrum extends relative to the asymptotic decay rate --
-    # which is the physically meaningful phantom-relaxation signature (Znidaric
-    # 2023) and is scale-invariant to leading order (both radius and gap scale
-    # as c). A vanishing gap (no spectral gap) is treated as inf reach: a
-    # gapless, strongly non-normal operator is the phantom/critical limit.
-    _gap = ev.get("gap", 0.0)
-    if _gap > 0.0:
-        _psr_fires = (
-            ev["pseudospectral_radius"] / _gap > 2.0 * ev.get("gap_to_gns_ratio", 1.0)
+    return [
+        (
+            rung.rule_id,
+            rung.a_class,
+            rung.f_family,
+            all(cond.fn(ev, relaxation) for cond in rung.conditions),
         )
-    else:
-        # Gapless limit: infinite reach dominates ANY ratio. The former
-        # ``inf > 2*ratio`` comparison silently failed when the GNS gap was
-        # ALSO floored (ratio = inf, and ``inf > inf`` is False) -- i.e. in the
-        # realistic gapless case, since ``gns_certified`` requires gap > 0 and
-        # the sentinel floors there. The documented contract (gapless +
-        # strongly non-normal = phantom/critical limit) now holds
-        # unconditionally on the reach side; henrici still gates below.
-        _psr_fires = True
-    rungs.append(("F5_PSEUDOSPECTRAL", "A10", "F5", bool(_psr_fires and ev["henrici_eta"] > 1.0)))
-    # F1 overlap/eigenvector amplification (Mori-Shirai 2020): non-normal
-    # amplification flagged by high Kreiss constant + Petermann factor
-    rungs.append(("F1_OVERLAP_AMPLIFICATION", "A3", "F1", bool(ev["kreiss"] > 5.0 and ev["petermann_max"] > 5.0)))
-    # F2 skin effect: large trans-amplitude ratio + kappa_trans
-    rungs.append(("F2_SKIN", "A4", "F2", bool(ev["trans_amplitude_ratio"] > 5.0 and ev["kappa_trans"] > 2.0)))
-    # F3 symmetrised gap correction (issue #88). A2/F3 semantics are a
-    # *measured* Mori-Shirai symmetrised-gap reduction (Delta_GNS genuinely
-    # below Delta), so the branch must key on a CERTIFIED Delta_GNS. When
-    # ``gns_gap`` is the conservative floor sentinel (~0: the GNS
-    # symmetrisation certifies no contraction at all -- the documented 2026-07
-    # audit-A1 behaviour for non-detailed-balance steady states with
-    # coherences), the exploded ratio is an artefact of the sentinel, not
-    # positive mechanism evidence: firing F3 off it labelled a textbook
-    # Rabi-driven amplitude-damped qubit (Delta_KMS == Delta, no real
-    # reduction) as A2/F3 CONFIRMED / PUBLICATION_GRADE. Uncertified cases
-    # fall through to the state-dependent branches below (A1/A5/A8/...),
-    # which is the honest floor: "GNS uncertified" is absence of evidence.
-    rungs.append(("F3_SYMMETRISED_GAP", "A2", "F3", bool(ev["gap_to_gns_ratio"] > 1.2 and ev.get("gns_certified", 0.0) > 0.5)))
-    # A1 gap-controlled (LIOU-#69): the OBSERVABLE (linear trace-distance)
-    # relaxation is a single exponential whose rate matches the spectral gap
-    # (dimension-coherent D17 < 0.05). This takes priority over the M2/M3a/M3b
-    # SHAPE branches below -- the relative-entropy curve carries a metric
-    # multiplier and can prefer a bi-exponential even for single-mode dynamics.
-    # It must NOT precede the F1-F5 gap-failure families (Equalita #79 review):
-    # gap_rate_consistency + linear_fit_model come from the initial-state-
-    # DEPENDENT trace-distance curve, whereas pseudospectral_radius / henrici /
-    # trans_amplitude / kreiss / petermann are operator-INTRINSIC. A strongly
-    # non-normal phantom/skin operator with an rho_0 that excites only the slow
-    # gap mode yields a clean single-exp at the gap rate; awarding A1/"none"
-    # CONFIRMED there would shadow the true A10/F5 (or A3/A4) mechanism. So the
-    # gap-failure families are decided first; A1 is reached only when none fire.
-    rungs.append(("A1_LINEAR_SINGLE_EXP", "A1", "none", bool(
-        ev.get("gap_rate_consistency", float("inf")) < 0.05
-        and ev.get("d17_linear_single_exp", 0.0) > 0.5)))
-    # Oscillatory transient
-    rungs.append(("A8_OSCILLATORY", "A8", "none", bool(ev["has_complex_pairs"] > 0 and relaxation.aicc_model == "M3b")))
-    # Jordan-block / LEP (M3a winner)
-    rungs.append(("A10_JORDAN_M3A", "A10", "F5", relaxation.aicc_model == "M3a"))
-    # Biexponential => metastable plateau or operator spreading
-    rungs.append(("A5_BIEXPONENTIAL", "A5", "none", relaxation.aicc_model == "M2"))
-    # Residual gap consistency: the linear-single-exp A1 branch above already
-    # claimed the strong (D17 < 0.05) single-mode case, so a plain
-    # ``gap_rate_consistency`` threshold is the only distinction left here. The
-    # former ``< 0.05 and aicc_model == "M0"`` pre-check was dead: it returned the
-    # identical ("A1", "none") that the ``< 0.20`` line below returns, and the A1
-    # confidence keys on ``gap_rate_consistency`` alone (not the aicc model), so
-    # it changed neither the label nor the score.
-    rungs.append(("A1_GAP_CONSISTENT", "A1", "none", bool(ev["gap_rate_consistency"] < 0.20)))
-    return rungs
+        for rung in _ladder_spec()
+    ]
 
 
 def triggered_hypotheses(
@@ -481,6 +708,174 @@ def triggered_hypotheses(
         }
         for rid, a_class, f_family, _fires in fired
     )
+
+
+# Issue #102: hypothesis-status vocabulary for the evidence matrix. SUPPORTED
+# is by construction equivalent to the rung firing in _hypothesis_ladder (the
+# matrix evaluates the SAME _ladder_spec conditions); the remaining statuses
+# grade the reasons a hypothesis did not fire, fail-closed.
+HYPOTHESIS_SUPPORTED: Final[str] = "SUPPORTED"
+HYPOTHESIS_NOT_SUPPORTED: Final[str] = "NOT_SUPPORTED"
+HYPOTHESIS_UNEVALUABLE: Final[str] = "UNEVALUABLE"
+HYPOTHESIS_RESERVED: Final[str] = "RESERVED"
+A12_FALLBACK_RULE_ID: Final[str] = "A12_FALLBACK"
+
+
+def _hypothesis_claim_floor(
+    a_class: str,
+    status: str,
+    ev: dict[str, float],
+    relaxation: RelaxationResult,
+) -> str:
+    """Explicit claim-floor rules for one hypothesis (issue #102).
+
+    The floor answers "what would LiouScope be willing to claim about THIS
+    hypothesis, given this run" — derived from the SAME verdict pipeline the
+    winner goes through, so the matrix cannot promise more than the classifier
+    would:
+
+    * ``RESERVED`` / ``UNEVALUABLE`` -> ``UNDEFINED``: no decision rule, or
+      required evidence missing — insufficient evidence, fail-closed.
+    * ``NOT_SUPPORTED`` -> ``NOT_EXCLUDED``: a threshold that did not fire is
+      absence of support, not positive counter-evidence (issue #70 A5: the
+      diagnostics establish positive evidence; they cannot prove absence).
+    * ``SUPPORTED`` -> the verdict this hypothesis would receive were it the
+      winner: :func:`_confidence` -> :func:`_pick_verdict_tier` -> the A11
+      single-state maximally-mixed floor. For the actual winner this equals
+      the reported verdict exactly (pinned in tests).
+    """
+    if status in (HYPOTHESIS_RESERVED, HYPOTHESIS_UNEVALUABLE):
+        return VERDICT_UNDEFINED
+    if status == HYPOTHESIS_NOT_SUPPORTED:
+        return VERDICT_NOT_EXCLUDED
+    verdict, tier = _pick_verdict_tier(a_class, relaxation, _confidence(ev, a_class))
+    verdict, _tier = _apply_single_state_maxmix_floor(
+        a_class,
+        verdict,
+        tier,
+        maximally_mixed=ev.get("maximally_mixed_steady_state", 0.0) > 0.5,
+        ensemble_confirmation=ev.get(ENSEMBLE_OVERRIDE_EVIDENCE_KEY, 0.0) > 0.5,
+    )
+    return verdict
+
+
+def hypothesis_evidence_matrix(
+    ev: dict[str, float],
+    *,
+    relaxation: RelaxationResult,
+) -> tuple[dict[str, object], ...]:
+    """Hypothesis-wise evidence matrix over the full A1-A12 taxonomy (#102).
+
+    For every decision rung of :func:`_ladder_spec`, plus the A12 fallback and
+    the schema-reserved classes, one entry records:
+
+    * ``supporting`` — the atomic conditions that hold, with the evidence
+      values they read (the "supporting measurements");
+    * ``counterevidence`` — the conditions that fail, with their values
+      (threshold non-exceedance; NOT proof of absence, see claim-floor rules);
+    * ``missing`` — required evidence keys absent from ``ev`` (e.g. the
+      Mpemba layer was not run), which makes the rung ``UNEVALUABLE``;
+    * ``status`` — SUPPORTED / NOT_SUPPORTED / UNEVALUABLE / RESERVED, where
+      SUPPORTED is by construction the rung's ``fires`` in the decision
+      ladder (same conditions, same evaluation);
+    * ``claim_floor`` — what this run could claim about the hypothesis, from
+      the explicit rules in :func:`_hypothesis_claim_floor`;
+    * ``support_score`` — the ordinal heuristic score :func:`_confidence`
+      assigns this class (NOT a probability; ``None`` for reserved classes).
+
+    The matrix is a REPORT, not a decision: the dominant class remains the
+    convenience projection produced by the unchanged priority chain, and no
+    decision function consumes the matrix. Reserved classes (A6/A7/A9) are
+    marked ``RESERVED`` with a permanent ``UNDEFINED`` floor and are thereby
+    excluded from claims and from coverage denominators (the reachable-class
+    denominator is ``REACHABLE_A_CLASSES``).
+
+    Per-hypothesis numerical-uncertainty and perturbation-robustness columns
+    (issue #102 wishlist) need machinery that does not exist yet and are
+    deliberately NOT faked here; they remain open in the issue.
+    """
+    entries: list[dict[str, object]] = []
+    any_fired = False
+    for rung in _ladder_spec():
+        missing_list: list[str] = []
+        for cond in rung.conditions:
+            for k in cond.keys:
+                if k not in ev and k not in missing_list:
+                    missing_list.append(k)
+        missing = tuple(missing_list)
+        supporting: list[dict[str, object]] = []
+        counterevidence: list[dict[str, object]] = []
+        if missing:
+            status = HYPOTHESIS_UNEVALUABLE
+        else:
+            all_hold = True
+            for cond in rung.conditions:
+                values: dict[str, object] = {k: float(ev[k]) for k in cond.keys}
+                for f_name in cond.relaxation_fields:
+                    values[f_name] = getattr(relaxation, f_name)
+                record: dict[str, object] = {
+                    "condition": cond.description,
+                    "values": values,
+                }
+                if cond.fn(ev, relaxation):
+                    supporting.append(record)
+                else:
+                    counterevidence.append(record)
+                    all_hold = False
+            status = HYPOTHESIS_SUPPORTED if all_hold else HYPOTHESIS_NOT_SUPPORTED
+            any_fired = any_fired or all_hold
+        entries.append(
+            {
+                "rule_id": rung.rule_id,
+                "a_class": rung.a_class,
+                "f_family": rung.f_family,
+                "status": status,
+                "supporting": tuple(supporting),
+                "counterevidence": tuple(counterevidence),
+                "missing": missing,
+                "claim_floor": _hypothesis_claim_floor(
+                    rung.a_class, status, ev, relaxation
+                ),
+                "support_score": _confidence(ev, rung.a_class),
+            }
+        )
+    # A12 fallback: "mixed / unresolved" is what the classifier returns when no
+    # rung fires, so its support status is exactly the negation of any_fired.
+    a12_status = HYPOTHESIS_NOT_SUPPORTED if any_fired else HYPOTHESIS_SUPPORTED
+    entries.append(
+        {
+            "rule_id": A12_FALLBACK_RULE_ID,
+            "a_class": "A12",
+            "f_family": "none",
+            "status": a12_status,
+            "supporting": (),
+            "counterevidence": (),
+            "missing": (),
+            "claim_floor": _hypothesis_claim_floor("A12", a12_status, ev, relaxation),
+            "support_score": _confidence(ev, "A12"),
+            "note": "fallback: fires iff no A1-A11 decision rule fires",
+        }
+    )
+    # Schema-reserved classes (issue #102 reachability/ontology gate): A6/A7/A9
+    # have no code-backed decision rule. They are excluded from claims (floor
+    # permanently UNDEFINED) and from coverage denominators; the per-class
+    # rationale travels with the entry so a serialised report is self-auditing.
+    for a_class in sorted(RESERVED_A_CLASSES, key=lambda a: int(a[1:])):
+        entries.append(
+            {
+                "rule_id": f"RESERVED_{a_class}",
+                "a_class": a_class,
+                "f_family": None,
+                "status": HYPOTHESIS_RESERVED,
+                "supporting": (),
+                "counterevidence": (),
+                "missing": (),
+                "claim_floor": VERDICT_UNDEFINED,
+                "support_score": None,
+                "note": RESERVED_A_CLASSES[a_class],
+            }
+        )
+    return tuple(entries)
 
 
 def _pick_verdict_tier(
@@ -594,8 +989,13 @@ def classify_mechanism(
         verdict=verdict,  # type: ignore[arg-type]
         tier=tier,        # type: ignore[arg-type]
         confidence=conf,
+        # Issue #102 option 1: the honestly-named field. Same value as
+        # ``confidence`` (which stays as the legacy alias) -- an ordinal,
+        # deterministic, rule-based support score, NOT a probability.
+        support_score=conf,
         evidence=ev,
         triggered_hypotheses=triggered_hypotheses(ev, relaxation=relaxation),
+        hypothesis_matrix=hypothesis_evidence_matrix(ev, relaxation=relaxation),
         taxonomy_version=TAXONOMY_VERSION,
         schema_version=DIAGNOSTIC_SCHEMA_VERSION,
     )

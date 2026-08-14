@@ -63,6 +63,14 @@ RESERVED_A_CLASSES: Final[dict[str, str]] = {
     "ETH / level-statistics signals for the prethermalization regime)",
 }
 
+# Issue #102 reachability/ontology gate: the coverage DENOMINATOR for any
+# "n of N classes" statement. Reserved classes have no code-backed decision
+# rule, are excluded from claims (their hypothesis-matrix claim floor is
+# permanently UNDEFINED) and must not inflate coverage denominators.
+REACHABLE_A_CLASSES: Final[tuple[str, ...]] = tuple(
+    a for a in A_CLASSES if a not in RESERVED_A_CLASSES
+)
+
 F_FAMILIES: Final[tuple[str, ...]] = ("F1", "F2", "F3", "F4", "F5", "none")
 
 A_CLASS_DESCRIPTIONS: Final[dict[str, str]] = {
