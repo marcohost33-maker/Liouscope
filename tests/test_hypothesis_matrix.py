@@ -120,6 +120,19 @@ def test_reachable_denominator_is_taxonomy_minus_reserved():
     assert evaluable == set(REACHABLE_A_CLASSES)
 
 
+def test_import_time_coverage_guard_accepts_the_real_spec():
+    from liouscope.diagnostics.classification import _reachable_coverage_check
+
+    assert _reachable_coverage_check() == frozenset(REACHABLE_A_CLASSES)
+
+
+def test_import_time_coverage_guard_fails_closed_on_drift():
+    from liouscope.diagnostics.classification import _reachable_coverage_check
+
+    with pytest.raises(RuntimeError, match="reachability gate"):
+        _reachable_coverage_check(frozenset({"A1", "A6"}))
+
+
 def test_matrix_order_is_decision_order_then_fallback_then_reserved():
     matrix = hypothesis_evidence_matrix(_ev(), relaxation=_Rel())
     ladder_ids = [r[0] for r in _hypothesis_ladder(_ev(), relaxation=_Rel())]

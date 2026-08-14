@@ -61,6 +61,7 @@ from .._consts import (
     DIAGNOSTIC_SCHEMA_VERSION,
     EPS_MAXMIX,
     GNS_CERTIFIED_RTOL,
+    REACHABLE_A_CLASSES,
     RESERVED_A_CLASSES,
     TAXONOMY_VERSION,
     TIER_CONFIRMATION,
@@ -633,6 +634,42 @@ def _ladder_spec() -> tuple[_Rung, ...]:
         ),
     )
     return (f4, f5, f1, f2, f3, a1_strong, a8, a10_m3a, a5, a1_residual)
+
+
+def _reachable_coverage_check(
+    spec_classes: frozenset[str] | None = None,
+) -> frozenset[str]:
+    """Import-time coverage gate over ``REACHABLE_A_CLASSES`` (issue #102).
+
+    The rungs of :func:`_ladder_spec` plus the A12 fallback must emit exactly
+    the reachable taxonomy (``A_CLASSES`` minus ``RESERVED_A_CLASSES``).
+    Adding a rung for a reserved class — or removing the last rung of a
+    reachable one — without updating the reserved contract in lock-step is a
+    reachability drift; failing here at import keeps that drift out of
+    consumers and out of coverage-denominator statements. The AST-level test
+    in ``tests/test_classifier_semantics_debt.py`` pins the same contract
+    statically; this guard covers installed environments where the test
+    suite never runs.
+
+    ``spec_classes`` exists for tests only; production callers use the
+    default (the real spec).
+    """
+    classes = (
+        frozenset(rung.a_class for rung in _ladder_spec()) | {"A12"}
+        if spec_classes is None
+        else spec_classes
+    )
+    if classes != frozenset(REACHABLE_A_CLASSES):
+        raise RuntimeError(
+            "classifier ladder drifted from the reachable taxonomy: spec emits "
+            f"{sorted(classes)} but REACHABLE_A_CLASSES is "
+            f"{sorted(REACHABLE_A_CLASSES)}; update RESERVED_A_CLASSES / the "
+            "ladder in lock-step (issue #102 reachability gate)"
+        )
+    return classes
+
+
+_reachable_coverage_check()
 
 
 def _hypothesis_ladder(
