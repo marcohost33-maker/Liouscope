@@ -914,6 +914,7 @@ def hypothesis_evidence_matrix(
     entries: list[dict[str, object]] = []
     any_fired = False
     any_unevaluable = False
+    blocking_missing: list[str] = []
     for rung in _ladder_spec():
         # ``missing`` is the issue-#102 column "missing REQUIRED evidence": it
         # drives UNEVALUABLE. A defaulted key is tracked separately -- the
@@ -973,6 +974,9 @@ def hypothesis_evidence_matrix(
         if missing_required:
             status = HYPOTHESIS_UNEVALUABLE
             any_unevaluable = True
+            for k in missing:
+                if k not in blocking_missing:
+                    blocking_missing.append(k)
         else:
             status = HYPOTHESIS_SUPPORTED if all_hold else HYPOTHESIS_NOT_SUPPORTED
             any_fired = any_fired or all_hold
@@ -1012,10 +1016,18 @@ def hypothesis_evidence_matrix(
     # ``A12`` default is likewise only reached after evaluating every rung.
     if any_fired:
         a12_status = HYPOTHESIS_NOT_SUPPORTED
+        a12_missing: tuple[str, ...] = ()
     elif any_unevaluable:
         a12_status = HYPOTHESIS_UNEVALUABLE
+        # The fallback's unevaluability is inherited: these are the required
+        # keys whose absence left a rung undecided, and therefore left "no
+        # mechanism applies" unestablished. Carrying them here keeps the
+        # serialised entry self-auditing -- a consumer can see WHICH missing
+        # measurement blocked the fallback claim without walking the rungs.
+        a12_missing = tuple(blocking_missing)
     else:
         a12_status = HYPOTHESIS_SUPPORTED
+        a12_missing = ()
     entries.append(
         {
             "rule_id": A12_FALLBACK_RULE_ID,
@@ -1024,7 +1036,7 @@ def hypothesis_evidence_matrix(
             "status": a12_status,
             "supporting": (),
             "counterevidence": (),
-            "missing": (),
+            "missing": a12_missing,
             "missing_optional": (),
             "claim_floor": _hypothesis_claim_floor("A12", a12_status, ev, relaxation),
             "support_score": (

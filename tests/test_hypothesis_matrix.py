@@ -182,6 +182,9 @@ def test_a12_fallback_is_unevaluable_while_any_rung_is_unknown():
     assert a12["status"] == HYPOTHESIS_UNEVALUABLE
     assert a12["claim_floor"] == VERDICT_UNDEFINED
     assert a12["support_score"] is None
+    # Self-auditing (tenth-round review): the entry names WHICH missing
+    # measurement blocked the fallback claim.
+    assert a12["missing"] == ("pseudospectral_radius",)
 
 
 def test_a12_still_refuted_outright_by_a_fired_rung_despite_unknowns():
