@@ -202,7 +202,9 @@ def test_certificate_is_not_applicable_to_a_non_trace_preserving_operator() -> N
     )
 
 
-def test_uncertified_spectrum_warns_instead_of_reporting_silently() -> None:
+def test_uncertified_spectrum_warns_instead_of_reporting_silently(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """Fail-closed: an unrepairable solve must not pass as a measurement."""
     sm = np.array([[0, 1], [0, 0]], dtype=complex)
     lsup = build_liouvillian(np.zeros((2, 2), dtype=complex), [sm], [1.0])
@@ -210,8 +212,9 @@ def test_uncertified_spectrum_warns_instead_of_reporting_silently() -> None:
 
     # Force the certificate to be unsatisfiable by demanding an impossibly
     # tight bound; this exercises the reporting path, not a real solver failure.
-    import liouscope.diagnostics.spectral as spectral_mod
-
+    # Patched by string target so the module is not imported a second time
+    # under a different style (CodeQL py/import-and-import-from), and so the
+    # restore is fixture-managed instead of a manual try/finally.
     def _impossible(l_super, **_kw):
         from liouscope.numerics.linalg import ZeroModeCertificate
         return (
@@ -222,17 +225,15 @@ def test_uncertified_spectrum_warns_instead_of_reporting_silently() -> None:
             ),
         )
 
-    original = spectral_mod.certified_eigvals
-    spectral_mod.certified_eigvals = _impossible
-    try:
-        with warnings.catch_warnings(record=True) as caught:
-            warnings.simplefilter("always")
-            result = compute_spectral_layer(lsup, rho_ss)
-        messages = [str(w.message) for w in caught]
-        assert any("issue #112" in m for m in messages), messages
-        assert result.zero_mode_certificate["certified"] is False
-    finally:
-        spectral_mod.certified_eigvals = original
+    monkeypatch.setattr(
+        "liouscope.diagnostics.spectral.certified_eigvals", _impossible
+    )
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        result = compute_spectral_layer(lsup, rho_ss)
+    messages = [str(w.message) for w in caught]
+    assert any("issue #112" in m for m in messages), messages
+    assert result.zero_mode_certificate["certified"] is False
 
 
 # --------------------------------------------------------------------------
