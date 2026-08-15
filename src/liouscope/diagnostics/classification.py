@@ -789,8 +789,7 @@ def _is_unavailable(ev: dict[str, float], key: str) -> bool:
     """
     if key not in ev:
         return True
-    value = ev[key]
-    return isinstance(value, float) and math.isnan(value)
+    return math.isnan(ev[key])
 
 
 def _hypothesis_claim_floor(
