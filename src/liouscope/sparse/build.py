@@ -13,6 +13,8 @@ from typing import Literal
 import numpy as np
 import scipy.sparse as sp
 
+from .._consts import EPS_HERMITICITY
+
 
 def build_sparse_liouvillian(
     H: np.ndarray | sp.spmatrix,
@@ -39,9 +41,18 @@ def build_sparse_liouvillian(
     # that is not GKSL at all while the dense twin raised.
     if H_sp.nnz and not np.all(np.isfinite(H_sp.data)):
         raise ValueError("H contains non-finite entries")
+    # Scale-relative Hermiticity gate, in parity with the dense builder
+    # (issue #109). Computed on the sparse data arrays so the d^2 dense
+    # materialisation the sparse path exists to avoid is not reintroduced.
     herm_defect = H_sp - H_sp.conj().T
-    if herm_defect.nnz and np.max(np.abs(herm_defect.data)) > 1.0e-9:
-        raise ValueError("H must be Hermitian within 1e-9 atol")
+    defect = float(np.max(np.abs(herm_defect.data))) if herm_defect.nnz else 0.0
+    scale = float(np.max(np.abs(H_sp.data))) if H_sp.nnz else 0.0
+    if defect > EPS_HERMITICITY * scale:
+        raise ValueError(
+            f"H must be Hermitian within a relative {EPS_HERMITICITY:g} "
+            f"(max|H - H^dag| = {defect:.3e}, max|H| = {scale:.3e}, "
+            f"relative defect = {defect / scale if scale else float('inf'):.3e})"
+        )
     if jump_ops is None:
         jump_ops = []
     sparse_jumps = [sp.csr_matrix(L, dtype=complex) for L in jump_ops]

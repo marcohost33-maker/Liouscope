@@ -37,6 +37,13 @@ class SpectralResult:
     eigenvalues: np.ndarray     # full sigma(L) sorted by real part
     steady_state: np.ndarray    # rho_ss matrix, d x d
     has_complex_pairs: bool
+    # Issue #112. Structural check that the computed spectrum contains the zero
+    # mode that vec(I)^H L = 0 guarantees for a trace-preserving generator, plus
+    # which LAPACK route produced the accepted spectrum. Report-only: it does
+    # not enter any verdict, but a ``certified=False`` entry marks D1/D3/D4 as
+    # unresolved for that system. Optional with a default so the run-manifest
+    # contract is unchanged (additive field).
+    zero_mode_certificate: dict[str, object] | None = None
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)

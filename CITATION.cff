@@ -49,6 +49,20 @@ abstract: >-
 # when the release is cut. It must NOT be described as making the mechanism
 # verdict unit-invariant in general: the A10/F5 branch still gates on the
 # rate-dimensioned henrici_eta threshold (open in #101).
+# Also pending for the next cut: the spectral layer verifies the computed
+# spectrum against the exact identity vec(I)^H L = 0 before reading D1/D3/D4
+# off it, and re-solves by an alternative LAPACK route when a stiff generator
+# makes zgeev deflate the zero mode away (issue #112). This too CHANGES
+# NUMERICAL RESULTS -- on stiff generators only -- and must be described as a
+# correction rather than an addition: the previously reported gap could be a
+# spurious mode rather than an inaccurate one (measured 7.28e-6 against a true
+# 1.074e-5 on a four-level classical jump network). It must NOT be described as
+# making the dense spectral layer reliable for arbitrarily stiff generators:
+# when no route satisfies the certificate the layer is marked unresolved, which
+# is a disclosure, not a repair. Hermiticity validation of the Hamiltonian is
+# likewise scale-relative rather than absolute (issue #109), which closes a
+# fail-open path that admitted non-GKSL generators at small ||H||; this changes
+# which inputs are ACCEPTED, not the numerics of accepted ones.
 keywords:
   - open quantum systems
   - Lindblad

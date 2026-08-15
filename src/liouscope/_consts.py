@@ -61,6 +61,16 @@ EPS_GAP: Final[float] = 1.0e-10
 # improvement (it is what rescues metastable slow modes); it is recorded here
 # because "only rescaled generators change" would be false.
 ZERO_MODE_EPS_FACTOR: Final[float] = 1.0e3
+# Issue #113. Splits the zero-mode tolerance band into "machine-zero" and
+# "inside the safety factor, hence undecidable". Measured across 83 healthy
+# generators the largest genuine in-band |lambda| reaches 2.38 * eps*||L||
+# (median 0.39); unresolved slow modes were measured at 4.87 and 4.87e2. The
+# populations overlap within ~2x, so this sits an order of magnitude above the
+# healthy maximum rather than midway: a false "unresolved" verdict destroys a
+# correct analysis, whereas a missed marginal case only leaves the pre-#113
+# behaviour. Consequence, stated rather than hidden: above a spectral spread of
+# ~1e14 the defect is not detectable by any magnitude test.
+ZERO_MODE_AMBIGUITY_FACTOR: Final[float] = 3.0e1
 EPS_HERMITICITY: Final[float] = 1.0e-9
 EPS_TRACE: Final[float] = 1.0e-10
 # Tight numerical detector for the exact maximally mixed state I/d. It is not a
