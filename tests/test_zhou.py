@@ -202,3 +202,18 @@ def test_zhou_unresolved_spectrum_returns_unconverged():
     supplied = _zhou.compute_zhou_predictor(lsup, epsilon=0.05, gap=0.5)
     assert supplied.converged is False
     assert supplied.gap == 0.5
+
+
+def test_zhou_inapplicable_certificate_falls_back_to_the_radius_filter():
+    """Round-14: the operator bound is not a cutoff without trace preservation.
+
+    A non-trace-preserving, strongly non-normal input has no guaranteed zero
+    mode; its certificate bound (~2.2e3 here) exceeds the whole spectrum, and
+    filtering with it discarded every eigenvalue -- D24 reported gap 0.0 /
+    unconverged for a well-separated spectrum with true gap 1.
+    """
+    A = np.diag([-1.0, -2.0, -3.0, -4.0]).astype(complex)
+    A[0, 3] = 1.0e16
+    result = _zhou.compute_zhou_predictor(A, epsilon=0.05)
+    assert result.converged is True
+    assert result.gap == pytest.approx(1.0, rel=1e-9)

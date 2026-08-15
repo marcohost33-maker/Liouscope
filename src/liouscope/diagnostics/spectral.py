@@ -225,7 +225,15 @@ def compute_spectral_layer(
     # modes inside the coarser band are not silently swallowed: the
     # ambiguity split (#113) reports them as ``resolved=False`` and D1
     # becomes NaN below.
-    zero_tol = certificate.bound
+    #
+    # ONLY when the certificate is applicable (round-14 review): without
+    # established trace preservation no zero eigenvalue is guaranteed, so the
+    # operator-norm bound is not a valid zero-mode cutoff -- on a
+    # non-trace-preserving strongly non-normal input it can exceed the whole
+    # spectrum (measured: bound 2.2e3 against eigenvalues of order 1) and
+    # would discard every mode, reporting the gapless D1 = 0.0. The
+    # radius-based default (``atol=None``) is the honest filter there.
+    zero_tol = certificate.bound if certificate.applicable else None
     if certificate.applicable and not certificate.certified:
         warnings.warn(
             "Spectral layer: the eigensolver returned no zero mode for a "
@@ -271,8 +279,18 @@ def compute_spectral_layer(
     # flipped this flag, and ``has_complex_pairs`` gates the A8
     # oscillatory-transient rung. The threshold is the shared operator-derived
     # bound (round-13): an imaginary part below the eigensolve backward error
-    # is round-off, not an oscillating pair.
-    has_complex = bool(np.any(np.abs(np.imag(eigenvalues)) > zero_tol))
+    # is round-off, not an oscillating pair. Radius fallback when the
+    # certificate is inapplicable (round-14), same as D1/D3/D4 above.
+    has_complex = bool(
+        np.any(
+            np.abs(np.imag(eigenvalues))
+            > (
+                zero_tol
+                if zero_tol is not None
+                else spectral_zero_tolerance(eigenvalues, name="eigenvalues")
+            )
+        )
+    )
     # Sort by real part descending so [0] is the steady state.
     order = np.argsort(-np.real(eigenvalues))
     return SpectralResult(

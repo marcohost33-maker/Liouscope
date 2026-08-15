@@ -56,7 +56,7 @@ _UNRESOLVED = _UnresolvedType()
 
 def _certified_decomposition(
     L_super: np.ndarray, *, what: str
-) -> tuple[np.ndarray, np.ndarray, np.ndarray, float] | None:
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, float | None] | None:
     """Certified eigendecomposition, or ``None`` when it must not be consumed.
 
     Shared by the Mpemba-layer consumers so they cannot drift apart on whether
@@ -76,6 +76,10 @@ def _certified_decomposition(
     or a certified-resolved stationary mode of a strongly non-normal
     generator survives the smaller radius-based filter and becomes a
     spurious "slowest mode" -- exactly what this helper exists to prevent.
+    It is ``None`` when the certificate is inapplicable (round-14 review):
+    without established trace preservation no zero mode is guaranteed and
+    the operator-norm bound is not a valid cutoff, so the consumers fall
+    back to the radius-based tolerance.
     """
     decomp, certificate = certified_eig(L_super)
     if certificate.applicable and not certificate.resolved:
@@ -100,7 +104,16 @@ def _certified_decomposition(
     left = decomp.left_vectors
     if left is None:  # pragma: no cover - certified_eig always sets left vectors
         raise RuntimeError("certified_eig did not return left eigenvectors")
-    return decomp.eigenvalues, left, decomp.right_vectors, certificate.bound
+    # Round-14 review: the operator-norm bound is only a valid zero-mode
+    # cutoff when trace preservation -- and hence the structural zero mode --
+    # is established. For an inapplicable certificate the callers fall back
+    # to the radius-based tolerance (``None`` here means "no override").
+    return (
+        decomp.eigenvalues,
+        left,
+        decomp.right_vectors,
+        certificate.bound if certificate.applicable else None,
+    )
 
 
 def _slowest_mode(

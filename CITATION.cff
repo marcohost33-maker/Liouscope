@@ -67,7 +67,12 @@ abstract: >-
 # (round-13 review). This corrects spurious near-zero or negative D1 gaps on
 # strongly non-normal generators, where the spectral radius understates the
 # eigensolver backward error by the ||L||_2 / max|lambda| ratio (measured
-# 3.9e3 at dimension four). Hermiticity validation of the Hamiltonian is
+# 3.9e3 at dimension four). The operator-derived bound applies only when the
+# certificate is applicable (trace preservation established); otherwise the
+# filters fall back to the radius-based tolerance, and the Petermann factors
+# (D9) likewise consume the certified eigendecomposition, withholding NaN on
+# unresolved spectra (round-14 review). Hermiticity validation of the
+# Hamiltonian is
 # likewise scale-relative rather than absolute (issue #109), which closes a
 # fail-open path that admitted non-GKSL generators at small ||H||; this changes
 # which inputs are ACCEPTED, not the numerics of accepted ones.

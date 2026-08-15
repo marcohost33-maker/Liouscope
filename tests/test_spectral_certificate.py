@@ -728,3 +728,85 @@ def test_one_scale_zhou_predictor_sees_the_true_gap() -> None:
     result = zhou.compute_zhou_predictor(_NONNORMAL_TP, epsilon=0.05)
     assert result.converged is True
     assert result.gap == pytest.approx(1.0, rel=1e-6)
+
+
+# --------------------------------------------------------------------------
+# Round-14 review: radius fallback when the certificate is inapplicable, and
+# the Petermann decomposition is certified.
+# --------------------------------------------------------------------------
+
+# Not trace preserving (no structural zero mode), strongly non-normal: the
+# operator-norm bound (~2.2e3) exceeds the whole spectrum {-1,-2,-3,-4}, so
+# filtering with it would discard every eigenvalue and report the gapless
+# D1 = 0.0 for a well-separated spectrum.
+def _non_tp_nonnormal() -> np.ndarray:
+    A = np.diag([-1.0, -2.0, -3.0, -4.0]).astype(complex)
+    A[0, 3] = 1.0e16
+    return A
+
+
+def test_inapplicable_certificate_falls_back_to_the_radius_filter() -> None:
+    """The operator bound is only a valid cutoff under trace preservation."""
+    A = _non_tp_nonnormal()
+    _ev, cert = certified_eigvals(A)
+    assert cert.applicable is False
+    assert cert.bound > 4.0, "precondition: bound must exceed the spectrum"
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")  # non-TP warning from the layer
+        result = compute_spectral_layer(A, rho_steady=np.eye(2, dtype=complex) / 2)
+    assert result.gap == pytest.approx(1.0, rel=1e-9)
+    assert result.spectral_spread == pytest.approx(3.0, rel=1e-9)
+
+
+def test_petermann_uses_the_certified_decomposition() -> None:
+    """D9 must not consume the raw spectrum the spectral layer repairs.
+
+    On the stiff #112 fixture the raw ``zgeev`` decomposition loses the
+    structural zero mode -- no cutoff can restore an eigenvalue that is
+    absent -- and reported 16 "non-zero" modes with ``petermann_max ~ 622.7``.
+    The certified route (``dgeev-real``) returns the physical 15 modes with
+    ``petermann_max ~ 2.0``.
+    """
+    from liouscope.diagnostics.nonnormality import petermann_factors
+
+    lsup = _classical_network(STIFF_PAIRS, STIFF_RATES)
+    _decomp, cert = certified_eigvals(lsup)
+    if not cert.resolved:  # pragma: no cover - guard against solver changes
+        pytest.skip("fixture is no longer certifiable")
+
+    eigvals, factors = petermann_factors(lsup)
+    assert eigvals.size == 15
+    assert float(np.max(factors)) == pytest.approx(2.0, rel=1e-6)
+    # The slowest surviving mode is the physical gap, not the spurious one.
+    assert float(-np.max(np.real(eigvals))) == pytest.approx(
+        STIFF_TRUE_GAP, rel=1e-3
+    )
+
+
+def test_petermann_withholds_nan_on_an_unresolved_spectrum() -> None:
+    """An unresolved decomposition yields the NaN sentinel, not K = 1.
+
+    NaN flows through the evidence machinery as "unavailable", so the F1
+    rung reads UNEVALUABLE; any computed value here -- including the
+    empty-array default ``K_max = 1.0``, which asserts perfect normality --
+    would be a fabricated measurement.
+    """
+    from liouscope.diagnostics.nonnormality import (
+        compute_nonnormality_layer,
+        petermann_factors,
+    )
+
+    lsup = _stiff_with_fast_rate(1.0e8)
+    _decomp, cert = certified_eigvals(lsup)
+    if cert.resolved:  # pragma: no cover - guard against solver changes
+        pytest.skip("fixture no longer produces an unresolved spectrum")
+
+    with pytest.warns(RuntimeWarning, match="withheld"):
+        eigvals, factors = petermann_factors(lsup)
+    assert np.all(np.isnan(eigvals)) and np.all(np.isnan(factors))
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        layer = compute_nonnormality_layer(lsup)
+    assert np.isnan(layer.petermann_max)

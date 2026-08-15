@@ -7,6 +7,32 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Fixed
+- **Petermann factors (D9) consume the certified eigendecomposition
+  (round-14 review). CHANGES NUMERICAL RESULTS** on stiff generators.
+  `petermann_factors` recomputed its own raw `zgeev` decomposition, so on a
+  stiff trace-preserving generator it consumed exactly the solver failure
+  the spectral and Mpemba layers repair (#112) — and no zero-mode cutoff can
+  restore an eigenvalue that is *absent* from the raw spectrum. Measured on
+  the stiff four-level fixture: 16 "non-zero" modes with
+  `petermann_max ≈ 622.7` against the certified 15 modes with `≈ 2.0`,
+  corrupting D9 and the D11 input while the spectral certificate looked
+  resolved — a possible false F1 signal no verdict floor would catch. The
+  function now uses `certified_eig`; when the certificate is applicable but
+  unresolved (#112/#113) both returned arrays are the NaN unavailable
+  sentinel, so `petermann_max` becomes NaN and the F1 rung reads UNEVALUABLE
+  instead of the empty-array default `K_max = 1.0`, which would assert
+  perfect normality.
+- **Radius fallback when the zero-mode certificate is inapplicable
+  (round-14 review).** Without established trace preservation no zero
+  eigenvalue is guaranteed, so the operator-norm certificate bound is not a
+  valid zero-mode cutoff: on a non-trace-preserving, strongly non-normal
+  input the bound (measured `2.2e3`) exceeded the whole spectrum
+  `{-1,-2,-3,-4}` and the round-13 filters discarded every eigenvalue —
+  D1 = `0.0` (gapless, firing the F5 reach leg) and an unconverged D24 for a
+  well-separated spectrum with true gap `1`. All round-13 call sites
+  (spectral layer, Mpemba layer, D9, D24) now use the certificate bound only
+  when `certificate.applicable`, and fall back to the radius-based #108
+  tolerance otherwise.
 - **One zero-mode scale for certification and filtering (round-13 review of
   the #112 machinery). CHANGES NUMERICAL RESULTS** on strongly non-normal
   generators. The `ZeroModeCertificate` accepts a stationary residual up to

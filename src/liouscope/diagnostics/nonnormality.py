@@ -52,12 +52,14 @@ resolvent peak (which is D11b in :mod:`liouscope.diagnostics.resolvent`).
 
 from __future__ import annotations
 
+import warnings
+
 import numpy as np
 import scipy.linalg as sla
 
 from .._consts import EPS_DIV
 from .._types import KreissGridEstimate, NonNormalityResult
-from ..numerics.linalg import operator_zero_tolerance, require_finite_square_2d
+from ..numerics.linalg import certified_eig, require_finite_square_2d
 from ..numerics.resolvent import resolvent_norm
 from ..numerics.scale import rate_scale, spectral_zero_tolerance
 
@@ -273,9 +275,38 @@ def petermann_factors(
     eigenmode ``j``; it does NOT equal the realised transient amplification of
     the propagator. Use D10 (Kreiss) / D15 (numerical abscissa) / D13
     (pseudospectrum) to bound ``sup_t ||e^{tL}||``. See the module docstring.
+
+    The eigendecomposition is CERTIFIED (round-14 review; issue #112). This
+    function previously recomputed its own raw ``zgeev`` decomposition, so on
+    a stiff trace-preserving generator it consumed exactly the solver failure
+    the spectral and Mpemba layers repair: the lost zero mode cannot be
+    restored by any cutoff (it is absent from the raw spectrum), and the
+    measured result was 16 "non-zero" modes with ``petermann_max ~ 622.7``
+    against the certified 15 modes with ``~ 2.0`` -- corrupting D9 and the
+    D11 input while the spectral layer looked resolved, i.e. a possible
+    false F1 signal that no verdict floor would catch. When the certificate
+    is applicable but NOT resolved, both returned arrays are a single NaN --
+    the library's unavailable sentinel -- so ``petermann_max`` becomes NaN
+    and the F1 rung reads UNEVALUABLE instead of a fabricated value.
     """
     L_super = np.asarray(L_super, dtype=complex)  # complex128: scipy dispatches by dtype; the double-solve contract (#108) must hold
-    eigvals, vl, vr = sla.eig(L_super, left=True, right=True)
+    decomp, certificate = certified_eig(L_super)
+    if certificate.applicable and not certificate.resolved:
+        warnings.warn(
+            "Petermann factors: the eigendecomposition of this trace-"
+            "preserving generator is unresolved (smallest |lambda| = "
+            f"{certificate.residual:.3e}, bound {certificate.bound:.3e}); "
+            "D9 is withheld as NaN rather than computed from a demonstrably "
+            "wrong spectrum (issues #112/#113, round-14 review).",
+            RuntimeWarning,
+            stacklevel=2,
+        )
+        nan_modes = np.full(1, np.nan, dtype=complex)
+        return nan_modes, np.full(1, np.nan)
+    eigvals = decomp.eigenvalues
+    vl, vr = decomp.left_vectors, decomp.right_vectors
+    if vl is None:  # pragma: no cover - certified_eig always sets left vectors
+        raise RuntimeError("certified_eig did not return left eigenvectors")
     # Normalise eigenvectors
     K_list: list[float] = []
     for j in range(eigvals.size):
@@ -292,14 +323,18 @@ def petermann_factors(
     # separation (issue #108): with an absolute floor, a rescaled generator
     # either dropped every mode (empty K array) or retained the round-off zero
     # mode, whose Petermann factor is numerical noise feeding the F1 gate.
-    # The scale is operator-derived (round-13 review): the operator is in
-    # hand here, and on a strongly non-normal generator the radius-based
-    # proxy is smaller than the eigensolve backward error ``eps * ||L||_2``,
-    # so the displaced zero mode survived the filter as a spurious extra
-    # eigenmode (measured: 4 modes reported where 3 exist).
+    # The scale is the certificate's own operator-derived bound (round-13
+    # review): on a strongly non-normal generator the radius-based proxy is
+    # smaller than the eigensolve backward error ``eps * ||L||_2``, so the
+    # displaced zero mode survived the filter as a spurious extra eigenmode
+    # (measured: 4 modes reported where 3 exist). Radius fallback when the
+    # certificate is inapplicable (round-14): without established trace
+    # preservation no zero mode is guaranteed and the operator-norm bound can
+    # exceed the whole spectrum of a strongly non-normal input.
+    default_tol = certificate.bound if certificate.applicable else None
     mask = np.abs(eigvals) > spectral_zero_tolerance(
         eigvals,
-        atol=operator_zero_tolerance(L_super) if atol is None else atol,
+        atol=default_tol if atol is None else atol,
         name="eigenvalues of L_super",
     )
     eigvals_filt = eigvals[mask]
