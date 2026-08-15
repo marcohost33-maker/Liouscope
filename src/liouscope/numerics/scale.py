@@ -131,20 +131,23 @@ def spectral_zero_tolerance(
         return float(atol)
     if ev.size == 0:
         return 0.0
-    # The backward error scales with the WORKING precision of the eigensolver
-    # that produced this spectrum, so eps must come from the array's own dtype.
-    # Hard-coding float64 eps for a single-precision spectrum would put the
-    # threshold ~9 orders of magnitude below that solver's round-off, retaining
-    # the numerical steady-state eigenvalue as physical -- reintroducing the
-    # negative-gap failure this function exists to prevent. Integer/object
-    # spectra have no meaningful eps and fall back to float64.
-    dtype = np.asarray(ev).dtype
-    real_dtype = np.empty(0, dtype=dtype).real.dtype
-    eps = float(
-        np.finfo(real_dtype).eps
-        if np.issubdtype(real_dtype, np.floating)
-        else np.finfo(float).eps
-    )
+    # eps is the DOUBLE-precision machine epsilon, deliberately independent of
+    # the array's storage dtype. The backward error is set by the precision the
+    # eigensolver COMPUTED in, and NumPy/SciPy solve in double regardless of the
+    # input dtype -- measured: a complex64 generator yields a numerical zero mode
+    # at ~1.5e-19, i.e. double-level, even though the returned array is
+    # complex64. Deriving eps from the storage dtype instead reads that as
+    # single-precision round-off and inflates the threshold to ~1.2e-4 relative,
+    # which discards clearly resolved slow modes: a complex64 two-channel
+    # generator with rates 1.0 and 1e-4 then reports a gap of 5e-1 instead of
+    # 5e-5, corrupting exactly the metastable case this tolerance was widened to
+    # protect.
+    #
+    # A genuinely single-precision spectrum (an external or GPU solver) is the
+    # one case where a coarser threshold is right, and it is indistinguishable
+    # from a downcast double result by inspection. Such callers pass ``rtol``
+    # explicitly -- an argument the caller has, and this function does not.
+    eps = float(np.finfo(float).eps)
     return float(rtol * eps * float(np.max(np.abs(ev))))
 
 

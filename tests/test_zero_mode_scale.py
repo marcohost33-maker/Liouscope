@@ -379,30 +379,44 @@ def test_threshold_sits_far_above_measured_round_off():
             assert zero_mode < spectral_zero_tolerance(ev)
 
 
-def test_tolerance_tracks_the_spectrum_dtype():
-    """Backward error scales with the SOLVER's working precision, not float64.
+# ---------------------------------------------------------------------------
+# Storage dtype is not the solver's precision (Codex review, rounds 3-4)
+# ---------------------------------------------------------------------------
 
-    A single-precision spectrum has round-off ~1e-7 relative; judging it by
-    float64 eps puts the threshold ~9 decades below that solver's noise, so the
-    numerical steady-state eigenvalue is retained as physical -- reintroducing
-    the negative gap this helper exists to prevent.
+
+def test_tolerance_ignores_the_storage_dtype():
+    """The threshold follows the COMPUTED precision, not how the result is stored.
+
+    NumPy/SciPy solve eigenproblems in double whatever the input dtype: a
+    `complex64` generator still yields a numerical zero mode at ~1.5e-19.
+    Reading the storage dtype as the solver's precision would inflate the
+    threshold to ~1.2e-4 relative, which is coarse enough to discard clearly
+    resolved slow modes.
     """
     ev64 = np.array([0.0, -0.5, -1.0], dtype=np.complex128)
-    ev32 = ev64.astype(np.complex64)
-    tol64 = spectral_zero_tolerance(ev64)
-    tol32 = spectral_zero_tolerance(ev32)
-    assert tol32 > tol64
-    ratio = float(np.finfo(np.float32).eps / np.finfo(np.float64).eps)
-    assert tol32 / tol64 == pytest.approx(ratio, rel=1e-9)
+    for arr in (ev64.astype(np.complex64), np.array([0.0, -0.5, -1.0], dtype=np.float32)):
+        assert spectral_zero_tolerance(arr) == pytest.approx(
+            spectral_zero_tolerance(ev64), rel=1e-12
+        )
 
-    # Real (non-complex) single precision must behave the same way.
-    assert spectral_zero_tolerance(np.array([0.0, -1.0], dtype=np.float32)) == pytest.approx(
-        tol32, rel=1e-9
-    )
+
+def test_single_precision_storage_keeps_resolved_slow_modes():
+    """A downcast metastable spectrum must not lose its slow branch.
+
+    Rates 1.0 and 1e-4 give a true gap of 5e-5, four decades above the round-off
+    the solver actually achieves. A dtype-derived threshold reported 5e-1 here.
+
+    D1 is exercised directly rather than through ``compute_spectral_layer``: at
+    this rate ratio the GNS Gram matrix is ill-conditioned and emits its own
+    (unrelated, pre-existing) warning, which would make this test fail for a
+    reason that has nothing to do with the zero-mode filter.
+    """
+    ev = np.linalg.eigvals(_two_channel_L(1.0e-4).astype(np.complex64))
+    assert liouvillian_gap(ev) == pytest.approx(0.5e-4, rel=1e-4)
 
 
 def test_single_precision_zero_mode_is_still_filtered():
-    """The end-to-end consequence of the dtype fix: no negative gap."""
+    """...while the round-off mode is still excluded, so no negative gap."""
     L = _rabi_damped_L()
     for c in (1.0, 1.0e-3, 1.0e3):
         ev = np.linalg.eigvals(c * L).astype(np.complex64)
