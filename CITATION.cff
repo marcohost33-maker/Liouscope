@@ -71,8 +71,12 @@ abstract: >-
 # certificate is applicable (trace preservation established); otherwise the
 # filters fall back to the radius-based tolerance, and the Petermann factors
 # (D9) likewise consume the certified eigendecomposition, withholding NaN on
-# unresolved spectra (round-14 review). Hermiticity validation of the
-# Hamiltonian is
+# unresolved spectra (round-14 review). The eigenvector-producing certificate
+# additionally validates per-mode left/right eigenvector residuals before
+# certifying (a small |lambda| does not vouch for the vectors D19/D9 consume),
+# and the repair ladder continues past ambiguous candidates so a later route
+# can resolve what the incumbent cannot (round-15 review). Hermiticity
+# validation of the Hamiltonian is
 # likewise scale-relative rather than absolute (issue #109), which closes a
 # fail-open path that admitted non-GKSL generators at small ||H||; this changes
 # which inputs are ACCEPTED, not the numerics of accepted ones.

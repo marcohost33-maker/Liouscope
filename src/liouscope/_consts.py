@@ -71,6 +71,20 @@ ZERO_MODE_EPS_FACTOR: Final[float] = 1.0e3
 # behaviour. Consequence, stated rather than hidden: above a spectral spread of
 # ~1e14 the defect is not detectable by any magnitude test.
 ZERO_MODE_AMBIGUITY_FACTOR: Final[float] = 3.0e1
+# Round-15 review: per-mode eigenVECTOR acceptance for certified_eig. A mode
+# with normalised residual r = max(||L v - lambda v||, ||L^H l - conj(lambda) l||)
+# (unit vectors) is consumable only when r <= max(REL_MAX * |lambda|, bound):
+# r/|lambda| is the first-order RELATIVE error scale of anything computed from
+# the pair, so beyond ~10% the "eigenvector" carries no measurement. Measured
+# populations (r/|lambda|, worst consumable mode): healthy zgeev across 301
+# generators <= 2.1e-10; legitimate dgeev-real repairs of the stiff #112
+# family 1.2e-2 .. 6.5e-2 (an extreme 7.9e-1 at spectral spread ~4e11, which
+# this gate deliberately fails closed -- a 79% slow-mode error is not a
+# measurement); corrupt zgeev decompositions that the eigenvalue certificate
+# alone would accept: 2.2e-1 .. 2.9e1. The boundary sits between the
+# marginal-but-usable and the clearly broken; the failure direction is
+# fail-closed (withhold), never a wrong value.
+VECTOR_RESIDUAL_REL_MAX: Final[float] = 1.0e-1
 EPS_HERMITICITY: Final[float] = 1.0e-9
 EPS_TRACE: Final[float] = 1.0e-10
 # Tight numerical detector for the exact maximally mixed state I/d. It is not a

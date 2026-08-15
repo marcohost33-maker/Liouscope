@@ -810,3 +810,93 @@ def test_petermann_withholds_nan_on_an_unresolved_spectrum() -> None:
         warnings.simplefilter("ignore")
         layer = compute_nonnormality_layer(lsup)
     assert np.isnan(layer.petermann_max)
+
+
+# --------------------------------------------------------------------------
+# Round-15 review: the ladder continues past ambiguous candidates, and
+# eigenVECTORS are validated before certification.
+# --------------------------------------------------------------------------
+
+# A stiff classical network (found by scan, deterministic from pairs+rates)
+# where zgeev's eigenvalue certificate PASSES with one ambiguous in-band
+# mode while dgeev-real returns a clean machine-zero stationary mode.
+_AMB_PAIRS = [(2, 3), (3, 2), (2, 0), (1, 0), (0, 1), (0, 3)]
+_AMB_RATES = [3.482e-04, 5.947e-06, 2.388e-06, 2.732e-05, 5.495e-06, 1.638e+06]
+
+# A stiff classical network where the eigenvalue certificate is clean but the
+# LEFT eigenvector of the slow mode has residual ~9e-5 against a bound of
+# ~3e-7 -- not an eigenvector in any usable sense.
+_BADVEC_PAIRS = [(2, 0), (0, 3), (3, 1), (1, 3), (0, 2), (1, 0)]
+_BADVEC_RATES = [4.452e-05, 1.005e+06, 2.452e-06, 6.823e-06, 4.239e-06, 4.307e-05]
+
+
+def _zgeev_band_stats(lsup, cert):
+    """(residual, ambiguous_count) of the raw zgeev spectrum under cert's scales."""
+    from liouscope._consts import ZERO_MODE_EPS_FACTOR
+
+    ev = eig_nonhermitian(np.asarray(lsup, complex)).eigenvalues
+    mag = np.abs(ev)
+    split = cert.bound * ZERO_MODE_AMBIGUITY_FACTOR / ZERO_MODE_EPS_FACTOR
+    in_band = mag <= cert.bound
+    return float(mag.min()), int(np.count_nonzero(in_band & (mag > split)))
+
+
+def test_ladder_continues_past_an_ambiguous_candidate() -> None:
+    """An ambiguous first candidate must not end the eigenvalue ladder.
+
+    Before round-15 the ladder returned zgeev's certified-but-ambiguous
+    spectrum immediately (resolved=False, D1 withheld, verdict floored)
+    although dgeev-real resolves the very same generator cleanly.
+    """
+    lsup = _classical_network(_AMB_PAIRS, _AMB_RATES)
+    ev, cert = certified_eigvals(lsup)
+    _resid, zgeev_amb = _zgeev_band_stats(lsup, cert)
+    if zgeev_amb == 0:  # pragma: no cover - guard against solver changes
+        pytest.skip("zgeev no longer produces an ambiguous candidate here")
+    assert cert.solver == "dgeev-real"
+    assert cert.certified and cert.resolved
+    assert cert.ambiguous_count == 0
+
+
+def test_vector_residuals_gate_the_eig_certificate() -> None:
+    """A small |lambda| does not vouch for the eigenVECTORS D19/D9 consume.
+
+    On this generator the zgeev eigenvalue certificate is clean (and
+    certified_eigvals rightly stays resolved -- the eigenvalues ARE usable
+    for D1), but the slow mode's left vector has residual three orders of
+    magnitude beyond the bound. certified_eig must fail closed rather than
+    expose it, and the reported residual must exceed the printed bound so
+    the downstream warning is self-consistent.
+    """
+    lsup = _classical_network(_BADVEC_PAIRS, _BADVEC_RATES)
+
+    _ev, cert_vals = certified_eigvals(lsup)
+    if not cert_vals.resolved:  # pragma: no cover - guard against changes
+        pytest.skip("eigenvalue certificate no longer resolves this fixture")
+
+    decomp, cert = certified_eig(lsup)
+    assert cert.applicable is True
+    assert cert.certified is False
+    assert cert.resolved is False
+    assert cert.residual > cert.bound
+
+    # The consumers withhold: slowest mode, D19 overlap and D9 all abstain.
+    from liouscope.diagnostics.nonnormality import petermann_factors
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        _evs, factors = petermann_factors(lsup)
+    assert np.all(np.isnan(factors))
+
+
+def test_vector_gate_accepts_the_canonical_stiff_repair() -> None:
+    """The gate must not reject the legitimate dgeev-real repair (#112).
+
+    Its slow-mode relative residuals are at the percent level -- marginal
+    but a measurement -- and rejecting it would trade a correct analysis
+    for a false withhold (the same trade-off as the #113 split).
+    """
+    lsup = _classical_network(STIFF_PAIRS, STIFF_RATES)
+    decomp, cert = certified_eig(lsup)
+    assert cert.certified and cert.resolved
+    assert cert.solver == "dgeev-real"

@@ -22,6 +22,7 @@ from .._consts import (
     EPS_HERMITICITY,
     EPS_SUPP,
     EPS_TRACE,
+    VECTOR_RESIDUAL_REL_MAX,
     ZERO_MODE_AMBIGUITY_FACTOR,
     ZERO_MODE_EPS_FACTOR,
 )
@@ -238,9 +239,16 @@ def certified_eigvals(
     Repair ladder
     -------------
     Candidates are tried in order and the FIRST one satisfying the certificate
-    is returned; the primary solve is therefore byte-identical whenever it is
-    already correct (measured: 400/400 random four-level networks, stiff and
-    well-conditioned alike, keep the ``zgeev`` result).
+    WITHOUT ambiguous in-band modes is returned; the primary solve is
+    therefore byte-identical whenever it is already correct (measured:
+    400/400 random four-level networks, stiff and well-conditioned alike,
+    keep the ``zgeev`` result). An ambiguous candidate does not end the
+    ladder (round-15 review): a later route can resolve the very modes it
+    cannot -- measured, ``zgeev`` certified a stiff network with one
+    ambiguous mode at ``6.3e-7`` while ``dgeev-real`` returned a clean
+    ``2.1e-15`` stationary mode. The best ambiguous candidate (fewest
+    ambiguous modes) is returned, fail-closed, only when every route stays
+    ambiguous.
 
     1. ``zgeev`` -- the incumbent, via :func:`eig_nonhermitian`;
     2. ``dgeev`` on the real part, when ``L`` is real-valued (a different
@@ -309,49 +317,73 @@ def certified_eigvals(
             balanced = sla.matrix_balance(L_c, permute=True)[0]
             yield ("balanced-zgeev", np.linalg.eigvals(balanced))
 
+    # Split the zero-tolerance band (issue #113). Below the split a mode is
+    # machine-zero; above it -- but still inside the #108 tolerance, which
+    # carries a factor ``rtol`` on top -- it is neither machine-zero nor
+    # resolved.
+    #
+    # The factor is set from a MEASURED distribution, not from taste. Across
+    # 83 healthy generators (single/two-qubit families plus random GKSL,
+    # unique and degenerate steady states alike) the largest in-band
+    # |lambda| reaches 2.38 * eps*||L||, median 0.39. Unresolved slow modes
+    # were measured at 4.87 and 4.87e2. The two populations are therefore
+    # NOT cleanly separated -- the nearest pair is 2.38 against 4.87, about
+    # 2x -- so the split is placed at 30x, roughly an order of magnitude
+    # clear of the healthy maximum rather than midway between the two.
+    #
+    # That choice is deliberately conservative: a false NaN on a healthy
+    # generator destroys a correct analysis, while a missed marginal case
+    # leaves behaviour exactly as it was before this check existed. The cost
+    # is bounded reach -- above a spectral spread of ~1e14 the slow modes
+    # sink below the split and the defect is undetectable by any magnitude
+    # test, because double precision has genuinely lost the information.
+    # That residual is documented in issue #113 rather than papered over
+    # here.
+    split = ZERO_MODE_AMBIGUITY_FACTOR * float(np.finfo(float).eps) * norm2
     best: tuple[str, np.ndarray, float] | None = None
+    ambiguous_best: tuple[str, np.ndarray, float, int, int] | None = None
     for name, ev in _candidates():
-        residual = float(np.min(np.abs(ev))) if ev.size else float("inf")
+        magnitudes = np.abs(ev)
+        residual = float(np.min(magnitudes)) if ev.size else float("inf")
         if residual <= bound:
-            magnitudes = np.abs(ev)
-            # Split the zero-tolerance band (issue #113). Below the split a
-            # mode is machine-zero; above it -- but still inside the #108
-            # tolerance, which carries a factor ``rtol`` on top -- it is
-            # neither machine-zero nor resolved.
-            #
-            # The factor is set from a MEASURED distribution, not from taste.
-            # Across 83 healthy generators (single/two-qubit families plus
-            # random GKSL, unique and degenerate steady states alike) the
-            # largest in-band |lambda| reaches 2.38 * eps*||L||, median 0.39.
-            # Unresolved slow modes were measured at 4.87 and 4.87e2. The two
-            # populations are therefore NOT cleanly separated -- the nearest
-            # pair is 2.38 against 4.87, about 2x -- so the split is placed at
-            # 30x, roughly an order of magnitude clear of the healthy maximum
-            # rather than midway between the two.
-            #
-            # That choice is deliberately conservative: a false NaN on a
-            # healthy generator destroys a correct analysis, while a missed
-            # marginal case leaves behaviour exactly as it was before this
-            # check existed. The cost is bounded reach -- above a spectral
-            # spread of ~1e14 the slow modes sink below the split and the
-            # defect is undetectable by any magnitude test, because double
-            # precision has genuinely lost the information. That residual is
-            # documented in issue #113 rather than papered over here.
-            split = ZERO_MODE_AMBIGUITY_FACTOR * float(np.finfo(float).eps) * norm2
             in_band = magnitudes <= bound
-            return ev, ZeroModeCertificate(
-                applicable=True,
-                certified=True,
-                solver=name,
-                residual=residual,
-                bound=bound,
-                trace_defect=tp_defect,
-                zero_mode_count=int(np.count_nonzero(in_band)),
-                ambiguous_count=int(np.count_nonzero(in_band & (magnitudes > split))),
-            )
+            zero_count = int(np.count_nonzero(in_band))
+            ambiguous = int(np.count_nonzero(in_band & (magnitudes > split)))
+            if ambiguous == 0:
+                return ev, ZeroModeCertificate(
+                    applicable=True,
+                    certified=True,
+                    solver=name,
+                    residual=residual,
+                    bound=bound,
+                    trace_defect=tp_defect,
+                    zero_mode_count=zero_count,
+                )
+            # Round-15 review: an AMBIGUOUS candidate must not end the
+            # ladder -- a later route can resolve the very modes this one
+            # cannot (measured: zgeev certified a stiff network with one
+            # ambiguous mode at 6.3e-7 while dgeev-real returns a clean
+            # 2.1e-15 stationary mode). It is retained only as the
+            # fail-closed fallback when EVERY route stays ambiguous, keyed
+            # by the fewest ambiguous modes (ties: ladder order).
+            if ambiguous_best is None or ambiguous < ambiguous_best[4]:
+                ambiguous_best = (name, ev, residual, zero_count, ambiguous)
+            continue
         if best is None or residual < best[2]:
             best = (name, ev, residual)
 
+    if ambiguous_best is not None:
+        name, ev, residual, zero_count, ambiguous = ambiguous_best
+        return ev, ZeroModeCertificate(
+            applicable=True,
+            certified=True,
+            solver=name,
+            residual=residual,
+            bound=bound,
+            trace_defect=tp_defect,
+            zero_mode_count=zero_count,
+            ambiguous_count=ambiguous,
+        )
     assert best is not None
     return best[1], ZeroModeCertificate(
         applicable=True,
@@ -397,6 +429,17 @@ def certified_eig(
     repairable here, and the certificate then reports ``certified=False``
     rather than pretending otherwise.
 
+    Beyond the eigenvalue certificate, a candidate is accepted only when
+    every consumed mode's left AND right eigen*vector* residuals pass the
+    per-mode relative gate ``r_j <= max(VECTOR_RESIDUAL_REL_MAX * |lambda_j|,
+    bound)`` (round-15 review) -- the vectors are what D19 and the Petermann
+    factors consume, and a small ``|lambda|`` does not vouch for them. When
+    the vectors fail on every route, the returned certificate carries
+    ``certified=False`` with ``residual`` set to the offending (vector)
+    residual, so the downstream warning shows a number that actually
+    exceeds the printed bound. Ambiguous candidates likewise no longer end
+    the ladder (same rule as :func:`certified_eigvals`).
+
     Returns
     -------
     tuple
@@ -438,26 +481,116 @@ def certified_eig(
                     ),
                 )
 
+    def _vector_residual(decomp: EigenDecomposition) -> float:
+        """Largest OFFENDING per-mode eigenvector residual; 0.0 when all pass.
+
+        Round-15 review: the eigenvalue certificate alone does not guarantee
+        the eigen*vectors* -- the quantities D19 and the Petermann factors
+        actually consume. Measured on a valid stiff classical network:
+        certified and resolved with ``bound = 3.2e-7``, yet the LEFT vector
+        of the selected slow mode had residual ``3.1e-4`` -- three orders of
+        magnitude beyond the certificate, i.e. not an eigenvector of ``L``
+        in any usable sense (the right vectors were fine).
+
+        The acceptance test is PER MODE and RELATIVE:
+        ``r_j <= max(VECTOR_RESIDUAL_REL_MAX * |lambda_j|, bound)`` for every
+        non-zero-band mode, with ``r_j`` the larger of the unit-normalised
+        left/right residuals. ``r_j / |lambda_j|`` is the first-order
+        relative error scale of anything computed from the pair, and unlike
+        a single operator-scale cutoff it separates the measured
+        populations: a legitimate ``dgeev-real`` repair carries a few
+        percent on its slow modes, while a corrupt ``zgeev`` decomposition
+        carries 22% to 2900% (see
+        :data:`liouscope._consts.VECTOR_RESIDUAL_REL_MAX` for the measured
+        calibration). Modes inside the zero band are not gated here: their
+        vectors span the stationary manifold and are not consumed through
+        this decomposition.
+        """
+        ev = decomp.eigenvalues
+        if not ev.size:
+            return 0.0
+        vr = decomp.right_vectors
+        vl = decomp.left_vectors
+        assert vl is not None  # every ladder route computes left vectors
+        tiny = np.finfo(float).tiny
+        res_r = np.linalg.norm(L_c @ vr - vr * ev[None, :], axis=0) / np.maximum(
+            np.linalg.norm(vr, axis=0), tiny
+        )
+        res_l = np.linalg.norm(
+            L_c.conj().T @ vl - vl * np.conj(ev)[None, :], axis=0
+        ) / np.maximum(np.linalg.norm(vl, axis=0), tiny)
+        res = np.maximum(res_r, res_l)
+        magnitudes = np.abs(ev)
+        consumed = magnitudes > bound
+        if not consumed.any():
+            return 0.0
+        allowed = np.maximum(VECTOR_RESIDUAL_REL_MAX * magnitudes[consumed], bound)
+        offending = res[consumed] > allowed
+        return float(np.max(res[consumed][offending])) if offending.any() else 0.0
+
+    split = ZERO_MODE_AMBIGUITY_FACTOR * float(np.finfo(float).eps) * norm2
     best: tuple[str, EigenDecomposition, float] | None = None
+    ambiguous_best: tuple[str, EigenDecomposition, float, int, int] | None = None
+    vector_failed: tuple[str, EigenDecomposition, float, float] | None = None
     for name, decomp in _candidates():
         magnitudes = np.abs(decomp.eigenvalues)
         residual = float(np.min(magnitudes)) if magnitudes.size else float("inf")
         if residual <= bound:
-            split = ZERO_MODE_AMBIGUITY_FACTOR * float(np.finfo(float).eps) * norm2
             in_band = magnitudes <= bound
-            return decomp, ZeroModeCertificate(
-                applicable=True,
-                certified=True,
-                solver=name,
-                residual=residual,
-                bound=bound,
-                trace_defect=tp_defect,
-                zero_mode_count=int(np.count_nonzero(in_band)),
-                ambiguous_count=int(np.count_nonzero(in_band & (magnitudes > split))),
-            )
+            zero_count = int(np.count_nonzero(in_band))
+            ambiguous = int(np.count_nonzero(in_band & (magnitudes > split)))
+            if ambiguous == 0:
+                vec_residual = _vector_residual(decomp)
+                if vec_residual == 0.0:
+                    return decomp, ZeroModeCertificate(
+                        applicable=True,
+                        certified=True,
+                        solver=name,
+                        residual=residual,
+                        bound=bound,
+                        trace_defect=tp_defect,
+                        zero_mode_count=zero_count,
+                    )
+                # Eigenvalues fine, eigenvectors demonstrably not: keep for
+                # the fail-closed record and try the next route.
+                if vector_failed is None or vec_residual < vector_failed[3]:
+                    vector_failed = (name, decomp, residual, vec_residual)
+                continue
+            # Round-15 review: an ambiguous candidate must not end the
+            # ladder (same rule as certified_eigvals).
+            if ambiguous_best is None or ambiguous < ambiguous_best[4]:
+                ambiguous_best = (name, decomp, residual, zero_count, ambiguous)
+            continue
         if best is None or residual < best[2]:
             best = (name, decomp, residual)
 
+    if ambiguous_best is not None:
+        name, decomp, residual, zero_count, ambiguous = ambiguous_best
+        return decomp, ZeroModeCertificate(
+            applicable=True,
+            certified=True,
+            solver=name,
+            residual=residual,
+            bound=bound,
+            trace_defect=tp_defect,
+            zero_mode_count=zero_count,
+            ambiguous_count=ambiguous,
+        )
+    if vector_failed is not None:
+        # No route produced consumable eigenvectors. certified=False keeps
+        # ``resolved`` False, so every consumer withholds -- the eigenvalue
+        # residual alone must not be allowed to read as success when the
+        # vectors it vouches for are not eigenvectors.
+        name, decomp, residual, vec_residual = vector_failed
+        return decomp, ZeroModeCertificate(
+            applicable=True,
+            certified=False,
+            solver=name,
+            residual=max(residual, vec_residual),
+            bound=bound,
+            trace_defect=tp_defect,
+            zero_mode_count=0,
+        )
     assert best is not None
     return best[1], ZeroModeCertificate(
         applicable=True,

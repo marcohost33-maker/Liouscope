@@ -7,6 +7,37 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Fixed
+- **certified_eig validates eigenVECTOR residuals before certifying
+  (round-15 review). CHANGES NUMERICAL RESULTS** on stiff generators.
+  The certificate accepted a decomposition solely because one eigenvalue was
+  close to zero — but D19 and the Petermann factors consume the
+  eigen*vectors*, and a small `|lambda|` does not vouch for them. Measured
+  on a valid stiff classical network: `certified=True, resolved=True` while
+  the slow mode's LEFT eigenvector had residual three orders of magnitude
+  beyond the certificate bound, i.e. not an eigenvector in any usable sense
+  (the right vectors were fine). Acceptance is now per mode and relative —
+  `r_j <= max(VECTOR_RESIDUAL_REL_MAX * |lambda_j|, bound)` with the larger
+  of the unit-normalised left/right residuals — because `r/|lambda|` is the
+  first-order relative error scale of anything computed from the pair, and
+  a single operator-scale cutoff does not separate the measured populations
+  (healthy `<= 2.1e-10`, legitimate `dgeev-real` repairs a few percent,
+  corrupt decompositions 22%–2900%; the calibration is documented at the
+  constant). A candidate failing the gate does not end the ladder; when no
+  route passes, the certificate reports `certified=False` with the
+  offending vector residual, and every vector consumer (D19, D9, D24)
+  withholds. `certified_eigvals` is deliberately untouched by this gate:
+  the eigenvalues of such a decomposition remain usable for D1/D3/D4.
+- **The repair ladder continues past ambiguous candidates (round-15
+  review). CHANGES NUMERICAL RESULTS** on stiff generators, in the
+  fail-open-to-correct direction. A candidate whose in-band spectrum
+  contained an ambiguous mode (#113) previously ended the ladder
+  immediately with `resolved=False` — withholding D1 and flooring the
+  verdict — even when the very next route resolves the generator cleanly
+  (measured: zgeev certified with one ambiguous mode at `6.3e-7` while
+  dgeev-real returns a `2.1e-15` stationary mode with none). Both ladders
+  now accept only ambiguity-free candidates and fall back to the best
+  ambiguous candidate (fewest ambiguous modes) only when every route stays
+  ambiguous. The healthy path is unchanged and still lazy.
 - **Petermann factors (D9) consume the certified eigendecomposition
   (round-14 review). CHANGES NUMERICAL RESULTS** on stiff generators.
   `petermann_factors` recomputed its own raw `zgeev` decomposition, so on a
