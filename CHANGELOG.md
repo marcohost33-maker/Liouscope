@@ -69,9 +69,37 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   the pre-#108 absolute floor did at unit scale.
   Pinned by `tests/test_zero_mode_scale.py` (tests over
   `c in {1e-10 ... 1e12}`: dimensionless quantities invariant, rate-valued ones
-  scaling by `c`, no false Mpemba candidate, no negative gap, end-to-end
-  verdict invariance, and a discrimination test proving the `atol` opt-in
-  really restores the old defect).
+  scaling by `c`, genuine metastable slow modes preserved, no false Mpemba
+  candidate, no negative gap, and a discrimination test proving the `atol`
+  opt-in really restores the old defect). The suite also pins the **known
+  non-invariance** of the mechanism class (A10/F5 still gates on
+  rate-dimensioned `henrici_eta`, issue #101), so the limitation stays visible
+  instead of being mistaken for a passing invariance claim.
+- **Fit seed rate is grid-relative, not an absolute floor (issue #108 class,
+  fitting path). CHANGES NUMERICAL RESULTS** for fits on time grids far from
+  unit span.
+  `initial_guess_m0` floored the seeded decay rate at an absolute `1e-3`. A rate
+  is `1/time`, so on a grid spanning `t = 5e10` — exactly what a slow generator
+  in small rate units produces — the seed sat `1e7` above the true rate, in a
+  region where `exp(-alpha t)` has underflowed flat and the optimiser has no
+  gradient. The fit then returned **the floor itself** as the measured rate:
+  `beta_D == beta_D_linear == 1e-3` on a system whose true rate was `5e-11`,
+  silently corrupting D5/D17 while every spectral quantity looked healthy.
+  The floor is now a dimensionless decay depth over the fitted window
+  (`ALPHA_SEED_FLOOR_FRAC / t_span`, the rate that decays ~0.5 % across the
+  grid), which reproduces `1e-3` exactly at the `t_span = 5` used throughout
+  the suite — so seeds there, and the anchors, are unchanged. The
+  too-few-positive-samples fallback rate is likewise grid-relative
+  (~one e-folding across the window) instead of an absolute `1.0`.
+  Model evaluations are additionally bounded in magnitude: capping the exponent
+  bounds `exp`, but M3a multiplies it by `(A + B t)`, whose magnitude is
+  unbounded in the parameters, and least-squares then squares the product
+  inside its own normal equations — overflowing in SciPy's `trf` rather than in
+  this module.
+  Residual limitation, deliberately **not** claimed as fixed: at `c = 1e-10`
+  the least-squares convergence criteria stop tracking the rescaling, so fitted
+  rates are asserted invariant only over `c in [1e-6, 1e10]`. Tracked in its own
+  issue; non-dimensionalising the fit is the proper resolution.
 
 ### Added
 - **Hypothesis-wise evidence matrix + `support_score` + reachability gate

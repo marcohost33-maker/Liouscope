@@ -287,6 +287,38 @@ def test_matrix_never_contradicts_the_ladder_on_partial_evidence(dropped):
                 assert ladder[rid] is False, f"{rid} NOT_SUPPORTED but ladder fired"
 
 
+def test_nan_required_evidence_counts_as_missing_not_as_measured():
+    """NaN is the library's "not computed" sentinel, not a failed threshold.
+
+    A presence-only check would let `petermann_max = NaN` read as collected
+    evidence: every comparison against NaN is False, so F1 would report
+    NOT_SUPPORTED and the A12 fallback would conclude that no mechanism
+    applies — from a value nobody measured.
+    """
+    ev = _ev(kreiss=10.0, petermann_max=float("nan"))
+    matrix = hypothesis_evidence_matrix(ev, relaxation=_Rel())
+
+    f1 = _entry(matrix, "F1_OVERLAP_AMPLIFICATION")
+    assert f1["status"] == HYPOTHESIS_UNEVALUABLE
+    assert f1["missing"] == ("petermann_max",)
+    assert f1["claim_floor"] == VERDICT_UNDEFINED
+    # The uncertainty must propagate: A12 cannot be SUPPORTED either.
+    assert _entry(matrix, "A12_FALLBACK")["status"] == HYPOTHESIS_UNEVALUABLE
+
+
+def test_infinite_evidence_stays_a_measured_value():
+    """Infinities are legitimate measurements with documented semantics.
+
+    A floored GNS gap drives `gap_to_gns_ratio` to `inf` by design, so sweeping
+    non-finite values wholesale into "missing" would erase the very signal the
+    F3 branch keys on.
+    """
+    ev = _ev(gap_to_gns_ratio=float("inf"), gns_certified=1.0)
+    f3 = _entry(hypothesis_evidence_matrix(ev, relaxation=_Rel()), "F3_SYMMETRISED_GAP")
+    assert f3["status"] == HYPOTHESIS_SUPPORTED
+    assert f3["missing"] == ()
+
+
 def test_partially_missing_rung_keeps_its_evaluable_evidence():
     """A sibling's missing key must not discard a measured condition.
 

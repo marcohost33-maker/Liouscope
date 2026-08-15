@@ -51,6 +51,7 @@ validation design.
 
 from __future__ import annotations
 
+import math
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Final
@@ -774,6 +775,24 @@ HYPOTHESIS_RESERVED: Final[str] = "RESERVED"
 A12_FALLBACK_RULE_ID: Final[str] = "A12_FALLBACK"
 
 
+def _is_unavailable(ev: dict[str, float], key: str) -> bool:
+    """Is ``key`` absent, or present but NaN (the unavailable-value sentinel)?
+
+    Diagnostics use NaN for "not computed" throughout the result dataclasses
+    (``henrici_relative``, ``beta_D_linear``, the D14b/D14c fields ...), so a
+    presence-only check would treat an unknown measurement as collected
+    evidence: every comparison against NaN is ``False``, which silently reads
+    as "the threshold was not met" and lets the A12 fallback conclude that no
+    mechanism applies. Infinities are NOT swept in here -- they are legitimate
+    measured values with documented per-predicate semantics (a floored gap
+    drives ``gap_to_gns_ratio`` to ``inf`` by design).
+    """
+    if key not in ev:
+        return True
+    value = ev[key]
+    return isinstance(value, float) and math.isnan(value)
+
+
 def _hypothesis_claim_floor(
     a_class: str,
     status: str,
@@ -883,10 +902,10 @@ def hypothesis_evidence_matrix(
         missing_optional_list: list[str] = []
         for cond in rung.conditions:
             for k in cond.keys:
-                if k not in ev and k not in missing_list:
+                if _is_unavailable(ev, k) and k not in missing_list:
                     missing_list.append(k)
             for k in cond.optional_keys:
-                if k not in ev and k not in missing_optional_list:
+                if _is_unavailable(ev, k) and k not in missing_optional_list:
                     missing_optional_list.append(k)
         missing = tuple(missing_list)
         missing_optional = tuple(missing_optional_list)
@@ -900,7 +919,7 @@ def hypothesis_evidence_matrix(
         # would throw away exactly the audit trail this matrix exists for.
         all_hold = True
         for cond in rung.conditions:
-            if any(k not in ev for k in cond.keys):
+            if any(_is_unavailable(ev, k) for k in cond.keys):
                 all_hold = False
                 continue
             values: dict[str, object] = {k: float(ev[k]) for k in cond.keys}

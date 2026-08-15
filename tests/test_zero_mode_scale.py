@@ -225,28 +225,84 @@ def test_unstable_generator_still_reports_a_negative_gap():
 
 
 # ---------------------------------------------------------------------------
-# End-to-end: the verdict itself must not move under a unit change
+# End-to-end: what #108 actually makes invariant -- and what it does not
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("c", [1.0e-10, 1.0, 1.0e10])
-def test_diagnose_verdict_is_invariant_under_rate_rescale(c):
-    """Full pipeline, metamorphic in the rate unit (t -> t/c keeps the physics)."""
-    L = _amplitude_damping_L()
-    rho0 = _plus_state()
-    rep = diagnose(
-        c * L,
-        rho_initial=rho0,
-        t_grid=np.linspace(0.0, 5.0 / c, 64),
-        bootstrap_B=20,
-        seed=1,
-    )
-    cls = rep.classification
-    assert (cls.a_class, cls.f_family) == ("A12", "none")
-    assert cls.verdict == "NOT_EXCLUDED"
-    assert rep.mpemba is not None
-    assert rep.mpemba.is_mpemba_candidate is False
+def _diagnose_rescaled(c: float):
+    """Full pipeline under the metamorphic rate change ``L -> cL``, ``t -> t/c``."""
+    import warnings
+
+    with warnings.catch_warnings():
+        # A 20-decade sweep drives the fitter through poorly-conditioned
+        # regions; convergence quality is not what this module pins.
+        warnings.simplefilter("ignore")
+        return diagnose(
+            c * _amplitude_damping_L(),
+            rho_initial=_plus_state(),
+            t_grid=np.linspace(0.0, 5.0 / c, 64),
+            bootstrap_B=20,
+            seed=1,
+        )
+
+
+@pytest.mark.parametrize("c", [1.0e-10, 1.0e-5, 1.0, 1.0e5, 1.0e10])
+def test_diagnose_spectral_and_mpemba_evidence_is_unit_invariant(c):
+    """The layer #108 fixes: gap scales by ``c``, D19 does not move at all.
+
+    This is the honest end-to-end claim for this issue -- the *evidence* the
+    zero-mode filter feeds, not the downstream verdict (see below).
+    """
+    rep = _diagnose_rescaled(c)
     assert rep.spectral.gap / c == pytest.approx(0.5, rel=1e-6)
+    assert rep.spectral.spectral_spread / c == pytest.approx(0.5, rel=1e-6)
+    assert rep.mpemba is not None
+    assert rep.mpemba.overlap_c1 == pytest.approx(0.5, rel=1e-6)
+    assert rep.mpemba.is_mpemba_candidate is False
+
+
+@pytest.mark.parametrize("c", [1.0e-6, 1.0e-3, 1.0, 1.0e3, 1.0e6, 1.0e10])
+def test_diagnose_fitted_rates_scale_with_the_rate_unit(c):
+    """Fitted rates are rate-valued: they must scale by ``c``, not sit on a floor.
+
+    Before the grid-relative seed floor, `c = 1e-10` returned
+    `beta_D == beta_D_linear == 1e-3` -- the absolute seed floor itself, 1e7
+    above the true rate -- so a report could carry corrupted D5/D17 evidence
+    while every spectral quantity looked healthy.
+
+    `c = 1e-10` is deliberately outside this range: there the least-squares
+    convergence criteria (which carry their own absolute/relative mix) stop
+    tracking the rescaling, which is a separate limitation from #108 and is
+    tracked in its own issue rather than silently asserted away here.
+    """
+    rep = _diagnose_rescaled(c)
+    assert rep.relaxation.beta_D / c == pytest.approx(1.0592, rel=1e-3)
+    assert rep.relaxation.beta_D_linear / c == pytest.approx(0.7515, rel=1e-3)
+
+
+def test_seed_floor_no_longer_pins_the_rate_on_a_long_grid():
+    """The specific regression: at c = 1e-10 the rate must not be the floor."""
+    rep = _diagnose_rescaled(1.0e-10)
+    assert rep.relaxation.beta_D != pytest.approx(1.0e-3, rel=1e-6)
+    # Within an order of magnitude of the true rate, rather than 1e7 above it.
+    assert 0.1 <= rep.relaxation.beta_D / 1.0e-10 <= 10.0
+
+
+def test_mechanism_class_is_NOT_claimed_invariant_under_rate_rescale():
+    """Pin the KNOWN limitation so nobody later claims invariance it lacks.
+
+    The A10/F5 branch still gates on the rate-dimensioned `henrici_eta > 1.0`
+    (issue #101, stated in the README), so rescaling crosses that threshold and
+    moves the class -- measured here at `c = 10` and `c = 1e3`, which report
+    A10/F5 where `c = 1` reports A12. #108 removes the zero-mode-induced verdict
+    flips; it does not and must not be read as making the verdict unit-invariant
+    in general. When #101 slice C lands, this test should start failing and be
+    replaced by a genuine invariance assertion.
+    """
+    classes = {c: _diagnose_rescaled(c).classification.a_class for c in (1.0, 10.0, 1.0e3)}
+    assert classes[1.0] == "A12"
+    assert classes[10.0] == "A10", "the documented henrici_eta scale dependence"
+    assert classes[1.0e3] == "A10"
 
 
 def test_legacy_absolute_floor_reproduces_the_pre_108_defect():

@@ -71,17 +71,49 @@ def test_initial_guess_m0_floors_alpha_positive(t):
 
 
 @pytest.mark.parametrize(
-    "y, expected_A",
+    "y, expected_A, expected_alpha",
     [
-        (np.array([0.0, -1.0, -2.0]), 0.0),  # fewer than 2 positive samples
-        (np.array([]), 1.0),                  # empty -> default amplitude
+        # Fewer than 2 positive samples. The fallback rate is now GRID-RELATIVE
+        # (~one e-folding across the window) rather than an absolute 1.0: a rate
+        # is 1/time, so a fixed fallback silently means "decays instantly" on a
+        # long grid and "never decays" on a short one. Here t spans [0, 2].
+        (np.array([0.0, -1.0, -2.0]), 0.0, 0.5),
+        # Empty input has no window to scale by, so the unit fallback stands.
+        (np.array([]), 1.0, 1.0),
     ],
 )
-def test_initial_guess_m0_fallback_when_too_few_positive(y, expected_A):
+def test_initial_guess_m0_fallback_when_too_few_positive(y, expected_A, expected_alpha):
     tt = np.arange(y.size, dtype=float)
     A, alpha = initial_guess_m0(tt, y)
     assert pytest.approx(expected_A) == A
-    assert alpha == pytest.approx(1.0)
+    assert alpha == pytest.approx(expected_alpha)
+
+
+def test_initial_guess_m0_seed_rate_scales_with_the_time_grid():
+    """A pure change of time units must move the seed with it (issue #108 class).
+
+    The absolute `1e-3` floor put the seed 1e7 above the true rate on a grid
+    spanning 5e10 — a region where `exp(-alpha t)` has underflowed flat and the
+    optimiser has no gradient, so the fit returned the floor itself as the
+    "measured" rate and silently corrupted D5/D17.
+    """
+    for c in (1.0, 1.0e-3, 1.0e-10):
+        t = np.linspace(0.0, 5.0 / c, 64)
+        y = np.exp(-0.5 * c * t)
+        _, alpha = initial_guess_m0(t, y)
+        assert alpha == pytest.approx(0.5 * c, rel=1e-6)
+
+
+def test_initial_guess_m0_floor_is_unchanged_on_the_canonical_grid():
+    """The grid-relative floor reproduces the historical 1e-3 at t_span = 5.
+
+    Keeping that identity is what leaves every seed in the existing suite — and
+    therefore the anchors — untouched by this change.
+    """
+    t = np.linspace(0.0, 5.0, 64)
+    flat = np.ones_like(t)          # zero slope -> the floor decides
+    _, alpha = initial_guess_m0(t, flat)
+    assert alpha == pytest.approx(1.0e-3, rel=1e-12)
 
 
 def test_initial_guess_m1_extends_m0_with_zero_offset(t):
