@@ -307,6 +307,114 @@ def certified_eigvals(
     )
 
 
+def certified_eig(
+    L_super: np.ndarray,
+    *,
+    rtol: float = ZERO_MODE_EPS_FACTOR,
+    tp_rtol: float = 1.0e-10,
+) -> tuple[EigenDecomposition, ZeroModeCertificate]:
+    """Like :func:`certified_eigvals`, but also returns left/right eigenvectors.
+
+    Issue #112 follow-up. The eigenvalue-only certificate protects D1/D3/D4, but
+    the layers that consume eigen*vectors* -- D19's slowest-mode overlap above
+    all -- were still reading the uncertified decomposition. That matters more
+    than it sounds: on a stiff generator ``zgeev`` can return a *spurious* slow
+    mode, and D19 then measures the initial state's overlap with an eigenvector
+    that corresponds to no physical mode. A wrong overlap on that rung fires a
+    false A11/F4 Mpemba candidate -- the highest-priority branch of the
+    classifier, and exactly the failure mode #108 was fixed to prevent.
+
+    Repair ladder, narrower than the eigenvalue-only one
+    ----------------------------------------------------
+    Only routes that actually produce eigenvectors in the ORIGINAL basis are
+    usable here:
+
+    1. ``zgeev`` -- the incumbent;
+    2. ``dgeev`` on the real part, when ``L`` is real-valued.
+
+    The Schur and balanced routes are deliberately absent: ``zgees`` yields no
+    eigenvectors directly, and the balanced solve returns them in the balanced
+    basis, where back-transforming re-introduces exactly the scaling that made
+    the decomposition unreliable. A narrower ladder is the honest choice --
+    it means some spectra that ``certified_eigvals`` can repair are NOT
+    repairable here, and the certificate then reports ``certified=False``
+    rather than pretending otherwise.
+
+    Returns
+    -------
+    tuple
+        ``(EigenDecomposition with left_vectors set, certificate)``.
+    """
+    L_super = require_finite_square_2d(L_super, name="L_super")
+    L_c = np.asarray(L_super, dtype=complex)
+    tp_defect, fro = trace_preservation_defect(L_c)
+    norm2 = float(np.linalg.norm(L_c, 2)) if L_c.size else 0.0
+    bound = rtol * float(np.finfo(float).eps) * norm2
+
+    primary = eig_nonhermitian(L_c, compute_left=True)
+    if not np.isfinite(tp_defect) or tp_defect > tp_rtol * max(fro, np.finfo(float).tiny):
+        return primary, ZeroModeCertificate(
+            applicable=False,
+            certified=False,
+            solver="zgeev",
+            residual=(
+                float(np.min(np.abs(primary.eigenvalues)))
+                if primary.eigenvalues.size
+                else float("nan")
+            ),
+            bound=bound,
+            trace_defect=tp_defect,
+        )
+
+    def _candidates() -> list[tuple[str, EigenDecomposition]]:
+        out: list[tuple[str, EigenDecomposition]] = [("zgeev", primary)]
+        if np.allclose(L_c.imag, 0.0):
+            with contextlib.suppress(ValueError, sla.LinAlgError):
+                w, vl, vr = sla.eig(L_c.real, left=True, right=True)
+                out.append(
+                    (
+                        "dgeev-real",
+                        EigenDecomposition(
+                            eigenvalues=np.asarray(w).astype(complex),
+                            right_vectors=np.asarray(vr).astype(complex),
+                            left_vectors=np.asarray(vl).astype(complex),
+                        ),
+                    )
+                )
+        return out
+
+    best: tuple[str, EigenDecomposition, float] | None = None
+    for name, decomp in _candidates():
+        magnitudes = np.abs(decomp.eigenvalues)
+        residual = float(np.min(magnitudes)) if magnitudes.size else float("inf")
+        if residual <= bound:
+            split = ZERO_MODE_AMBIGUITY_FACTOR * float(np.finfo(float).eps) * norm2
+            in_band = magnitudes <= bound
+            return decomp, ZeroModeCertificate(
+                applicable=True,
+                certified=True,
+                solver=name,
+                residual=residual,
+                bound=bound,
+                trace_defect=tp_defect,
+                zero_mode_count=int(np.count_nonzero(in_band)),
+                ambiguous_count=int(np.count_nonzero(in_band & (magnitudes > split))),
+            )
+        if best is None or residual < best[2]:
+            best = (name, decomp, residual)
+
+    assert best is not None
+    return best[1], ZeroModeCertificate(
+        applicable=True,
+        certified=False,
+        solver=best[0],
+        residual=best[2],
+        bound=bound,
+        trace_defect=tp_defect,
+        zero_mode_count=0,
+    )
+
+
 def require_finite_square_2d(A: np.ndarray, *, name: str = "matrix") -> np.ndarray:
     """Validate ``A`` as a finite, square, 2-D array at a public boundary.
 

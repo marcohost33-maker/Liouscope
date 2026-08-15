@@ -18,6 +18,7 @@ from liouscope._consts import ZERO_MODE_AMBIGUITY_FACTOR
 from liouscope.core.lindblad import build_liouvillian
 from liouscope.diagnostics.spectral import compute_spectral_layer, liouvillian_gap
 from liouscope.numerics.linalg import (
+    certified_eig,
     certified_eigvals,
     eig_nonhermitian,
     trace_preservation_defect,
@@ -375,6 +376,97 @@ def test_the_discarded_value_really_was_a_fast_mode() -> None:
         f"slowest genuine one; got {would_have_reported:.3e} vs "
         f"{slowest_genuine:.3e}"
     )
+
+
+# --------------------------------------------------------------------------
+# Issue #112 follow-up: the eigenVECTOR consumers (D19 / A11-F4 rung).
+# --------------------------------------------------------------------------
+
+
+def test_incumbent_slow_eigenvector_is_not_an_eigenvector() -> None:
+    """DISCRIMINATION: the pre-fix slow 'mode' satisfies no eigenvalue equation.
+
+    This is what makes the D19 exposure worse than a wrong number: the overlap
+    was measured against a vector with a residual LARGER than the eigenvalue it
+    claims to belong to.
+    """
+    from liouscope.numerics.linalg import eig_nonhermitian as _eig
+
+    lsup = _classical_network(STIFF_PAIRS, STIFF_RATES)
+    decomp = _eig(lsup, compute_left=True)
+    ev = decomp.eigenvalues
+    tol = 1e3 * np.finfo(float).eps * np.linalg.norm(lsup, 2)
+    mask = np.abs(ev) > tol
+    idx = np.where(mask)[0][int(np.argmax(np.real(ev[mask])))]
+    r = decomp.right_vectors[:, idx]
+    r = r / np.linalg.norm(r)
+    residual = float(np.linalg.norm(lsup @ r - ev[idx] * r))
+    assert residual > abs(ev[idx]), (
+        "repro no longer exercises the defect: the incumbent slow eigenvector "
+        f"has residual {residual:.3e} against |lambda| = {abs(ev[idx]):.3e}"
+    )
+
+
+def test_certified_decomposition_returns_genuine_eigenvectors() -> None:
+    """After repair, both left and right slow eigenvectors satisfy their equations."""
+    lsup = _classical_network(STIFF_PAIRS, STIFF_RATES)
+    decomp, cert = certified_eig(lsup)
+    assert cert.certified and cert.solver != "zgeev"
+    ev = decomp.eigenvalues
+    assert decomp.left_vectors is not None
+    tol = 1e3 * np.finfo(float).eps * np.linalg.norm(lsup, 2)
+    mask = np.abs(ev) > tol
+    idx = np.where(mask)[0][int(np.argmax(np.real(ev[mask])))]
+    lam = ev[idx]
+    assert lam.real == pytest.approx(-STIFF_TRUE_GAP, rel=1e-9)
+
+    r = decomp.right_vectors[:, idx] / np.linalg.norm(decomp.right_vectors[:, idx])
+    left = decomp.left_vectors[:, idx] / np.linalg.norm(decomp.left_vectors[:, idx])
+    scale = float(np.linalg.norm(lsup, 2))
+    assert np.linalg.norm(lsup @ r - lam * r) <= 1e3 * np.finfo(float).eps * scale
+    assert np.linalg.norm(left.conj() @ lsup - lam * left.conj()) <= (
+        1e3 * np.finfo(float).eps * scale
+    )
+
+
+def test_slowest_mode_selects_the_true_slow_mode() -> None:
+    """The D19 entry point now picks the analytically correct mode."""
+    from liouscope.diagnostics.mpemba import _slowest_mode
+
+    lsup = _classical_network(STIFF_PAIRS, STIFF_RATES)
+    mode = _slowest_mode(lsup)
+    assert mode is not None
+    l_slow, r_slow = mode
+    r_slow = r_slow / np.linalg.norm(r_slow)
+    rayleigh = complex(np.vdot(r_slow, lsup @ r_slow))
+    assert rayleigh.real == pytest.approx(-STIFF_TRUE_GAP, rel=1e-6)
+
+
+def test_certified_eig_is_a_no_op_on_healthy_generators() -> None:
+    sm = np.array([[0, 1], [0, 0]], dtype=complex)
+    lsup = build_liouvillian(np.zeros((2, 2), dtype=complex), [sm], [1.0])
+    decomp, cert = certified_eig(lsup)
+    assert cert.certified and cert.solver == "zgeev"
+    incumbent = eig_nonhermitian(lsup, compute_left=True)
+    np.testing.assert_allclose(decomp.eigenvalues, incumbent.eigenvalues)
+    np.testing.assert_allclose(decomp.right_vectors, incumbent.right_vectors)
+
+
+def test_certified_eig_ladder_is_narrower_than_eigvals_and_says_so() -> None:
+    """A complex-valued stiff generator has no eigenvector-producing repair.
+
+    certified_eigvals may still repair such a case via Schur; certified_eig
+    must NOT claim to, because Schur yields no eigenvectors. The honest
+    outcome is certified=False, not a silently different spectrum.
+    """
+    lsup = _classical_network(STIFF_PAIRS, STIFF_RATES).astype(complex)
+    lsup = lsup + 0j
+    lsup[0, 0] += 1e-18j          # make it non-real without changing the physics
+    decomp, cert = certified_eig(lsup)
+    if not cert.certified:
+        # the narrower ladder gave up -- it must return the incumbent, unchanged
+        incumbent = eig_nonhermitian(lsup, compute_left=True)
+        np.testing.assert_allclose(decomp.eigenvalues, incumbent.eigenvalues)
 
 
 def test_certificate_dict_is_json_serialisable() -> None:
