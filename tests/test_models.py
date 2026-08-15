@@ -273,3 +273,57 @@ def test_extreme_amplitude_probes_saturate_instead_of_overflowing():
             out = model(t, params)
             assert np.all(np.isfinite(out)), f"{model.__name__} not finite"
             assert np.all(np.abs(out) <= 1.0e100), f"{model.__name__} unbounded"
+
+
+def test_initial_guess_m3a_slope_scales_with_the_time_grid():
+    """B carries dimension amplitude/time; an absolute seed broke M3a at c=1e6.
+
+    On the exactly rescaled curve `(1 + 0.2*c*t) * exp(-0.5*c*t)` the absolute
+    `0.01 * A` slope seed reached `1e5 * A` at the window end for `c = 1e-6`
+    grids — so far from any plausible curve that the M3a fit diverged with
+    infinite AICc, silently removing the A10/F5 Jordan hypothesis from the
+    model comparison purely because of the rate unit.
+    """
+    from liouscope.fitting.gls import fit_gls_ar1
+
+    for c in (1.0, 1.0e6):
+        t = np.linspace(0.0, 10.0 / c, 96)
+        y = (1.0 + 0.2 * c * t) * np.exp(-0.5 * c * t)
+        p0 = initial_guess_m3a(t, y)
+        assert p0[1] == pytest.approx(0.005 * p0[0] * c, rel=1e-6)
+        fit = fit_gls_ar1(M3a, t, y, p0)
+        assert fit.success
+        assert fit.params[2] == pytest.approx(0.5 * c, rel=1e-3)   # alpha scales
+        assert fit.params[1] == pytest.approx(0.2 * c, rel=1e-2)   # B scales
+    # c = 1e-6 (long-grid, small-parameter regime): the SEED now scales, and the
+    # fit no longer diverges to infinite AICc -- but exact parameter recovery
+    # there is bounded by the least-squares convergence non-invariance tracked
+    # in issue #111, so it is deliberately NOT asserted.
+    t = np.linspace(0.0, 10.0e6, 96)
+    y = (1.0 + 0.2e-6 * t) * np.exp(-0.5e-6 * t)
+    fit = fit_gls_ar1(M3a, t, y, initial_guess_m3a(t, y))
+    assert fit.success
+    assert np.all(np.isfinite(fit.params))
+
+
+def test_initial_guess_m3a_reproduces_the_historical_seed_on_canonical_grids():
+    t = np.linspace(0.0, 5.0, 64)
+    y = 3.0 * np.exp(-0.8 * t)
+    A, B, _alpha = initial_guess_m3a(t, y)
+    assert pytest.approx(0.01 * A, rel=1e-12) == B
+
+
+def test_fit_boundary_rejects_non_finite_data():
+    """Model saturation is for optimiser probes, not for corrupted input.
+
+    Without this gate, a NaN in caller data was laundered by the saturating
+    models into a 'successful' fit with a finite likelihood.
+    """
+    from liouscope.fitting.gls import fit_gls_ar1
+
+    t_bad = np.array([0.0, 1.0, np.nan, 3.0])
+    y = np.exp(-np.array([0.0, 1.0, 2.0, 3.0]))
+    with pytest.raises(ValueError, match="finite"):
+        fit_gls_ar1(M0, t_bad, y, np.array([1.0, 1.0]))
+    with pytest.raises(ValueError, match="finite"):
+        fit_gls_ar1(M0, np.array([0.0, 1.0, 2.0, 3.0]), y, np.array([1.0, np.inf]))

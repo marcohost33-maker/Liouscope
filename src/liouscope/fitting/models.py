@@ -198,10 +198,25 @@ def initial_guess_m2(t: np.ndarray, y: np.ndarray) -> np.ndarray:
     return np.array([0.5 * A, alpha, 0.5 * A, alpha * 3.0])
 
 
+# M3a slope-seed fraction (issue #108 class, eighth review round). ``B`` in
+# ``(A + B t) exp(-alpha t)`` carries dimension amplitude/time, so an absolute
+# seed ``0.01 * A`` is tied to a unit choice: on a grid spanning ``t = 1e7``
+# the seeded linear term reaches ``1e5 * A`` at the window end -- so far from
+# any plausible curve that the M3a fit diverges (infinite AICc) purely because
+# of the rate unit, silently removing the A10/F5 Jordan hypothesis from the
+# model comparison. Seeding ``B = frac * A / t_span`` makes the seeded slope a
+# fixed FRACTION of the amplitude across the window; ``frac = 0.05``
+# reproduces the historical ``0.01 * A`` exactly on the canonical
+# ``t_span = 5`` grids, so existing seeds and the anchors are unchanged.
+M3A_SLOPE_SEED_FRAC: float = 5.0e-2
+
+
 def initial_guess_m3a(t: np.ndarray, y: np.ndarray) -> np.ndarray:
-    """Seed (A + B t) exp(-alpha t) from M0 plus small slope."""
+    """Seed (A + B t) exp(-alpha t) from M0 plus a small grid-relative slope."""
     A, alpha = initial_guess_m0(t, y)
-    return np.array([A, 0.01 * A, alpha])
+    span = _time_span(t)
+    slope = M3A_SLOPE_SEED_FRAC * A / span if span > 0.0 else 0.01 * A
+    return np.array([A, slope, alpha])
 
 
 def initial_guess_m3b(

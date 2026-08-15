@@ -519,3 +519,51 @@ def test_legacy_construction_still_honours_the_alias_contract():
             a_class="A1", f_family="none", verdict="CANDIDATE", tier="CONFIRMATION",
             confidence=0.7, support_score=0.2, evidence={},
         )
+
+
+def test_nan_optional_evidence_behaves_exactly_like_its_absence():
+    """The claim floor must not depend on how a missing value is ENCODED.
+
+    `gap` is optional for F5 (the reach predicate reads it with the documented
+    gapless default). Before the NaN strip, the absent encoding applied the
+    default and fired the rung, while the NaN encoding made the comparison
+    False — same missing measurement, different claim floor, and the matrix
+    diverged from the ladder.
+    """
+    base = _ev(pseudospectral_radius=10.0, henrici_eta=2.0)
+
+    absent = dict(base)
+    del absent["gap"]
+    as_nan = dict(base)
+    as_nan["gap"] = float("nan")
+
+    rel = _Rel()
+    for ev in (absent, as_nan):
+        ladder = {r[0]: r[3] for r in _hypothesis_ladder(ev, relaxation=rel)}
+        f5 = _entry(hypothesis_evidence_matrix(ev, relaxation=rel), "F5_PSEUDOSPECTRAL")
+        assert ladder["F5_PSEUDOSPECTRAL"] is True
+        assert f5["status"] == HYPOTHESIS_SUPPORTED
+        assert "gap" in f5["missing_optional"]
+
+
+def test_nan_required_evidence_also_behaves_exactly_like_its_absence():
+    """Encoding-independence must hold for REQUIRED keys too.
+
+    `gap_to_gns_ratio` is required by F3 (indexed directly). For the absent
+    encoding the ladder has always raised rather than deciding from a value
+    nobody measured; the NaN encoding now does the same, and the matrix marks
+    F3 UNEVALUABLE under both.
+    """
+    base = _ev(henrici_eta=2.0)
+    absent = dict(base)
+    del absent["gap_to_gns_ratio"]
+    as_nan = dict(base)
+    as_nan["gap_to_gns_ratio"] = float("nan")
+
+    rel = _Rel()
+    for ev in (absent, as_nan):
+        with pytest.raises(KeyError):
+            _hypothesis_ladder(ev, relaxation=rel)
+        f3 = _entry(hypothesis_evidence_matrix(ev, relaxation=rel), "F3_SYMMETRISED_GAP")
+        assert f3["status"] == HYPOTHESIS_UNEVALUABLE
+        assert "gap_to_gns_ratio" in f3["missing"]

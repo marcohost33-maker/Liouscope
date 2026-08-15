@@ -706,7 +706,17 @@ def _hypothesis_ladder(
     The rungs and their conditions come from :func:`_ladder_spec`; a rung
     fires iff ALL of its conditions hold (short-circuit evaluation, matching
     the historical inline ``and`` chains exactly).
+
+    NaN-valued evidence is stripped before evaluation
+    (:func:`_strip_unavailable`): NaN is the library's unavailable-value
+    sentinel, so a NaN-encoded missing measurement must behave exactly like an
+    absent key — for defaulted (optional) keys the documented default applies,
+    for indexed (required) keys the rung cannot fire. Without the strip, the
+    same missing measurement changed the outcome depending on its ENCODING:
+    ``gap_to_gns_ratio`` absent let the F5 reach leg apply its default ``1.0``,
+    while ``gap_to_gns_ratio = NaN`` made every comparison False.
     """
+    ev = _strip_unavailable(ev)
     return [
         (
             rung.rule_id,
@@ -773,6 +783,20 @@ HYPOTHESIS_NOT_SUPPORTED: Final[str] = "NOT_SUPPORTED"
 HYPOTHESIS_UNEVALUABLE: Final[str] = "UNEVALUABLE"
 HYPOTHESIS_RESERVED: Final[str] = "RESERVED"
 A12_FALLBACK_RULE_ID: Final[str] = "A12_FALLBACK"
+
+
+def _strip_unavailable(ev: dict[str, float]) -> dict[str, float]:
+    """Return ``ev`` without NaN-valued entries (the unavailable sentinel).
+
+    Evaluating predicates against the stripped view makes the NaN encoding of
+    a missing measurement behave exactly like its absence, in the decision
+    ladder and the evidence matrix alike — otherwise the claim floor of a rung
+    depended on whether the same unavailable value arrived as a NaN entry or
+    as no entry at all.
+    """
+    if not any(math.isnan(v) for v in ev.values()):
+        return ev
+    return {k: v for k, v in ev.items() if not math.isnan(v)}
 
 
 def _is_unavailable(ev: dict[str, float], key: str) -> bool:
@@ -886,6 +910,7 @@ def hypothesis_evidence_matrix(
     (issue #102 wishlist) need machinery that does not exist yet and are
     deliberately NOT faked here; they remain open in the issue.
     """
+    ev = _strip_unavailable(ev)
     entries: list[dict[str, object]] = []
     any_fired = False
     any_unevaluable = False

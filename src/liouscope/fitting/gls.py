@@ -73,6 +73,19 @@ def fit_gls_ar1(
     t = np.asarray(t, dtype=float)
     y = np.asarray(y, dtype=float)
     p = np.asarray(p0, dtype=float).copy()
+    # Fail closed on corrupted input at the FIT boundary (eighth-round review):
+    # the models saturate non-finite intermediates so that optimiser overflow
+    # probes keep a finite, informative residual — but that same saturation
+    # would otherwise launder a NaN in caller-supplied data into a "successful"
+    # fit with a finite likelihood. Overflow recovery is for probes the
+    # optimiser generates itself; data the caller hands in must be measurements.
+    for name, arr in (("t", t), ("y", y), ("p0", p)):
+        if not np.all(np.isfinite(arr)):
+            bad = np.flatnonzero(~np.isfinite(arr)).tolist()
+            raise ValueError(
+                f"fit_gls_ar1: {name} must be finite; non-finite entries at "
+                f"indices {bad}"
+            )
     rho = 0.0
     success = True
     for _ in range(n_iters):
