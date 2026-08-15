@@ -715,6 +715,14 @@ def _hypothesis_ladder(
     same missing measurement changed the outcome depending on its ENCODING:
     ``gap_to_gns_ratio`` absent let the F5 reach leg apply its default ``1.0``,
     while ``gap_to_gns_ratio = NaN`` made every comparison False.
+
+    A condition whose required keys are unavailable is treated as NOT holding
+    rather than invoked (eleventh-round review): letting the predicate index a
+    stripped key aborted REPORT GENERATION with a ``KeyError`` whenever one
+    condition passed and its sibling's evidence was NaN. Not firing is the
+    fail-closed direction — no mechanism is claimed — and the evidence matrix
+    carries the audit trail (the rung reports UNEVALUABLE with the missing
+    keys, and the A12 fallback inherits the uncertainty).
     """
     ev = _strip_unavailable(ev)
     return [
@@ -722,7 +730,10 @@ def _hypothesis_ladder(
             rung.rule_id,
             rung.a_class,
             rung.f_family,
-            all(cond.fn(ev, relaxation) for cond in rung.conditions),
+            all(
+                all(k in ev for k in cond.keys) and cond.fn(ev, relaxation)
+                for cond in rung.conditions
+            ),
         )
         for rung in _ladder_spec()
     ]

@@ -123,7 +123,7 @@ schema-reserved classes — one entry with:
 | `counterevidence` | conditions that fail, with their values |
 | `missing` | required evidence keys absent from this run |
 | `claim_floor` | what this run could claim about the hypothesis |
-| `support_score` | the ordinal score this class would receive |
+| `support_score` | the ordinal score this class would receive; `None` unless the entry is `SUPPORTED` |
 
 The claim floor follows explicit, fail-closed rules: `RESERVED` and
 `UNEVALUABLE` floor to `UNDEFINED` (no rule / no evidence — no claim);

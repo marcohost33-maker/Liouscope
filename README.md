@@ -121,7 +121,11 @@ schema-reserved A6/A7/A9 — each with its supporting measurements,
 counterevidence, missing required evidence, an explicit fail-closed
 `claim_floor` (`RESERVED`/`UNEVALUABLE` → `UNDEFINED`, `NOT_SUPPORTED` →
 `NOT_EXCLUDED`, `SUPPORTED` → the verdict it would receive as winner) and its
-ordinal `support_score`. Decision ladder and matrix are derived from the same
+ordinal `support_score` — which is a number **only for `SUPPORTED` entries**
+and `None` otherwise: the score answers "what grade would this class get as
+the winner", so attaching it to a failed or unevaluable rung would print a
+confirmation-grade number beside that rung's own counterevidence. Decision
+ladder and matrix are derived from the same
 declarative rung spec, so the audit surface cannot drift from the decision;
 the matrix is report-only. See
 `docs/explanation/layers-and-taxonomy.md` for the full vocabulary.

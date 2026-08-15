@@ -257,29 +257,18 @@ def test_missing_optional_key_is_reported_without_forcing_unevaluable():
 def test_matrix_never_contradicts_the_ladder_on_partial_evidence(dropped):
     """Equivalence must survive every single-key omission, not just full sets.
 
-    The two are deliberately asymmetric on incomplete input: the matrix is the
-    robust reporter (it exists to say "this evidence was missing"), while the
-    ladder is the strict decision and raises `KeyError` on a missing required
-    key rather than deciding from a value nobody measured. Both therefore
-    refuse to rule -- and that agreement is what this test pins. Where the
-    ladder does produce a verdict, SUPPORTED must mean fired and NOT_SUPPORTED
-    must mean not fired.
+    Missing required evidence makes the affected rungs not-fire in the ladder
+    and UNEVALUABLE in the matrix -- both refuse to claim a mechanism from a
+    value nobody measured, and neither is allowed to crash report generation
+    (eleventh-round review). SUPPORTED must mean fired, NOT_SUPPORTED and
+    UNEVALUABLE must mean not fired.
     """
     ev = _ev(henrici_eta=2.0, kreiss=10.0, petermann_max=10.0)
     ev.pop(dropped, None)
     for model in ("M0", "M2", "M3a"):
         rel = _Rel(aicc_model=model)
         matrix = hypothesis_evidence_matrix(ev, relaxation=rel)
-        try:
-            ladder = {r[0]: r[3] for r in _hypothesis_ladder(ev, relaxation=rel)}
-        except KeyError:
-            # The strict path refused to decide; every rung that indexes the
-            # dropped key must be reported UNEVALUABLE rather than given a
-            # verdict the decision itself would not make.
-            affected = [e for e in matrix if dropped in e.get("missing", ())]
-            assert affected, f"no rung reported {dropped} as missing REQUIRED evidence"
-            assert all(e["status"] == HYPOTHESIS_UNEVALUABLE for e in affected)
-            continue
+        ladder = {r[0]: r[3] for r in _hypothesis_ladder(ev, relaxation=rel)}
         for entry in matrix:
             rid = entry["rule_id"]
             if rid not in ladder:
@@ -288,6 +277,8 @@ def test_matrix_never_contradicts_the_ladder_on_partial_evidence(dropped):
                 assert ladder[rid] is True, f"{rid} SUPPORTED but ladder did not fire"
             elif entry["status"] == HYPOTHESIS_NOT_SUPPORTED:
                 assert ladder[rid] is False, f"{rid} NOT_SUPPORTED but ladder fired"
+            elif entry["status"] == HYPOTHESIS_UNEVALUABLE:
+                assert ladder[rid] is False, f"{rid} UNEVALUABLE but ladder fired"
 
 
 def test_nan_required_evidence_counts_as_missing_not_as_measured():
@@ -565,8 +556,27 @@ def test_nan_required_evidence_also_behaves_exactly_like_its_absence():
 
     rel = _Rel()
     for ev in (absent, as_nan):
-        with pytest.raises(KeyError):
-            _hypothesis_ladder(ev, relaxation=rel)
+        ladder = {r[0]: r[3] for r in _hypothesis_ladder(ev, relaxation=rel)}
+        assert ladder["F3_SYMMETRISED_GAP"] is False  # cannot fire without evidence
         f3 = _entry(hypothesis_evidence_matrix(ev, relaxation=rel), "F3_SYMMETRISED_GAP")
         assert f3["status"] == HYPOTHESIS_UNEVALUABLE
         assert "gap_to_gns_ratio" in f3["missing"]
+
+
+def test_partial_nan_evidence_does_not_abort_report_generation():
+    """A passed sibling condition must not turn missing evidence into a crash.
+
+    `kreiss = 10` passes F1's first condition; `petermann_max = NaN` strips the
+    second condition's key. Before this fix the predicate indexed the stripped
+    key and REPORT GENERATION died with KeyError — worse than any wrong answer,
+    and unreachable-by-construction only for `_gather_evidence` callers, not
+    for the public `classify_mechanism`/matrix surface.
+    """
+    ev = _ev(kreiss=10.0, petermann_max=float("nan"))
+    rel = _Rel()
+    ladder = {r[0]: r[3] for r in _hypothesis_ladder(ev, relaxation=rel)}
+    assert ladder["F1_OVERLAP_AMPLIFICATION"] is False
+    f1 = _entry(hypothesis_evidence_matrix(ev, relaxation=rel), "F1_OVERLAP_AMPLIFICATION")
+    assert f1["status"] == HYPOTHESIS_UNEVALUABLE
+    assert f1["missing"] == ("petermann_max",)
+    assert len(f1["supporting"]) == 1  # the measured kreiss support survives
