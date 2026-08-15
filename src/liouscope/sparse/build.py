@@ -46,7 +46,13 @@ def build_sparse_liouvillian(
     # materialisation the sparse path exists to avoid is not reintroduced.
     herm_defect = H_sp - H_sp.conj().T
     defect = float(np.max(np.abs(herm_defect.data))) if herm_defect.nnz else 0.0
-    scale = float(np.max(np.abs(H_sp.data))) if H_sp.nnz else 0.0
+    # Gauge-fixed scale, in parity with the dense builder (twelfth-round
+    # review): a real identity offset is physically inert but inflates the
+    # scale, loosening the gate. Subtracting the real trace part touches only
+    # the diagonal, so sparsity is preserved.
+    H_gauge = (H_sp - sp.identity(d, dtype=complex, format="csr")
+               * (H_sp.diagonal().sum().real / d)).tocsr()
+    scale = float(np.max(np.abs(H_gauge.data))) if H_gauge.nnz else 0.0
     if defect > EPS_HERMITICITY * scale:
         raise ValueError(
             f"H must be Hermitian within a relative {EPS_HERMITICITY:g} "

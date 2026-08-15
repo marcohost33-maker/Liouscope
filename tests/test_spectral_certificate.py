@@ -13,10 +13,15 @@ import warnings
 
 import numpy as np
 import pytest
+import scipy.linalg as sla
 
 from liouscope._consts import ZERO_MODE_AMBIGUITY_FACTOR
 from liouscope.core.lindblad import build_liouvillian
-from liouscope.diagnostics.spectral import compute_spectral_layer, liouvillian_gap
+from liouscope.diagnostics.spectral import (
+    compute_spectral_layer,
+    liouvillian_gap,
+    oscillating_mode_gap,
+)
 from liouscope.numerics.linalg import (
     certified_eig,
     certified_eigvals,
@@ -476,3 +481,134 @@ def test_certificate_dict_is_json_serialisable() -> None:
     lsup = _classical_network(STIFF_PAIRS, STIFF_RATES)
     _, cert = certified_eigvals(lsup)
     json.dumps(cert.as_dict(), allow_nan=False)      # RFC 8259: no NaN/inf
+
+
+# --------------------------------------------------------------------------
+# Twelfth-round review: repair-ladder correctness and consumption guards.
+# --------------------------------------------------------------------------
+
+
+def test_dgeev_real_route_requires_exact_realness():
+    """A tiny imaginary part must not be silently deleted by the real route.
+
+    `np.allclose(imag, 0)` carries an absolute default atol, so a stiff complex
+    generator in small rate units read as "real" and `dgeev-real` solved a
+    DIFFERENT matrix -- the Hamiltonian contribution vanished, moving D3 under
+    a pure `L -> cL` unit change. Exact realness is the only scale-invariant
+    criterion under which the route is valid.
+    """
+    H = np.diag([0.0, 1.0e-7, 2.0e-7, 3.0e-7]).astype(complex)
+    lsup = _classical_network(STIFF_PAIRS, [7.28e-6, 3.67e-5, 1.53e-5, 2.70e5, 1.42e-5])
+    d = 4
+    eye = np.eye(d, dtype=complex)
+    lsup = lsup + (-1j * (np.kron(eye, H) - np.kron(H.T, eye)))
+
+    ref_osc = oscillating_mode_gap(certified_eigvals(lsup)[0])
+    for c in (1.0e-10, 1.0, 1.0e5):
+        ev, cert = certified_eigvals(c * lsup)
+        assert cert.solver != "dgeev-real", "complex L must never take the real route"
+        assert oscillating_mode_gap(ev) / c == pytest.approx(ref_osc, rel=1e-6)
+
+
+def test_repair_ladder_is_lazy_for_the_healthy_path(monkeypatch):
+    """A certified primary solve must not pay for the fallback decompositions."""
+    calls: list[str] = []
+    original_schur = sla.schur
+
+    def _counting_schur(*args, **kwargs):
+        calls.append("schur")
+        return original_schur(*args, **kwargs)
+
+    monkeypatch.setattr(sla, "schur", _counting_schur)
+    sm = np.array([[0, 1], [0, 0]], dtype=complex)
+    lsup = build_liouvillian(np.zeros((2, 2), dtype=complex), [sm], [1.0])
+    _ev, cert = certified_eigvals(lsup)
+    assert cert.certified and cert.solver == "zgeev"
+    assert calls == [], "healthy path executed a fallback Schur decomposition"
+
+
+def test_unresolved_spectrum_withholds_the_mpemba_overlap():
+    """D19 must abstain, not fire, when the slow spectrum is unresolved.
+
+    The uncertified decomposition of the stiff network offers a "slowest"
+    vector with Rayleigh value ~-5e7 against an analytic slow mode near
+    -1e-5; consuming it corrupts the classifier's highest-priority A11/F4
+    rung. Equally important: the abstention value is NaN, not 0.0 -- a 0.0
+    would itself read as "the initial state skips the slowest mode" and
+    MANUFACTURE a Mpemba candidate out of solver failure.
+    """
+    from liouscope.diagnostics.mpemba import compute_mpemba_layer, overlap_c1
+
+    lsup = _stiff_with_fast_rate(1.0e8)
+    _ev, cert = certified_eigvals(lsup)
+    if cert.resolved:  # pragma: no cover - guard against future solver changes
+        pytest.skip("fixture no longer produces an unresolved spectrum")
+
+    rho0 = np.zeros((4, 4), dtype=complex)
+    rho0[1, 1] = rho0[2, 2] = 0.5
+    rho0[1, 2] = rho0[2, 1] = 0.5
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        c1 = overlap_c1(lsup, rho0)
+        result = compute_mpemba_layer(
+            lsup, rho0, rho_steady_state=_population_steady_state(
+                [7.28e-6, 3.67e-5, 1.53e-5, 1.0e8, 1.42e-5]
+            )
+        )
+    assert np.isnan(c1)
+    assert np.isnan(result.overlap_c1)
+    assert result.is_mpemba_candidate is False
+
+
+def test_unresolved_certificate_floors_the_verdict_to_undefined():
+    """No mechanism claim may stand on a spectrum the solver could not resolve.
+
+    Fail-closed at the VERDICT level, exactly like the non-finite-beta_D floor:
+    class and family remain the best-fit hypothesis, the claim degrades to
+    UNDEFINED / EXPLORATION. Synthetic certificates keep the test independent
+    of which fixtures happen to defeat the current repair ladder.
+    """
+    from liouscope.diagnostics.classification import classify_mechanism
+    from tests.test_classifier_semantics_debt import (
+        _lep,
+        _mpemba,
+        _nonnorm,
+        _relaxation,
+        _resolvent,
+        _spectral,
+        _transient,
+    )
+
+    def _classify(certificate):
+        return classify_mechanism(
+            _spectral(zero_mode_certificate=certificate),
+            _nonnorm(),
+            _relaxation(),
+            _resolvent(),
+            _transient(),
+            _lep(gap_rate_consistency=0.01),
+            _mpemba(),
+        )
+
+    resolved = _classify(
+        {"applicable": True, "certified": True, "resolved": True}
+    )
+    assert resolved.verdict != "UNDEFINED"
+
+    for bad in (
+        {"applicable": True, "certified": False, "resolved": False},
+        {"applicable": True, "certified": True, "resolved": False},  # ambiguous
+    ):
+        floored = _classify(bad)
+        assert floored.verdict == "UNDEFINED"
+        assert floored.tier == "EXPLORATION"
+        assert floored.a_class == resolved.a_class  # hypothesis label preserved
+        assert floored.evidence["spectral_resolved"] == 0.0
+
+    # Not applicable (non-trace-preserving input): no floor, no evidence key.
+    inapplicable = _classify(
+        {"applicable": False, "certified": False, "resolved": False}
+    )
+    assert inapplicable.verdict == resolved.verdict
+    assert "spectral_resolved" not in inapplicable.evidence

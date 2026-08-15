@@ -164,6 +164,30 @@ ADVISORY_EVIDENCE_KEYS: frozenset[str] = frozenset(
 SINGLE_STATE_MAXMIX_FLOOR_CLASS: str = "A11"
 ENSEMBLE_OVERRIDE_EVIDENCE_KEY: str = "ensemble_confirmation"
 
+# Issues #112/#113 (twelfth-round review): evidence key recording whether the
+# spectral layer's structural zero-mode certificate resolved. Written by
+# ``classify_mechanism`` from ``SpectralResult.zero_mode_certificate`` when one
+# is present; absent for synthetic results that carry no certificate, so every
+# pre-existing test and serialised result is untouched. Class-INFLUENCING by
+# design, in the fail-closed direction only: an unresolved certificate means
+# D1/D3/D4 -- and every evidence ratio built on them -- came from a spectrum
+# the solver demonstrably could not resolve, so no mechanism claim may stand
+# on it. The verdict floors to UNDEFINED (insufficient evidence), exactly like
+# the non-finite-beta_D floor; class/family remain as the best-fit HYPOTHESIS.
+SPECTRAL_RESOLVED_EVIDENCE_KEY: str = "spectral_resolved"
+
+
+def _apply_spectral_certificate_floor(
+    verdict: str,
+    tier: str,
+    *,
+    spectral_resolved: bool,
+) -> tuple[str, str]:
+    """Insufficient-evidence floor for an unresolved spectral certificate."""
+    if not spectral_resolved:
+        return VERDICT_UNDEFINED, TIER_EXPLORATION
+    return verdict, tier
+
 
 def _is_maximally_mixed(rho_steady_state: np.ndarray, *, atol: float = EPS_MAXMIX) -> bool:
     """Is ``rho_ss`` the maximally mixed state ``I/d`` (to ``atol``)?
@@ -855,12 +879,17 @@ def _hypothesis_claim_floor(
     if status == HYPOTHESIS_NOT_SUPPORTED:
         return VERDICT_NOT_EXCLUDED
     verdict, tier = _pick_verdict_tier(a_class, relaxation, _confidence(ev, a_class))
-    verdict, _tier = _apply_single_state_maxmix_floor(
+    verdict, tier = _apply_single_state_maxmix_floor(
         a_class,
         verdict,
         tier,
         maximally_mixed=ev.get("maximally_mixed_steady_state", 0.0) > 0.5,
         ensemble_confirmation=ev.get(ENSEMBLE_OVERRIDE_EVIDENCE_KEY, 0.0) > 0.5,
+    )
+    verdict, _tier = _apply_spectral_certificate_floor(
+        verdict,
+        tier,
+        spectral_resolved=ev.get(SPECTRAL_RESOLVED_EVIDENCE_KEY, 1.0) > 0.5,
     )
     return verdict
 
@@ -1174,6 +1203,11 @@ def classify_mechanism(
     maximally_mixed = _is_maximally_mixed(spectral.steady_state)
     ev["maximally_mixed_steady_state"] = float(maximally_mixed)
     ev[ENSEMBLE_OVERRIDE_EVIDENCE_KEY] = float(bool(ensemble_confirmation))
+    certificate = getattr(spectral, "zero_mode_certificate", None)
+    spectral_resolved = True
+    if isinstance(certificate, dict) and certificate.get("applicable"):
+        spectral_resolved = bool(certificate.get("resolved", certificate.get("certified")))
+        ev[SPECTRAL_RESOLVED_EVIDENCE_KEY] = float(spectral_resolved)
     a_class, f_family = _pick_a_class(ev, relaxation=relaxation)
     conf = _confidence(ev, a_class)
     verdict, tier = _pick_verdict_tier(a_class, relaxation, conf)
@@ -1183,6 +1217,9 @@ def classify_mechanism(
         tier,
         maximally_mixed=maximally_mixed,
         ensemble_confirmation=bool(ensemble_confirmation),
+    )
+    verdict, tier = _apply_spectral_certificate_floor(
+        verdict, tier, spectral_resolved=spectral_resolved
     )
     return ClassificationResult(
         a_class=a_class,

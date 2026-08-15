@@ -107,7 +107,17 @@ def build_liouvillian(
     # Hermitian H once ||H|| rose above ~1e8, where similarity round-off alone
     # exceeds 1e-9. EPS_HERMITICITY is now read as a RELATIVE tolerance, so at
     # unit scale the gate is unchanged.
-    defect, scale = hermiticity_defect(H)
+    # Gauge invariance (twelfth-round review): the dynamics depend on H only
+    # through the commutator, so adding a REAL multiple of the identity changes
+    # nothing physical -- but it inflates max|H| and thereby loosens a
+    # scale-relative gate (H + 1e9*I passed with the same non-Hermitian part
+    # that H alone rejected). The defect is measured on H itself (a real
+    # diagonal shift cannot change H - H^dag), while the SCALE comes from the
+    # gauge-fixed traceless part.
+    d_h = H.shape[0]
+    H_gauge = H - (np.trace(H).real / d_h) * np.eye(d_h, dtype=complex)
+    defect, _ = hermiticity_defect(H)
+    _, scale = hermiticity_defect(H_gauge)
     if defect > EPS_HERMITICITY * scale:
         raise ValueError(
             f"H must be Hermitian within a relative {EPS_HERMITICITY:g} "

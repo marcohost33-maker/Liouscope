@@ -12,6 +12,7 @@ Includes:
 from __future__ import annotations
 
 import contextlib
+from collections.abc import Iterator
 from dataclasses import dataclass
 
 import numpy as np
@@ -241,16 +242,25 @@ def certified_eigvals(
             trace_defect=tp_defect,
         )
 
-    def _candidates() -> list[tuple[str, np.ndarray]]:
-        out: list[tuple[str, np.ndarray]] = [("zgeev", primary)]
-        if np.allclose(L_c.imag, 0.0):
-            out.append(("dgeev-real", np.linalg.eigvals(L_c.real).astype(complex)))
+    def _candidates() -> Iterator[tuple[str, np.ndarray]]:
+        # LAZY by design (twelfth-round review): the ladder stops at the first
+        # certified spectrum, and the healthy path is the primary solve -- an
+        # eager list would charge every caller three additional cubic
+        # decompositions that the loop then never looks at.
+        yield ("zgeev", primary)
+        # ``dgeev`` genuinely solves a DIFFERENT matrix unless L is EXACTLY
+        # real: ``np.allclose`` carries an absolute default atol, so a stiff
+        # complex generator in small rate units read as "real" and the repair
+        # silently deleted its Hamiltonian part (measured: D3 moved from 1e-7
+        # to ~9.7e-6 under a pure L -> 1e-10 L rescale). Exact realness is the
+        # only scale-invariant criterion under which the route is valid.
+        if not np.any(L_c.imag):
+            yield ("dgeev-real", np.linalg.eigvals(L_c.real).astype(complex))
         with contextlib.suppress(ValueError, sla.LinAlgError):
-            out.append(("zgees-schur", np.diag(sla.schur(L_c, output="complex")[0])))
+            yield ("zgees-schur", np.diag(sla.schur(L_c, output="complex")[0]))
         with contextlib.suppress(ValueError, sla.LinAlgError):
             balanced = sla.matrix_balance(L_c, permute=True)[0]
-            out.append(("balanced-zgeev", np.linalg.eigvals(balanced)))
-        return out
+            yield ("balanced-zgeev", np.linalg.eigvals(balanced))
 
     best: tuple[str, np.ndarray, float] | None = None
     for name, ev in _candidates():
@@ -366,22 +376,20 @@ def certified_eig(
             trace_defect=tp_defect,
         )
 
-    def _candidates() -> list[tuple[str, EigenDecomposition]]:
-        out: list[tuple[str, EigenDecomposition]] = [("zgeev", primary)]
-        if np.allclose(L_c.imag, 0.0):
+    def _candidates() -> Iterator[tuple[str, EigenDecomposition]]:
+        # Lazy + exact realness, for the same reasons as the eigenvalue ladder.
+        yield ("zgeev", primary)
+        if not np.any(L_c.imag):
             with contextlib.suppress(ValueError, sla.LinAlgError):
                 w, vl, vr = sla.eig(L_c.real, left=True, right=True)
-                out.append(
-                    (
-                        "dgeev-real",
-                        EigenDecomposition(
-                            eigenvalues=np.asarray(w).astype(complex),
-                            right_vectors=np.asarray(vr).astype(complex),
-                            left_vectors=np.asarray(vl).astype(complex),
-                        ),
-                    )
+                yield (
+                    "dgeev-real",
+                    EigenDecomposition(
+                        eigenvalues=np.asarray(w).astype(complex),
+                        right_vectors=np.asarray(vr).astype(complex),
+                        left_vectors=np.asarray(vl).astype(complex),
+                    ),
                 )
-        return out
 
     best: tuple[str, EigenDecomposition, float] | None = None
     for name, decomp in _candidates():
