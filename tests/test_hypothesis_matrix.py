@@ -215,7 +215,14 @@ def test_failed_condition_is_listed_as_counterevidence_with_values():
 
 
 def test_missing_required_evidence_makes_the_rung_unevaluable():
-    ev = _ev()
+    """UNEVALUABLE is the genuinely open case (round-13 review).
+
+    The reach leg HOLDS here (radius/gap = 10 > 2 * ratio), so with
+    ``henrici_eta`` unmeasured no evaluated condition is false and the missing
+    value could still flip the rung to supported — that, and only that, is
+    UNEVALUABLE.
+    """
+    ev = _ev(pseudospectral_radius=10.0)
     del ev["henrici_eta"]  # non-normality layer not run: F5 indexes this key
     matrix = hypothesis_evidence_matrix(ev, relaxation=_Rel())
     f5 = _entry(matrix, "F5_PSEUDOSPECTRAL")
@@ -225,6 +232,51 @@ def test_missing_required_evidence_makes_the_rung_unevaluable():
     # The decision ladder must agree that an unevaluable rung cannot fire.
     ladder = {r[0]: r[3] for r in _hypothesis_ladder(ev, relaxation=_Rel())}
     assert ladder["F5_PSEUDOSPECTRAL"] is False
+
+
+def test_conclusively_refuted_partial_rung_is_not_supported():
+    """One evaluated-false condition refutes the conjunction (round-13 review).
+
+    ``kreiss = 1`` fails F1's ``kreiss > 5`` leg, so no value of the missing
+    ``petermann_max`` could make the rung fire — reporting UNEVALUABLE would
+    claim an openness that does not exist, and (worse) would propagate into an
+    UNEVALUABLE A12 fallback while the decision ladder deterministically
+    returns A12. The absent key stays listed in ``missing`` for the audit
+    trail.
+    """
+    ev = _ev()  # kreiss = 1.0 fails the F1 gate on its own
+    del ev["petermann_max"]
+    matrix = hypothesis_evidence_matrix(ev, relaxation=_Rel())
+    f1 = _entry(matrix, "F1_OVERLAP_AMPLIFICATION")
+    assert f1["status"] == HYPOTHESIS_NOT_SUPPORTED
+    assert len(f1["counterevidence"]) == 1
+    assert f1["counterevidence"][0]["values"] == {"kreiss": 1.0}
+    assert f1["missing"] == ("petermann_max",)
+    assert f1["claim_floor"] == VERDICT_NOT_EXCLUDED
+
+
+def test_all_partial_rungs_refuted_restores_the_a12_equivalence():
+    """Matrix and ladder must agree on the deterministic A12 (round-13 review).
+
+    With the default evidence every rung fails on an evaluated condition, and
+    deleting ``henrici_eta`` leaves F5 refuted by its reach leg rather than
+    open. The ladder deterministically returns A12; the matrix must mark A12
+    SUPPORTED, not UNEVALUABLE, or the two contradict on exactly the partially
+    collected runs the matrix exists to describe.
+    """
+    ev = _ev()
+    del ev["henrici_eta"]
+    rel = _Rel()
+    assert _pick_a_class(ev, relaxation=rel) == ("A12", "none"), (
+        "control: ladder falls to A12"
+    )
+    matrix = hypothesis_evidence_matrix(ev, relaxation=rel)
+    f5 = _entry(matrix, "F5_PSEUDOSPECTRAL")
+    assert f5["status"] == HYPOTHESIS_NOT_SUPPORTED  # reach leg is false
+    assert f5["missing"] == ("henrici_eta",)         # audit trail preserved
+    a12 = _entry(matrix, "A12_FALLBACK")
+    assert a12["status"] == HYPOTHESIS_SUPPORTED
+    assert a12["missing"] == ()
 
 
 def test_missing_optional_key_is_reported_without_forcing_unevaluable():
@@ -257,11 +309,13 @@ def test_missing_optional_key_is_reported_without_forcing_unevaluable():
 def test_matrix_never_contradicts_the_ladder_on_partial_evidence(dropped):
     """Equivalence must survive every single-key omission, not just full sets.
 
-    Missing required evidence makes the affected rungs not-fire in the ladder
-    and UNEVALUABLE in the matrix -- both refuse to claim a mechanism from a
-    value nobody measured, and neither is allowed to crash report generation
-    (eleventh-round review). SUPPORTED must mean fired, NOT_SUPPORTED and
-    UNEVALUABLE must mean not fired.
+    Missing required evidence makes the affected rungs not-fire in the ladder,
+    and in the matrix either NOT_SUPPORTED (an evaluated sibling condition
+    already refutes the conjunction, round-13 review) or UNEVALUABLE (the rung
+    stays genuinely open) -- in every case both refuse to claim a mechanism
+    from a value nobody measured, and neither is allowed to crash report
+    generation (eleventh-round review). SUPPORTED must mean fired,
+    NOT_SUPPORTED and UNEVALUABLE must mean not fired.
     """
     ev = _ev(henrici_eta=2.0, kreiss=10.0, petermann_max=10.0)
     ev.pop(dropped, None)
@@ -546,9 +600,13 @@ def test_nan_required_evidence_also_behaves_exactly_like_its_absence():
     `gap_to_gns_ratio` is required by F3 (indexed directly). For the absent
     encoding the ladder has always raised rather than deciding from a value
     nobody measured; the NaN encoding now does the same, and the matrix marks
-    F3 UNEVALUABLE under both.
+    F3 UNEVALUABLE under both. ``gns_certified = 1.0`` keeps the sibling
+    condition true, so the rung is genuinely OPEN — with the default
+    (uncertified) evidence the sibling would refute the conjunction outright
+    and both encodings would correctly read NOT_SUPPORTED instead
+    (round-13 precedence).
     """
-    base = _ev(henrici_eta=2.0)
+    base = _ev(henrici_eta=2.0, gns_certified=1.0)
     absent = dict(base)
     del absent["gap_to_gns_ratio"]
     as_nan = dict(base)

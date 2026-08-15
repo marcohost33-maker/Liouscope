@@ -59,7 +59,15 @@ abstract: >-
 # 1.074e-5 on a four-level classical jump network). It must NOT be described as
 # making the dense spectral layer reliable for arbitrarily stiff generators:
 # when no route satisfies the certificate the layer is marked unresolved, which
-# is a disclosure, not a repair. Hermiticity validation of the Hamiltonian is
+# is a disclosure, not a repair. Certification and downstream zero-mode
+# filtering share ONE operator-derived scale (rtol * eps * ||L||_2) at every
+# call site that holds the operator -- spectral layer, Mpemba layer, Petermann
+# factors and the D24 predictor, which is now itself routed through the
+# certified eigensolve and returns an unconverged record on unresolved spectra
+# (round-13 review). This corrects spurious near-zero or negative D1 gaps on
+# strongly non-normal generators, where the spectral radius understates the
+# eigensolver backward error by the ||L||_2 / max|lambda| ratio (measured
+# 3.9e3 at dimension four). Hermiticity validation of the Hamiltonian is
 # likewise scale-relative rather than absolute (issue #109), which closes a
 # fail-open path that admitted non-GKSL generators at small ||H||; this changes
 # which inputs are ACCEPTED, not the numerics of accepted ones.

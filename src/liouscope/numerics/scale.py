@@ -87,12 +87,17 @@ def spectral_zero_tolerance(
     rtol
         Multiplier on the backward error ``eps * max|lambda|``.
     atol
-        Legacy ABSOLUTE floor, returned verbatim in place of the computed
-        tolerance -- the reproducibility opt-in for pre-#108 behaviour,
-        mirroring how #99 preserved the old absolute steady-state tolerance.
-        The spectrum is still validated (see ``Raises``): a compatibility
-        switch may reproduce the old THRESHOLD, but it must not reintroduce
-        the old silent acceptance of corrupted solver output.
+        ABSOLUTE tolerance, returned verbatim in place of the computed
+        radius-relative one. Two documented uses: (a) the reproducibility
+        opt-in for pre-#108 behaviour, mirroring how #99 preserved the old
+        absolute steady-state tolerance; (b) forwarding the operator-derived
+        backward-error bound ``rtol * eps * ||L||_2`` (round-13 review; see
+        :func:`liouscope.numerics.linalg.operator_zero_tolerance`) from call
+        sites that hold the operator, where the spectral radius is only a
+        proxy for the true backward-error scale. The spectrum is still
+        validated (see ``Raises``): an absolute override may replace the
+        THRESHOLD, but it must not reintroduce the old silent acceptance of
+        corrupted solver output.
     name
         Argument name used in the fail-closed error message.
 

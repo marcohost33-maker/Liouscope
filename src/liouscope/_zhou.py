@@ -71,11 +71,10 @@ from __future__ import annotations
 from typing import Final
 
 import numpy as np
-import scipy.linalg as sla
 
 from ._consts import EPS_DIV
 from ._types import ZhouPredictorResult
-from .numerics.scale import spectral_zero_tolerance
+from .numerics.linalg import certified_eig
 
 # S6 re-audit 2026-06-04: the cited reference is independently verified to
 # exist (arXiv PDF v3). Our implemented bound is the same family as Zhou's
@@ -126,13 +125,41 @@ def compute_zhou_predictor(
     """
     L_super = np.asarray(L_super, dtype=complex)  # complex128: scipy dispatches by dtype; the double-solve contract (#108) must hold
     if gap is None or petermann_factor is None:
-        eigvals, vl, vr = sla.eig(L_super, left=True, right=True)
-        # Scale-relative zero-mode separation (issue #108): D24 consumes the
-        # gap, so an absolute floor made the predicted mixing-time window
+        # Round-13 review: D24's recomputation must not retain a solver
+        # failure that the spectral and Mpemba paths repair. On the stiff
+        # #112 fixture the raw ``zgeev`` spectrum made D24 report
+        # ``gap = 7.28e-6`` where the certified solve recovers the physical
+        # ``1.074e-5`` -- a ~30% shift of the whole mixing-time window.
+        decomp, certificate = certified_eig(L_super)
+        if certificate.applicable and not certificate.resolved:
+            # The eigendecomposition is demonstrably unreliable (failed
+            # certification, or ambiguous in-band modes, issues #112/#113).
+            # A predictor built on it would be a claim the arithmetic cannot
+            # support: return an unconverged record, honouring any
+            # caller-supplied values exactly like the no-nonzero-modes branch.
+            return ZhouPredictorResult(
+                mixing_time_lower=float("inf"),
+                mixing_time_upper=float("inf"),
+                epsilon=epsilon,
+                converged=False,
+                gap=float(gap) if gap is not None else float("nan"),
+                petermann_factor=(
+                    float(petermann_factor)
+                    if petermann_factor is not None
+                    else float("nan")
+                ),
+            )
+        eigvals, vl, vr = decomp.eigenvalues, decomp.left_vectors, decomp.right_vectors
+        if vl is None:  # pragma: no cover - certified_eig always sets left vectors
+            raise RuntimeError("certified_eig did not return left eigenvectors")
+        # Zero-mode separation on the certificate's own operator-derived
+        # scale (round-13): the radius-based proxy is smaller than the
+        # eigensolve backward error on strongly non-normal generators, so a
+        # certified-resolved stationary mode would survive it as a spurious
+        # slow mode. Scale-relative in either case (issue #108): D24 consumes
+        # the gap, so an absolute floor made the predicted mixing-time window
         # depend on the choice of rate unit.
-        nonzero = np.abs(eigvals) > spectral_zero_tolerance(
-            eigvals, name="eigenvalues of L_super"
-        )
+        nonzero = np.abs(eigvals) > certificate.bound
         if not nonzero.any():
             # Honour caller-supplied values in the unconverged record:
             # hard-coding gap=0.0 here silently overwrote an explicitly

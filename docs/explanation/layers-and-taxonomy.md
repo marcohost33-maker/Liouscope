@@ -121,9 +121,18 @@ schema-reserved classes — one entry with:
 | `status` | `SUPPORTED` / `NOT_SUPPORTED` / `UNEVALUABLE` / `RESERVED` |
 | `supporting` | atomic conditions that hold, with the evidence values read |
 | `counterevidence` | conditions that fail, with their values |
-| `missing` | required evidence keys absent from this run |
+| `missing` | required evidence keys absent from this run (kept as an audit trail even when the rung is already refuted) |
 | `claim_floor` | what this run could claim about the hypothesis |
 | `support_score` | the ordinal score this class would receive; `None` unless the entry is `SUPPORTED` |
+
+Each rung is a conjunction, so status precedence is conclusive-first: one
+evaluated-**false** condition refutes the rung (`NOT_SUPPORTED`) no matter
+what a missing sibling measurement would have said; `UNEVALUABLE` is
+reserved for the genuinely open case where no evaluated condition is false
+and the missing required evidence could still flip the rung to supported.
+This keeps the A12 fallback consistent with the decision ladder on
+partially collected runs: when every unfired rung is conclusively refuted,
+the fallback is `SUPPORTED` — exactly the ladder's deterministic A12.
 
 The claim floor follows explicit, fail-closed rules: `RESERVED` and
 `UNEVALUABLE` floor to `UNDEFINED` (no rule / no evidence — no claim);

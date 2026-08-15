@@ -137,3 +137,68 @@ def test_zhou_defective_mode_does_not_poison_kmax():
     assert res.converged
     assert np.isfinite(res.mixing_time_upper)
     assert np.isfinite(res.petermann_factor)
+
+
+# --------------------------------------------------------------------------
+# Round-13 review: the D24 recomputation must use the certified eigensolve.
+# --------------------------------------------------------------------------
+
+# Local copy of the #112 stiff fixture (the ``tests`` directory is not an
+# importable package on the CI runner, so no cross-test import).
+_STIFF_PAIRS = [(0, 3), (0, 2), (1, 0), (3, 2), (2, 1)]
+_STIFF_RATES = [7.28e-6, 3.67e-5, 1.53e-5, 2.70e5, 1.42e-5]
+_STIFF_TRUE_GAP = 1.074e-5
+
+
+def _classical_network(pairs, rates, d=4):
+    jumps = []
+    for (to, frm) in pairs:
+        j = np.zeros((d, d), dtype=complex)
+        j[to, frm] = 1.0
+        jumps.append(j)
+    return build_liouvillian(np.zeros((d, d), dtype=complex), jumps, rates)
+
+
+def test_zhou_recompute_uses_the_certified_spectrum():
+    """D24 must not retain the solver failure the other layers repair.
+
+    On the stiff #112 network the raw ``zgeev`` spectrum loses the exact zero
+    mode and leaves a spurious ``7.28e-6`` in its place, shifting the whole
+    predicted mixing-time window by ~30%. The certified solve recovers the
+    physical gap ``1.074e-5``.
+    """
+    lsup = _classical_network(_STIFF_PAIRS, _STIFF_RATES)
+    result = _zhou.compute_zhou_predictor(lsup, epsilon=0.05)
+    assert result.converged is True
+    assert result.gap == pytest.approx(_STIFF_TRUE_GAP, rel=1e-3)
+    assert result.gap != pytest.approx(7.28e-6, rel=1e-3)  # the pre-fix value
+
+
+def test_zhou_unresolved_spectrum_returns_unconverged():
+    """An unresolved eigendecomposition must not drive a mixing-time claim.
+
+    With the fast rate pushed to ``1e8`` the spectral spread defeats every
+    repair route (issues #112/#113): the honest answer is an unconverged
+    record, not bounds built on a demonstrably wrong spectrum.
+    """
+    from liouscope.numerics.linalg import certified_eig
+
+    lsup = _classical_network(
+        _STIFF_PAIRS, [7.28e-6, 3.67e-5, 1.53e-5, 1.0e8, 1.42e-5]
+    )
+    _decomp, cert = certified_eig(lsup)
+    if cert.resolved:  # pragma: no cover - guard against future solver changes
+        pytest.skip("fixture no longer produces an unresolved spectrum")
+
+    result = _zhou.compute_zhou_predictor(lsup, epsilon=0.05)
+    assert result.converged is False
+    assert np.isinf(result.mixing_time_lower)
+    assert np.isinf(result.mixing_time_upper)
+    assert np.isnan(result.gap)
+    assert np.isnan(result.petermann_factor)
+
+    # Caller-supplied values are honoured in the unconverged record, exactly
+    # like the existing no-nonzero-modes branch.
+    supplied = _zhou.compute_zhou_predictor(lsup, epsilon=0.05, gap=0.5)
+    assert supplied.converged is False
+    assert supplied.gap == 0.5

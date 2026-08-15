@@ -378,7 +378,9 @@ class _Condition:
 
     ``keys`` names the REQUIRED evidence-dict entries: the predicate indexes
     them directly, so their absence makes the rung UNEVALUABLE in the matrix
-    (e.g. the Mpemba layer was not run). ``optional_keys`` names entries the
+    (e.g. the Mpemba layer was not run) -- unless an evaluated sibling
+    condition is already false, which refutes the conjunction conclusively
+    (round-13 review). ``optional_keys`` names entries the
     predicate reads through ``ev.get(key, default)`` — it has documented
     semantics without them, so they are reported in ``values`` when present but
     never trigger UNEVALUABLE.
@@ -910,8 +912,12 @@ def hypothesis_evidence_matrix(
       unevaluable, so a partially collected run keeps its usable evidence;
     * ``counterevidence`` — the conditions that fail, with their values
       (threshold non-exceedance; NOT proof of absence, see claim-floor rules);
-    * ``missing`` — REQUIRED evidence keys absent from ``ev``, which makes the
-      rung ``UNEVALUABLE``; ``missing_optional`` separately records absent keys
+    * ``missing`` — REQUIRED evidence keys absent from ``ev``. These make the
+      rung ``UNEVALUABLE`` only when no evaluated sibling condition is already
+      false (round-13 review): the rung is a conjunction, so one false
+      condition refutes it conclusively — ``NOT_SUPPORTED`` — no matter what
+      the missing measurement would have said, and the absent keys stay
+      listed here for the audit trail; ``missing_optional`` separately records absent keys
       the predicate reads with a documented default (e.g. the Mpemba layer was
       not run), which are worth auditing but do not stop the rung being
       decided — the ladder decides it from the same default;
@@ -982,10 +988,8 @@ def hypothesis_evidence_matrix(
         # `kreiss` but never computed `petermann_max` should still show the
         # Kreiss support next to the missing Petermann value. Discarding it
         # would throw away exactly the audit trail this matrix exists for.
-        all_hold = True
         for cond in rung.conditions:
             if any(_is_unavailable(ev, k) for k in cond.keys):
-                all_hold = False
                 continue
             values: dict[str, object] = {k: float(ev[k]) for k in cond.keys}
             # Optional keys are reported when present; when absent the
@@ -1004,22 +1008,29 @@ def hypothesis_evidence_matrix(
                 supporting.append(record)
             else:
                 counterevidence.append(record)
-                all_hold = False
-        # Only a missing REQUIRED key makes the rung unevaluable. A missing
-        # optional key is still reported in ``missing`` (the auditor wants to
-        # know the Mpemba layer never ran) but the rung keeps a real verdict,
-        # because the ladder likewise evaluates it from the documented default
-        # -- declaring it unevaluable would make the matrix contradict the
-        # decision it describes.
-        if missing_required:
+        # Status precedence (round-13 review). The rung is a conjunction, so
+        # ONE evaluated-false condition refutes it conclusively -- no value of
+        # the missing evidence could make it fire (``kreiss = 1`` refutes F1
+        # whether or not ``petermann_max`` was ever measured). UNEVALUABLE is
+        # reserved for the genuinely open case: no evaluated condition is
+        # false AND a missing REQUIRED key could still flip the rung to
+        # supported. A missing optional key never blocks either way: the rung
+        # keeps a real verdict because the ladder likewise evaluates it from
+        # the documented default -- declaring it unevaluable would make the
+        # matrix contradict the decision it describes.
+        if counterevidence:
+            status = HYPOTHESIS_NOT_SUPPORTED
+        elif missing_required:
             status = HYPOTHESIS_UNEVALUABLE
             any_unevaluable = True
             for k in missing:
                 if k not in blocking_missing:
                     blocking_missing.append(k)
         else:
-            status = HYPOTHESIS_SUPPORTED if all_hold else HYPOTHESIS_NOT_SUPPORTED
-            any_fired = any_fired or all_hold
+            # No counterevidence and nothing missing: every condition was
+            # evaluated and held.
+            status = HYPOTHESIS_SUPPORTED
+            any_fired = True
         entries.append(
             {
                 "rule_id": rung.rule_id,
@@ -1054,6 +1065,10 @@ def hypothesis_evidence_matrix(
     # more than the run measured. With any rung unevaluable the fallback is
     # itself unevaluable -- fail-closed, and consistent with the ladder, whose
     # ``A12`` default is likewise only reached after evaluating every rung.
+    # A partially collected rung with counterevidence does NOT block (round-13
+    # review): it is conclusively refuted, so when every rung is either
+    # refuted or fired-out, the ladder's deterministic A12 is matched by a
+    # SUPPORTED fallback here -- the matrix/decision equivalence holds again.
     if any_fired:
         a12_status = HYPOTHESIS_NOT_SUPPORTED
         a12_missing: tuple[str, ...] = ()

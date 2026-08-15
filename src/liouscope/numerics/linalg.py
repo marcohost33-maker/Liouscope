@@ -136,6 +136,53 @@ class ZeroModeCertificate:
         }
 
 
+def operator_zero_tolerance(
+    L_super: np.ndarray,
+    *,
+    rtol: float = ZERO_MODE_EPS_FACTOR,
+    name: str = "L_super",
+) -> float:
+    """Operator-derived zero-mode tolerance ``rtol * eps * ||L||_2``.
+
+    Round-13 review (issue #112 follow-up): certification and downstream
+    filtering must use ONE scale. The certificate accepts a stationary
+    residual up to the true eigensolver backward error ``eps * ||L||_2``,
+    but :func:`liouscope.numerics.scale.spectral_zero_tolerance` -- which
+    only sees the spectrum -- can only use the spectral radius
+    ``max|lambda|`` as a proxy. For a strongly non-normal generator
+    ``||L||_2`` exceeds the radius by orders of magnitude (measured: 3.9e3
+    on a 4x4 trace-preserving example), so a certified-resolved zero mode
+    with residual between the two thresholds survived the radius filter and
+    D1 reported ``~1e-12`` -- occasionally NEGATIVE -- instead of the true
+    gap ``1``.
+
+    Every consumer that holds the OPERATOR (not just its spectrum) must
+    therefore filter with this function or, equivalently, with the
+    ``bound`` of the :class:`ZeroModeCertificate`, which is computed from
+    the same expression. The radius-based
+    :func:`~liouscope.numerics.scale.spectral_zero_tolerance` remains the
+    correct fallback for spectrum-only call sites. Genuine slow modes
+    falling inside this coarser band are not silently swallowed: they are
+    flagged by the certificate's ambiguity split (``resolved=False``,
+    issue #113), which floors the verdict instead.
+
+    Parameters
+    ----------
+    L_super
+        The operator whose eigensolve backward error sets the scale.
+    rtol
+        Multiplier on ``eps * ||L||_2``, shared with the certificate and
+        with ``spectral_zero_tolerance``.
+    name
+        Argument name for the fail-closed validation message.
+    """
+    if not np.isfinite(rtol) or rtol < 0.0:
+        raise ValueError(f"rtol must be finite and non-negative, got {rtol}")
+    L_c = np.asarray(require_finite_square_2d(L_super, name=name), dtype=complex)
+    norm2 = float(np.linalg.norm(L_c, 2)) if L_c.size else 0.0
+    return float(rtol * float(np.finfo(float).eps) * norm2)
+
+
 def trace_preservation_defect(L_super: np.ndarray) -> tuple[float, float]:
     """Return ``(||vec(I)^H L||_2, ||L||_F)`` for a vectorised generator.
 

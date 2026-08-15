@@ -7,6 +7,51 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Fixed
+- **One zero-mode scale for certification and filtering (round-13 review of
+  the #112 machinery). CHANGES NUMERICAL RESULTS** on strongly non-normal
+  generators. The `ZeroModeCertificate` accepts a stationary residual up to
+  the true eigensolver backward error `rtol * eps * ||L||_2`, but the
+  downstream zero-mode filters (`spectral_zero_tolerance`, #108) only see the
+  spectrum and used the spectral radius `max|lambda|` as a proxy. For a
+  strongly non-normal trace-preserving operator `||L||_2` exceeds the radius
+  by orders of magnitude (measured: `3.9e3` on a 4x4 example), so a
+  certified-*resolved* zero mode with residual between the two thresholds
+  survived the radius filter as a spurious "genuine" mode: D1 reported
+  `~1e-12` — occasionally **negative**, impossible for a GKSL generator —
+  instead of the true gap `1`, and D9 reported four eigenmodes where three
+  exist. Every consumer that holds the operator now filters with the
+  certificate's own bound (new shared helper
+  `liouscope.numerics.linalg.operator_zero_tolerance`): the spectral layer
+  (D1/D3/D4, `has_complex_pairs`), the Mpemba layer (slowest mode, mode
+  expansion), `petermann_factors` (D9) and the D24 predictor. Genuine slow
+  modes inside the coarser band are not silently swallowed — the #113
+  ambiguity split reports them as `resolved=False` and floors the verdict.
+  The radius-based default of `spectral_zero_tolerance` is unchanged for
+  spectrum-only call sites, and a caller-supplied `atol` still wins.
+- **D24 recomputation is routed through the certified eigensolve (round-13
+  review). CHANGES NUMERICAL RESULTS** on stiff generators. When
+  `compute_zhou_predictor` recomputes an omitted `gap`/`petermann_factor` it
+  filtered the raw `zgeev` spectrum, retaining exactly the solver failure the
+  spectral and Mpemba layers repair (#112): on the stiff four-level fixture
+  D24 reported `gap = 7.28e-6` where the certified solve recovers the
+  physical `1.074e-5`, shifting the whole predicted mixing-time window by
+  ~30%. The recomputation now uses `certified_eig` and the certificate's
+  zero-mode bound; when the certificate is applicable but unresolved
+  (#112/#113) the predictor returns an honest unconverged record (infinite
+  bounds, NaN gap/K) instead of bounds built on a demonstrably wrong
+  spectrum. Caller-supplied values keep bypassing the eigensolve entirely.
+- **Hypothesis matrix: a conclusively refuted partial rung is NOT_SUPPORTED,
+  not UNEVALUABLE (round-13 review; #102 machinery).** The rungs are
+  conjunctions, so one evaluated-false condition refutes a rung no matter
+  what a missing sibling measurement would have said (`kreiss = 1` refutes F1
+  with or without `petermann_max`). Previously any missing required key
+  forced UNEVALUABLE, which also propagated into an UNEVALUABLE A12 fallback
+  while the decision ladder deterministically returned A12 — the matrix
+  contradicting the decision it documents. `UNEVALUABLE` is now reserved for
+  the genuinely open case: no evaluated condition is false and the missing
+  evidence could still flip the rung to supported. Absent keys stay listed in
+  `missing` for the audit trail either way; claim floors follow the status as
+  before (refuted → `NOT_EXCLUDED`, open → `UNDEFINED`).
 - **D1 refuses to report a gap it cannot resolve, instead of reporting a fast
   mode (issue #113, PARTIAL). CHANGES NUMERICAL RESULTS** on very stiff
   generators, where the previous value was wrong by orders of magnitude.

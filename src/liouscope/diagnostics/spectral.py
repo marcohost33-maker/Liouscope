@@ -213,6 +213,19 @@ def compute_spectral_layer(
     # against the exact structural fact vec(I)^H L = 0 and repairs via a
     # different LAPACK route when the check fails.
     eigenvalues, certificate = certified_eigvals(L_super)
+    # Round-13 review: certification and filtering must use ONE scale. The
+    # certificate accepts a stationary residual up to the eigensolver backward
+    # error ``eps * ||L||_2``; the radius-based default of
+    # ``spectral_zero_tolerance`` is only a spectrum-side proxy for it. On a
+    # strongly non-normal generator (measured: ``||L||_2 / max|lambda| ~
+    # 3.9e3`` at 4x4) a certified-resolved zero mode survived the smaller
+    # radius filter and D1 reported ``~1e-12`` -- occasionally negative --
+    # instead of the true gap ``1``. The operator is in hand here, so every
+    # D1-D4 filter below receives the certificate's own bound. Genuine slow
+    # modes inside the coarser band are not silently swallowed: the
+    # ambiguity split (#113) reports them as ``resolved=False`` and D1
+    # becomes NaN below.
+    zero_tol = certificate.bound
     if certificate.applicable and not certificate.certified:
         warnings.warn(
             "Spectral layer: the eigensolver returned no zero mode for a "
@@ -225,7 +238,7 @@ def compute_spectral_layer(
             RuntimeWarning,
             stacklevel=2,
         )
-    delta = liouvillian_gap(eigenvalues)
+    delta = liouvillian_gap(eigenvalues, atol=zero_tol)
     if certificate.applicable and certificate.certified and not certificate.resolved:
         # Issue #113. Some eigenvalue sits inside the #108 zero-mode tolerance
         # while being far above the bare backward error -- neither machine-zero
@@ -252,17 +265,14 @@ def compute_spectral_layer(
         delta = float("nan")
     delta_s = gns_gap(L_super, rho_steady)
     kms = kms_gap(L_super, rho_steady)
-    osc = oscillating_mode_gap(eigenvalues)
-    spread = spectral_spread(eigenvalues)
-    # Same scale-relative separation as D3 (issue #108): with an absolute floor
-    # a rescaled spectrum flipped this flag, and ``has_complex_pairs`` gates the
-    # A8 oscillatory-transient rung.
-    has_complex = bool(
-        np.any(
-            np.abs(np.imag(eigenvalues))
-            > spectral_zero_tolerance(eigenvalues, name="eigenvalues")
-        )
-    )
+    osc = oscillating_mode_gap(eigenvalues, atol=zero_tol)
+    spread = spectral_spread(eigenvalues, atol=zero_tol)
+    # Same separation as D3: with an absolute floor a rescaled spectrum
+    # flipped this flag, and ``has_complex_pairs`` gates the A8
+    # oscillatory-transient rung. The threshold is the shared operator-derived
+    # bound (round-13): an imaginary part below the eigensolve backward error
+    # is round-off, not an oscillating pair.
+    has_complex = bool(np.any(np.abs(np.imag(eigenvalues)) > zero_tol))
     # Sort by real part descending so [0] is the steady state.
     order = np.argsort(-np.real(eigenvalues))
     return SpectralResult(

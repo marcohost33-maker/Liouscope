@@ -57,7 +57,7 @@ import scipy.linalg as sla
 
 from .._consts import EPS_DIV
 from .._types import KreissGridEstimate, NonNormalityResult
-from ..numerics.linalg import require_finite_square_2d
+from ..numerics.linalg import operator_zero_tolerance, require_finite_square_2d
 from ..numerics.resolvent import resolvent_norm
 from ..numerics.scale import rate_scale, spectral_zero_tolerance
 
@@ -292,8 +292,15 @@ def petermann_factors(
     # separation (issue #108): with an absolute floor, a rescaled generator
     # either dropped every mode (empty K array) or retained the round-off zero
     # mode, whose Petermann factor is numerical noise feeding the F1 gate.
+    # The scale is operator-derived (round-13 review): the operator is in
+    # hand here, and on a strongly non-normal generator the radius-based
+    # proxy is smaller than the eigensolve backward error ``eps * ||L||_2``,
+    # so the displaced zero mode survived the filter as a spurious extra
+    # eigenmode (measured: 4 modes reported where 3 exist).
     mask = np.abs(eigvals) > spectral_zero_tolerance(
-        eigvals, atol=atol, name="eigenvalues of L_super"
+        eigvals,
+        atol=operator_zero_tolerance(L_super) if atol is None else atol,
+        name="eigenvalues of L_super",
     )
     eigvals_filt = eigvals[mask]
     K_filt = K_arr[mask]

@@ -638,3 +638,93 @@ def test_unresolved_certificate_floors_the_verdict_to_undefined():
     )
     assert inapplicable.verdict == resolved.verdict
     assert "spectral_resolved" not in inapplicable.evidence
+
+
+# --------------------------------------------------------------------------
+# Round-13 review: ONE zero-mode scale for certification and filtering.
+# --------------------------------------------------------------------------
+
+# A strongly non-normal, exactly trace-preserving 4x4 generator with true
+# spectrum {0, -1, -2, -3} and ``||L||_2 / max|lambda| ~ 4e3`` (built as
+# ``V diag(0,-1,-2,-3) V^{-1}`` with three nearly parallel columns of ``V``
+# orthogonal to ``vec(I)``; frozen as exact float64 literals so the test is
+# deterministic). On this operator ``zgeev`` displaces the stationary
+# eigenvalue to ``~9e-13`` -- inside the certificate's operator-derived
+# backward-error bound ``rtol * eps * ||L||_2`` (certified, resolved), but
+# ABOVE the radius-based #108 tolerance ``rtol * eps * max|lambda|``. Before
+# the round-13 fix the certified zero mode therefore survived the downstream
+# filter as a spurious "genuine" mode: D1 reported ``~1e-12`` (negative on
+# some runs) instead of the true gap ``1``, and D9 reported four eigenmodes
+# where three exist.
+_NONNORMAL_TP = np.array([
+    [1492.4052081746918-576.74034398067965j, 4242.3884273335898+2154.8269993072913j, -123.4536161693602+4504.5869089583975j, -108.4279406414272+1496.7026292274365j],
+    [436.11533077659476+1358.1304295507621j, -2136.4399993753545+3659.1255589614616j, -3997.0661272793914-342.52784186068834j, -1323.878377954796-173.62369459581453j],
+    [-593.97781553431003+43.262846725648785j, -1272.4461716988801-1224.2111146810887j, 529.60685055923602-1585.6825857533454j, 199.42084850952054-519.04474610309012j],
+    [-1492.4052081746918+576.74034398067965j, -4242.3884273335898-2154.8269993072909j, 123.4536161693602-4504.5869089583975j, 108.42794064142709-1496.7026292274363j],
+])
+
+
+def test_nonnormal_fixture_shows_the_scale_mismatch() -> None:
+    """Pin the defect's precondition: certified-resolved, yet above the
+    radius tolerance.
+
+    If a future LAPACK computes this stationary eigenvalue below the
+    radius-based tolerance the fixture no longer exercises the mismatch;
+    skip rather than fail so the guard is visible.
+    """
+    from liouscope.numerics.scale import spectral_zero_tolerance
+
+    defect, fro = trace_preservation_defect(_NONNORMAL_TP)
+    assert defect <= 1.0e-12 * fro, "fixture must be trace preserving"
+
+    ev, cert = certified_eigvals(_NONNORMAL_TP)
+    assert cert.applicable and cert.certified and cert.resolved
+    ratio = float(np.linalg.norm(_NONNORMAL_TP, 2)) / float(np.max(np.abs(ev)))
+    assert ratio > 1.0e3, "fixture must be strongly non-normal"
+
+    residual = float(np.min(np.abs(ev)))
+    if residual <= spectral_zero_tolerance(ev):  # pragma: no cover
+        pytest.skip("solver resolved the zero mode below the radius tolerance")
+    assert residual <= cert.bound  # inside the operator-derived bound
+
+
+def test_certificate_bound_equals_the_operator_zero_tolerance() -> None:
+    """The certificate and the shared helper must be the SAME scale."""
+    from liouscope.numerics.linalg import operator_zero_tolerance
+
+    _ev, cert = certified_eigvals(_NONNORMAL_TP)
+    assert cert.bound == operator_zero_tolerance(_NONNORMAL_TP)
+
+
+def test_one_scale_spectral_layer_reports_the_true_gap() -> None:
+    """D1/D3/D4 must filter with the certificate's own bound.
+
+    Before round-13 this reported ``gap ~ 1e-12`` -- occasionally NEGATIVE,
+    impossible for a GKSL generator -- because the certified stationary mode
+    survived the smaller radius-based filter.
+    """
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")  # ill-conditioned sqrtm inside gns_gap
+        result = compute_spectral_layer(_NONNORMAL_TP)
+    assert result.gap == pytest.approx(1.0, rel=1e-6)
+    assert result.spectral_spread == pytest.approx(2.0, rel=1e-6)
+    assert result.zero_mode_certificate["resolved"] is True
+
+
+def test_one_scale_petermann_drops_the_stationary_mode() -> None:
+    """D9 must not report the displaced zero mode as a fourth eigenmode."""
+    from liouscope.diagnostics.nonnormality import petermann_factors
+
+    eigvals, factors = petermann_factors(_NONNORMAL_TP)
+    assert eigvals.size == 3
+    assert factors.size == 3
+    assert np.real(eigvals[0]) == pytest.approx(-1.0, rel=1e-6)
+
+
+def test_one_scale_zhou_predictor_sees_the_true_gap() -> None:
+    """D24's recomputation shares the certificate scale (round-13)."""
+    import liouscope._zhou as zhou
+
+    result = zhou.compute_zhou_predictor(_NONNORMAL_TP, epsilon=0.05)
+    assert result.converged is True
+    assert result.gap == pytest.approx(1.0, rel=1e-6)
