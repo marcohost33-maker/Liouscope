@@ -7,6 +7,94 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Fixed
+- **D1 refuses to report a gap it cannot resolve, instead of reporting a fast
+  mode (issue #113, PARTIAL). CHANGES NUMERICAL RESULTS** on very stiff
+  generators, where the previous value was wrong by orders of magnitude.
+  The #108 tolerance carries a safety factor of `ZERO_MODE_EPS_FACTOR = 1e3`
+  above the bare backward error `eps * ||L||`. Once the spectral spread grows
+  large enough, genuine slow modes fall *inside* that safety factor; the filter
+  discards them as "zero" and D1 reads off the next surviving mode — a **fast**
+  one. Measured on a four-level classical jump network: `5.0e7` reported for a
+  true gap of `1.07e-5`, i.e. wrong by twelve orders of magnitude and in the
+  fail-open direction.
+  `ZeroModeCertificate` now separates the two readings of an in-band mode: a
+  degenerate stationary manifold (conserved quantity / symmetry sector) puts
+  its extra zero modes at *machine zero* and is perfectly legal, whereas a
+  swallowed slow mode sits above `eps * ||L||`, inside the safety factor.
+  Only the latter (`ambiguous_count > 0`) marks the layer unresolved, and D1 is
+  then reported as **NaN** — deliberately not `0.0`, which asserts gaplessness
+  and fires the F5 reach leg, and deliberately not the fast mode.
+  `ZERO_MODE_AMBIGUITY_FACTOR = 30` is calibrated against a **measured**
+  distribution rather than chosen: across 83 healthy generators the largest
+  genuine in-band `|lambda| / (eps*||L||)` reaches `2.38` (median `0.39`),
+  while unresolved slow modes were measured at `4.87` and `4.87e2`. The two
+  populations overlap within about `2x`, so the split sits an order of
+  magnitude above the healthy maximum rather than between them: a false NaN
+  destroys a correct analysis, a missed marginal case only leaves the previous
+  behaviour. **Bounded reach, stated explicitly:** roughly one further decade
+  of spread is now fail-closed; beyond that the slow modes sink below the
+  backward error and the defect is undetectable by any magnitude test. Issue
+  #113 stays open for the extended-precision / Krylov route.
+- **Spectral layer: the computed spectrum is now checked against an exact
+  structural fact before D1/D3/D4 are read off it (issue #112). CHANGES
+  NUMERICAL RESULTS** on stiff generators.
+  Every trace-preserving generator satisfies `vec(I)^H L = 0` *exactly*, so `0`
+  is an exact eigenvalue and a correct eigensolve must return some
+  `|lambda| <= ZERO_MODE_EPS_FACTOR * eps * ||L||`. A spectrum without one is
+  proof that the solve failed — a theorem, not a tuned threshold.
+  This is a **different defect from #108**: #108 fixed the zero-mode *filter*,
+  while here the *spectrum being filtered* is wrong, so no separation tolerance
+  can repair it (asserted in `tests/test_spectral_certificate.py`: the relative
+  and the legacy absolute filter return byte-identical wrong gaps).
+  Mechanism: LAPACK `zgeev` deflates a subdiagonal when the Ahues-Tisseur test
+  `|h[i,i-1] h[i-1,i]| <= eps |h[i,i]| |h[i-1,i-1] - h[i,i]|` passes. On a stiff
+  generator the *large* diagonal entries inflate that bound, so the entire slow
+  block deflates to its own diagonal. Measured on a four-level classical jump
+  network (rate spread ~1e10, exactly trace preserving): the exact zero mode
+  vanished from the returned spectrum, a spurious mode appeared in its place,
+  and D1 reported `7.28e-6` for a generator whose true gap is `1.074e-5`
+  (independently confirmed against the analytically decoupled population and
+  coherence blocks, and against a matrix-exponential decay oracle).
+  Note this failure is **invisible to conditioning**: the per-eigenvalue
+  condition numbers of the wrong spectrum are 1–25, i.e. the solver reports the
+  wrong answer as well conditioned, and explicit balancing does not fix it
+  (both measured). It is also **not** repairable by deflating `vec(I)` with a
+  dense similarity: that destroys the block structure which made the slow modes
+  computable in the first place, and was measured to make 12% of stiff systems
+  *worse*. What works is re-solving the same matrix by a route whose deflation
+  is not driven by the stiff diagonal.
+  `numerics.linalg.certified_eigvals()` therefore tries `zgeev`, then (when `L`
+  is real-valued) `dgeev`, then the complex Schur form, then a balanced
+  `zgeev`, and returns the **first spectrum satisfying the certificate**. The
+  incumbent result is kept byte-identically whenever it is already correct —
+  measured across 400 random four-level networks, stiff and well-conditioned
+  alike, `zgeev` was retained in 400/400 and no system's gap got worse.
+  If no route is certified, `compute_spectral_layer` emits a `RuntimeWarning`
+  and marks the layer unresolved rather than reporting a gap it cannot stand
+  behind. `SpectralResult.zero_mode_certificate` records the outcome
+  (report-only, additive field with a default — the run-manifest contract is
+  unchanged).
+- **Hermiticity validation is scale-relative: `H` is no longer accepted or
+  rejected on the basis of its units (issue #109).**
+  `is_hermitian` and both Liouvillian builders applied an **absolute**
+  `1e-9` tolerance to the Hamiltonian, which carries energy/rate dimension —
+  the same defect class as #108, in input validation rather than in a
+  diagnostic. Measured in both directions:
+  - **fail-open (the serious direction)** — a genuinely non-Hermitian `H` with
+    a *relative* defect of `1e-6` passed validation once `||H|| <~ 1e-3`,
+    producing a generator that is not GKSL at all, after which every downstream
+    diagnostic describes dynamics that are not a quantum channel. The sparse
+    builder shared the defect, so both paths accepted it.
+  - **false rejection** — an exactly Hermitian `H` reconstructed by a unitary
+    similarity carries round-off `~eps*||H||`, which exceeds `1e-9` once
+    `||H|| >~ 1e8`, so valid input was refused.
+  `EPS_HERMITICITY` is now read as a **relative** tolerance on `max|H|`, so at
+  unit scale — the regime of every existing fixture — the gate is unchanged;
+  only operators far from unit scale move. The legacy absolute gate remains
+  available as an explicit `atol=` opt-in (mirroring how #99 and #108 preserved
+  their predecessors), and `is_density_matrix` deliberately keeps it: a density
+  matrix is trace-normalised, so the absolute reading is already relative to a
+  fixed scale and the rate-dimension argument does not apply.
 - **Zero-mode separation is scale-relative: D1/D3/D4/D9/D16/D19/D20/D24 no
   longer depend on the choice of rate unit, removing the ZERO-MODE-INDUCED
   verdict flips (issue #108). CHANGES NUMERICAL RESULTS** for generators whose
@@ -121,6 +209,16 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   the least-squares convergence criteria stop tracking the rescaling, so fitted
   rates are asserted invariant only over `c in [1e-6, 1e10]`. Tracked in its own
   issue; non-dimensionalising the fit is the proper resolution.
+
+### Changed
+- **Import convention in `AGENTS.md` corrected to the codebase (issue #110,
+  documentation only, no code change).** The rule demanded absolute
+  intra-package imports; the package has never followed it — measured at 135
+  relative import statements across 39 of 53 modules and **0** absolute ones.
+  Relative intra-package imports are standard for a `src/` layout, so the
+  convention was corrected rather than ~30 modules rewritten. The divergence's
+  only effect was that automated reviewers kept flagging conforming code as a
+  violation (which is how it surfaced, during the PR #107 review).
 
 ### Added
 - **Hypothesis-wise evidence matrix + `support_score` + reachability gate

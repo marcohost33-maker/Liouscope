@@ -16,6 +16,8 @@ gives the GNS gap ``Delta_s``.
 
 from __future__ import annotations
 
+import warnings
+
 import numpy as np
 import scipy.linalg as sla
 
@@ -23,7 +25,7 @@ from .._consts import EPS_GAP
 from .._types import SpectralResult
 from ..core.lindblad import steady_state
 from ..numerics.adjoint import gram_adjoint, symmetrised_liouvillian
-from ..numerics.linalg import eig_nonhermitian
+from ..numerics.linalg import certified_eigvals
 from ..numerics.scale import spectral_zero_tolerance
 
 
@@ -204,9 +206,50 @@ def compute_spectral_layer(
     L_super = np.asarray(L_super, dtype=complex)  # complex128: scipy dispatches by dtype; the double-solve contract (#108) must hold
     if rho_steady is None:
         rho_steady = steady_state(L_super)
-    decomp = eig_nonhermitian(L_super)
-    eigenvalues = decomp.eigenvalues
+    # Issue #112: the zero-mode FILTER (#108) can only be as good as the
+    # spectrum it filters. On a stiff generator zgeev's deflation can drop the
+    # exact zero mode entirely and put a spurious mode in its place, which no
+    # tolerance can undo. certified_eigvals checks the computed spectrum
+    # against the exact structural fact vec(I)^H L = 0 and repairs via a
+    # different LAPACK route when the check fails.
+    eigenvalues, certificate = certified_eigvals(L_super)
+    if certificate.applicable and not certificate.certified:
+        warnings.warn(
+            "Spectral layer: the eigensolver returned no zero mode for a "
+            f"trace-preserving generator (smallest |lambda| = "
+            f"{certificate.residual:.3e}, admissible backward error = "
+            f"{certificate.bound:.3e}). The generator is too stiff for a dense "
+            "eigensolve in this basis, so D1/D3/D4 are NOT reliable for this "
+            "system; no repair route succeeded. Treat the spectral layer as "
+            "unresolved rather than as a measurement (issue #112).",
+            RuntimeWarning,
+            stacklevel=2,
+        )
     delta = liouvillian_gap(eigenvalues)
+    if certificate.applicable and certificate.certified and not certificate.resolved:
+        # Issue #113. Some eigenvalue sits inside the #108 zero-mode tolerance
+        # while being far above the bare backward error -- neither machine-zero
+        # nor resolved. The filter discards it as "zero" and D1 reads off the
+        # next surviving mode, which is a FAST one: wrong in the fail-open
+        # direction and by many orders of magnitude (measured: 5.0e7 reported
+        # for a true gap of 1.07e-5 once the spectral spread reaches ~1e13).
+        # Reporting that would be a claim the arithmetic cannot support, so D1
+        # becomes NaN. Deliberately NOT 0.0, which means "gapless" and fires the
+        # F5 reach leg, and deliberately not the fast mode.
+        #
+        # A merely DEGENERATE stationary manifold does not land here: its extra
+        # zero modes sit at machine zero, so they are unambiguous and the gap
+        # taken from the complement is correct.
+        warnings.warn(
+            f"Spectral layer: {certificate.ambiguous_count} eigenvalue(s) fall "
+            f"inside the zero-mode tolerance ({certificate.bound:.3e}) without "
+            "being machine-zero, so the slow spectrum is not resolvable at "
+            "double precision. D1 is reported as NaN rather than as the next "
+            "surviving mode, which would be a fast one (issue #113).",
+            RuntimeWarning,
+            stacklevel=2,
+        )
+        delta = float("nan")
     delta_s = gns_gap(L_super, rho_steady)
     kms = kms_gap(L_super, rho_steady)
     osc = oscillating_mode_gap(eigenvalues)
@@ -231,4 +274,7 @@ def compute_spectral_layer(
         eigenvalues=eigenvalues[order],
         steady_state=np.asarray(rho_steady),
         has_complex_pairs=has_complex,
+        zero_mode_certificate=certificate.as_dict(),
     )
+
+

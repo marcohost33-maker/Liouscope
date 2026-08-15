@@ -31,13 +31,41 @@ signals overlap-amplification (F1).
 
 from __future__ import annotations
 
+import warnings
+
 import numpy as np
-import scipy.linalg as sla
 
 from .._consts import EPS_DIV, EPS_HERMITICITY
 from .._types import MpembaResult
 from ..numerics.kronecker import vec
+from ..numerics.linalg import certified_eig
 from ..numerics.scale import spectral_zero_tolerance
+
+
+def _certified_decomposition(
+    L_super: np.ndarray, *, what: str
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Certified eigendecomposition, warning once when it cannot be repaired.
+
+    Shared by the two Mpemba-layer consumers so they cannot drift apart on
+    whether the spectrum they read was trustworthy (issue #112 follow-up).
+    """
+    decomp, certificate = certified_eig(L_super)
+    if certificate.applicable and not certificate.certified:
+        warnings.warn(
+            f"{what}: no zero mode was found for a trace-preserving generator "
+            f"(smallest |lambda| = {certificate.residual:.3e} > "
+            f"{certificate.bound:.3e}) and no eigenvector-producing repair "
+            "route succeeded. The slowest mode -- and therefore the D19 "
+            "overlap and the A11/F4 rung consuming it -- is NOT reliable for "
+            "this system (issue #112).",
+            RuntimeWarning,
+            stacklevel=3,
+        )
+    left = decomp.left_vectors
+    if left is None:  # pragma: no cover - certified_eig always sets left vectors
+        raise RuntimeError("certified_eig did not return left eigenvectors")
+    return decomp.eigenvalues, left, decomp.right_vectors
 
 
 def _slowest_mode(
@@ -57,7 +85,12 @@ def _slowest_mode(
     since :func:`is_trivial_overlap` depends on this same function.
     """
     L_super = np.asarray(L_super, dtype=complex)  # complex128: scipy dispatches by dtype; the double-solve contract (#108) must hold
-    eigvals, vl, vr = sla.eig(L_super, left=True, right=True)
+    # Issue #112 follow-up. The slowest-mode EIGENVECTOR is what D19 measures
+    # the overlap against, so a spurious slow mode does not merely shift a
+    # number -- it points the overlap at a mode that does not exist, on the very
+    # rung that fires A11/F4. Certify the decomposition against vec(I)^H L = 0
+    # first, and repair it when the incumbent solve lost the zero mode.
+    eigvals, vl, vr = _certified_decomposition(L_super, what="slowest mode")
     tol = spectral_zero_tolerance(eigvals, atol=atol, name="eigenvalues of L_super")
     nonzero_mask = np.abs(eigvals) > tol
     if not np.any(nonzero_mask):
@@ -174,7 +207,7 @@ def expansion_alpha(
     Returns ``alpha`` (slope). A flat distribution gives ``alpha`` near 0.
     """
     L_super = np.asarray(L_super, dtype=complex)  # complex128: scipy dispatches by dtype; the double-solve contract (#108) must hold
-    eigvals, vl, vr = sla.eig(L_super, left=True, right=True)
+    eigvals, vl, vr = _certified_decomposition(L_super, what="mode expansion")
     tol = spectral_zero_tolerance(eigvals, atol=atol, name="eigenvalues of L_super")
     mask = np.abs(eigvals) > tol
     eigvals_nz = eigvals[mask]
