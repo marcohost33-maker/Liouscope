@@ -35,14 +35,23 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     impossible for a GKSL generator by definition.
   The correction is canonical and carries no free parameter: the new
   `numerics.scale.spectral_zero_tolerance()` derives the threshold from the
-  spectrum itself as `ZERO_MODE_RTOL * max|lambda|` (spectral radius —
-  homogeneous of degree one and unitary-similarity invariant, like
-  `rate_scale`). At unit scale it reproduces the historical absolute floor, so
-  **all 21 anchor regressions and the full suite stay green byte-identically**;
-  only rescaled generators change. Non-finite spectra now fail closed rather
-  than silently reporting "no non-zero modes". The legacy absolute floor
-  remains available as an explicit `atol=` opt-in on every affected function,
-  mirroring how #99 preserved the pre-#97 steady-state tolerance.
+  spectrum itself as `ZERO_MODE_EPS_FACTOR * eps * max|lambda|` (spectral
+  radius — homogeneous of degree one and unitary-similarity invariant, like
+  `rate_scale`), with `eps` taken from the spectrum's own dtype so a
+  single-precision solver is not judged by double-precision round-off.
+  **All 21 anchor regressions and the full suite stay green**, but the change
+  is *not* confined to rescaled generators: at unit scale the threshold is
+  ~2.2e-13 rather than the historical 1e-10, so a mode between those two values
+  is now classified as genuine where it was previously discarded. That
+  direction is the intended improvement — it is what rescues metastable slow
+  modes — and no anchor system carries a mode in that band, which is why the
+  reference behaviour is unchanged.
+  Non-finite spectra now fail closed rather
+  than silently reporting "no non-zero modes" — including on the legacy path,
+  since a compatibility switch may restore the old *threshold* but must not
+  restore silent acceptance of corrupted solver output. The legacy absolute
+  floor remains available as an explicit `atol=` opt-in on every affected
+  function, mirroring how #99 preserved the pre-#97 steady-state tolerance.
   D1 deliberately does **not** clamp the gap at zero: after the scale-relative
   filter a positive `Re(lambda)` is no longer round-off but a genuinely
   unstable (non-GKSL) mode, and masking it would trade one silent failure for

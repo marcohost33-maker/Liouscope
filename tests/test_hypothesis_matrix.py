@@ -165,6 +165,34 @@ def test_a12_fallback_status_is_negation_of_any_rung_firing():
     assert _entry(loud, "A12_FALLBACK")["status"] == HYPOTHESIS_NOT_SUPPORTED
 
 
+def test_a12_fallback_is_unevaluable_while_any_rung_is_unknown():
+    """"Nothing fired" is not established while a rung could not be evaluated.
+
+    With a high `henrici_eta` but no `pseudospectral_radius`, F5 is correctly
+    UNEVALUABLE -- and the missing value could well have made it fire. Calling
+    A12 ("mixed / unresolved") SUPPORTED there would assert more than the run
+    measured.
+    """
+    ev = _ev(henrici_eta=2.0)
+    del ev["pseudospectral_radius"]
+    matrix = hypothesis_evidence_matrix(ev, relaxation=_Rel())
+    assert _entry(matrix, "F5_PSEUDOSPECTRAL")["status"] == HYPOTHESIS_UNEVALUABLE
+
+    a12 = _entry(matrix, "A12_FALLBACK")
+    assert a12["status"] == HYPOTHESIS_UNEVALUABLE
+    assert a12["claim_floor"] == VERDICT_UNDEFINED
+    assert a12["support_score"] is None
+
+
+def test_a12_still_refuted_outright_by_a_fired_rung_despite_unknowns():
+    """A fired rung settles it: A12 is NOT_SUPPORTED, not merely unknown."""
+    ev = _ev(kreiss=10.0, petermann_max=10.0, henrici_eta=2.0)
+    del ev["pseudospectral_radius"]          # F5 unevaluable, F1 fires
+    matrix = hypothesis_evidence_matrix(ev, relaxation=_Rel())
+    assert _entry(matrix, "F1_OVERLAP_AMPLIFICATION")["status"] == HYPOTHESIS_SUPPORTED
+    assert _entry(matrix, "A12_FALLBACK")["status"] == HYPOTHESIS_NOT_SUPPORTED
+
+
 # ---------------------------------------------------------------------------
 # Supporting / counterevidence / missing content
 # ---------------------------------------------------------------------------
@@ -428,13 +456,25 @@ def test_diagnose_populates_matrix_and_support_score():
     assert _entry(matrix, "F4_MPEMBA")["status"] != HYPOTHESIS_UNEVALUABLE
 
 
-def test_support_score_defaults_nan_for_legacy_construction():
-    """Older serialised results / direct constructions stay valid (additive)."""
+def test_legacy_construction_still_honours_the_alias_contract():
+    """An omitted `support_score` must inherit `confidence`, not stay NaN.
+
+    Older callers and results rebuilt from pre-field serialisations supply only
+    `confidence`. Leaving the sentinel would break the documented promise that
+    the two names carry the same value on exactly the backward-compatible path,
+    and would export a non-finite tag where an ordinal was promised.
+    """
     from liouscope._types import ClassificationResult
 
     legacy = ClassificationResult(
         a_class="A1", f_family="none", verdict="CANDIDATE", tier="CONFIRMATION",
         confidence=0.7, evidence={},
     )
-    assert math.isnan(legacy.support_score)
+    assert legacy.support_score == 0.7 == legacy.confidence
     assert legacy.hypothesis_matrix == ()
+
+    explicit = ClassificationResult(
+        a_class="A1", f_family="none", verdict="CANDIDATE", tier="CONFIRMATION",
+        confidence=0.7, support_score=0.5, evidence={},
+    )
+    assert explicit.support_score == 0.5, "an explicit score must not be overwritten"

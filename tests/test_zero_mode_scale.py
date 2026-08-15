@@ -321,3 +321,35 @@ def test_threshold_sits_far_above_measured_round_off():
             zero_mode = float(np.min(np.abs(ev)))
             assert zero_mode <= 10.0 * eps * radius
             assert zero_mode < spectral_zero_tolerance(ev)
+
+
+def test_tolerance_tracks_the_spectrum_dtype():
+    """Backward error scales with the SOLVER's working precision, not float64.
+
+    A single-precision spectrum has round-off ~1e-7 relative; judging it by
+    float64 eps puts the threshold ~9 decades below that solver's noise, so the
+    numerical steady-state eigenvalue is retained as physical -- reintroducing
+    the negative gap this helper exists to prevent.
+    """
+    ev64 = np.array([0.0, -0.5, -1.0], dtype=np.complex128)
+    ev32 = ev64.astype(np.complex64)
+    tol64 = spectral_zero_tolerance(ev64)
+    tol32 = spectral_zero_tolerance(ev32)
+    assert tol32 > tol64
+    ratio = float(np.finfo(np.float32).eps / np.finfo(np.float64).eps)
+    assert tol32 / tol64 == pytest.approx(ratio, rel=1e-9)
+
+    # Real (non-complex) single precision must behave the same way.
+    assert spectral_zero_tolerance(np.array([0.0, -1.0], dtype=np.float32)) == pytest.approx(
+        tol32, rel=1e-9
+    )
+
+
+def test_single_precision_zero_mode_is_still_filtered():
+    """The end-to-end consequence of the dtype fix: no negative gap."""
+    L = _rabi_damped_L()
+    for c in (1.0, 1.0e-3, 1.0e3):
+        ev = np.linalg.eigvals(c * L).astype(np.complex64)
+        gap = liouvillian_gap(ev)
+        assert gap >= 0.0
+        assert gap / c == pytest.approx(0.2, rel=1.0e-3)

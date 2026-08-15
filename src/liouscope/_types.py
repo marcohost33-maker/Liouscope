@@ -6,6 +6,7 @@ The top-level :class:`DiagnosticReport` is what `diagnose()` returns.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
@@ -290,7 +291,7 @@ class ClassificationResult:
     # validation design in issue #102. Additive + defaulted (NaN) so results
     # serialised by older versions stay valid; ``classify_mechanism`` always
     # populates it, and the two fields are pinned equal in tests.
-    support_score: float = float("nan")
+    support_score: float = float("nan")  # defaults to ``confidence``; see __post_init__
     # Issue #102: every hypothesis that fired, in priority order, each flagged
     # ``shadowed`` when a higher rung already won. The dominant class above is a
     # convenience projection; without this the branch chain silently erases
@@ -304,6 +305,21 @@ class ClassificationResult:
     hypothesis_matrix: tuple[dict[str, object], ...] = ()
     taxonomy_version: str = TAXONOMY_VERSION
     schema_version: str = DIAGNOSTIC_SCHEMA_VERSION
+
+    def __post_init__(self) -> None:
+        """Keep the ``support_score`` / ``confidence`` alias contract exact.
+
+        An older caller — or a result reconstructed from a serialised report
+        predating the field — supplies only ``confidence``. Leaving
+        ``support_score`` at its ``NaN`` sentinel would break the documented
+        promise that the two names carry the same value, precisely on the
+        backward-compatible path: code migrated to the new field would lose the
+        score for legacy results, and an export would emit a non-finite tag
+        where an ordinal value was promised. An explicitly supplied
+        ``support_score`` is left untouched.
+        """
+        if math.isnan(self.support_score):
+            object.__setattr__(self, "support_score", self.confidence)
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)

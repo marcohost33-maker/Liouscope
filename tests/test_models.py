@@ -197,3 +197,23 @@ def _unclipped_reference(model, t, params):
         return (A + B * t) * np.exp(-alpha * t)
     A, beta, omega, phi = params
     return A * np.exp(-beta * t) * np.cos(omega * t + phi)
+
+
+def test_clip_does_not_truncate_representable_decay():
+    """The overflow cap is one-sided; clipping decay would bias every fit.
+
+    `exp(-400) = 1.9e-174` is perfectly representable. A symmetric clip at 345
+    reported `1.5e-150` instead -- a factor of 1e24 -- giving every model an
+    artificial constant tail that distorts residuals, fitted offsets and AICc
+    on high-dynamic-range trajectories.
+    """
+    for exponent in (300.0, 400.0, 700.0, 745.0):
+        got = M0(np.array([exponent]), np.array([1.0, 1.0]))[0]
+        assert got == np.exp(-exponent), f"decay truncated at exponent -{exponent}"
+
+
+def test_extreme_decay_underflows_to_zero_without_warning():
+    """Underflow is exact in the limit and needs no guard."""
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        assert M0(np.array([1.0e4]), np.array([1.0, 1.0]))[0] == 0.0

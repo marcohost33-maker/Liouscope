@@ -131,7 +131,20 @@ def spectral_zero_tolerance(
         return float(atol)
     if ev.size == 0:
         return 0.0
-    eps = float(np.finfo(float).eps)
+    # The backward error scales with the WORKING precision of the eigensolver
+    # that produced this spectrum, so eps must come from the array's own dtype.
+    # Hard-coding float64 eps for a single-precision spectrum would put the
+    # threshold ~9 orders of magnitude below that solver's round-off, retaining
+    # the numerical steady-state eigenvalue as physical -- reintroducing the
+    # negative-gap failure this function exists to prevent. Integer/object
+    # spectra have no meaningful eps and fall back to float64.
+    dtype = np.asarray(ev).dtype
+    real_dtype = np.empty(0, dtype=dtype).real.dtype
+    eps = float(
+        np.finfo(real_dtype).eps
+        if np.issubdtype(real_dtype, np.floating)
+        else np.finfo(float).eps
+    )
     return float(rtol * eps * float(np.max(np.abs(ev))))
 
 

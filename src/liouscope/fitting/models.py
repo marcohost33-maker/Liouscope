@@ -30,10 +30,10 @@ ModelFunc = Callable[[np.ndarray, np.ndarray], np.ndarray]
 # mode is silent non-convergence on legitimate physical input rather than a
 # clean rejection of the bad probe.
 #
-# Clipping the EXPONENT keeps every model finite and monotone in the parameters
-# over the whole real line while changing nothing in the well-conditioned
-# regime, where the exponent of a decaying model is <= 0 and this bound is
-# unreachable: the value is bit-identical to the unclipped one.
+# Capping the exponent from ABOVE keeps every model finite over the whole real
+# line while changing nothing in the regime where models are actually fitted:
+# a decaying model has exponent <= 0, so this bound is unreachable and the value
+# is bit-identical to the unclipped one.
 #
 # The bound is 345, not the ~709 where ``np.exp`` itself overflows, because
 # saturating exp is not sufficient on its own: M3a multiplies it by the
@@ -41,16 +41,25 @@ ModelFunc = Callable[[np.ndarray, np.ndarray], np.ndarray]
 # into a *multiply* overflow one line later. ``exp(345) ~ 4.6e149`` leaves ~158
 # decades of headroom for the prefactor, which covers any t and B a fit can
 # plausibly see (``B t ~ 5e8`` on the longest grid used here).
+#
+# The cap is deliberately ONE-SIDED. Clipping the negative side too would
+# corrupt genuine, perfectly representable decay: ``exp(-400) = 1.9e-174``
+# would be reported as ``exp(-345) = 1.5e-150``, a factor of 1e24 too large,
+# growing past 1e150 by exponent -700. Every model would acquire an artificial
+# constant tail that distorts residuals, fitted offsets and AICc on
+# high-dynamic-range trajectories -- trading an overflow for a silent bias.
+# Underflow needs no guard: it is exact in the limit (``exp(-800) -> 0.0``) and
+# NumPy's default error state ignores it, so no warning is promoted.
 _EXP_CLIP: float = 345.0
 
 
 def _safe_exp(x: np.ndarray) -> np.ndarray:
-    """``exp(x)`` with the exponent clipped to a finite, non-overflowing range.
+    """``exp(x)`` with the exponent capped from above only.
 
-    Bit-identical to ``np.exp`` for ``|x| <= 700``; saturating instead of
-    overflowing to ``inf`` (or underflowing to a warning) outside it.
+    Bit-identical to ``np.exp`` for every ``x <= 345``, including the whole
+    decaying range; saturating instead of overflowing to ``inf`` above it.
     """
-    result: np.ndarray = np.exp(np.clip(x, -_EXP_CLIP, _EXP_CLIP))
+    result: np.ndarray = np.exp(np.minimum(x, _EXP_CLIP))
     return result
 
 

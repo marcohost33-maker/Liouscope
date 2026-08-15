@@ -870,6 +870,7 @@ def hypothesis_evidence_matrix(
     """
     entries: list[dict[str, object]] = []
     any_fired = False
+    any_unevaluable = False
     for rung in _ladder_spec():
         # ``missing`` is the issue-#102 column "missing REQUIRED evidence": it
         # drives UNEVALUABLE. A defaulted key is tracked separately -- the
@@ -928,6 +929,7 @@ def hypothesis_evidence_matrix(
         # decision it describes.
         if missing_required:
             status = HYPOTHESIS_UNEVALUABLE
+            any_unevaluable = True
         else:
             status = HYPOTHESIS_SUPPORTED if all_hold else HYPOTHESIS_NOT_SUPPORTED
             any_fired = any_fired or all_hold
@@ -959,8 +961,18 @@ def hypothesis_evidence_matrix(
             }
         )
     # A12 fallback: "mixed / unresolved" is what the classifier returns when no
-    # rung fires, so its support status is exactly the negation of any_fired.
-    a12_status = HYPOTHESIS_NOT_SUPPORTED if any_fired else HYPOTHESIS_SUPPORTED
+    # rung fires. A fired rung refutes it outright. But ``not any_fired`` alone
+    # does NOT establish it: an UNEVALUABLE rung might have fired had its
+    # evidence been collected, so claiming "no mechanism applies" would assert
+    # more than the run measured. With any rung unevaluable the fallback is
+    # itself unevaluable -- fail-closed, and consistent with the ladder, whose
+    # ``A12`` default is likewise only reached after evaluating every rung.
+    if any_fired:
+        a12_status = HYPOTHESIS_NOT_SUPPORTED
+    elif any_unevaluable:
+        a12_status = HYPOTHESIS_UNEVALUABLE
+    else:
+        a12_status = HYPOTHESIS_SUPPORTED
     entries.append(
         {
             "rule_id": A12_FALLBACK_RULE_ID,

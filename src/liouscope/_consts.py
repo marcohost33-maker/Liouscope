@@ -26,7 +26,8 @@ EPS_SUPP: Final[float] = 1.0e-12
 # LEGACY ABSOLUTE zero-mode floor. Retained as an explicit opt-in only (issue
 # #108): a Liouvillian carries rate dimension, so an absolute floor is not
 # invariant under a change of rate units L -> cL. Scale-relative separation is
-# the default -- see ZERO_MODE_RTOL and numerics.scale.spectral_zero_tolerance.
+# the default -- see ZERO_MODE_EPS_FACTOR and
+# numerics.scale.spectral_zero_tolerance.
 EPS_GAP: Final[float] = 1.0e-10
 # Issue #108: zero-mode tolerance as a multiple of the EIGENSOLVER BACKWARD
 # ERROR, ``eps * max|lambda|``, not a fixed fraction of the spectral radius.
@@ -50,6 +51,13 @@ EPS_GAP: Final[float] = 1.0e-10
 # A mode below this threshold is not merely filtered by choice: it is not
 # reliably separable from round-off by a dense eigensolver at all. Callers who
 # need a different trade-off can pass ``rtol`` explicitly.
+#
+# NOTE: this does NOT reproduce the pre-#108 absolute floor at unit scale. At
+# max|lambda| = 1 the threshold is ~2.2e-13, not 1e-10, so a mode between those
+# two values is now classified as GENUINE where it was previously discarded --
+# a change that applies without any rescaling. That direction is the intended
+# improvement (it is what rescues metastable slow modes); it is recorded here
+# because "only rescaled generators change" would be false.
 ZERO_MODE_EPS_FACTOR: Final[float] = 1.0e3
 EPS_HERMITICITY: Final[float] = 1.0e-9
 EPS_TRACE: Final[float] = 1.0e-10
