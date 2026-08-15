@@ -315,11 +315,27 @@ class ClassificationResult:
         promise that the two names carry the same value, precisely on the
         backward-compatible path: code migrated to the new field would lose the
         score for legacy results, and an export would emit a non-finite tag
-        where an ordinal value was promised. An explicitly supplied
-        ``support_score`` is left untouched.
+        where an ordinal value was promised.
+
+        An explicitly supplied ``support_score`` that DISAGREES with
+        ``confidence`` is rejected rather than kept or silently overwritten:
+        the two names are documented aliases of one value, so a report
+        carrying ``confidence=0.7`` next to ``support_score=0.2`` would hand
+        different scores to consumers depending on which name they read — a
+        contradiction, not a datum. If the fields ever legitimately diverge
+        (a CALIBRATED score, issue #102 option 2), that is a semantic change
+        that must ship with its own contract, not leak in through mismatched
+        constructor arguments.
         """
         if math.isnan(self.support_score):
             object.__setattr__(self, "support_score", self.confidence)
+        elif self.support_score != self.confidence:
+            raise ValueError(
+                "support_score and confidence are documented aliases of one "
+                f"value; got support_score={self.support_score!r} vs "
+                f"confidence={self.confidence!r}. Supply only confidence (the "
+                "alias inherits it), or supply equal values."
+            )
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)

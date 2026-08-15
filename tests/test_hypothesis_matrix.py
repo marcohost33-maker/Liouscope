@@ -505,8 +505,17 @@ def test_legacy_construction_still_honours_the_alias_contract():
     assert legacy.support_score == 0.7 == legacy.confidence
     assert legacy.hypothesis_matrix == ()
 
-    explicit = ClassificationResult(
+    equal = ClassificationResult(
         a_class="A1", f_family="none", verdict="CANDIDATE", tier="CONFIRMATION",
-        confidence=0.7, support_score=0.5, evidence={},
+        confidence=0.7, support_score=0.7, evidence={},
     )
-    assert explicit.support_score == 0.5, "an explicit score must not be overwritten"
+    assert equal.support_score == 0.7  # explicitly supplying the same value is fine
+
+    # A MISMATCH is a contradiction, not a datum: two names documented as
+    # aliases of one value must never serialise different scores depending on
+    # which name a consumer reads.
+    with pytest.raises(ValueError, match="aliases"):
+        ClassificationResult(
+            a_class="A1", f_family="none", verdict="CANDIDATE", tier="CONFIRMATION",
+            confidence=0.7, support_score=0.2, evidence={},
+        )
