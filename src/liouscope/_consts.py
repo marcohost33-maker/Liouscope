@@ -14,11 +14,11 @@ TAXONOMY_VERSION: Final[str] = "A1-A12-v3.1"
 DIAGNOSTIC_SCHEMA_VERSION: Final[str] = "D1-D24-Übersicht-v3-2026-04-24"
 MANIFEST_SCHEMA_VERSION: Final[str] = "1.5.0"
 
-RESERVED_DIAGNOSTIC_SLOTS: Final[Mapping[str, str]] = MappingProxyType({
+RESERVED_DIAGNOSTIC_SLOTS: Final[dict[str, str]] = {
     "D21": "reserved (canon schema D1-D24-Übersicht-v3; not implemented here)",
     "D22": "reserved (canon schema D1-D24-Übersicht-v3; not implemented here)",
     "D23": "reserved (canon schema D1-D24-Übersicht-v3; not implemented here)",
-})
+}
 
 CORE_SCOPE: Final[str] = "time-homogeneous finite-dimensional GKSL/QMS"
 RELEASE_STATE: Final[str] = "engineering release-ready"
@@ -91,6 +91,14 @@ A_CLASSES: Final[tuple[str, ...]] = (
     "A7", "A8", "A9", "A10", "A11", "A12",
 )
 
+# Immutable BY DESIGN (ninth-round review, both directions weighed): the
+# import-time reachability guard and REACHABLE_A_CLASSES derive from this
+# mapping, so a consumer-side ``pop("A6")`` would silently desynchronise the
+# taxonomy from the guard that certifies it. The three catalogs above stay
+# plain dicts -- they are long-established public exports whose consumers
+# legitimately ``json.dumps``/``deepcopy`` them, and mutating them desyncs no
+# decision logic. This mapping is NEW public API in the same release that
+# freezes it, so nothing established loses serialisability.
 RESERVED_A_CLASSES: Final[Mapping[str, str]] = MappingProxyType({
     "A6": "reserved (taxonomy A1-A12-v3.1; no classifier branch yet -- needs an "
     "accelerated-decay / operator-spreading detector distinct from A5)",
@@ -110,7 +118,7 @@ REACHABLE_A_CLASSES: Final[tuple[str, ...]] = tuple(
 
 F_FAMILIES: Final[tuple[str, ...]] = ("F1", "F2", "F3", "F4", "F5", "none")
 
-A_CLASS_DESCRIPTIONS: Final[Mapping[str, str]] = MappingProxyType({
+A_CLASS_DESCRIPTIONS: Final[dict[str, str]] = {
     "A1": "Asymptotic-gap-controlled (primitive QMS)",
     "A2": "Sym-gap-corrected transient (Mori-Shirai 2023)",
     "A3": "Overlap/eigenvector-amplified (Mori-Shirai 2020)",
@@ -123,13 +131,13 @@ A_CLASS_DESCRIPTIONS: Final[Mapping[str, str]] = MappingProxyType({
     "A10": "Phantom relaxation (Znidaric 2023)",
     "A11": "Non-normal Mpemba (Entropy 27, 581, 2025)",
     "A12": "Mixed / unresolved",
-})
+}
 
-F_FAMILY_DESCRIPTIONS: Final[Mapping[str, str]] = MappingProxyType({
+F_FAMILY_DESCRIPTIONS: Final[dict[str, str]] = {
     "F1": "Mori-Shirai overlap (PRL 125, 230604, 2020)",
     "F2": "Liouvillian skin effect (PRL 127, 070402, 2021)",
     "F3": "Symmetrised gap (PRL 130, 230404, 2023)",
     "F4": "Quantum Mpemba effect (PRL 127, 060401, 2021)",
     "F5": "Phantom relaxation (arXiv:2306.07876, 2023)",
     "none": "No gap-failure mechanism flagged",
-})
+}
