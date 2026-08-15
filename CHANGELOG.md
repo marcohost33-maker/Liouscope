@@ -37,8 +37,15 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `numerics.scale.spectral_zero_tolerance()` derives the threshold from the
   spectrum itself as `ZERO_MODE_EPS_FACTOR * eps * max|lambda|` (spectral
   radius — homogeneous of degree one and unitary-similarity invariant, like
-  `rate_scale`), with `eps` taken from the spectrum's own dtype so a
-  single-precision solver is not judged by double-precision round-off.
+  `rate_scale`), with `eps` fixed at DOUBLE-precision machine epsilon: the
+  library's own dense solves are guaranteed double (below), so the storage
+  dtype of a spectrum says nothing about the precision it was computed in. A
+  spectrum from a genuinely single-precision external/GPU solver is the one
+  case needing a coarser threshold, is indistinguishable from a downcast
+  double result by inspection, and therefore belongs to the caller: the
+  eigenvalue-based diagnostics (D1/D3/D4/D16) expose the `rtol` multiplier
+  for exactly that, so such callers can widen the filter without reverting to
+  an absolute floor.
   **All 21 anchor regressions and the full suite stay green**, but the change
   is *not* confined to rescaled generators: at unit scale the threshold is
   ~2.2e-13 rather than the historical 1e-10, so a mode between those two values
@@ -52,6 +59,20 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   restore silent acceptance of corrupted solver output. The legacy absolute
   floor remains available as an explicit `atol=` opt-in on every affected
   function, mirroring how #99 preserved the pre-#97 steady-state tolerance.
+  **The double-precision solver contract is now enforced, not assumed:**
+  `eig_nonhermitian` documents "always LAPACK `zgeev`", but `scipy.linalg.eig`
+  dispatches by dtype and genuinely ran single-precision `cgeev` on a
+  `complex64` input (measured: ~30x the eigenvalue error of the double solve
+  on the same stored matrix; `numpy.linalg` by contrast always computes in
+  double and only casts the result back). Since every backward-error tolerance
+  above is calibrated against the double solve, all dense eigen/Schur
+  boundaries (`eig_nonhermitian`, the Mpemba layer, Petermann/Henrici, D24)
+  now promote to `complex128` before solving. Representation error already
+  present in caller-supplied single-precision data is the caller's data
+  quality and is neither masked nor "corrected". This supersedes the
+  storage-dtype-derived epsilon briefly present during review (it discarded
+  resolved metastable modes: a `complex64` two-channel generator with rates
+  `1.0`/`1e-4`, true gap `5e-5`, reported `5e-1`).
   D1 deliberately does **not** clamp the gap at zero: after the scale-relative
   filter a positive `Re(lambda)` is no longer round-off but a genuinely
   unstable (non-GKSL) mode, and masking it would trade one silent failure for

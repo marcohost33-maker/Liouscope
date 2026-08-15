@@ -104,7 +104,30 @@ def kms_gap(L_super: np.ndarray, rho_steady: np.ndarray) -> float:
     return _real_gap_from_symmetric(M)
 
 
-def liouvillian_gap(eigenvalues: np.ndarray, *, atol: float | None = None) -> float:
+def _zero_tol(
+    eigenvalues: np.ndarray, *, rtol: float | None, atol: float | None
+) -> float:
+    """Resolve the zero-mode tolerance, forwarding an explicit ``rtol``.
+
+    ``rtol`` is the multiplier on the double-precision backward error
+    ``eps64 * max|lambda|`` (issue #108). The library's own dense solves are
+    promoted to complex128, so the default is correct for every spectrum
+    LiouScope computes itself; a caller feeding eigenvalues from a genuinely
+    single-precision external/GPU solver widens the filter here — e.g.
+    ``rtol = 1e3 * (eps32 / eps64)`` — instead of falling back to an absolute
+    floor.
+    """
+    if rtol is None:
+        return spectral_zero_tolerance(eigenvalues, atol=atol, name="eigenvalues")
+    return spectral_zero_tolerance(eigenvalues, rtol=rtol, atol=atol, name="eigenvalues")
+
+
+def liouvillian_gap(
+    eigenvalues: np.ndarray,
+    *,
+    rtol: float | None = None,
+    atol: float | None = None,
+) -> float:
     """D1: ``Delta = -max{ Re(lambda) : lambda in sigma(L), lambda != 0 }``.
 
     The zero-mode separation is SCALE-RELATIVE by default (issue #108):
@@ -118,7 +141,7 @@ def liouvillian_gap(eigenvalues: np.ndarray, *, atol: float | None = None) -> fl
     """
     eigenvalues = np.asarray(eigenvalues)
     # Filter zero eigenvalues (steady state)
-    tol = spectral_zero_tolerance(eigenvalues, atol=atol, name="eigenvalues")
+    tol = _zero_tol(eigenvalues, rtol=rtol, atol=atol)
     mask = np.abs(eigenvalues) > tol
     if not mask.any():
         return 0.0
@@ -133,7 +156,12 @@ def liouvillian_gap(eigenvalues: np.ndarray, *, atol: float | None = None) -> fl
     return float(-max_re)
 
 
-def oscillating_mode_gap(eigenvalues: np.ndarray, *, atol: float | None = None) -> float:
+def oscillating_mode_gap(
+    eigenvalues: np.ndarray,
+    *,
+    rtol: float | None = None,
+    atol: float | None = None,
+) -> float:
     """D3: minimal ``|Im(lambda)|`` over complex-conjugate pairs.
 
     Returns 0 if no complex pairs exist. The "is this imaginary part real or
@@ -141,21 +169,26 @@ def oscillating_mode_gap(eigenvalues: np.ndarray, *, atol: float | None = None) 
     legacy absolute floor.
     """
     eigenvalues = np.asarray(eigenvalues)
-    tol = spectral_zero_tolerance(eigenvalues, atol=atol, name="eigenvalues")
+    tol = _zero_tol(eigenvalues, rtol=rtol, atol=atol)
     complex_mask = np.abs(np.imag(eigenvalues)) > tol
     if not complex_mask.any():
         return 0.0
     return float(np.min(np.abs(np.imag(eigenvalues[complex_mask]))))
 
 
-def spectral_spread(eigenvalues: np.ndarray, *, atol: float | None = None) -> float:
+def spectral_spread(
+    eigenvalues: np.ndarray,
+    *,
+    rtol: float | None = None,
+    atol: float | None = None,
+) -> float:
     """D4: ``max|Re(lambda)| - min|Re(lambda)|`` over non-zero eigenvalues.
 
     Scale-relative zero-mode separation (issue #108); pass ``atol`` for the
     legacy absolute floor.
     """
     eigenvalues = np.asarray(eigenvalues)
-    tol = spectral_zero_tolerance(eigenvalues, atol=atol, name="eigenvalues")
+    tol = _zero_tol(eigenvalues, rtol=rtol, atol=atol)
     mask = np.abs(eigenvalues) > tol
     if not mask.any():
         return 0.0
@@ -168,7 +201,7 @@ def compute_spectral_layer(
     rho_steady: np.ndarray | None = None,
 ) -> SpectralResult:
     """Run all spectral diagnostics D1-D4."""
-    L_super = np.asarray(L_super)
+    L_super = np.asarray(L_super, dtype=complex)  # complex128: scipy dispatches by dtype; the double-solve contract (#108) must hold
     if rho_steady is None:
         rho_steady = steady_state(L_super)
     decomp = eig_nonhermitian(L_super)

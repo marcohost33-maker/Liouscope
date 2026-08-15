@@ -79,39 +79,55 @@ def _bounded(result: np.ndarray) -> np.ndarray:
     Symmetric, unlike :func:`_safe_exp`: model values are legitimately negative
     (M3b oscillates), and the bound is about the magnitude the solver must
     handle, not about the direction of decay.
+
+    Non-finite intermediates are mapped to the bound rather than clipped: the
+    factor MULTIPLICATION can itself overflow before this function sees the
+    product (an unconstrained fit can probe an amplitude like ``1e200``, and
+    ``1e200 * exp(345)`` is ``inf`` on arrival), and ``0 * inf`` yields NaN.
+    Both mean "this probe is absurdly far from the data", so the honest finite
+    encoding is the saturation value the optimiser steps away from — models
+    are evaluated under a suppressed overflow errstate for the same reason.
     """
-    out: np.ndarray = np.clip(result, -_MODEL_CLIP, _MODEL_CLIP)
-    return out
+    out: np.ndarray = np.nan_to_num(
+        result, nan=_MODEL_CLIP, posinf=_MODEL_CLIP, neginf=-_MODEL_CLIP
+    )
+    clipped: np.ndarray = np.clip(out, -_MODEL_CLIP, _MODEL_CLIP)
+    return clipped
 
 
 def M0(t: np.ndarray, params: np.ndarray) -> np.ndarray:
     """``A * exp(-alpha t)``; params = (A, alpha)."""
     A, alpha = params
-    return _bounded(A * _safe_exp(-alpha * t))
+    with np.errstate(over="ignore", invalid="ignore"):
+        return _bounded(A * _safe_exp(-alpha * t))
 
 
 def M1(t: np.ndarray, params: np.ndarray) -> np.ndarray:
     """``A * exp(-alpha t) + C``; params = (A, alpha, C)."""
     A, alpha, C = params
-    return _bounded(A * _safe_exp(-alpha * t) + C)
+    with np.errstate(over="ignore", invalid="ignore"):
+        return _bounded(A * _safe_exp(-alpha * t) + C)
 
 
 def M2(t: np.ndarray, params: np.ndarray) -> np.ndarray:
     """``A1 exp(-beta1 t) + A2 exp(-beta2 t)``; params = (A1, beta1, A2, beta2)."""
     A1, beta1, A2, beta2 = params
-    return _bounded(A1 * _safe_exp(-beta1 * t) + A2 * _safe_exp(-beta2 * t))
+    with np.errstate(over="ignore", invalid="ignore"):
+        return _bounded(A1 * _safe_exp(-beta1 * t) + A2 * _safe_exp(-beta2 * t))
 
 
 def M3a(t: np.ndarray, params: np.ndarray) -> np.ndarray:
     """``(A + B t) exp(-alpha t)``; params = (A, B, alpha)."""
     A, B, alpha = params
-    return _bounded((A + B * t) * _safe_exp(-alpha * t))
+    with np.errstate(over="ignore", invalid="ignore"):
+        return _bounded((A + B * t) * _safe_exp(-alpha * t))
 
 
 def M3b(t: np.ndarray, params: np.ndarray) -> np.ndarray:
     """``A exp(-beta t) cos(omega t + phi)``; params = (A, beta, omega, phi)."""
     A, beta, omega, phi = params
-    return _bounded(A * _safe_exp(-beta * t) * np.cos(omega * t + phi))
+    with np.errstate(over="ignore", invalid="ignore"):
+        return _bounded(A * _safe_exp(-beta * t) * np.cos(omega * t + phi))
 
 
 # Seed-rate floor as a DIMENSIONLESS decay depth over the fitted window, not an

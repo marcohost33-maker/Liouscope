@@ -42,8 +42,20 @@ def eig_nonhermitian(
     Always uses LAPACK ``zgeev`` (via ``scipy.linalg.eig``). Anchor D: never
     fall back to ``eigh`` which assumes Hermiticity that Liouvillians do not
     have.
+
+    The promotion to ``complex128`` below is what makes the "always zgeev"
+    contract TRUE: unlike ``numpy.linalg`` (which computes in double
+    regardless of input dtype and only casts the result back),
+    ``scipy.linalg.eig`` dispatches by dtype and would run single-precision
+    ``cgeev`` on a ``complex64`` input — measured at ~30x the eigenvalue error
+    of the double solve on the same stored matrix. Every zero-mode/backward-
+    error tolerance downstream (issue #108) is calibrated against the double
+    solve, so the solver precision must not silently follow the caller's
+    storage dtype. Representation error already present in single-precision
+    INPUT data is the caller's data quality and is not (cannot be) undone
+    here.
     """
-    A = np.asarray(A)
+    A = np.asarray(A, dtype=complex)
     if A.ndim != 2 or A.shape[0] != A.shape[1]:
         raise ValueError(f"eig_nonhermitian expects a square matrix, got {A.shape}")
     if compute_left:

@@ -72,7 +72,7 @@ HENRICI_REL_CLIP_TOL = 1.0e-9
 
 def henrici_eta_n(A: np.ndarray) -> float:
     """Henrici departure-from-normality measure via Schur form."""
-    A = np.asarray(A)
+    A = np.asarray(A, dtype=complex)  # complex128: scipy dispatches by dtype; the double-solve contract (#108) must hold
     T, _ = sla.schur(A, output="complex")
     # The diagonal carries eigenvalues; the strictly-upper triangle is N.
     n = T.shape[0]
@@ -274,7 +274,7 @@ def petermann_factors(
     the propagator. Use D10 (Kreiss) / D15 (numerical abscissa) / D13
     (pseudospectrum) to bound ``sup_t ||e^{tL}||``. See the module docstring.
     """
-    L_super = np.asarray(L_super)
+    L_super = np.asarray(L_super, dtype=complex)  # complex128: scipy dispatches by dtype; the double-solve contract (#108) must hold
     eigvals, vl, vr = sla.eig(L_super, left=True, right=True)
     # Normalise eigenvectors
     K_list: list[float] = []
@@ -321,7 +321,7 @@ def kreiss_constant(
     use :func:`kreiss_grid_lower_bound` (D10b) for the scale-relative,
     metadata-carrying successor.
     """
-    L_super = np.asarray(L_super)
+    L_super = np.asarray(L_super, dtype=complex)  # complex128: scipy dispatches by dtype; the double-solve contract (#108) must hold
     eigvals = sla.eigvals(L_super)
     re_part = np.real(eigvals)
     re_max = float(re_part.max())

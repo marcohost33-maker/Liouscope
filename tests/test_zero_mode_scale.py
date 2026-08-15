@@ -403,8 +403,9 @@ def test_tolerance_ignores_the_storage_dtype():
 def test_single_precision_storage_keeps_resolved_slow_modes():
     """A downcast metastable spectrum must not lose its slow branch.
 
-    Rates 1.0 and 1e-4 give a true gap of 5e-5, four decades above the round-off
-    the solver actually achieves. A dtype-derived threshold reported 5e-1 here.
+    Rates 1.0 and 1e-4 give a true gap of 5e-5, four decades above the
+    round-off of the double solve the library now guarantees. A dtype-derived
+    threshold reported 5e-1 here.
 
     D1 is exercised directly rather than through ``compute_spectral_layer``: at
     this rate ratio the GNS Gram matrix is ill-conditioned and emits its own
@@ -415,6 +416,32 @@ def test_single_precision_storage_keeps_resolved_slow_modes():
     assert liouvillian_gap(ev) == pytest.approx(0.5e-4, rel=1e-4)
 
 
+def test_dense_eig_paths_enforce_the_double_precision_contract():
+    """scipy dispatches by dtype, so the promotion must be explicit.
+
+    ``numpy.linalg`` computes in double regardless of input dtype and only
+    casts the result back; ``scipy.linalg.eig`` genuinely runs single-precision
+    ``cgeev`` on a ``complex64`` input (measured: ~30x the eigenvalue error of
+    the double solve on the same stored matrix). Every backward-error tolerance
+    in this suite is calibrated against the double solve, so the library's
+    dense eig boundaries promote to ``complex128`` before solving.
+    """
+    from liouscope.numerics.linalg import eig_nonhermitian
+
+    L32 = _rabi_damped_L().astype(np.complex64)
+    decomp = eig_nonhermitian(L32)
+    assert decomp.eigenvalues.dtype == np.complex128
+
+    # End-to-end through the scipy-backed Mpemba layer: a single-precision
+    # STORED input must produce the double-solve answer (the ~eps32 input
+    # representation error is the caller's data quality, not solver noise).
+    L32b = _amplitude_damping_L().astype(np.complex64)
+    rho_ss = steady_state(_amplitude_damping_L())
+    result = compute_mpemba_layer(L32b, _plus_state(), rho_steady_state=rho_ss)
+    assert result.overlap_c1 == pytest.approx(0.5, rel=1e-6)
+    assert result.is_mpemba_candidate is False
+
+
 def test_single_precision_zero_mode_is_still_filtered():
     """...while the round-off mode is still excluded, so no negative gap."""
     L = _rabi_damped_L()
@@ -423,3 +450,27 @@ def test_single_precision_zero_mode_is_still_filtered():
         gap = liouvillian_gap(ev)
         assert gap >= 0.0
         assert gap / c == pytest.approx(0.2, rel=1.0e-3)
+
+
+def test_rtol_passthrough_serves_external_single_precision_spectra():
+    """A caller with a genuinely single-precision spectrum can widen the filter.
+
+    The library's own solves are promoted to double, but eigenvalues fed in
+    from an external/GPU single-precision solver carry ~eps32-level round-off
+    that the double-calibrated default cannot see: a stationary mode displaced
+    to 1e-7 * max|lambda| survives the filter and produces a negative gap. The
+    exposed `rtol` multiplier is the sanctioned escape hatch — scale-relative,
+    not an absolute floor.
+    """
+    ev = np.array([1.0e-7, -0.2, -1.0], dtype=complex)  # displaced zero mode
+    assert liouvillian_gap(ev) == pytest.approx(-1.0e-7)  # default: double contract
+    rtol32 = 1.0e3 * float(np.finfo(np.float32).eps / np.finfo(np.float64).eps)
+    assert liouvillian_gap(ev, rtol=rtol32) == pytest.approx(0.2)
+    # And the same knob exists on the other eigenvalue-based diagnostics.
+    assert spectral_spread(ev, rtol=rtol32) == pytest.approx(0.8)
+    from liouscope.diagnostics.lep import lep_proximity as _lp
+
+    sep_default, _ = _lp(ev)
+    sep_wide, _ = _lp(ev, rtol=rtol32)
+    assert sep_default > 0.0
+    assert sep_wide == sep_default  # separations unaffected; only the clamp scale

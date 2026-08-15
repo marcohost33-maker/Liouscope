@@ -124,7 +124,7 @@ def compute_zhou_predictor(
     -------
     ZhouPredictorResult
     """
-    L_super = np.asarray(L_super)
+    L_super = np.asarray(L_super, dtype=complex)  # complex128: scipy dispatches by dtype; the double-solve contract (#108) must hold
     if gap is None or petermann_factor is None:
         eigvals, vl, vr = sla.eig(L_super, left=True, right=True)
         # Scale-relative zero-mode separation (issue #108): D24 consumes the

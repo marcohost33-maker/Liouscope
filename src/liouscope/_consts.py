@@ -6,17 +6,19 @@ packaged schemas and public documentation.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+from types import MappingProxyType
 from typing import Final
 
 TAXONOMY_VERSION: Final[str] = "A1-A12-v3.1"
 DIAGNOSTIC_SCHEMA_VERSION: Final[str] = "D1-D24-Übersicht-v3-2026-04-24"
 MANIFEST_SCHEMA_VERSION: Final[str] = "1.5.0"
 
-RESERVED_DIAGNOSTIC_SLOTS: Final[dict[str, str]] = {
+RESERVED_DIAGNOSTIC_SLOTS: Final[Mapping[str, str]] = MappingProxyType({
     "D21": "reserved (canon schema D1-D24-Übersicht-v3; not implemented here)",
     "D22": "reserved (canon schema D1-D24-Übersicht-v3; not implemented here)",
     "D23": "reserved (canon schema D1-D24-Übersicht-v3; not implemented here)",
-}
+})
 
 CORE_SCOPE: Final[str] = "time-homogeneous finite-dimensional GKSL/QMS"
 RELEASE_STATE: Final[str] = "engineering release-ready"
@@ -89,14 +91,14 @@ A_CLASSES: Final[tuple[str, ...]] = (
     "A7", "A8", "A9", "A10", "A11", "A12",
 )
 
-RESERVED_A_CLASSES: Final[dict[str, str]] = {
+RESERVED_A_CLASSES: Final[Mapping[str, str]] = MappingProxyType({
     "A6": "reserved (taxonomy A1-A12-v3.1; no classifier branch yet -- needs an "
     "accelerated-decay / operator-spreading detector distinct from A5)",
     "A7": "reserved (taxonomy A1-A12-v3.1; no classifier branch yet -- needs a "
     "weak-dissipation singular-perturbation probe, Mori 2024)",
     "A9": "reserved (taxonomy A1-A12-v3.1; no classifier branch yet -- needs "
     "ETH / level-statistics signals for the prethermalization regime)",
-}
+})
 
 # Issue #102 reachability/ontology gate: the coverage DENOMINATOR for any
 # "n of N classes" statement. Reserved classes have no code-backed decision
@@ -108,7 +110,7 @@ REACHABLE_A_CLASSES: Final[tuple[str, ...]] = tuple(
 
 F_FAMILIES: Final[tuple[str, ...]] = ("F1", "F2", "F3", "F4", "F5", "none")
 
-A_CLASS_DESCRIPTIONS: Final[dict[str, str]] = {
+A_CLASS_DESCRIPTIONS: Final[Mapping[str, str]] = MappingProxyType({
     "A1": "Asymptotic-gap-controlled (primitive QMS)",
     "A2": "Sym-gap-corrected transient (Mori-Shirai 2023)",
     "A3": "Overlap/eigenvector-amplified (Mori-Shirai 2020)",
@@ -121,13 +123,13 @@ A_CLASS_DESCRIPTIONS: Final[dict[str, str]] = {
     "A10": "Phantom relaxation (Znidaric 2023)",
     "A11": "Non-normal Mpemba (Entropy 27, 581, 2025)",
     "A12": "Mixed / unresolved",
-}
+})
 
-F_FAMILY_DESCRIPTIONS: Final[dict[str, str]] = {
+F_FAMILY_DESCRIPTIONS: Final[Mapping[str, str]] = MappingProxyType({
     "F1": "Mori-Shirai overlap (PRL 125, 230604, 2020)",
     "F2": "Liouvillian skin effect (PRL 127, 070402, 2021)",
     "F3": "Symmetrised gap (PRL 130, 230404, 2023)",
     "F4": "Quantum Mpemba effect (PRL 127, 060401, 2021)",
     "F5": "Phantom relaxation (arXiv:2306.07876, 2023)",
     "none": "No gap-failure mechanism flagged",
-}
+})

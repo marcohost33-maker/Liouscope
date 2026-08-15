@@ -19,7 +19,10 @@ from ..numerics.scale import spectral_zero_tolerance
 
 
 def lep_proximity(
-    eigenvalues: np.ndarray, *, atol: float | None = None
+    eigenvalues: np.ndarray,
+    *,
+    rtol: float | None = None,
+    atol: float | None = None,
 ) -> tuple[float, int]:
     """Minimum eigenvalue-pair separation, including complex-conjugate pairs.
 
@@ -63,7 +66,11 @@ def lep_proximity(
     # fell below the floor and reported proximity 0.0, the STRONGEST possible EP
     # signal, for an ordinary well-separated spectrum. Both the clamp and the
     # candidate-count window now scale with the spectral radius.
-    tol = spectral_zero_tolerance(eigenvalues, atol=atol, name="eigenvalues")
+    tol = (
+        spectral_zero_tolerance(eigenvalues, atol=atol, name="eigenvalues")
+        if rtol is None
+        else spectral_zero_tolerance(eigenvalues, rtol=rtol, atol=atol, name="eigenvalues")
+    )
     n = eigenvalues.size
     if n < 2:
         return float("inf"), 0

@@ -56,7 +56,7 @@ def _slowest_mode(
     classifier -- while the issue-#68 non-triviality guard could not correct it,
     since :func:`is_trivial_overlap` depends on this same function.
     """
-    L_super = np.asarray(L_super)
+    L_super = np.asarray(L_super, dtype=complex)  # complex128: scipy dispatches by dtype; the double-solve contract (#108) must hold
     eigvals, vl, vr = sla.eig(L_super, left=True, right=True)
     tol = spectral_zero_tolerance(eigvals, atol=atol, name="eigenvalues of L_super")
     nonzero_mask = np.abs(eigvals) > tol
@@ -173,7 +173,7 @@ def expansion_alpha(
     Fits ``log|c_n| = alpha * n + c0`` for the ``n_modes`` slowest modes.
     Returns ``alpha`` (slope). A flat distribution gives ``alpha`` near 0.
     """
-    L_super = np.asarray(L_super)
+    L_super = np.asarray(L_super, dtype=complex)  # complex128: scipy dispatches by dtype; the double-solve contract (#108) must hold
     eigvals, vl, vr = sla.eig(L_super, left=True, right=True)
     tol = spectral_zero_tolerance(eigvals, atol=atol, name="eigenvalues of L_super")
     mask = np.abs(eigvals) > tol

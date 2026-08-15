@@ -378,3 +378,19 @@ def test_advisory_non_influence_holds_across_several_base_classes():
             a, f = _pick_a_class(ev, relaxation=relaxation)
             assert (a, f) == (a0, f0)
             assert _confidence(ev, a) == c0
+
+
+def test_reserved_a_classes_mapping_is_immutable():
+    """A consumer must not be able to mutate the reachability contract.
+
+    The import-time coverage guard compares the ladder against
+    ``REACHABLE_A_CLASSES``, which is precomputed from this mapping — a
+    post-import ``pop("A6")`` would silently desynchronise the taxonomy from
+    the guard that certifies it.
+    """
+    import pytest
+
+    with pytest.raises(TypeError):
+        RESERVED_A_CLASSES["A6"] = "mutated"  # type: ignore[index]
+    with pytest.raises((TypeError, AttributeError)):
+        RESERVED_A_CLASSES.pop("A6")  # type: ignore[attr-defined]

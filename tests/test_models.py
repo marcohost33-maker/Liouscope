@@ -249,3 +249,27 @@ def test_extreme_decay_underflows_to_zero_without_warning():
     with warnings.catch_warnings():
         warnings.simplefilter("error")
         assert M0(np.array([1.0e4]), np.array([1.0, 1.0]))[0] == 0.0
+
+
+def test_extreme_amplitude_probes_saturate_instead_of_overflowing():
+    """The factor MULTIPLICATION can overflow before any clamp sees the product.
+
+    An unconstrained fit can probe an amplitude like 1e200; `1e200 * exp(345)`
+    is already inf on arrival, and `0 * inf` yields NaN. Both encode "this
+    probe is absurdly far from the data", so the models saturate at the finite
+    bound instead of raising the (error-promoted) overflow warning.
+    """
+    t = np.array([0.0, 1000.0])
+    probes = {
+        M0: np.array([1.0e200, -1.0]),
+        M1: np.array([1.0e200, -1.0, 1.0e200]),
+        M2: np.array([1.0e200, -1.0, 1.0e200, -1.0]),
+        M3a: np.array([1.0e200, 1.0e200, -1.0]),
+        M3b: np.array([1.0e200, -1.0, 0.3, 0.0]),
+    }
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        for model, params in probes.items():
+            out = model(t, params)
+            assert np.all(np.isfinite(out)), f"{model.__name__} not finite"
+            assert np.all(np.abs(out) <= 1.0e100), f"{model.__name__} unbounded"
