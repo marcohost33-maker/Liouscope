@@ -569,26 +569,52 @@ def test_unresolved_certificate_floors_the_verdict_to_undefined():
     UNDEFINED / EXPLORATION. Synthetic certificates keep the test independent
     of which fixtures happen to defeat the current repair ladder.
     """
-    from liouscope.diagnostics.classification import classify_mechanism
-    from tests.test_classifier_semantics_debt import (
-        _lep,
-        _mpemba,
-        _nonnorm,
-        _relaxation,
-        _resolvent,
-        _spectral,
-        _transient,
+    from liouscope._types import (
+        LepResult,
+        MpembaResult,
+        NonNormalityResult,
+        RelaxationResult,
+        ResolventResult,
+        SpectralResult,
+        TransientResult,
     )
+    from liouscope.diagnostics.classification import classify_mechanism
+
+    arr = np.zeros(1, dtype=complex)
 
     def _classify(certificate):
+        # Local synthetic results (no cross-test import: the ``tests``
+        # directory is not an importable package on the CI runner).
         return classify_mechanism(
-            _spectral(zero_mode_certificate=certificate),
-            _nonnorm(),
-            _relaxation(),
-            _resolvent(),
-            _transient(),
-            _lep(gap_rate_consistency=0.01),
-            _mpemba(),
+            SpectralResult(
+                gap=0.5, gns_gap=0.5, kms_gap=0.5, oscillating_gap=0.1,
+                spectral_spread=1.0, eigenvalues=arr,
+                steady_state=np.zeros((1, 1), dtype=complex),
+                has_complex_pairs=False, zero_mode_certificate=certificate,
+            ),
+            NonNormalityResult(
+                henrici_eta=0.5, petermann_max=1.0, petermann_factors=arr,
+                kreiss=1.0, bohr_ap_length=1, bohr_ap_pauli_bound=0.0,
+            ),
+            RelaxationResult(
+                von_neumann_entropy=0.0, relative_entropy_curve=arr.real,
+                fidelity_curve=arr.real, entanglement_asymmetry=None, fits={},
+                aicc_model="M1", beta_D=0.5, bca_ci_beta=(0.4, 0.6),
+            ),
+            ResolventResult(
+                resolvent_peak=1.0, ridge_fwhm=1.0, pseudospectral_radius=0.5,
+                pseudospec_eps=1.0e-3,
+            ),
+            TransientResult(
+                trans_amplitude_ratio=1.0, kappa_trans=1.0, numerical_abscissa=0.0,
+            ),
+            LepResult(
+                lep_proximity=1.0, gap_rate_consistency=0.01,
+                initial_state_sensitivity=0.0, lep_candidate_count=0,
+            ),
+            MpembaResult(
+                overlap_c1=0.5, expansion_alpha=1.0, is_mpemba_candidate=False,
+            ),
         )
 
     resolved = _classify(
