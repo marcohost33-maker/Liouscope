@@ -43,10 +43,12 @@ abstract: >-
 # the schema-reserved classes excluded from claims and coverage denominators
 # (`ClassificationResult.hypothesis_matrix`, issue #102); and the zero-mode
 # separation underlying D1/D3/D4/D9/D16/D19/D20/D24 is scale-relative, so those
-# diagnostics and the resulting mechanism verdict are invariant under a change
-# of rate units (issue #108) -- this last item CHANGES NUMERICAL RESULTS for
-# generators whose spectral radius is far from unity and must be described as a
-# correction, not merely an addition, when the release is cut.
+# diagnostics no longer depend on the choice of rate unit (issue #108). The
+# last item CHANGES NUMERICAL RESULTS for generators whose spectral radius is
+# far from unity and must be described as a correction, not merely an addition,
+# when the release is cut. It must NOT be described as making the mechanism
+# verdict unit-invariant in general: the A10/F5 branch still gates on the
+# rate-dimensioned henrici_eta threshold (open in #101).
 keywords:
   - open quantum systems
   - Lindblad

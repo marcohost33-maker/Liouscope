@@ -7,10 +7,15 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Fixed
-- **Zero-mode separation is scale-relative: D1/D3/D4/D9/D16/D19/D20/D24 and the
-  mechanism verdict are now invariant under a change of rate units (issue
-  #108). CHANGES NUMERICAL RESULTS** for generators whose spectral radius is
-  far from unity.
+- **Zero-mode separation is scale-relative: D1/D3/D4/D9/D16/D19/D20/D24 no
+  longer depend on the choice of rate unit, removing the ZERO-MODE-INDUCED
+  verdict flips (issue #108). CHANGES NUMERICAL RESULTS** for generators whose
+  spectral radius is far from unity.
+  This does **not** make the mechanism verdict unit-invariant in general: the
+  A10/F5 branch still gates on the rate-dimensioned `henrici_eta > 1.0`, so
+  rescaling can still cross that threshold. That remaining limitation is
+  tracked in #101 (slice C) and stated in the README; #108 removes a different,
+  independent source of unit dependence.
   The filter deciding which modes are the steady state used an **absolute**
   floor `|lambda| > 1e-10`, duplicated across five modules. A Liouvillian
   carries rate dimension, so this broke in *both* directions under `L -> cL`:
@@ -42,7 +47,18 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   filter a positive `Re(lambda)` is no longer round-off but a genuinely
   unstable (non-GKSL) mode, and masking it would trade one silent failure for
   another.
-  Pinned by `tests/test_zero_mode_scale.py` (33 tests over
+  The threshold is a multiple of the eigensolver BACKWARD ERROR
+  (`ZERO_MODE_EPS_FACTOR * eps * max|lambda|`), not a fixed fraction of the
+  spectral radius. A fixed fraction would impose a dynamic-range ceiling and
+  discard the genuine slow modes of a METASTABLE generator (A5): with
+  `1e-10 * max|lambda|`, two damping channels at rates `1.0` and `1e-12` (true
+  gap `5e-13`) reported a gap of `5e-1`. Calibration measured across amplitude
+  damping, Rabi-driven damping, dephasing, a strongly non-normal near-defective
+  generator and a 64-dim 3-qubit chain, each at `c in {1, 1e6, 1e12}`: the
+  numerical zero mode never exceeded `1.94 * eps * max|lambda|`, so the default
+  factor keeps ~500x headroom while resolving genuine modes further down than
+  the pre-#108 absolute floor did at unit scale.
+  Pinned by `tests/test_zero_mode_scale.py` (tests over
   `c in {1e-10 ... 1e12}`: dimensionless quantities invariant, rate-valued ones
   scaling by `c`, no false Mpemba candidate, no negative gap, end-to-end
   verdict invariance, and a discrimination test proving the `atol` opt-in

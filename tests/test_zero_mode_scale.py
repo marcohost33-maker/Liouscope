@@ -24,7 +24,7 @@ import numpy as np
 import pytest
 
 from liouscope import build_liouvillian, diagnose
-from liouscope._consts import ZERO_MODE_RTOL
+from liouscope._consts import ZERO_MODE_EPS_FACTOR
 from liouscope.core.lindblad import steady_state
 from liouscope.diagnostics.lep import lep_proximity
 from liouscope.diagnostics.mpemba import compute_mpemba_layer, overlap_c1
@@ -69,7 +69,8 @@ def _plus_state() -> np.ndarray:
 def test_zero_tolerance_is_homogeneous_degree_one():
     ev = np.array([0.0, -0.5, -1.0 + 2.0j], dtype=complex)
     base = spectral_zero_tolerance(ev)
-    assert base == pytest.approx(ZERO_MODE_RTOL * 2.23606797749979, rel=1e-12)
+    eps = float(np.finfo(float).eps)
+    assert base == pytest.approx(ZERO_MODE_EPS_FACTOR * eps * 2.23606797749979, rel=1e-12)
     for c in C_SET:
         assert spectral_zero_tolerance(c * ev) == pytest.approx(c * base, rel=1e-12)
 
@@ -82,6 +83,19 @@ def test_zero_tolerance_zero_operator_and_empty_semantics():
 def test_zero_tolerance_legacy_absolute_opt_in():
     ev = np.array([0.0, -1.0e6], dtype=complex)
     assert spectral_zero_tolerance(ev, atol=1.0e-10) == 1.0e-10
+
+
+@pytest.mark.parametrize("bad", [np.nan, np.inf])
+def test_legacy_atol_still_validates_the_spectrum(bad):
+    """A compatibility switch may restore the old threshold, not old silence.
+
+    Before this guard, `liouvillian_gap([0, nan], atol=1e-10)` reported 0.0 --
+    corrupted solver output laundered into "no non-zero modes".
+    """
+    with pytest.raises(ValueError, match="finite"):
+        spectral_zero_tolerance(np.array([0.0, bad], dtype=complex), atol=1.0e-10)
+    with pytest.raises(ValueError, match="finite"):
+        liouvillian_gap(np.array([0.0, bad], dtype=complex), atol=1.0e-10)
 
 
 @pytest.mark.parametrize("bad", [np.nan, np.inf, -np.inf])
@@ -245,3 +259,65 @@ def test_legacy_absolute_floor_reproduces_the_pre_108_defect():
     ev_small = np.linalg.eigvals(1.0e-10 * L)
     assert liouvillian_gap(ev_small) > 0.0                     # fixed default
     assert liouvillian_gap(ev_small, atol=1.0e-10) == 0.0      # legacy defect
+
+
+# ---------------------------------------------------------------------------
+# Dynamic range: genuine slow modes must survive (Codex review P1)
+# ---------------------------------------------------------------------------
+
+
+def _two_channel_L(rate_slow: float) -> np.ndarray:
+    """Two independent damping channels with widely separated rates.
+
+    This is the metastable (A5) regime — a wide separation of physical rates is
+    the phenomenon, not an artefact — so the zero-mode filter must not treat the
+    slow branch as round-off.
+    """
+    sm = np.array([[0.0, 1.0], [0.0, 0.0]], dtype=complex)
+    eye = np.eye(2, dtype=complex)
+    return build_liouvillian(
+        np.zeros((4, 4), dtype=complex),
+        [np.kron(sm, eye), np.kron(eye, sm)],
+        rates=[1.0, rate_slow],
+    )
+
+
+@pytest.mark.parametrize("rate_slow", [1.0e-2, 1.0e-6, 1.0e-10, 1.0e-12])
+def test_genuine_slow_modes_survive_the_zero_mode_filter(rate_slow):
+    """A fixed fraction of the spectral radius would discard these.
+
+    With a `1e-10 * max|lambda|` threshold, `rate_slow = 1e-12` reported a gap
+    of 5e-1 instead of 5e-13 — wrong by ten orders of magnitude, and precisely
+    on the metastable systems the library exists to study. Tying the threshold
+    to the eigensolver backward error (`eps * max|lambda|`) instead resolves
+    modes far below any fixed dynamic-range ceiling.
+    """
+    L = _two_channel_L(rate_slow)
+    ev = np.linalg.eigvals(L)
+    assert liouvillian_gap(ev) == pytest.approx(0.5 * rate_slow, rel=1.0e-6)
+
+
+def test_slow_mode_survival_is_also_unit_invariant():
+    """Wide rate separation and unit rescaling must compose, not conflict."""
+    L = _two_channel_L(1.0e-10)
+    for c in (1.0e-6, 1.0, 1.0e6):
+        gap = liouvillian_gap(np.linalg.eigvals(c * L))
+        assert gap / c == pytest.approx(0.5e-10, rel=1.0e-6)
+
+
+def test_threshold_sits_far_above_measured_round_off():
+    """The calibration claim behind ZERO_MODE_EPS_FACTOR, asserted not assumed.
+
+    Across these controls the numerical zero mode never exceeded ~2 * eps *
+    max|lambda|; the default factor keeps orders of magnitude of headroom, which
+    is what stops direction B (a round-off mode promoted to genuine, yielding a
+    negative gap) from returning.
+    """
+    eps = float(np.finfo(float).eps)
+    for L in (_amplitude_damping_L(), _rabi_damped_L(), _two_channel_L(1.0e-6)):
+        for c in (1.0, 1.0e6, 1.0e12):
+            ev = np.linalg.eigvals(c * L)
+            radius = float(np.max(np.abs(ev)))
+            zero_mode = float(np.min(np.abs(ev)))
+            assert zero_mode <= 10.0 * eps * radius
+            assert zero_mode < spectral_zero_tolerance(ev)

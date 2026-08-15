@@ -7,6 +7,8 @@ frequency pick. The functions are pure, so the tests are exact / deterministic.
 
 from __future__ import annotations
 
+import warnings
+
 import numpy as np
 import pytest
 
@@ -126,3 +128,72 @@ def test_initial_guess_m3b_short_signal_falls_back_to_unit_omega():
     y = np.array([1.0, 0.5, 0.25])
     *_, omega, _ = initial_guess_m3b(t, y)
     assert omega == 1.0
+
+
+# ---------------------------------------------------------------------------
+# Overflow robustness on long time grids (issue #108 follow-up)
+# ---------------------------------------------------------------------------
+
+
+def test_models_stay_finite_for_optimiser_probes_on_long_grids():
+    """The optimiser probes negative rates; a long grid must not overflow.
+
+    A slow generator expressed in small rate units yields a legitimately long
+    time grid (t up to 5e10 in the #108 rescaling tests). A probe with a
+    NEGATIVE decay rate then drives the exponent past the float64 overflow
+    threshold. `inf`/`nan` residuals give least-squares no gradient to step
+    back from, so the failure mode is silent non-convergence on valid physical
+    input -- not merely a log line.
+    """
+    t = np.linspace(0.0, 5.0e10, 64)
+    probes = {
+        M0: np.array([1.5, -0.043]),
+        M1: np.array([1.5, -0.043, 4.1]),
+        M2: np.array([0.5, -0.043, 0.5, -0.1]),
+        M3a: np.array([1.5, 0.01, -0.043]),
+        M3b: np.array([1.5, -0.043, 0.3, 0.0]),
+    }
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")  # any overflow/underflow warning fails
+        for model, params in probes.items():
+            out = model(t, params)
+            assert np.all(np.isfinite(out)), f"{model.__name__} produced non-finite output"
+
+
+@pytest.mark.parametrize(
+    "model,params",
+    [
+        (M0, np.array([1.5, 0.4])),
+        (M1, np.array([1.5, 0.4, 0.2])),
+        (M2, np.array([0.5, 0.4, 0.5, 1.2])),
+        (M3a, np.array([1.5, 0.01, 0.4])),
+        (M3b, np.array([1.5, 0.4, 0.3, 0.0])),
+    ],
+)
+def test_exponent_clip_is_inert_in_the_well_conditioned_regime(model, params):
+    """The clip must change nothing where the models are actually fitted.
+
+    Bit-identical, not merely close: a clip that perturbed ordinary fits would
+    silently move every published rate estimate.
+    """
+    t = np.linspace(0.0, 20.0, 128)
+    expected = _unclipped_reference(model, t, params)
+    assert np.array_equal(model(t, params), expected)
+
+
+def _unclipped_reference(model, t, params):
+    """Recompute the model with the plain, unclipped ``np.exp``."""
+    if model is M0:
+        A, alpha = params
+        return A * np.exp(-alpha * t)
+    if model is M1:
+        A, alpha, C = params
+        return A * np.exp(-alpha * t) + C
+    if model is M2:
+        A1, b1, A2, b2 = params
+        return A1 * np.exp(-b1 * t) + A2 * np.exp(-b2 * t)
+    if model is M3a:
+        A, B, alpha = params
+        return (A + B * t) * np.exp(-alpha * t)
+    A, beta, omega, phi = params
+    return A * np.exp(-beta * t) * np.cos(omega * t + phi)

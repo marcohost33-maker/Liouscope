@@ -28,12 +28,29 @@ EPS_SUPP: Final[float] = 1.0e-12
 # invariant under a change of rate units L -> cL. Scale-relative separation is
 # the default -- see ZERO_MODE_RTOL and numerics.scale.spectral_zero_tolerance.
 EPS_GAP: Final[float] = 1.0e-10
-# Issue #108: RELATIVE zero-mode tolerance, applied against the spectral radius
-# max|lambda|. Chosen to reproduce the historical absolute floor at unit scale
-# (max|lambda| ~ 1) while sitting ~6 orders of magnitude above the eigensolver
-# round-off floor (~eps * ||L||), so it separates numerical zero modes from
-# genuine ones at ANY rate scale.
-ZERO_MODE_RTOL: Final[float] = 1.0e-10
+# Issue #108: zero-mode tolerance as a multiple of the EIGENSOLVER BACKWARD
+# ERROR, ``eps * max|lambda|``, not a fixed fraction of the spectral radius.
+#
+# The distinction matters for metastable systems (A5), whose whole point is a
+# wide separation of physical rates. A tolerance of ``1e-10 * max|lambda|``
+# would impose a fixed dynamic-range ceiling of 1e10 and discard a genuine slow
+# mode below it -- e.g. two damping channels at rates 1.0 and 1e-12 have a true
+# gap of 5e-13 and would be reported as 5e-1, wrong by ten orders of magnitude.
+#
+# A computed eigenvalue carries an uncertainty of order ``eps * ||L||``, so that
+# -- not a fixed ratio -- is the scale on which "indistinguishable from zero"
+# is decided. Measured across amplitude damping, Rabi-driven damping,
+# dephasing, a strongly non-normal near-defective generator and a 64-dim
+# 3-qubit chain, each at c in {1, 1e6, 1e12}, the numerical zero mode never
+# exceeded ``1.94 * eps * max|lambda|``. The factor below therefore keeps ~500x
+# headroom above the observed round-off while resolving genuine modes down to
+# ~2e-13 relative -- a wider dynamic range than the pre-#108 absolute floor
+# afforded at unit scale.
+#
+# A mode below this threshold is not merely filtered by choice: it is not
+# reliably separable from round-off by a dense eigensolver at all. Callers who
+# need a different trade-off can pass ``rtol`` explicitly.
+ZERO_MODE_EPS_FACTOR: Final[float] = 1.0e3
 EPS_HERMITICITY: Final[float] = 1.0e-9
 EPS_TRACE: Final[float] = 1.0e-10
 # Tight numerical detector for the exact maximally mixed state I/d. It is not a

@@ -351,19 +351,30 @@ def _pick_a_class(
 class _Condition:
     """One atomic requirement of a decision rung (issue #102).
 
-    ``keys`` names the evidence-dict entries the predicate reads, so the
-    hypothesis evidence matrix can report *which* measurement supported or
-    contradicted the rung, and can mark the rung UNEVALUABLE when a required
-    key is absent (e.g. the Mpemba layer was not run). ``relaxation_fields``
-    names any :class:`RelaxationResult` attributes read, for the same audit
-    purpose. ``fn`` MUST reproduce the decision predicate exactly — it is the
-    single source both the ladder and the matrix evaluate.
+    ``keys`` names the REQUIRED evidence-dict entries: the predicate indexes
+    them directly, so their absence makes the rung UNEVALUABLE in the matrix
+    (e.g. the Mpemba layer was not run). ``optional_keys`` names entries the
+    predicate reads through ``ev.get(key, default)`` — it has documented
+    semantics without them, so they are reported in ``values`` when present but
+    never trigger UNEVALUABLE.
+
+    Keeping the two apart is what preserves the matrix/ladder equivalence: if a
+    defaulted key were declared required, the matrix would report UNEVALUABLE
+    for evidence on which the ladder happily fires (the F5 reach leg reads
+    ``ev.get("gap", 0.0)`` and treats a missing gap as the gapless limit), and
+    the two would disagree exactly on the partially collected evidence the
+    matrix exists to describe.
+
+    ``relaxation_fields`` names any :class:`RelaxationResult` attributes read,
+    for the same audit purpose. ``fn`` MUST reproduce the decision predicate
+    exactly — it is the single source both the ladder and the matrix evaluate.
     """
 
     description: str
     keys: tuple[str, ...]
     fn: Callable[[dict[str, float], RelaxationResult], bool]
     relaxation_fields: tuple[str, ...] = ()
+    optional_keys: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -441,7 +452,8 @@ def _ladder_spec() -> tuple[_Rung, ...]:
             _Condition(
                 description="mpemba_is_candidate > 0.5 (D19 slow-mode skip, "
                 "non-triviality guard folded in)",
-                keys=("mpemba_is_candidate",),
+                keys=(),
+                optional_keys=("mpemba_is_candidate",),
                 fn=lambda ev, rel: ev.get("mpemba_is_candidate", 0.0) > 0.5,
             ),
         ),
@@ -457,7 +469,8 @@ def _ladder_spec() -> tuple[_Rung, ...]:
             _Condition(
                 description="pseudospectral reach: radius/gap > 2 * gap_to_gns_ratio "
                 "(gapless => infinite reach; see #101 gapless blind spot)",
-                keys=("pseudospectral_radius", "gap", "gap_to_gns_ratio"),
+                keys=("pseudospectral_radius",),
+                optional_keys=("gap", "gap_to_gns_ratio"),
                 fn=_f5_reach,
             ),
             _Condition(
@@ -530,7 +543,8 @@ def _ladder_spec() -> tuple[_Rung, ...]:
             _Condition(
                 description="gns_certified > 0.5 (Delta_GNS measured, not the "
                 "floor sentinel -- #88)",
-                keys=("gns_certified",),
+                keys=(),
+                optional_keys=("gns_certified",),
                 fn=lambda ev, rel: ev.get("gns_certified", 0.0) > 0.5,
             ),
         ),
@@ -555,13 +569,15 @@ def _ladder_spec() -> tuple[_Rung, ...]:
         conditions=(
             _Condition(
                 description="gap_rate_consistency < 0.05 (D17, dimension-coherent)",
-                keys=("gap_rate_consistency",),
+                keys=(),
+                optional_keys=("gap_rate_consistency",),
                 fn=lambda ev, rel: ev.get("gap_rate_consistency", float("inf")) < 0.05,
             ),
             _Condition(
                 description="linear trace-distance relaxation is single-exponential "
                 "(M0/M1 winner)",
-                keys=("d17_linear_single_exp",),
+                keys=(),
+                optional_keys=("d17_linear_single_exp",),
                 fn=lambda ev, rel: ev.get("d17_linear_single_exp", 0.0) > 0.5,
             ),
         ),
@@ -812,8 +828,11 @@ def hypothesis_evidence_matrix(
       unevaluable, so a partially collected run keeps its usable evidence;
     * ``counterevidence`` — the conditions that fail, with their values
       (threshold non-exceedance; NOT proof of absence, see claim-floor rules);
-    * ``missing`` — required evidence keys absent from ``ev`` (e.g. the
-      Mpemba layer was not run), which makes the rung ``UNEVALUABLE``;
+    * ``missing`` — REQUIRED evidence keys absent from ``ev``, which makes the
+      rung ``UNEVALUABLE``; ``missing_optional`` separately records absent keys
+      the predicate reads with a documented default (e.g. the Mpemba layer was
+      not run), which are worth auditing but do not stop the rung being
+      decided — the ladder decides it from the same default;
     * ``status`` — SUPPORTED / NOT_SUPPORTED / UNEVALUABLE / RESERVED, where
       SUPPORTED is by construction the rung's ``fires`` in the decision
       ladder (same conditions, same evaluation);
@@ -852,27 +871,44 @@ def hypothesis_evidence_matrix(
     entries: list[dict[str, object]] = []
     any_fired = False
     for rung in _ladder_spec():
+        # ``missing`` is the issue-#102 column "missing REQUIRED evidence": it
+        # drives UNEVALUABLE. A defaulted key is tracked separately -- the
+        # auditor still wants to know the Mpemba layer never ran, but its
+        # absence does not stop the rung being decided, because the ladder
+        # decides it too (from the documented default). The same key can be
+        # required for one rung and optional for another, which a single mixed
+        # list could not express.
         missing_list: list[str] = []
+        missing_optional_list: list[str] = []
         for cond in rung.conditions:
             for k in cond.keys:
                 if k not in ev and k not in missing_list:
                     missing_list.append(k)
+            for k in cond.optional_keys:
+                if k not in ev and k not in missing_optional_list:
+                    missing_optional_list.append(k)
         missing = tuple(missing_list)
+        missing_optional = tuple(missing_optional_list)
+        missing_required = bool(missing)
         supporting: list[dict[str, object]] = []
         counterevidence: list[dict[str, object]] = []
-        # Evaluate every condition whose OWN inputs are present, even when a
-        # sibling condition is unevaluable: a run that measured a high `kreiss`
-        # but never computed `petermann_max` should still show the Kreiss
-        # support next to the missing Petermann value. Discarding it would
-        # throw away exactly the audit trail this matrix exists for. The rung
-        # status still degrades to UNEVALUABLE — partial evidence never
-        # promotes a hypothesis.
+        # Evaluate every condition whose OWN required inputs are present, even
+        # when a sibling condition is unevaluable: a run that measured a high
+        # `kreiss` but never computed `petermann_max` should still show the
+        # Kreiss support next to the missing Petermann value. Discarding it
+        # would throw away exactly the audit trail this matrix exists for.
         all_hold = True
         for cond in rung.conditions:
             if any(k not in ev for k in cond.keys):
                 all_hold = False
                 continue
             values: dict[str, object] = {k: float(ev[k]) for k in cond.keys}
+            # Optional keys are reported when present; when absent the
+            # predicate supplies its documented default, so the condition is
+            # still evaluated and still agrees with the ladder.
+            for k in cond.optional_keys:
+                if k in ev:
+                    values[k] = float(ev[k])
             for f_name in cond.relaxation_fields:
                 values[f_name] = getattr(relaxation, f_name)
             record: dict[str, object] = {
@@ -884,7 +920,13 @@ def hypothesis_evidence_matrix(
             else:
                 counterevidence.append(record)
                 all_hold = False
-        if missing:
+        # Only a missing REQUIRED key makes the rung unevaluable. A missing
+        # optional key is still reported in ``missing`` (the auditor wants to
+        # know the Mpemba layer never ran) but the rung keeps a real verdict,
+        # because the ladder likewise evaluates it from the documented default
+        # -- declaring it unevaluable would make the matrix contradict the
+        # decision it describes.
+        if missing_required:
             status = HYPOTHESIS_UNEVALUABLE
         else:
             status = HYPOTHESIS_SUPPORTED if all_hold else HYPOTHESIS_NOT_SUPPORTED
@@ -898,6 +940,7 @@ def hypothesis_evidence_matrix(
                 "supporting": tuple(supporting),
                 "counterevidence": tuple(counterevidence),
                 "missing": missing,
+                "missing_optional": missing_optional,
                 "claim_floor": _hypothesis_claim_floor(
                     rung.a_class, status, ev, relaxation
                 ),
@@ -927,6 +970,7 @@ def hypothesis_evidence_matrix(
             "supporting": (),
             "counterevidence": (),
             "missing": (),
+            "missing_optional": (),
             "claim_floor": _hypothesis_claim_floor("A12", a12_status, ev, relaxation),
             "support_score": (
                 _confidence(ev, "A12") if a12_status == HYPOTHESIS_SUPPORTED else None
@@ -948,6 +992,7 @@ def hypothesis_evidence_matrix(
                 "supporting": (),
                 "counterevidence": (),
                 "missing": (),
+                "missing_optional": (),
                 "claim_floor": VERDICT_UNDEFINED,
                 "support_score": None,
                 "note": RESERVED_A_CLASSES[a_class],

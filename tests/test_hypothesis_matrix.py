@@ -185,16 +185,78 @@ def test_failed_condition_is_listed_as_counterevidence_with_values():
 
 def test_missing_required_evidence_makes_the_rung_unevaluable():
     ev = _ev()
-    del ev["mpemba_is_candidate"]  # Mpemba layer not run
+    del ev["henrici_eta"]  # non-normality layer not run: F5 indexes this key
     matrix = hypothesis_evidence_matrix(ev, relaxation=_Rel())
-    f4 = _entry(matrix, "F4_MPEMBA")
-    assert f4["status"] == HYPOTHESIS_UNEVALUABLE
-    assert f4["missing"] == ("mpemba_is_candidate",)
-    assert f4["supporting"] == () and f4["counterevidence"] == ()
-    assert f4["claim_floor"] == VERDICT_UNDEFINED
+    f5 = _entry(matrix, "F5_PSEUDOSPECTRAL")
+    assert f5["status"] == HYPOTHESIS_UNEVALUABLE
+    assert f5["missing"] == ("henrici_eta",)
+    assert f5["claim_floor"] == VERDICT_UNDEFINED
     # The decision ladder must agree that an unevaluable rung cannot fire.
     ladder = {r[0]: r[3] for r in _hypothesis_ladder(ev, relaxation=_Rel())}
-    assert ladder["F4_MPEMBA"] is False
+    assert ladder["F5_PSEUDOSPECTRAL"] is False
+
+
+def test_missing_optional_key_is_reported_without_forcing_unevaluable():
+    """A defaulted key must not make the matrix contradict the ladder.
+
+    `_f5_reach` reads `ev.get("gap", 0.0)` and treats a missing gap as the
+    gapless limit, so with `henrici_eta > 1` the ladder FIRES F5. Declaring
+    `gap` required would have the matrix report UNEVALUABLE for exactly that
+    input — the two disagreeing on the partially collected evidence the matrix
+    exists to describe. The absence is still surfaced in `missing`.
+    """
+    ev = _ev(henrici_eta=2.0)
+    del ev["gap"]
+    rel = _Rel()
+    ladder = {r[0]: r[3] for r in _hypothesis_ladder(ev, relaxation=rel)}
+    assert ladder["F5_PSEUDOSPECTRAL"] is True, "control: the ladder must fire here"
+
+    f5 = _entry(hypothesis_evidence_matrix(ev, relaxation=rel), "F5_PSEUDOSPECTRAL")
+    assert f5["status"] == HYPOTHESIS_SUPPORTED
+    assert f5["missing"] == ()                      # nothing REQUIRED is absent
+    assert "gap" in f5["missing_optional"]          # but the absence is audited
+
+
+@pytest.mark.parametrize("dropped", [
+    "mpemba_is_candidate", "gap", "gap_to_gns_ratio", "gns_certified",
+    "gap_rate_consistency", "d17_linear_single_exp", "henrici_eta",
+    "kreiss", "petermann_max", "trans_amplitude_ratio", "kappa_trans",
+    "has_complex_pairs", "pseudospectral_radius",
+])
+def test_matrix_never_contradicts_the_ladder_on_partial_evidence(dropped):
+    """Equivalence must survive every single-key omission, not just full sets.
+
+    The two are deliberately asymmetric on incomplete input: the matrix is the
+    robust reporter (it exists to say "this evidence was missing"), while the
+    ladder is the strict decision and raises `KeyError` on a missing required
+    key rather than deciding from a value nobody measured. Both therefore
+    refuse to rule -- and that agreement is what this test pins. Where the
+    ladder does produce a verdict, SUPPORTED must mean fired and NOT_SUPPORTED
+    must mean not fired.
+    """
+    ev = _ev(henrici_eta=2.0, kreiss=10.0, petermann_max=10.0)
+    ev.pop(dropped, None)
+    for model in ("M0", "M2", "M3a"):
+        rel = _Rel(aicc_model=model)
+        matrix = hypothesis_evidence_matrix(ev, relaxation=rel)
+        try:
+            ladder = {r[0]: r[3] for r in _hypothesis_ladder(ev, relaxation=rel)}
+        except KeyError:
+            # The strict path refused to decide; every rung that indexes the
+            # dropped key must be reported UNEVALUABLE rather than given a
+            # verdict the decision itself would not make.
+            affected = [e for e in matrix if dropped in e.get("missing", ())]
+            assert affected, f"no rung reported {dropped} as missing REQUIRED evidence"
+            assert all(e["status"] == HYPOTHESIS_UNEVALUABLE for e in affected)
+            continue
+        for entry in matrix:
+            rid = entry["rule_id"]
+            if rid not in ladder:
+                continue
+            if entry["status"] == HYPOTHESIS_SUPPORTED:
+                assert ladder[rid] is True, f"{rid} SUPPORTED but ladder did not fire"
+            elif entry["status"] == HYPOTHESIS_NOT_SUPPORTED:
+                assert ladder[rid] is False, f"{rid} NOT_SUPPORTED but ladder fired"
 
 
 def test_partially_missing_rung_keeps_its_evaluable_evidence():
