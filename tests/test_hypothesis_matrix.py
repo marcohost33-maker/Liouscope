@@ -197,6 +197,46 @@ def test_missing_required_evidence_makes_the_rung_unevaluable():
     assert ladder["F4_MPEMBA"] is False
 
 
+def test_partially_missing_rung_keeps_its_evaluable_evidence():
+    """A sibling's missing key must not discard a measured condition.
+
+    `kreiss = 11` is genuine, measured support for F1; only `petermann_max` is
+    absent. Reporting an empty evidence list here would throw away exactly the
+    audit trail the matrix exists for, while the status must still degrade —
+    partial evidence never promotes a hypothesis.
+    """
+    ev = _ev(kreiss=11.0)
+    del ev["petermann_max"]
+    f1 = _entry(
+        hypothesis_evidence_matrix(ev, relaxation=_Rel()), "F1_OVERLAP_AMPLIFICATION"
+    )
+    assert f1["status"] == HYPOTHESIS_UNEVALUABLE
+    assert f1["missing"] == ("petermann_max",)
+    assert len(f1["supporting"]) == 1
+    assert f1["supporting"][0]["values"] == {"kreiss": 11.0}
+    assert f1["claim_floor"] == VERDICT_UNDEFINED
+    assert f1["support_score"] is None
+
+
+def test_unsupported_hypotheses_carry_no_support_score():
+    """A winner-only grade beside explicit counterevidence would mislead.
+
+    `_confidence` keys on a SUBSET of each firing rule (A3 on `kreiss` alone),
+    so `kreiss = 11` with `petermann_max = 1` fails F1 while `_confidence`
+    would still hand A3 the 0.85 confirmation grade.
+    """
+    ev = _ev(kreiss=11.0, petermann_max=1.0)
+    matrix = hypothesis_evidence_matrix(ev, relaxation=_Rel())
+    f1 = _entry(matrix, "F1_OVERLAP_AMPLIFICATION")
+    assert f1["status"] == HYPOTHESIS_NOT_SUPPORTED
+    assert f1["support_score"] is None
+    for entry in matrix:
+        if entry["status"] != HYPOTHESIS_SUPPORTED:
+            assert entry["support_score"] is None, entry["rule_id"]
+        else:
+            assert isinstance(entry["support_score"], float)
+
+
 def test_relaxation_fields_are_recorded_for_model_driven_rungs():
     matrix = hypothesis_evidence_matrix(_ev(), relaxation=_Rel(aicc_model="M3a"))
     a10 = _entry(matrix, "A10_JORDAN_M3A")

@@ -807,7 +807,9 @@ def hypothesis_evidence_matrix(
     the schema-reserved classes, one entry records:
 
     * ``supporting`` — the atomic conditions that hold, with the evidence
-      values they read (the "supporting measurements");
+      values they read (the "supporting measurements"). Conditions whose own
+      inputs are present are evaluated even when a SIBLING condition is
+      unevaluable, so a partially collected run keeps its usable evidence;
     * ``counterevidence`` — the conditions that fail, with their values
       (threshold non-exceedance; NOT proof of absence, see claim-floor rules);
     * ``missing`` — required evidence keys absent from ``ev`` (e.g. the
@@ -818,7 +820,23 @@ def hypothesis_evidence_matrix(
     * ``claim_floor`` — what this run could claim about the hypothesis, from
       the explicit rules in :func:`_hypothesis_claim_floor`;
     * ``support_score`` — the ordinal heuristic score :func:`_confidence`
-      assigns this class (NOT a probability; ``None`` for reserved classes).
+      assigns this class (NOT a probability), and ``None`` unless the
+      hypothesis is SUPPORTED: the score answers "what grade would this class
+      get as the winner" and keys on a subset of the firing rule, so attaching
+      it to a failed rung would print a confirmation-grade number beside that
+      rung's own counterevidence.
+
+    Trust boundary: the matrix REPORTS the supplied ``ev`` dict, it does not
+    re-validate it. In the production path ``ev`` is built by
+    :func:`_gather_evidence` and the ensemble override is written by
+    :func:`classify_mechanism` from an argument that :func:`liouscope.diagnose`
+    has already validated against a typed
+    :class:`liouscope.ensemble.EnsembleEvidence` (a bare boolean is rejected
+    fail-closed there, per AGENTS.md A11). A hand-built ``ev`` passed straight
+    to this function therefore carries exactly the trust its caller gives it —
+    the same contract as :func:`classify_mechanism` and
+    :func:`_apply_single_state_maxmix_floor`, which likewise take the override
+    as a plain argument.
 
     The matrix is a REPORT, not a decision: the dominant class remains the
     convenience projection produced by the unchanged priority chain, and no
@@ -842,23 +860,33 @@ def hypothesis_evidence_matrix(
         missing = tuple(missing_list)
         supporting: list[dict[str, object]] = []
         counterevidence: list[dict[str, object]] = []
+        # Evaluate every condition whose OWN inputs are present, even when a
+        # sibling condition is unevaluable: a run that measured a high `kreiss`
+        # but never computed `petermann_max` should still show the Kreiss
+        # support next to the missing Petermann value. Discarding it would
+        # throw away exactly the audit trail this matrix exists for. The rung
+        # status still degrades to UNEVALUABLE — partial evidence never
+        # promotes a hypothesis.
+        all_hold = True
+        for cond in rung.conditions:
+            if any(k not in ev for k in cond.keys):
+                all_hold = False
+                continue
+            values: dict[str, object] = {k: float(ev[k]) for k in cond.keys}
+            for f_name in cond.relaxation_fields:
+                values[f_name] = getattr(relaxation, f_name)
+            record: dict[str, object] = {
+                "condition": cond.description,
+                "values": values,
+            }
+            if cond.fn(ev, relaxation):
+                supporting.append(record)
+            else:
+                counterevidence.append(record)
+                all_hold = False
         if missing:
             status = HYPOTHESIS_UNEVALUABLE
         else:
-            all_hold = True
-            for cond in rung.conditions:
-                values: dict[str, object] = {k: float(ev[k]) for k in cond.keys}
-                for f_name in cond.relaxation_fields:
-                    values[f_name] = getattr(relaxation, f_name)
-                record: dict[str, object] = {
-                    "condition": cond.description,
-                    "values": values,
-                }
-                if cond.fn(ev, relaxation):
-                    supporting.append(record)
-                else:
-                    counterevidence.append(record)
-                    all_hold = False
             status = HYPOTHESIS_SUPPORTED if all_hold else HYPOTHESIS_NOT_SUPPORTED
             any_fired = any_fired or all_hold
         entries.append(
@@ -873,7 +901,18 @@ def hypothesis_evidence_matrix(
                 "claim_floor": _hypothesis_claim_floor(
                     rung.a_class, status, ev, relaxation
                 ),
-                "support_score": _confidence(ev, rung.a_class),
+                # Only a SUPPORTED hypothesis carries a score. ``_confidence``
+                # answers "what grade would this class get as the WINNER" and
+                # keys on a subset of the firing rule, so a failed rung would
+                # otherwise show a confirmation-grade number right next to its
+                # own counterevidence -- e.g. kreiss=11 with petermann_max=1
+                # fails F1 yet would report A3 at 0.85. A score without support
+                # is not a weaker claim, it is a misleading one.
+                "support_score": (
+                    _confidence(ev, rung.a_class)
+                    if status == HYPOTHESIS_SUPPORTED
+                    else None
+                ),
             }
         )
     # A12 fallback: "mixed / unresolved" is what the classifier returns when no
@@ -889,7 +928,9 @@ def hypothesis_evidence_matrix(
             "counterevidence": (),
             "missing": (),
             "claim_floor": _hypothesis_claim_floor("A12", a12_status, ev, relaxation),
-            "support_score": _confidence(ev, "A12"),
+            "support_score": (
+                _confidence(ev, "A12") if a12_status == HYPOTHESIS_SUPPORTED else None
+            ),
             "note": "fallback: fires iff no A1-A11 decision rule fires",
         }
     )

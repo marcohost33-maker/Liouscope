@@ -73,8 +73,9 @@ from typing import Final
 import numpy as np
 import scipy.linalg as sla
 
-from ._consts import EPS_DIV, EPS_GAP
+from ._consts import EPS_DIV
 from ._types import ZhouPredictorResult
+from .numerics.scale import spectral_zero_tolerance
 
 # S6 re-audit 2026-06-04: the cited reference is independently verified to
 # exist (arXiv PDF v3). Our implemented bound is the same family as Zhou's
@@ -126,7 +127,12 @@ def compute_zhou_predictor(
     L_super = np.asarray(L_super)
     if gap is None or petermann_factor is None:
         eigvals, vl, vr = sla.eig(L_super, left=True, right=True)
-        nonzero = np.abs(eigvals) > EPS_GAP
+        # Scale-relative zero-mode separation (issue #108): D24 consumes the
+        # gap, so an absolute floor made the predicted mixing-time window
+        # depend on the choice of rate unit.
+        nonzero = np.abs(eigvals) > spectral_zero_tolerance(
+            eigvals, name="eigenvalues of L_super"
+        )
         if not nonzero.any():
             # Honour caller-supplied values in the unconverged record:
             # hard-coding gap=0.0 here silently overwrote an explicitly

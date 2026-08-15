@@ -55,11 +55,11 @@ from __future__ import annotations
 import numpy as np
 import scipy.linalg as sla
 
-from .._consts import EPS_DIV, EPS_GAP
+from .._consts import EPS_DIV
 from .._types import KreissGridEstimate, NonNormalityResult
 from ..numerics.linalg import require_finite_square_2d
 from ..numerics.resolvent import resolvent_norm
-from ..numerics.scale import rate_scale
+from ..numerics.scale import rate_scale, spectral_zero_tolerance
 
 # Fail-closed ceiling for the dimensionless Henrici index: mathematically
 # ``eta_N <= ||L||_F`` (Schur unitary invariance), so ``henrici_relative`` can
@@ -261,7 +261,7 @@ def kreiss_grid_lower_bound(
 def petermann_factors(
     L_super: np.ndarray,
     *,
-    atol: float = EPS_GAP,
+    atol: float | None = None,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Petermann factors per non-zero eigenmode.
 
@@ -288,8 +288,13 @@ def petermann_factors(
             K = float((np.linalg.norm(r) ** 2 * np.linalg.norm(l) ** 2) / denom)
         K_list.append(K)
     K_arr = np.asarray(K_list)
-    # Drop zero eigenvalue but KEEP complex pairs.
-    mask = np.abs(eigvals) > atol
+    # Drop zero eigenvalue but KEEP complex pairs. Scale-relative zero-mode
+    # separation (issue #108): with an absolute floor, a rescaled generator
+    # either dropped every mode (empty K array) or retained the round-off zero
+    # mode, whose Petermann factor is numerical noise feeding the F1 gate.
+    mask = np.abs(eigvals) > spectral_zero_tolerance(
+        eigvals, atol=atol, name="eigenvalues of L_super"
+    )
     eigvals_filt = eigvals[mask]
     K_filt = K_arr[mask]
     order = np.argsort(-np.real(eigvals_filt))

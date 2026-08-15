@@ -6,6 +6,48 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+- **Zero-mode separation is scale-relative: D1/D3/D4/D9/D16/D19/D20/D24 and the
+  mechanism verdict are now invariant under a change of rate units (issue
+  #108). CHANGES NUMERICAL RESULTS** for generators whose spectral radius is
+  far from unity.
+  The filter deciding which modes are the steady state used an **absolute**
+  floor `|lambda| > 1e-10`, duplicated across five modules. A Liouvillian
+  carries rate dimension, so this broke in *both* directions under `L -> cL`:
+  - **small `c`** — every genuine mode fell below the floor, so D1 collapsed to
+    `0.0` (unconditionally firing the gapless F5 reach leg) and the D19
+    slowest-mode overlap collapsed to `0.0`, raising a **false A11/F4 Mpemba
+    candidate** on the highest-priority rung of the classifier. Measured
+    end-to-end on an amplitude-damped qubit with `rho_0 = |+><+|`: the verdict
+    moved from `A12/none NOT_EXCLUDED EXPLORATION` at `c = 1` to
+    `A11/F4 CANDIDATE CONFIRMATION` at `c = 1e-10` — a textbook system promoted
+    to a quantum-Mpemba candidate by a change of units alone. The issue-#68
+    non-triviality guard could not correct it, since it depends on the same
+    `_slowest_mode` helper.
+  - **large `c`** — the round-off zero mode (`~eps * ||L||`) rose *above* the
+    floor and was counted as genuine, yielding a **negative spectral gap**
+    (`-1.4e-6` at `c = 1e10` for a Rabi-driven damped qubit), which is
+    impossible for a GKSL generator by definition.
+  The correction is canonical and carries no free parameter: the new
+  `numerics.scale.spectral_zero_tolerance()` derives the threshold from the
+  spectrum itself as `ZERO_MODE_RTOL * max|lambda|` (spectral radius —
+  homogeneous of degree one and unitary-similarity invariant, like
+  `rate_scale`). At unit scale it reproduces the historical absolute floor, so
+  **all 21 anchor regressions and the full suite stay green byte-identically**;
+  only rescaled generators change. Non-finite spectra now fail closed rather
+  than silently reporting "no non-zero modes". The legacy absolute floor
+  remains available as an explicit `atol=` opt-in on every affected function,
+  mirroring how #99 preserved the pre-#97 steady-state tolerance.
+  D1 deliberately does **not** clamp the gap at zero: after the scale-relative
+  filter a positive `Re(lambda)` is no longer round-off but a genuinely
+  unstable (non-GKSL) mode, and masking it would trade one silent failure for
+  another.
+  Pinned by `tests/test_zero_mode_scale.py` (33 tests over
+  `c in {1e-10 ... 1e12}`: dimensionless quantities invariant, rate-valued ones
+  scaling by `c`, no false Mpemba candidate, no negative gap, end-to-end
+  verdict invariance, and a discrimination test proving the `atol` opt-in
+  really restores the old defect).
+
 ### Added
 - **Hypothesis-wise evidence matrix + `support_score` + reachability gate
   (issue #102, additive, `claim_status: pending`, no verdict change).**

@@ -34,22 +34,32 @@ from __future__ import annotations
 import numpy as np
 import scipy.linalg as sla
 
-from .._consts import EPS_DIV, EPS_GAP, EPS_HERMITICITY
+from .._consts import EPS_DIV, EPS_HERMITICITY
 from .._types import MpembaResult
 from ..numerics.kronecker import vec
+from ..numerics.scale import spectral_zero_tolerance
 
 
 def _slowest_mode(
-    L_super: np.ndarray, *, atol: float = EPS_GAP
+    L_super: np.ndarray, *, atol: float | None = None
 ) -> tuple[np.ndarray, np.ndarray] | None:
     """Return ``(l_slow, r_slow)`` for the slowest non-zero mode, or ``None``.
 
     The slowest mode is the non-zero eigenvalue with the largest (least
     negative) real part. Returns ``None`` when every mode is a zero mode.
+
+    The zero-mode separation is SCALE-RELATIVE (issue #108). With the former
+    absolute floor a pure change of rate units ``L -> cL`` with small ``c``
+    pushed every genuine mode below the floor, so this returned ``None``,
+    :func:`overlap_c1` returned ``0.0``, and ``0.0 < overlap_threshold`` fired
+    a FALSE A11/F4 Mpemba candidate on the highest-priority rung of the
+    classifier -- while the issue-#68 non-triviality guard could not correct it,
+    since :func:`is_trivial_overlap` depends on this same function.
     """
     L_super = np.asarray(L_super)
     eigvals, vl, vr = sla.eig(L_super, left=True, right=True)
-    nonzero_mask = np.abs(eigvals) > atol
+    tol = spectral_zero_tolerance(eigvals, atol=atol, name="eigenvalues of L_super")
+    nonzero_mask = np.abs(eigvals) > tol
     if not np.any(nonzero_mask):
         return None
     eigvals_nz = eigvals[nonzero_mask]
@@ -62,7 +72,7 @@ def overlap_c1(
     L_super: np.ndarray,
     rho_initial: np.ndarray,
     *,
-    atol: float = EPS_GAP,
+    atol: float | None = None,
 ) -> float:
     """Magnitude of the biorthogonal slowest-mode overlap ``|c_1|``.
 
@@ -108,7 +118,7 @@ def is_trivial_overlap(
     rho_initial: np.ndarray,
     rho_steady_state: np.ndarray,
     *,
-    atol: float = EPS_GAP,
+    atol: float | None = None,
     block_tol: float = 1.0e-9,
 ) -> bool:
     """Is a vanishing slowest-mode overlap symmetry-protected (not Mpemba)?
@@ -156,7 +166,7 @@ def expansion_alpha(
     rho_initial: np.ndarray,
     *,
     n_modes: int = 6,
-    atol: float = EPS_GAP,
+    atol: float | None = None,
 ) -> float:
     """Scaling exponent of overlap coefficients vs. mode-index.
 
@@ -165,7 +175,8 @@ def expansion_alpha(
     """
     L_super = np.asarray(L_super)
     eigvals, vl, vr = sla.eig(L_super, left=True, right=True)
-    mask = np.abs(eigvals) > atol
+    tol = spectral_zero_tolerance(eigvals, atol=atol, name="eigenvalues of L_super")
+    mask = np.abs(eigvals) > tol
     eigvals_nz = eigvals[mask]
     if eigvals_nz.size < 2:
         return 0.0

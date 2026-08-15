@@ -24,6 +24,7 @@ from .._types import SpectralResult
 from ..core.lindblad import steady_state
 from ..numerics.adjoint import gram_adjoint, symmetrised_liouvillian
 from ..numerics.linalg import eig_nonhermitian
+from ..numerics.scale import spectral_zero_tolerance
 
 
 def _gram_gns(rho: np.ndarray) -> np.ndarray:
@@ -103,34 +104,59 @@ def kms_gap(L_super: np.ndarray, rho_steady: np.ndarray) -> float:
     return _real_gap_from_symmetric(M)
 
 
-def liouvillian_gap(eigenvalues: np.ndarray, *, atol: float = EPS_GAP) -> float:
-    """D1: ``Delta = -max{ Re(lambda) : lambda in sigma(L), lambda != 0 }``."""
+def liouvillian_gap(eigenvalues: np.ndarray, *, atol: float | None = None) -> float:
+    """D1: ``Delta = -max{ Re(lambda) : lambda in sigma(L), lambda != 0 }``.
+
+    The zero-mode separation is SCALE-RELATIVE by default (issue #108):
+    ``tol = ZERO_MODE_RTOL * max|lambda|``, so ``Delta`` scales exactly as
+    ``c Delta`` under a pure change of rate units ``L -> cL``. With the former
+    absolute floor, a rescaled spectrum either lost every genuine mode (gap
+    collapsing to ``0.0``, which unconditionally fires the gapless F5 reach
+    leg) or promoted the round-off zero mode to a genuine one, yielding a
+    NEGATIVE gap -- impossible for a GKSL generator. Pass ``atol`` to opt back
+    into the legacy absolute floor.
+    """
     eigenvalues = np.asarray(eigenvalues)
     # Filter zero eigenvalues (steady state)
-    mask = np.abs(eigenvalues) > atol
+    tol = spectral_zero_tolerance(eigenvalues, atol=atol, name="eigenvalues")
+    mask = np.abs(eigenvalues) > tol
     if not mask.any():
         return 0.0
     nonzero = eigenvalues[mask]
     max_re = float(np.max(np.real(nonzero)))
+    # NOTE: no clamp at zero. After the scale-relative filter a positive
+    # Re(lambda) is no longer a round-off artefact of the zero mode; it means
+    # the supplied generator has a genuinely unstable mode (non-GKSL input).
+    # Clamping would mask that, so the negative gap stays visible as an honest
+    # signal -- the #108 fix removes the round-off cause, it does not hide the
+    # physical one.
     return float(-max_re)
 
 
-def oscillating_mode_gap(eigenvalues: np.ndarray, *, atol: float = EPS_GAP) -> float:
+def oscillating_mode_gap(eigenvalues: np.ndarray, *, atol: float | None = None) -> float:
     """D3: minimal ``|Im(lambda)|`` over complex-conjugate pairs.
 
-    Returns 0 if no complex pairs exist.
+    Returns 0 if no complex pairs exist. The "is this imaginary part real or
+    round-off" threshold is scale-relative (issue #108); pass ``atol`` for the
+    legacy absolute floor.
     """
     eigenvalues = np.asarray(eigenvalues)
-    complex_mask = np.abs(np.imag(eigenvalues)) > atol
+    tol = spectral_zero_tolerance(eigenvalues, atol=atol, name="eigenvalues")
+    complex_mask = np.abs(np.imag(eigenvalues)) > tol
     if not complex_mask.any():
         return 0.0
     return float(np.min(np.abs(np.imag(eigenvalues[complex_mask]))))
 
 
-def spectral_spread(eigenvalues: np.ndarray, *, atol: float = EPS_GAP) -> float:
-    """D4: ``max|Re(lambda)| - min|Re(lambda)|`` over non-zero eigenvalues."""
+def spectral_spread(eigenvalues: np.ndarray, *, atol: float | None = None) -> float:
+    """D4: ``max|Re(lambda)| - min|Re(lambda)|`` over non-zero eigenvalues.
+
+    Scale-relative zero-mode separation (issue #108); pass ``atol`` for the
+    legacy absolute floor.
+    """
     eigenvalues = np.asarray(eigenvalues)
-    mask = np.abs(eigenvalues) > atol
+    tol = spectral_zero_tolerance(eigenvalues, atol=atol, name="eigenvalues")
+    mask = np.abs(eigenvalues) > tol
     if not mask.any():
         return 0.0
     re_abs = np.abs(np.real(eigenvalues[mask]))
@@ -152,7 +178,15 @@ def compute_spectral_layer(
     kms = kms_gap(L_super, rho_steady)
     osc = oscillating_mode_gap(eigenvalues)
     spread = spectral_spread(eigenvalues)
-    has_complex = bool(np.any(np.abs(np.imag(eigenvalues)) > EPS_GAP))
+    # Same scale-relative separation as D3 (issue #108): with an absolute floor
+    # a rescaled spectrum flipped this flag, and ``has_complex_pairs`` gates the
+    # A8 oscillatory-transient rung.
+    has_complex = bool(
+        np.any(
+            np.abs(np.imag(eigenvalues))
+            > spectral_zero_tolerance(eigenvalues, name="eigenvalues")
+        )
+    )
     # Sort by real part descending so [0] is the steady state.
     order = np.argsort(-np.real(eigenvalues))
     return SpectralResult(

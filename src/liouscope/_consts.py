@@ -23,7 +23,17 @@ RELEASE_STATE: Final[str] = "engineering release-ready"
 PAPER_STATE: Final[str] = "arXiv v5 submitted; peer-review pending"
 
 EPS_SUPP: Final[float] = 1.0e-12
+# LEGACY ABSOLUTE zero-mode floor. Retained as an explicit opt-in only (issue
+# #108): a Liouvillian carries rate dimension, so an absolute floor is not
+# invariant under a change of rate units L -> cL. Scale-relative separation is
+# the default -- see ZERO_MODE_RTOL and numerics.scale.spectral_zero_tolerance.
 EPS_GAP: Final[float] = 1.0e-10
+# Issue #108: RELATIVE zero-mode tolerance, applied against the spectral radius
+# max|lambda|. Chosen to reproduce the historical absolute floor at unit scale
+# (max|lambda| ~ 1) while sitting ~6 orders of magnitude above the eigensolver
+# round-off floor (~eps * ||L||), so it separates numerical zero modes from
+# genuine ones at ANY rate scale.
+ZERO_MODE_RTOL: Final[float] = 1.0e-10
 EPS_HERMITICITY: Final[float] = 1.0e-9
 EPS_TRACE: Final[float] = 1.0e-10
 # Tight numerical detector for the exact maximally mixed state I/d. It is not a
