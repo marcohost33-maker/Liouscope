@@ -59,7 +59,7 @@ import scipy.linalg as sla
 
 from .._consts import EPS_DIV
 from .._types import KreissGridEstimate, NonNormalityResult
-from ..numerics.linalg import certified_eig, require_finite_square_2d
+from ..numerics.linalg import certified_eig, certified_eigvals, require_finite_square_2d
 from ..numerics.resolvent import resolvent_norm
 from ..numerics.scale import rate_scale, spectral_zero_tolerance
 
@@ -457,7 +457,29 @@ def compute_nonnormality_layer(L_super: np.ndarray) -> NonNormalityResult:
     K_scaled = kreiss_grid_lower_bound(L_super)
     n2 = L_super.shape[0]
     d = int(round(np.sqrt(n2)))
-    ap_length, pauli_bound = bohr_arithmetic_progression(eigvals_filt, d)
+    # D11 consumes only EIGENVALUES (round-16 review). When D9 is withheld
+    # (round-15 eigenvector gate) the sentinel array must not flow into the
+    # progression scan -- NaN would be silently filtered there and the
+    # default length 1 reported as a MEASURED value. The eigenvalue
+    # certificate frequently still resolves in exactly that situation (the
+    # corruption is in the vectors), so D11 is recomputed from the certified
+    # spectrum; only when the eigenvalues themselves are unresolved does
+    # D11 become NaN, the library's unavailable sentinel.
+    if K_factors.size and bool(np.all(np.isnan(K_factors))):
+        ev_c, cert = certified_eigvals(np.asarray(L_super, dtype=complex))
+        if cert.applicable and not cert.resolved:
+            ap_length, pauli_bound = float("nan"), float(np.log2(max(d, 2)))
+        else:
+            tol = (
+                cert.bound
+                if cert.applicable
+                else spectral_zero_tolerance(ev_c, name="eigenvalues of L_super")
+            )
+            ap_length, pauli_bound = bohr_arithmetic_progression(
+                ev_c[np.abs(ev_c) > tol], d
+            )
+    else:
+        ap_length, pauli_bound = bohr_arithmetic_progression(eigvals_filt, d)
     return NonNormalityResult(
         henrici_eta=eta_n,
         petermann_max=K_max,

@@ -75,7 +75,11 @@ abstract: >-
 # additionally validates per-mode left/right eigenvector residuals before
 # certifying (a small |lambda| does not vouch for the vectors D19/D9 consume),
 # and the repair ladder continues past ambiguous candidates so a later route
-# can resolve what the incumbent cannot (round-15 review). Hermiticity
+# can resolve what the incumbent cannot (round-15 review). The Prony fallback
+# seeds for the M3b fit are grid-relative (round-16 review), removing a
+# rate-unit dependence that corrupted fitted rates on non-uniform grids far
+# from unit span; D24's partial recomputation and D11's eigenvalue input now
+# match the certificate of what they actually consume. Hermiticity
 # validation of the Hamiltonian is
 # likewise scale-relative rather than absolute (issue #109), which closes a
 # fail-open path that admitted non-GKSL generators at small ||H||; this changes

@@ -900,3 +900,63 @@ def test_vector_gate_accepts_the_canonical_stiff_repair() -> None:
     decomp, cert = certified_eig(lsup)
     assert cert.certified and cert.resolved
     assert cert.solver == "dgeev-real"
+
+
+# --------------------------------------------------------------------------
+# Round-16 review: D11 is decoupled from the D9 vector gate.
+# --------------------------------------------------------------------------
+
+
+def test_d11_reads_the_certified_spectrum_when_d9_is_withheld() -> None:
+    """The NaN sentinel must not fabricate a D11 progression length.
+
+    With a ladder Hamiltonian on the bad-vector network the certified
+    spectrum carries an arithmetic progression of length 3 in its imaginary
+    parts, the eigenvalue certificate resolves, and only the eigenvector
+    gate fails. Before round-16 the D9 NaN sentinel flowed into the
+    progression scan, was silently filtered, and D11 reported the default
+    length 1 as a measured value.
+    """
+    from liouscope.diagnostics.nonnormality import (
+        compute_nonnormality_layer,
+        petermann_factors,
+    )
+
+    H = np.diag([0.0, 1.0, 2.0, 3.0]).astype(complex)
+    jumps = []
+    for (to, frm) in _BADVEC_PAIRS:
+        j = np.zeros((4, 4), dtype=complex)
+        j[to, frm] = 1.0
+        jumps.append(j)
+    lsup = build_liouvillian(H, jumps, _BADVEC_RATES)
+
+    _ev, cert_vals = certified_eigvals(lsup)
+    if not cert_vals.resolved:  # pragma: no cover - guard against changes
+        pytest.skip("eigenvalue certificate no longer resolves this fixture")
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        _evs, factors = petermann_factors(lsup)
+    if not np.all(np.isnan(factors)):  # pragma: no cover - guard
+        pytest.skip("D9 is no longer withheld on this fixture")
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        layer = compute_nonnormality_layer(lsup)
+    assert np.isnan(layer.petermann_max)     # D9 stays withheld
+    assert layer.bohr_ap_length == 3         # D11 from the certified spectrum
+
+
+def test_d11_is_nan_when_the_eigenvalues_are_unresolved() -> None:
+    """No certified spectrum at all -> D11 is the NaN sentinel, not 1."""
+    from liouscope.diagnostics.nonnormality import compute_nonnormality_layer
+
+    lsup = _stiff_with_fast_rate(1.0e8)
+    _ev, cert = certified_eigvals(lsup)
+    if cert.resolved:  # pragma: no cover - guard against solver changes
+        pytest.skip("fixture no longer produces an unresolved spectrum")
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        layer = compute_nonnormality_layer(lsup)
+    assert np.isnan(layer.petermann_max)
+    assert np.isnan(layer.bohr_ap_length)

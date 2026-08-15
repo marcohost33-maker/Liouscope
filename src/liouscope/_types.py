@@ -144,7 +144,7 @@ class NonNormalityResult:
     petermann_max: float        # D9 max K_j
     petermann_factors: np.ndarray
     kreiss: float               # D10 (legacy absolute-grid lower bound)
-    bohr_ap_length: int         # D11 Bohr arithmetic-progression depth
+    bohr_ap_length: float       # D11 Bohr AP depth (int-valued; NaN = withheld, round-16)
     bohr_ap_pauli_bound: float
     henrici_relative: float = float("nan")   # D8b eta_N / ||L||_F in [0, 1]
     kreiss_scaled: float = float("nan")      # D10b scale-relative grid lower bound

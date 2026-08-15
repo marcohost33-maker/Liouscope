@@ -217,3 +217,35 @@ def test_zhou_inapplicable_certificate_falls_back_to_the_radius_filter():
     result = _zhou.compute_zhou_predictor(A, epsilon=0.05)
     assert result.converged is True
     assert result.gap == pytest.approx(1.0, rel=1e-9)
+
+
+def test_zhou_gap_only_recompute_uses_the_eigenvalue_certificate():
+    """Round-16: the certificate must match what the partial path consumes.
+
+    With ``petermann_factor`` supplied no eigenvectors are read, so the
+    (wider-ladder) eigenvalue certificate decides. On this stiff network it
+    resolves a usable gap while only the round-15 eigenvector gate fails --
+    requiring ``certified_eig`` here returned an unnecessary unconverged
+    record with a NaN gap.
+    """
+    from liouscope.numerics.linalg import certified_eig, certified_eigvals
+
+    pairs = [(2, 0), (0, 3), (3, 1), (1, 3), (0, 2), (1, 0)]
+    rates = [4.452e-05, 1.005e+06, 2.452e-06, 6.823e-06, 4.239e-06, 4.307e-05]
+    lsup = _classical_network(pairs, rates)
+
+    ev, cert_vals = certified_eigvals(lsup)
+    _decomp, cert_eig = certified_eig(lsup)
+    if not cert_vals.resolved or cert_eig.resolved:  # pragma: no cover
+        pytest.skip("fixture no longer separates the two certificates")
+
+    gap_expected = float(-np.max(ev[np.abs(ev) > cert_vals.bound].real))
+    result = _zhou.compute_zhou_predictor(lsup, epsilon=0.05, petermann_factor=2.0)
+    assert result.converged is True
+    assert result.gap == pytest.approx(gap_expected, rel=1e-9)
+    assert result.petermann_factor == 2.0
+
+    # The full recompute still needs eigenvectors and must stay fail-closed.
+    full = _zhou.compute_zhou_predictor(lsup, epsilon=0.05)
+    assert full.converged is False
+    assert np.isnan(full.gap)

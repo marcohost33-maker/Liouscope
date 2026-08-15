@@ -74,7 +74,7 @@ import numpy as np
 
 from ._consts import EPS_DIV
 from ._types import ZhouPredictorResult
-from .numerics.linalg import certified_eig
+from .numerics.linalg import certified_eig, certified_eigvals
 from .numerics.scale import spectral_zero_tolerance
 
 # S6 re-audit 2026-06-04: the cited reference is independently verified to
@@ -131,7 +131,25 @@ def compute_zhou_predictor(
         # #112 fixture the raw ``zgeev`` spectrum made D24 report
         # ``gap = 7.28e-6`` where the certified solve recovers the physical
         # ``1.074e-5`` -- a ~30% shift of the whole mixing-time window.
-        decomp, certificate = certified_eig(L_super)
+        #
+        # The certificate matches what is CONSUMED (round-16 review): the
+        # Petermann recomputation reads eigenvectors and needs the stricter
+        # ``certified_eig``, but when the caller supplied ``petermann_factor``
+        # and only the gap is missing, no eigenvectors are consumed and the
+        # (wider-ladder) eigenvalue certificate decides -- measured: a stiff
+        # network whose eigenvalue certificate resolves a usable gap of
+        # ``3.32e-6`` while only the eigenvector gate fails returned an
+        # unnecessary unconverged record here.
+        need_vectors = petermann_factor is None
+        if need_vectors:
+            decomp, certificate = certified_eig(L_super)
+            eigvals = decomp.eigenvalues
+            vl, vr = decomp.left_vectors, decomp.right_vectors
+            if vl is None:  # pragma: no cover - certified_eig sets left vectors
+                raise RuntimeError("certified_eig did not return left eigenvectors")
+        else:
+            eigvals, certificate = certified_eigvals(L_super)
+            vl = vr = None
         if certificate.applicable and not certificate.resolved:
             # The eigendecomposition is demonstrably unreliable (failed
             # certification, or ambiguous in-band modes, issues #112/#113).
@@ -150,9 +168,6 @@ def compute_zhou_predictor(
                     else float("nan")
                 ),
             )
-        eigvals, vl, vr = decomp.eigenvalues, decomp.left_vectors, decomp.right_vectors
-        if vl is None:  # pragma: no cover - certified_eig always sets left vectors
-            raise RuntimeError("certified_eig did not return left eigenvectors")
         # Zero-mode separation on the certificate's own operator-derived
         # scale (round-13): the radius-based proxy is smaller than the
         # eigensolve backward error on strongly non-normal generators, so a
@@ -191,6 +206,7 @@ def compute_zhou_predictor(
         if gap is None:
             gap = float(-np.max(np.real(eigvals_nz)))
         if petermann_factor is None:
+            assert vl is not None and vr is not None  # need_vectors branch above
             K_vals = []
             for j in range(eigvals.size):
                 if not nonzero[j]:

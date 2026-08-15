@@ -7,6 +7,44 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Fixed
+- **Prony fallback seeds are grid-relative (round-16 review; the #108 class
+  of defect). CHANGES NUMERICAL RESULTS** on grids far from unit span where
+  the Prony estimate falls back (non-uniform sampling, short signals,
+  degenerate data). The fallback seeded `(beta, omega) = (1, 1)` in absolute
+  rate units, so on a valid non-uniform grid spanning `t = 1e7` the M3b fit
+  started seven orders of magnitude off and least-squares "converged"
+  (`success=True`) onto the seed itself — measured `[A, beta, omega] ≈
+  [0.006, 1, 1]` for true values `5e-8` / `2e-6` — corrupting the fitted
+  rate and suppressing the M3b/A8 hypothesis purely because of the rate
+  unit. Fallback rates are now `5.0 / t_span` and the success-path
+  positivity floors `5e-6 / t_span`, both reproducing the historical values
+  exactly at the canonical `t_span = 5` (the same convention as
+  `ALPHA_SEED_FLOOR_FRAC` / `M3A_SLOPE_SEED_FRAC`); the M3b fit on the
+  measured non-uniform scenario is now unit-invariant across
+  `c ∈ [1e-6, 1e6]`.
+- **D24 uses the eigenvalue certificate when only the gap is missing
+  (round-16 review).** The recomputation branch required `certified_eig`
+  even when the caller supplied `petermann_factor` — but that partial path
+  consumes no eigenvectors, so a stiff network whose eigenvalue certificate
+  resolves a usable gap (measured `3.32e-6`) while only the round-15
+  eigenvector gate fails returned an unnecessary unconverged record. The
+  certificate now matches what is consumed: `certified_eigvals` when only
+  the gap is recomputed, the stricter `certified_eig` when the Petermann
+  factor is.
+- **D11 is decoupled from the D9 vector gate (round-16 review).** When D9
+  is withheld (round-15), the NaN sentinel array flowed into
+  `bohr_arithmetic_progression`, which silently filtered it and reported
+  the default length `1` as a measured D11 value. D11 consumes only
+  eigenvalues, and the eigenvalue certificate frequently still resolves in
+  exactly that situation, so its input is now recomputed from the certified
+  spectrum; only when the eigenvalues themselves are unresolved does
+  `bohr_ap_length` become NaN (the field is now float-typed with NaN as the
+  documented unavailable sentinel).
+- **Release-note correction (round-16 review, documentation only):** the
+  `atol=` opt-in for the legacy absolute Hermiticity gate exists on the
+  standalone `is_hermitian` predicate only; the builders never accepted it
+  and their relative gate cannot be bypassed. The #109 entry below now says
+  so explicitly instead of advertising an unavailable builder argument.
 - **certified_eig validates eigenVECTOR residuals before certifying
   (round-15 review). CHANGES NUMERICAL RESULTS** on stiff generators.
   The certificate accepted a decomposition solely because one eigenvalue was
@@ -193,10 +231,14 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `EPS_HERMITICITY` is now read as a **relative** tolerance on `max|H|`, so at
   unit scale — the regime of every existing fixture — the gate is unchanged;
   only operators far from unit scale move. The legacy absolute gate remains
-  available as an explicit `atol=` opt-in (mirroring how #99 and #108 preserved
-  their predecessors), and `is_density_matrix` deliberately keeps it: a density
-  matrix is trace-normalised, so the absolute reading is already relative to a
-  fixed scale and the rate-dimension argument does not apply.
+  available as an explicit `atol=` opt-in **on the standalone `is_hermitian`
+  predicate only** (mirroring how #99 and #108 preserved their predecessors);
+  the builders `build_liouvillian` / `build_sparse_liouvillian` deliberately
+  expose no such override — their gate is always relative, and pre-validating
+  with the predicate does not bypass it. `is_density_matrix` keeps its
+  absolute reading: a density matrix is trace-normalised, so that reading is
+  already relative to a fixed scale and the rate-dimension argument does not
+  apply.
 - **Zero-mode separation is scale-relative: D1/D3/D4/D9/D16/D19/D20/D24 no
   longer depend on the choice of rate unit, removing the ZERO-MODE-INDUCED
   verdict flips (issue #108). CHANGES NUMERICAL RESULTS** for generators whose
