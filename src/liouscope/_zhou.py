@@ -144,12 +144,8 @@ def compute_zhou_predictor(
         if need_vectors:
             decomp, certificate = certified_eig(L_super)
             eigvals = decomp.eigenvalues
-            vl, vr = decomp.left_vectors, decomp.right_vectors
-            if vl is None:  # pragma: no cover - certified_eig sets left vectors
-                raise RuntimeError("certified_eig did not return left eigenvectors")
         else:
             eigvals, certificate = certified_eigvals(L_super)
-            vl = vr = None
         if certificate.applicable and not certificate.resolved:
             # The eigendecomposition is demonstrably unreliable (failed
             # certification, or ambiguous in-band modes, issues #112/#113).
@@ -206,7 +202,10 @@ def compute_zhou_predictor(
         if gap is None:
             gap = float(-np.max(np.real(eigvals_nz)))
         if petermann_factor is None:
-            assert vl is not None and vr is not None  # need_vectors branch above
+            # ``decomp`` is bound: this branch is exactly ``need_vectors``.
+            vl, vr = decomp.left_vectors, decomp.right_vectors
+            if vl is None:  # pragma: no cover - certified_eig sets left vectors
+                raise RuntimeError("certified_eig did not return left eigenvectors")
             K_vals = []
             for j in range(eigvals.size):
                 if not nonzero[j]:
