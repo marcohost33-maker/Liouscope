@@ -189,6 +189,15 @@ class RelaxationResult:
     # uses. Additive + defaulted so older callers / serialised reports stay valid.
     beta_D_linear: float = float("nan")
     linear_fit_model: str = "none"
+    # Provenance of the time grid the whole layer was fitted on. Every fitted
+    # quantity above is conditional on that window, so recording HOW it was
+    # chosen is part of the audit trail rather than a convenience:
+    #   "caller"       -- the caller supplied t_grid explicitly
+    #   "gap_scaled"   -- default window [0, HORIZON / Delta], rate-unit invariant
+    #   "legacy_fixed" -- no usable decay scale (Delta <= 0); absolute fallback
+    # Additive + defaulted, so older callers and serialised reports stay valid.
+    t_grid_source: str = "caller"
+    t_grid_span: float = float("nan")
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)

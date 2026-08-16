@@ -175,3 +175,47 @@ not influence any verdict yet: the switch requires the preregistered
 calibration study and independent physics review specified in issue #101
 (slice C), including gapless-normal negative controls, before any threshold
 is chosen.
+
+## The relaxation window is measured in the system's own relaxation time
+
+Everything the relaxation layer reports — D5, D6, D7, the M0..M3b AICc
+comparison, `beta_D`, its BCa interval and the D17 gap-rate check — is fitted
+on a time grid. A decay rate has dimension `1/time`, so an *absolute* default
+window would be an unstated claim about the caller's unit of time.
+
+When `t_grid` is omitted, `diagnose()` therefore spans
+
+```text
+t in [0, RELAXATION_HORIZON / Delta],   80 uniform samples
+```
+
+with `Delta` the D1 gap and `RELAXATION_HORIZON = 10` — a fixed number of
+e-foldings of the slowest mode, which is the only window carried along by the
+rescaling `L → cL`. The fitted rates track that rescaling to ≤1.2e-3 relative
+over twelve decades of rate units
+(`tests/test_relaxation_grid_scale.py`). At `Delta = 1` the grid is
+bit-identical to the historical `linspace(0.0, 10.0, 80)`; when no decay scale
+is resolved (`Delta <= 0`) that historical window is used, since there is then
+no timescale to scale by.
+
+The grid is **uniform** by requirement, not by convenience: the GLS layer
+whitens residuals with a single AR(1) coefficient, which presumes a constant
+sample interval. The transient layer's two-scale grid is appropriate there —
+a `sup_t` search with no noise model — but reusing it here would make the
+lag-1 correlation position-dependent and silently invalidate the whitening,
+the AR(1) bootstrap and `N_eff`.
+
+Which window produced a given run is recorded on the report, so it never has
+to be inferred:
+
+```python
+report.relaxation.t_grid_source  # "caller" | "gap_scaled" | "legacy_fixed"
+report.relaxation.t_grid_span
+```
+
+This closes the time-grid unit dependence only. The `henrici_eta > 1.0` gate
+above is unaffected: `henrici_eta` is rate-dimensioned, so on an
+amplitude-damped qubit it equals the rescaling factor `c` exactly and still
+flips A5 → A10 between `c = 1` and `c = 3` whatever the grid. A third,
+independent dependence sits in the least-squares solver's own convergence
+controls (issue #111). Neither is asserted away by the grid work.

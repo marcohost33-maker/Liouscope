@@ -30,6 +30,68 @@ from ..fitting.neff import estimate_neff_geyer
 from ..fitting.prony import prony_seed
 from ..numerics.kronecker import unvec, vec
 from ..numerics.linalg import support_check
+from .spectral import compute_spectral_layer
+
+# Default relaxation window, expressed in the system's OWN slowest relaxation
+# time ``1 / Delta`` (D1) rather than in absolute time units.
+#
+# A decay rate carries dimension 1/time, so any *absolute* default window is
+# implicitly a claim about the caller's unit of time. The legacy default
+# ``linspace(0.0, 10.0, 80)`` made the whole relaxation layer -- D5, D6, D7,
+# the M0..M3b AICc comparison, ``beta_D``, its BCa interval and the D17
+# gap-rate check -- silently dependent on that choice: under the pure change of
+# rate units ``L -> cL`` (identical physics, different unit of time) ``beta_D``
+# drifted by >20%, the D17 linear rate ``beta_D_linear`` was wrong by a factor
+# ~430 at ``c = 1e-6``, and ``diagnose()`` returned four different A-classes
+# across ``c in [1e-6, 1e2]``. Rates in real systems are MHz or GHz, not O(1),
+# so the affected regime is the common one, not an exotic corner.
+#
+# ``[0, HORIZON / Delta]`` fixes the window at a fixed number of e-foldings of
+# the slowest mode, which is the only unit-invariant choice: it is carried
+# along by the rescaling and therefore samples the same dimensionless curve
+# whatever units the caller works in. ``HORIZON = 10`` is ``e^-10 ~ 4.5e-5`` of
+# the initial deviation -- deep enough to identify the rate, shallow enough
+# that the tail is not almost entirely numerical floor.
+#
+# Chosen to be exactly backward compatible at ``Delta = 1``: the grid is then
+# bit-identical to the legacy ``linspace(0.0, 10.0, 80)``.
+RELAXATION_HORIZON: float = 10.0
+RELAXATION_N_POINTS: int = 80
+
+# Legacy absolute window, retained ONLY for the degenerate case where no decay
+# scale exists (``Delta <= 0``: no isolated steady state, or a gap that floored
+# to zero). There is no physical timescale to scale by there, so any window is
+# a convention; keeping the historical one avoids inventing a second arbitrary
+# constant and keeps those runs comparable with earlier releases.
+_LEGACY_T_MAX: float = 10.0
+
+
+def default_relaxation_grid(
+    gap: float,
+    *,
+    horizon: float = RELAXATION_HORIZON,
+    n_points: int = RELAXATION_N_POINTS,
+) -> np.ndarray:
+    """Uniform time grid spanning ``horizon`` e-foldings of the slowest mode.
+
+    Returns ``linspace(0, horizon / gap, n_points)``, i.e. a window measured in
+    the system's own relaxation time ``1 / gap`` (D1). See the module-level
+    note on :data:`RELAXATION_HORIZON` for why the default must not be an
+    absolute window.
+
+    The grid is deliberately **uniform**. The GLS fit whitens residuals with an
+    AR(1) model (``r_k - rho r_{k-1}``), which presumes a constant sampling
+    interval; a log-spaced or two-scale grid -- appropriate for the transient
+    layer's ``sup_t`` search, where no noise model is involved -- would make
+    that lag-1 correlation a function of position on the grid and quietly
+    invalidate the whitening, the AR(1) bootstrap and ``N_eff``.
+
+    ``gap <= 0`` or a non-finite ``gap`` means no usable decay scale was
+    resolved; the historical absolute window is returned in that case.
+    """
+    if not np.isfinite(gap) or gap <= 0.0:
+        return np.linspace(0.0, _LEGACY_T_MAX, n_points)
+    return np.linspace(0.0, horizon / float(gap), n_points)
 
 
 def _evolve(L_super: np.ndarray, rho0: np.ndarray, t_grid: np.ndarray) -> np.ndarray:
@@ -269,10 +331,22 @@ def compute_relaxation_layer(
     rho_initial: np.ndarray | None = None,
     rho_steady_state: np.ndarray | None = None,
     t_grid: np.ndarray | None = None,
+    gap: float | None = None,
     bootstrap_B: int = 200,
     seed: int = 42,
 ) -> RelaxationResult:
-    """Run D5-D7b and the M0..M3b fit hierarchy."""
+    """Run D5-D7b and the M0..M3b fit hierarchy.
+
+    Parameters
+    ----------
+    gap
+        Spectral gap ``Delta`` (D1), used only to scale the DEFAULT time grid
+        to the system's own relaxation time when ``t_grid`` is not given (see
+        :func:`default_relaxation_grid`). :func:`liouscope.diagnose` forwards
+        the gap it has already computed; a direct caller who omits it gets the
+        same value recomputed from ``L_super`` via D1, so the default window is
+        rate-unit invariant either way. Ignored when ``t_grid`` is supplied.
+    """
     L_super = np.asarray(L_super)
     n2 = L_super.shape[0]
     d = int(round(np.sqrt(n2)))
@@ -280,8 +354,26 @@ def compute_relaxation_layer(
         rho_steady_state = steady_state(L_super)
     if rho_initial is None:
         rho_initial = np.eye(d, dtype=complex) / d
-    if t_grid is None:
-        t_grid = np.linspace(0.0, 10.0, 80)
+
+    if t_grid is not None:
+        t_grid_source = "caller"
+    else:
+        # Recomputing D1 here (rather than falling back to an absolute window)
+        # keeps a direct call to this function as unit-invariant as the full
+        # pipeline. It calls the spectral layer itself rather than re-deriving
+        # the gap: D1 is not simply the smallest non-zero eigenvalue but carries
+        # the certified zero-mode tolerance and the #113 ambiguity rule (an
+        # unresolvable slow spectrum yields NaN, not a fast mode). Duplicating
+        # any of that here would let the two entry points drift apart. The
+        # already-computed steady state is passed through so only the spectrum
+        # is recomputed, and a NaN gap degrades to the documented legacy window.
+        if gap is None:
+            gap = compute_spectral_layer(L_super, rho_steady_state).gap
+        t_grid = default_relaxation_grid(gap)
+        t_grid_source = (
+            "gap_scaled" if np.isfinite(gap) and gap > 0.0 else "legacy_fixed"
+        )
+    t_grid = np.asarray(t_grid, dtype=float)
 
     traj = _evolve(L_super, rho_initial, t_grid)
     final_rho = traj[-1]
@@ -369,4 +461,6 @@ def compute_relaxation_layer(
         bca_ci_beta=(bca_lo, bca_hi),
         beta_D_linear=float(beta_D_linear),
         linear_fit_model=linear_fit_model,
+        t_grid_source=t_grid_source,
+        t_grid_span=float(t_grid[-1] - t_grid[0]),
     )

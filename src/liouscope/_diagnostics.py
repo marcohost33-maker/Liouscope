@@ -68,7 +68,15 @@ def diagnose(
     rho_steady_state
         Optional pre-computed steady state.
     t_grid
-        Time grid for the relaxation layer.
+        Time grid for the relaxation layer. When omitted the window is derived
+        from the system's own slowest relaxation time — ``[0, 10 / Delta]``
+        with ``Delta`` the D1 gap, sampled uniformly at 80 points (see
+        :func:`liouscope.diagnostics.relaxation.default_relaxation_grid`). The
+        default is therefore invariant under a pure change of rate units
+        ``L -> cL``; an absolute default would make every fitted rate, the AICc
+        model choice and the reported A-class depend on the caller's unit of
+        time. Which window was used is recorded on
+        ``report.relaxation.t_grid_source`` / ``.t_grid_span``.
     include_mpemba
         Compute D19/D20.
     bootstrap_B
@@ -162,6 +170,12 @@ def diagnose(
         rho_initial=rho_initial,
         rho_steady_state=rho_steady_state,
         t_grid=t_grid,
+        # D1 is already computed above; forwarding it keeps the DEFAULT
+        # relaxation window tied to the system's own relaxation time instead of
+        # an absolute one (see relaxation.default_relaxation_grid). Without
+        # this, a pure change of rate units L -> cL moved beta_D by >20% and
+        # changed the reported A-class, on identical physics.
+        gap=spectral.gap,
         bootstrap_B=bootstrap_B,
         seed=resolved_seed,
     )
