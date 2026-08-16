@@ -7,6 +7,101 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Fixed
+- **Multiscale disclosure + stored time grid (PR #115 review round).** Two
+  findings on the relaxation-window change below.
+
+  *Unsampled fast modes are now disclosed, not silently fitted.* A uniform
+  window scaled to `1/Δ` cannot also resolve a much faster mode: the window must
+  reach `~1/Δ` to see the slowest mode relax, while the step must stay under
+  `~1/r_max` to see the fastest at all, and 80 uniform samples span only about
+  an eightfold separation between them. Verified on two independent damped
+  qubits with rates `1e-6` and `1`: the fast mode decays to exactly `0.0` within
+  one step. This is **not** a regression introduced by the new window — on that
+  same system the previous absolute window put `beta_D_linear` `3.5e4` relative
+  away from the true gap, against `0.58` for the gap-scaled one — but fitting a
+  component that was never sampled is exactly what the project's fail-loud
+  convention exists to prevent. `compute_relaxation_layer` now measures
+  `samples_per_fast_efolding = 1 / (r_max · blind)` and emits an
+  `UnderResolvedTransientWarning` below `MIN_SAMPLES_PER_FAST_EFOLD = 1`,
+  recording the value on the result. `blind = max(dt, t[0])` is the largest
+  interval the grid leaves unsampled, not merely the step: `diagnose` permits
+  any non-negative start, and a late-starting grid leaves a lead-in that no
+  step size compensates for. On `linspace(100, 101, 101)` a rate-1 mode was
+  reported at "100 samples per fast e-folding" with no warning, while its
+  amplitude at the first sample is `e^-100`, the entire relative-entropy curve
+  measures identically zero, and the fit still returned `beta_D = 1.0`. The
+  term is exactly `dt` for any grid starting at zero, so the default path is
+  unchanged. It is a disclosure, not a repair: widening
+  the window is strictly worse for the reported quantity, and a log-spaced grid
+  would invalidate the AR(1) whitening. The measure is itself rate-unit
+  invariant (pinned by test), so it cannot fire on one choice of time unit and
+  not another. V5 (Jaynes-Cummings near the EP, measured `r_max/Δ = 396`)
+  legitimately trips it; those tests acknowledge the disclosure by message
+  filter with the reason stated inline.
+
+  *The report stores the time grid itself, not only its span.* `t_grid_span`
+  alone does not identify the sampling — `[0, 1, 10]` and `[0, 9, 10]` share a
+  span of 10 while describing materially different trajectories — and the
+  report already serialised three 80-point curves whose abscissa was missing, so
+  a consumer could not re-fit, re-plot or audit the rates it reports.
+  `RelaxationResult.t_grid` now carries a snapshot (a copy, so later mutation of
+  the caller's array cannot rewrite the record). Additive and defaulted; no
+  manifest-schema change.
+- **The DEFAULT relaxation time grid is scaled to the system's own relaxation
+  time. CHANGES NUMERICAL RESULTS** for every `diagnose()` call that does not
+  pass an explicit `t_grid` and whose spectral gap is not `Δ = 1`. The
+  relaxation layer fits every rate it reports on a time grid, and a decay rate
+  carries dimension `1/time`, so the absolute default `linspace(0.0, 10.0, 80)`
+  was implicitly a claim about the caller's unit of time. Under the pure
+  rescale `L → cL` (identical physics, different unit of time) on an
+  amplitude-damped qubit this was measured as:
+
+  | `c` | `beta_D / c` | `beta_D_linear / c` | AICc winner | A-class |
+  |---|---|---|---|---|
+  | 1e+02 | 1.025 | 0.254 | M0 | A10 |
+  | 1e+00 | 1.029 | 0.482 | M2 | A5 |
+  | 1e-02 | 1.085 | 0.403 | M0 | A1 |
+  | 1e-04 | 1.167 | 0.965 | M0 | A12 |
+  | 1e-06 | 1.251 | **109.99** | M0 | A12 |
+
+  — a 22 % drift in `beta_D`, a factor ~430 error in the D17 linear rate at
+  `c = 1e-6`, a model-selection flip between M0 and M2, and four different
+  mechanism classes for one system. Since physical rates are MHz or GHz rather
+  than `O(1)`, this was the common regime, not a corner case.
+
+  The default window is now `[0, RELAXATION_HORIZON / Δ]` at
+  `RELAXATION_N_POINTS = 80` uniform samples (`liouscope.diagnostics.relaxation
+  .default_relaxation_grid`), i.e. a fixed number of e-foldings of the slowest
+  mode — the only choice carried along by the rescaling. Measured after the
+  fix: `beta_D / c` and `beta_D_linear / c` invariant to ≤1.2e-3 relative over
+  `c ∈ [1e-6, 1e6]` (twelve decades) on both an amplitude-damped and a driven
+  dephasing qubit, with a stable AICc winner; the A-class is stable over
+  `c ∈ [1e-6, 1]`. The grid is deliberately uniform: the GLS layer whitens with
+  a single AR(1) coefficient, which presumes a constant sample interval, so the
+  transient layer's two-scale grid must not be reused here.
+
+  *Backward compatibility:* `RELAXATION_HORIZON = 10.0` is chosen so the grid is
+  **bit-identical** to the legacy `linspace(0.0, 10.0, 80)` at `Δ = 1`, and
+  `Δ ≤ 0` (no resolved decay scale) still returns the historical absolute
+  window. `compute_relaxation_layer` gains an optional `gap=` argument;
+  `diagnose()` forwards the D1 gap it has already computed, and a direct caller
+  who omits it gets the same value recomputed through the same `liouvillian_gap`
+  routine, so the two entry points cannot drift apart. An explicit `t_grid`
+  remains authoritative.
+
+  *Audit trail:* `RelaxationResult` gains two additive, defaulted fields —
+  `t_grid_source` (`"caller"` / `"gap_scaled"` / `"legacy_fixed"`) and
+  `t_grid_span` — so which window produced a given set of rates is recorded on
+  the report rather than inferred. No manifest-schema change (the run-manifest
+  contract is untouched); older serialised reports remain valid.
+
+  *Scope:* this closes the time-grid unit dependence only. Two independent ones
+  remain open and are neither fixed nor asserted away here — the least-squares
+  solver's own convergence controls (#111) and the rate-dimensioned
+  `henrici_eta` / `resolvent_peak` that the classifier still consumes (#101).
+  The latter is now pinned as a measured boundary: `henrici_eta` equals `c`
+  exactly on the test system and flips A5 → A10 between `c = 1` and `c = 3`
+  independently of the grid.
 - **Prony fallback seeds are grid-relative (round-16 review; the #108 class
   of defect). CHANGES NUMERICAL RESULTS** on grids far from unit span where
   the Prony estimate falls back (non-uniform sampling, short signals,

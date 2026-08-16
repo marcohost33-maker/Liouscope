@@ -175,3 +175,80 @@ not influence any verdict yet: the switch requires the preregistered
 calibration study and independent physics review specified in issue #101
 (slice C), including gapless-normal negative controls, before any threshold
 is chosen.
+
+## The relaxation window is measured in the system's own relaxation time
+
+Everything the relaxation layer reports — D5, D6, D7, the M0..M3b AICc
+comparison, `beta_D`, its BCa interval and the D17 gap-rate check — is fitted
+on a time grid. A decay rate has dimension `1/time`, so an *absolute* default
+window would be an unstated claim about the caller's unit of time.
+
+When `t_grid` is omitted, `diagnose()` therefore spans
+
+```text
+t in [0, RELAXATION_HORIZON / Delta],   80 uniform samples
+```
+
+with `Delta` the D1 gap and `RELAXATION_HORIZON = 10` — a fixed number of
+e-foldings of the slowest mode, which is the only window carried along by the
+rescaling `L → cL`. The fitted rates track that rescaling to ≤1.2e-3 relative
+over twelve decades of rate units
+(`tests/test_relaxation_grid_scale.py`). At `Delta = 1` the grid is
+bit-identical to the historical `linspace(0.0, 10.0, 80)`; when no decay scale
+is resolved (`Delta <= 0`) that historical window is used, since there is then
+no timescale to scale by.
+
+The grid is **uniform** by requirement, not by convenience: the GLS layer
+whitens residuals with a single AR(1) coefficient, which presumes a constant
+sample interval. The transient layer's two-scale grid is appropriate there —
+a `sup_t` search with no noise model — but reusing it here would make the
+lag-1 correlation position-dependent and silently invalidate the whitening,
+the AR(1) bootstrap and `N_eff`.
+
+Which window produced a given run is recorded on the report, so it never has
+to be inferred — including the grid itself, which is the abscissa the exported
+D5/D6/D7 curves are sampled on:
+
+```python
+report.relaxation.t_grid_source  # "caller" | "gap_scaled" | "legacy_fixed"
+report.relaxation.t_grid_span
+report.relaxation.t_grid         # the sampling, not just its extent
+```
+
+### What a uniform window cannot do
+
+The two requirements pull against each other. The window must reach `~1/Δ` to
+see the slowest mode relax; the step must stay below `~1/r_max` to see the
+fastest mode at all. Eighty uniform samples over ten e-foldings give
+
+```text
+samples_per_fast_efolding = 1 / (r_max · blind) ≈ 7.9 · Δ / r_max
+```
+
+where `blind = max(dt, t[0])` is the largest interval the grid leaves
+unsampled. The lead-in matters because `diagnose()` accepts any non-negative
+start: on `linspace(100, 101, 101)` a rate-1 mode is sampled a hundred times
+per e-folding and is still long gone by the first sample. For the default
+grid, which starts at zero, `blind` is exactly `dt`.
+
+so roughly an **eightfold** spread of timescales is the most one uniform grid
+can straddle. Beyond that the fast mode is stepped over rather than measured —
+with rates `1e-6` and `1` it decays to exactly zero within a single step.
+
+Widening the window does not help: an absolute window resolves the fast mode
+and misses the relaxation entirely, which is worse for the quantity this layer
+reports (measured `beta_D_linear` `3.5e4` relative from the true gap, against
+`0.58` for the gap-scaled window). Log spacing is also unavailable, for the
+AR(1) reason above. So the layer **discloses** rather than repairs: below one
+sample per fast e-folding it emits an `UnderResolvedTransientWarning` and
+records `report.relaxation.samples_per_fast_efolding`. The reported rates then
+describe the slow dynamics the window resolves, and a caller who needs the fast
+component must supply a `t_grid` that resolves it — reading the resulting rates
+as describing *that* window.
+
+This closes the time-grid unit dependence only. The `henrici_eta > 1.0` gate
+above is unaffected: `henrici_eta` is rate-dimensioned, so on an
+amplitude-damped qubit it equals the rescaling factor `c` exactly and still
+flips A5 → A10 between `c = 1` and `c = 3` whatever the grid. A third,
+independent dependence sits in the least-squares solver's own convergence
+controls (issue #111). Neither is asserted away by the grid work.

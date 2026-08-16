@@ -189,6 +189,28 @@ class RelaxationResult:
     # uses. Additive + defaulted so older callers / serialised reports stay valid.
     beta_D_linear: float = float("nan")
     linear_fit_model: str = "none"
+    # Provenance of the time grid the whole layer was fitted on. Every fitted
+    # quantity above is conditional on that window, so recording HOW it was
+    # chosen is part of the audit trail rather than a convenience:
+    #   "caller"       -- the caller supplied t_grid explicitly
+    #   "gap_scaled"   -- default window [0, HORIZON / Delta], rate-unit invariant
+    #   "legacy_fixed" -- no usable decay scale (Delta <= 0); absolute fallback
+    # Additive + defaulted, so older callers and serialised reports stay valid.
+    t_grid_source: str = "caller"
+    t_grid_span: float = float("nan")
+    # The grid ITSELF, not merely its span. The three curves above are y-values
+    # sampled on it, and a span alone does not identify the sampling: [0, 1, 10]
+    # and [0, 9, 10] share a span of 10 while describing materially different
+    # trajectories. Without this the exported report carries ordinates with no
+    # abscissa, so a downstream consumer cannot re-fit, re-plot or audit the
+    # rates it reports. Additive + defaulted like the fields above.
+    t_grid: np.ndarray | None = None
+    # How finely this grid samples the FASTEST decaying mode, as samples per
+    # e-folding. Below ``relaxation.MIN_SAMPLES_PER_FAST_EFOLD`` that mode was
+    # stepped over rather than measured, so the reported rates describe only
+    # the slow dynamics the window resolves and an
+    # ``UnderResolvedTransientWarning`` is emitted. ``inf`` when nothing decays.
+    samples_per_fast_efolding: float = float("nan")
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
