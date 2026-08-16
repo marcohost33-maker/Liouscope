@@ -84,6 +84,23 @@ abstract: >-
 # likewise scale-relative rather than absolute (issue #109), which closes a
 # fail-open path that admitted non-GKSL generators at small ||H||; this changes
 # which inputs are ACCEPTED, not the numerics of accepted ones.
+# Also pending for the next cut: the DEFAULT relaxation time grid spans a fixed
+# number of e-foldings of the slowest mode, [0, 10 / Delta], instead of the
+# absolute window [0, 10] (PR #115). This CHANGES NUMERICAL RESULTS -- for every
+# run that does not pass an explicit t_grid and whose gap is not Delta = 1 --
+# and must be described as a correction, not an addition: the previously
+# reported rates were measured on a window whose relation to the dynamics
+# depended on the caller's unit of time, so on an amplitude-damped qubit under
+# the pure rescale L -> cL the fitted beta_D drifted 22%, the D17 linear rate
+# was wrong by a factor ~430 at c = 1e-6, and four different A-classes were
+# reported for one system. It must NOT be described as making the fitted
+# relaxation rates invariant under an arbitrary change of rate units: the
+# least-squares solver's own convergence controls remain unit-dependent (open in
+# #111), and the mechanism verdict still gates on the rate-dimensioned
+# henrici_eta threshold (open in #101). The claim is bounded to what was
+# measured -- beta_D and beta_D_linear track the rescaling to <=1.2e-3 relative
+# over c in [1e-6, 1e6] with a stable AICc winner, and the A-class is stable
+# over c in [1e-6, 1] -- on the two qubit systems tested.
 keywords:
   - open quantum systems
   - Lindblad
