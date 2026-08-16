@@ -34,6 +34,7 @@ therefore restricted to the range where those two do not dominate.
 from __future__ import annotations
 
 import warnings
+from functools import cache
 
 import numpy as np
 import pytest
@@ -72,9 +73,24 @@ def _rabi_dephasing(c: float) -> np.ndarray:
 SYSTEMS = {"amp_damped": _amp_damped, "rabi_dephasing": _rabi_dephasing}
 
 
-def _diagnose(L: np.ndarray):
+@cache
+def _report(system: str, c: float):
+    """One ``diagnose()`` per (system, rate unit), shared across tests.
+
+    The scaling tests below interrogate different fields of the SAME runs, and
+    a full pipeline call is not cheap; without this the module would re-run the
+    identical sweep once per assertion and dominate CI wall-clock on a
+    five-version matrix. Keyed on the scalars rather than the array because the
+    Liouvillian is a pure function of them.
+    """
     # The GLS layer legitimately warns about small-n AR(1) bias on an 80-point
     # grid; that is orthogonal to the scaling contract under test.
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        return diagnose(SYSTEMS[system](c), rho_initial=_RHO_PLUS, bootstrap_B=10, seed=1)
+
+
+def _diagnose(L: np.ndarray):
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
         return diagnose(L, rho_initial=_RHO_PLUS, bootstrap_B=10, seed=1)
@@ -143,8 +159,7 @@ def test_fitted_rates_scale_with_the_rate_unit(system):
     fixes; an implementation that reverts to an absolute grid fails here by
     more than an order of magnitude, not marginally.
     """
-    make = SYSTEMS[system]
-    reports = {c: _diagnose(make(c)) for c in C_SET}
+    reports = {c: _report(system, c) for c in C_SET}
     ref = reports[1.0]
 
     for c, rep in reports.items():
@@ -172,8 +187,7 @@ def test_aicc_model_selection_is_rate_unit_invariant(system):
     winner flipped between M0 and M2 with ``c``, which changes both the
     reported rate's meaning and the A10/F5 Jordan evidence.
     """
-    make = SYSTEMS[system]
-    winners = {c: _diagnose(make(c)).relaxation.aicc_model for c in C_SET}
+    winners = {c: _report(system, c).relaxation.aicc_model for c in C_SET}
     assert len(set(winners.values())) == 1, f"AICc winner varies with rate unit: {winners}"
 
 
@@ -193,7 +207,7 @@ def test_mechanism_class_is_stable_across_rate_units():
     pins that boundary explicitly so it cannot be mistaken for a grid problem.
     """
     classes = {
-        c: _diagnose(_amp_damped(c)).classification.a_class
+        c: _report("amp_damped", c).classification.a_class
         for c in (1.0e-6, 1.0e-4, 1.0e-2, 1.0)
     }
     assert len(set(classes.values())) == 1, f"A-class varies with rate unit: {classes}"
@@ -208,7 +222,7 @@ def test_henrici_eta_is_the_remaining_unit_dependence_above_unit_rates():
     A-class with it. Should #101 be closed by making the classifier consume the
     dimensionless D8b instead, this test is the one that must be updated.
     """
-    low, high = _diagnose(_amp_damped(1.0)), _diagnose(_amp_damped(1.0e2))
+    low, high = _report("amp_damped", 1.0), _report("amp_damped", 1.0e2)
 
     # D8 is rate-dimensioned: it is literally the rescaling factor apart.
     assert low.classification.evidence["henrici_eta"] == pytest.approx(1.0, rel=1e-6)
