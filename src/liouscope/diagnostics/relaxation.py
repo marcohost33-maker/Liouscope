@@ -134,11 +134,24 @@ MIN_SAMPLES_PER_FAST_EFOLD: float = 1.0
 def samples_per_fast_efolding(L_super: np.ndarray, t_grid: np.ndarray) -> float:
     """How finely the grid samples the fastest decaying mode of ``L_super``.
 
-    ``1 / (r_max * dt)`` with ``r_max = max(-Re lambda)``. On the gap-scaled
-    default this reduces to ``7.9 * Delta / r_max``, i.e. a uniform 80-point
-    window covering ten e-foldings of the slowest mode resolves at most about
-    an eightfold spread of timescales -- past that the two ends of the spectrum
-    cannot both be sampled by one uniform grid.
+    ``1 / (r_max * blind)`` with ``r_max = max(-Re lambda)`` and ``blind`` the
+    largest interval the grid leaves unsampled. On the gap-scaled default this
+    reduces to ``7.9 * Delta / r_max``, i.e. a uniform 80-point window covering
+    ten e-foldings of the slowest mode resolves at most about an eightfold
+    spread of timescales -- past that the two ends of the spectrum cannot both
+    be sampled by one uniform grid.
+
+    ``blind`` is ``max(dt, t[0])``, not merely the step. The dynamics starts at
+    ``rho_initial`` at ``t = 0`` while the trajectory is only evaluated from
+    ``t[0]``, and :func:`liouscope.diagnose` permits any non-negative start, so
+    a late-starting grid leaves a lead-in that no step size compensates for: a
+    rate-1 mode on ``linspace(100, 101, 101)`` is sampled 100x per e-folding
+    and is nonetheless long gone by the first sample (amplitude ``e^-100``, and
+    the whole relative-entropy curve measures identically zero while the fit
+    still returns a confident-looking rate). Counting the lead-in as what it is
+    -- an unsampled interval, and usually the largest one -- catches that with
+    the same comparison, and is exactly ``dt`` for any grid starting at zero,
+    so the default path is unchanged.
 
     Returns ``inf`` when nothing decays (no finite positive rate) and NaN when
     the grid has no usable step.
@@ -149,11 +162,13 @@ def samples_per_fast_efolding(L_super: np.ndarray, t_grid: np.ndarray) -> float:
     dt = float(t[1] - t[0])
     if not np.isfinite(dt) or dt <= 0.0:
         return float("nan")
+    lead_in = float(t[0]) if np.isfinite(t[0]) and t[0] > 0.0 else 0.0
+    blind = max(dt, lead_in)
     rates = -np.real(np.linalg.eigvals(np.asarray(L_super)))
     positive = rates[np.isfinite(rates) & (rates > 0.0)]
     if positive.size == 0:
         return float("inf")
-    return float(1.0 / (float(np.max(positive)) * dt))
+    return float(1.0 / (float(np.max(positive)) * blind))
 
 
 def _evolve(L_super: np.ndarray, rho0: np.ndarray, t_grid: np.ndarray) -> np.ndarray:
@@ -453,10 +468,16 @@ def compute_relaxation_layer(
     # caller-supplied grid is checked on the same terms as the default.
     fast_resolution = samples_per_fast_efolding(L_super, t_grid)
     if np.isfinite(fast_resolution) and fast_resolution < MIN_SAMPLES_PER_FAST_EFOLD:
+        blind = max(float(t_grid[1] - t_grid[0]), max(float(t_grid[0]), 0.0))
+        span_kind = (
+            "unsampled lead-in from t=0"
+            if blind > float(t_grid[1] - t_grid[0])
+            else "sample interval"
+        )
         warnings.warn(
             "Relaxation layer: the fastest mode decays by "
-            f"{100.0 * (1.0 - np.exp(-1.0 / fast_resolution)):.1f}% between "
-            f"consecutive samples (dt = {t_grid[1] - t_grid[0]:.4g}, "
+            f"{100.0 * (1.0 - np.exp(-1.0 / fast_resolution)):.1f}% across the "
+            f"largest gap the grid leaves ({span_kind} = {blind:.4g}, "
             f"{fast_resolution:.3g} samples per fast e-folding), so it is "
             "stepped over rather than measured. The reported rates describe "
             "the SLOW dynamics this window resolves; the fast component is not "

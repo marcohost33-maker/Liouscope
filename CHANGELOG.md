@@ -21,9 +21,17 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   away from the true gap, against `0.58` for the gap-scaled one — but fitting a
   component that was never sampled is exactly what the project's fail-loud
   convention exists to prevent. `compute_relaxation_layer` now measures
-  `samples_per_fast_efolding = 1 / (r_max · dt)` and emits an
+  `samples_per_fast_efolding = 1 / (r_max · blind)` and emits an
   `UnderResolvedTransientWarning` below `MIN_SAMPLES_PER_FAST_EFOLD = 1`,
-  recording the value on the result. It is a disclosure, not a repair: widening
+  recording the value on the result. `blind = max(dt, t[0])` is the largest
+  interval the grid leaves unsampled, not merely the step: `diagnose` permits
+  any non-negative start, and a late-starting grid leaves a lead-in that no
+  step size compensates for. On `linspace(100, 101, 101)` a rate-1 mode was
+  reported at "100 samples per fast e-folding" with no warning, while its
+  amplitude at the first sample is `e^-100`, the entire relative-entropy curve
+  measures identically zero, and the fit still returned `beta_D = 1.0`. The
+  term is exactly `dt` for any grid starting at zero, so the default path is
+  unchanged. It is a disclosure, not a repair: widening
   the window is strictly worse for the reported quantity, and a log-spaced grid
   would invalidate the AR(1) whitening. The measure is itself rate-unit
   invariant (pinned by test), so it cannot fire on one choice of time unit and

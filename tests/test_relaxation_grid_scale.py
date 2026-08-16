@@ -408,6 +408,49 @@ def test_widely_separated_rates_disclose_the_unsampled_fast_mode():
     assert rep.samples_per_fast_efolding < MIN_SAMPLES_PER_FAST_EFOLD
 
 
+def test_late_starting_grid_counts_its_unsampled_lead_in():
+    """A fine step does not help if the mode is gone before the first sample.
+
+    Reviewer finding on PR #115 (Codex, second round) against the guard added
+    in the first. ``diagnose`` permits any non-negative start, and on
+    ``linspace(100, 101, 101)`` a rate-1 mode is sampled 100x per e-folding
+    while its amplitude at the first sample is ``e^-100``. Measured before the
+    fix: no warning, "100 samples per fast e-folding" — and the entire
+    relative-entropy curve identically zero, with the fit still returning
+    ``beta_D = 1.0``. The blind interval from ``t=0`` is now counted as what it
+    is: unsampled, and here the largest gap in the grid.
+    """
+    L = _amp_damped(1.0)  # rate 1
+    grid = np.linspace(100.0, 101.0, 101)
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        rep = compute_relaxation_layer(
+            L, rho_initial=_RHO_PLUS, t_grid=grid, bootstrap_B=5, seed=1
+        )
+    assert any(
+        issubclass(w.category, UnderResolvedTransientWarning) for w in caught
+    ), "a grid starting 100 e-foldings late reported no under-resolution"
+    # 1 / (r_max * t[0]) = 1/100, NOT 1 / (r_max * dt) = 100.
+    assert rep.samples_per_fast_efolding == pytest.approx(0.01, rel=1.0e-6)
+
+
+def test_lead_in_never_penalises_a_grid_that_starts_at_zero():
+    """The lead-in term must be inert on the default path.
+
+    ``max(dt, t[0])`` is exactly ``dt`` whenever ``t[0] == 0``, so the guard's
+    behaviour on every default-grid run is unchanged by the lead-in fix.
+    """
+    L = _amp_damped(1.0)
+    from_zero = np.linspace(0.0, 20.0, 80)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        rep = compute_relaxation_layer(
+            L, rho_initial=_RHO_PLUS, t_grid=from_zero, bootstrap_B=5, seed=1
+        )
+    dt = float(from_zero[1] - from_zero[0])
+    assert rep.samples_per_fast_efolding == pytest.approx(1.0 / dt, rel=1.0e-9)
+
+
 @pytest.mark.parametrize("c", [1.0e-4, 1.0, 1.0e4])
 def test_single_timescale_systems_do_not_trip_the_disclosure(c):
     """The guard must not cry wolf on ordinary systems, at any rate unit.

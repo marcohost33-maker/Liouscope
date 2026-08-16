@@ -222,8 +222,14 @@ see the slowest mode relax; the step must stay below `~1/r_max` to see the
 fastest mode at all. Eighty uniform samples over ten e-foldings give
 
 ```text
-samples_per_fast_efolding = 1 / (r_max · dt) ≈ 7.9 · Δ / r_max
+samples_per_fast_efolding = 1 / (r_max · blind) ≈ 7.9 · Δ / r_max
 ```
+
+where `blind = max(dt, t[0])` is the largest interval the grid leaves
+unsampled. The lead-in matters because `diagnose()` accepts any non-negative
+start: on `linspace(100, 101, 101)` a rate-1 mode is sampled a hundred times
+per e-folding and is still long gone by the first sample. For the default
+grid, which starts at zero, `blind` is exactly `dt`.
 
 so roughly an **eightfold** spread of timescales is the most one uniform grid
 can straddle. Beyond that the fast mode is stepped over rather than measured —
