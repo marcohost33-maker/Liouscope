@@ -7,6 +7,38 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Fixed
+- **Multiscale disclosure + stored time grid (PR #115 review round).** Two
+  findings on the relaxation-window change below.
+
+  *Unsampled fast modes are now disclosed, not silently fitted.* A uniform
+  window scaled to `1/Δ` cannot also resolve a much faster mode: the window must
+  reach `~1/Δ` to see the slowest mode relax, while the step must stay under
+  `~1/r_max` to see the fastest at all, and 80 uniform samples span only about
+  an eightfold separation between them. Verified on two independent damped
+  qubits with rates `1e-6` and `1`: the fast mode decays to exactly `0.0` within
+  one step. This is **not** a regression introduced by the new window — on that
+  same system the previous absolute window put `beta_D_linear` `3.5e4` relative
+  away from the true gap, against `0.58` for the gap-scaled one — but fitting a
+  component that was never sampled is exactly what the project's fail-loud
+  convention exists to prevent. `compute_relaxation_layer` now measures
+  `samples_per_fast_efolding = 1 / (r_max · dt)` and emits an
+  `UnderResolvedTransientWarning` below `MIN_SAMPLES_PER_FAST_EFOLD = 1`,
+  recording the value on the result. It is a disclosure, not a repair: widening
+  the window is strictly worse for the reported quantity, and a log-spaced grid
+  would invalidate the AR(1) whitening. The measure is itself rate-unit
+  invariant (pinned by test), so it cannot fire on one choice of time unit and
+  not another. V5 (Jaynes-Cummings near the EP, measured `r_max/Δ = 396`)
+  legitimately trips it; those tests acknowledge the disclosure by message
+  filter with the reason stated inline.
+
+  *The report stores the time grid itself, not only its span.* `t_grid_span`
+  alone does not identify the sampling — `[0, 1, 10]` and `[0, 9, 10]` share a
+  span of 10 while describing materially different trajectories — and the
+  report already serialised three 80-point curves whose abscissa was missing, so
+  a consumer could not re-fit, re-plot or audit the rates it reports.
+  `RelaxationResult.t_grid` now carries a snapshot (a copy, so later mutation of
+  the caller's array cannot rewrite the record). Additive and defaulted; no
+  manifest-schema change.
 - **The DEFAULT relaxation time grid is scaled to the system's own relaxation
   time. CHANGES NUMERICAL RESULTS** for every `diagnose()` call that does not
   pass an explicit `t_grid` and whose spectral gap is not `Δ = 1`. The

@@ -94,6 +94,68 @@ def default_relaxation_grid(
     return np.linspace(0.0, horizon / float(gap), n_points)
 
 
+class UnderResolvedTransientWarning(UserWarning):
+    """The fastest mode decays within one grid step, so it is never sampled.
+
+    A uniform grid can only resolve dynamics slower than its own step. When a
+    system carries widely separated rates the two requirements collide: the
+    window must reach ``~1/Delta`` to see the SLOWEST mode relax, while the
+    step must stay below ``~1/r_max`` to see the FASTEST one at all, and 80
+    uniform samples span barely two decades between them.
+
+    Widening the grid is not the fix -- an absolute window resolves the fast
+    mode and misses the relaxation entirely, which is strictly worse for the
+    quantity this layer reports (measured on two independent damped qubits with
+    rates 1e-6 and 1: the absolute window put ``beta_D_linear`` 3.5e4 relative
+    away from the true gap, the gap-scaled window 0.58). Nor is a log-spaced
+    grid: the GLS layer whitens with a single AR(1) coefficient, which presumes
+    a constant sample interval.
+
+    So this is a disclosure, not a repair. The slow rate the layer reports
+    remains the meaningful one; what is lost is the FAST component, and callers
+    who need it must supply their own ``t_grid`` resolving that timescale (and
+    read the resulting rates as describing that window).
+    """
+
+
+# Minimum samples per e-folding of the FASTEST mode before that mode counts as
+# stepped over rather than measured. Below 1 the fastest component loses more
+# than 63% of its amplitude between consecutive samples, so no fit can identify
+# it from this grid.
+#
+# A curve-shape heuristic was tried first and rejected: the share of the decay
+# landing in the first interval measures how much AMPLITUDE the fast component
+# carries, not whether it was RESOLVED, and the two are independent (measured
+# 0.49 for a fully unsampled 1e-6/1 separation against 0.46 for a mild 0.1/1
+# one). The spectrum answers the actual question directly.
+MIN_SAMPLES_PER_FAST_EFOLD: float = 1.0
+
+
+def samples_per_fast_efolding(L_super: np.ndarray, t_grid: np.ndarray) -> float:
+    """How finely the grid samples the fastest decaying mode of ``L_super``.
+
+    ``1 / (r_max * dt)`` with ``r_max = max(-Re lambda)``. On the gap-scaled
+    default this reduces to ``7.9 * Delta / r_max``, i.e. a uniform 80-point
+    window covering ten e-foldings of the slowest mode resolves at most about
+    an eightfold spread of timescales -- past that the two ends of the spectrum
+    cannot both be sampled by one uniform grid.
+
+    Returns ``inf`` when nothing decays (no finite positive rate) and NaN when
+    the grid has no usable step.
+    """
+    t = np.asarray(t_grid, dtype=float)
+    if t.size < 2:
+        return float("nan")
+    dt = float(t[1] - t[0])
+    if not np.isfinite(dt) or dt <= 0.0:
+        return float("nan")
+    rates = -np.real(np.linalg.eigvals(np.asarray(L_super)))
+    positive = rates[np.isfinite(rates) & (rates > 0.0)]
+    if positive.size == 0:
+        return float("inf")
+    return float(1.0 / (float(np.max(positive)) * dt))
+
+
 def _evolve(L_super: np.ndarray, rho0: np.ndarray, t_grid: np.ndarray) -> np.ndarray:
     """Propagate ``rho(t) = expm(L t) rho_0`` and return the trajectory."""
     rho_vec0 = vec(rho0)
@@ -387,6 +449,24 @@ def compute_relaxation_layer(
         [trace_distance(traj[k], rho_steady_state) for k in range(traj.shape[0])]
     )
 
+    # Under-resolution disclosure. Applies to the window actually used, so a
+    # caller-supplied grid is checked on the same terms as the default.
+    fast_resolution = samples_per_fast_efolding(L_super, t_grid)
+    if np.isfinite(fast_resolution) and fast_resolution < MIN_SAMPLES_PER_FAST_EFOLD:
+        warnings.warn(
+            "Relaxation layer: the fastest mode decays by "
+            f"{100.0 * (1.0 - np.exp(-1.0 / fast_resolution)):.1f}% between "
+            f"consecutive samples (dt = {t_grid[1] - t_grid[0]:.4g}, "
+            f"{fast_resolution:.3g} samples per fast e-folding), so it is "
+            "stepped over rather than measured. The reported rates describe "
+            "the SLOW dynamics this window resolves; the fast component is not "
+            "identifiable from this grid and the M0..M3b comparison cannot see "
+            "it. Supply an explicit t_grid resolving that timescale if you "
+            "need it -- note the rates then describe that window instead.",
+            UnderResolvedTransientWarning,
+            stacklevel=2,
+        )
+
     # Fit hierarchy on relative entropy decay (ensures positivity).
     fits: dict[str, FitResult] = {}
     for name in ("M0", "M1", "M2", "M3a", "M3b"):
@@ -463,4 +543,6 @@ def compute_relaxation_layer(
         linear_fit_model=linear_fit_model,
         t_grid_source=t_grid_source,
         t_grid_span=float(t_grid[-1] - t_grid[0]),
+        t_grid=t_grid.copy(),
+        samples_per_fast_efolding=fast_resolution,
     )

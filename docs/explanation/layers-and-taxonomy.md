@@ -206,12 +206,39 @@ lag-1 correlation position-dependent and silently invalidate the whitening,
 the AR(1) bootstrap and `N_eff`.
 
 Which window produced a given run is recorded on the report, so it never has
-to be inferred:
+to be inferred — including the grid itself, which is the abscissa the exported
+D5/D6/D7 curves are sampled on:
 
 ```python
 report.relaxation.t_grid_source  # "caller" | "gap_scaled" | "legacy_fixed"
 report.relaxation.t_grid_span
+report.relaxation.t_grid         # the sampling, not just its extent
 ```
+
+### What a uniform window cannot do
+
+The two requirements pull against each other. The window must reach `~1/Δ` to
+see the slowest mode relax; the step must stay below `~1/r_max` to see the
+fastest mode at all. Eighty uniform samples over ten e-foldings give
+
+```text
+samples_per_fast_efolding = 1 / (r_max · dt) ≈ 7.9 · Δ / r_max
+```
+
+so roughly an **eightfold** spread of timescales is the most one uniform grid
+can straddle. Beyond that the fast mode is stepped over rather than measured —
+with rates `1e-6` and `1` it decays to exactly zero within a single step.
+
+Widening the window does not help: an absolute window resolves the fast mode
+and misses the relaxation entirely, which is worse for the quantity this layer
+reports (measured `beta_D_linear` `3.5e4` relative from the true gap, against
+`0.58` for the gap-scaled window). Log spacing is also unavailable, for the
+AR(1) reason above. So the layer **discloses** rather than repairs: below one
+sample per fast e-folding it emits an `UnderResolvedTransientWarning` and
+records `report.relaxation.samples_per_fast_efolding`. The reported rates then
+describe the slow dynamics the window resolves, and a caller who needs the fast
+component must supply a `t_grid` that resolves it — reading the resulting rates
+as describing *that* window.
 
 This closes the time-grid unit dependence only. The `henrici_eta > 1.0` gate
 above is unaffected: `henrici_eta` is rate-dimensioned, so on an

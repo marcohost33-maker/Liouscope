@@ -41,8 +41,10 @@ import pytest
 
 from liouscope import build_liouvillian, diagnose
 from liouscope.diagnostics.relaxation import (
+    MIN_SAMPLES_PER_FAST_EFOLD,
     RELAXATION_HORIZON,
     RELAXATION_N_POINTS,
+    UnderResolvedTransientWarning,
     compute_relaxation_layer,
     default_relaxation_grid,
 )
@@ -261,6 +263,53 @@ def test_grid_provenance_records_the_gap_scaled_default():
     assert rep.relaxation.t_grid_span == pytest.approx(2.0e4, rel=1.0e-9)
 
 
+def test_stored_grid_identifies_the_sampling_not_just_the_span():
+    """A span does not identify a grid; the exported curves need their abscissa.
+
+    Reviewer finding on PR #115 (Codex P2). ``[0, 1, 10]`` and ``[0, 9, 10]``
+    share a span of 10 while sampling materially different trajectories, and
+    the report already serialises three 80-point curves whose x-axis was
+    missing — so a consumer could not re-fit, re-plot or audit the rates.
+    """
+    a = np.array([0.0, 1.0, 10.0])
+    b = np.array([0.0, 9.0, 10.0])
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        ra = compute_relaxation_layer(
+            _amp_damped(1.0), rho_initial=_RHO_PLUS, t_grid=a, bootstrap_B=5, seed=1
+        )
+        rb = compute_relaxation_layer(
+            _amp_damped(1.0), rho_initial=_RHO_PLUS, t_grid=b, bootstrap_B=5, seed=1
+        )
+    # The span alone cannot tell these apart ...
+    assert ra.t_grid_span == rb.t_grid_span == pytest.approx(10.0)
+    # ... the stored grid can, and it is the grid actually used.
+    np.testing.assert_array_equal(ra.t_grid, a)
+    np.testing.assert_array_equal(rb.t_grid, b)
+
+
+def test_stored_grid_is_a_snapshot_not_an_alias():
+    """Mutating the caller's array afterwards must not rewrite the record."""
+    grid = np.linspace(0.0, 5.0, 16)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        rep = compute_relaxation_layer(
+            _amp_damped(1.0), rho_initial=_RHO_PLUS, t_grid=grid, bootstrap_B=5, seed=1
+        )
+    original = grid.copy()
+    grid[0] = -999.0
+    np.testing.assert_array_equal(rep.t_grid, original)
+
+
+def test_stored_grid_matches_the_curves_it_indexes():
+    """The stored grid must be the abscissa of the exported curves, same length."""
+    rel = _report("amp_damped", 1.0).relaxation
+    n = int(rel.t_grid.size)
+    assert n == rel.relative_entropy_curve.size
+    assert n == rel.fidelity_curve.size
+    assert n == rel.trace_distance_curve.size
+
+
 def test_grid_provenance_records_an_explicit_caller_grid():
     grid = np.linspace(0.0, 3.0, 40)
     with warnings.catch_warnings():
@@ -319,6 +368,78 @@ def test_implicit_window_matches_the_certified_d1_gap():
     assert implicit.t_grid_span == pytest.approx(
         RELAXATION_HORIZON / gap, rel=1.0e-12
     )
+
+
+# ---------------------------------------------------------------------------
+# Multiscale disclosure: what a uniform window cannot do, it must say
+# ---------------------------------------------------------------------------
+
+
+def _two_scale(slow: float, fast: float) -> tuple[np.ndarray, np.ndarray]:
+    """Two INDEPENDENT amplitude-damped qubits with separated rates."""
+    i2 = np.eye(2, dtype=complex)
+    L = build_liouvillian(
+        np.zeros((4, 4), dtype=complex),
+        [np.sqrt(slow) * np.kron(_SM, i2), np.sqrt(fast) * np.kron(i2, _SM)],
+    )
+    plus = np.array([1.0, 1.0], dtype=complex) / np.sqrt(2.0)
+    psi = np.kron(plus, plus)
+    return L, np.outer(psi, psi.conj())
+
+
+def test_widely_separated_rates_disclose_the_unsampled_fast_mode():
+    """The grid cannot resolve six decades of separation, so it must say so.
+
+    Reviewer finding on PR #115 (Codex P1). Confirmed: with rates 1e-6 and 1 the
+    fast mode decays to exactly 0.0 within one grid step. The finding was NOT a
+    regression — on this same system the previous absolute window put
+    ``beta_D_linear`` 3.5e4 relative away from the true gap against 0.58 for the
+    gap-scaled one — but it is a real limitation, and silently fitting a
+    component that was never sampled is precisely what this project's
+    fail-loud convention exists to prevent.
+    """
+    L, rho0 = _two_scale(1.0e-6, 1.0)
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        rep = compute_relaxation_layer(L, rho_initial=rho0, bootstrap_B=5, seed=1)
+    assert any(
+        issubclass(w.category, UnderResolvedTransientWarning) for w in caught
+    ), "no disclosure emitted for a 1e-6 / 1 timescale separation"
+    assert rep.samples_per_fast_efolding < MIN_SAMPLES_PER_FAST_EFOLD
+
+
+@pytest.mark.parametrize("c", [1.0e-4, 1.0, 1.0e4])
+def test_single_timescale_systems_do_not_trip_the_disclosure(c):
+    """The guard must not cry wolf on ordinary systems, at any rate unit.
+
+    A disclosure that fires on well-resolved input would be filtered away
+    wholesale and then miss the case it exists for.
+    """
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        rep = compute_relaxation_layer(
+            _amp_damped(c), rho_initial=_RHO_PLUS, bootstrap_B=5, seed=1
+        )
+    assert not any(
+        issubclass(w.category, UnderResolvedTransientWarning) for w in caught
+    ), f"spurious disclosure on a single-timescale system at c={c:g}"
+    assert rep.samples_per_fast_efolding > MIN_SAMPLES_PER_FAST_EFOLD
+
+
+def test_fast_mode_resolution_is_itself_rate_unit_invariant():
+    """The resolution measure is a ratio of rates, so it must not move with ``c``.
+
+    If it did, the disclosure would fire on one choice of time unit and not
+    another for the same physics — reintroducing, in the guard, exactly the
+    defect this module exists to prevent.
+    """
+    values = [
+        compute_relaxation_layer(
+            _amp_damped(c), rho_initial=_RHO_PLUS, bootstrap_B=5, seed=1
+        ).samples_per_fast_efolding
+        for c in (1.0e-4, 1.0, 1.0e4)
+    ]
+    np.testing.assert_allclose(values, values[0], rtol=1.0e-9)
 
 
 def test_unresolved_gap_degrades_to_the_documented_legacy_window():
