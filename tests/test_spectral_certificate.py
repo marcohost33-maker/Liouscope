@@ -325,13 +325,20 @@ def test_degenerate_stationary_manifold_is_not_flagged_unresolved() -> None:
 def test_ambiguity_split_keeps_margin_on_both_sides() -> None:
     """The #113 split must clear the healthy population AND catch the defect.
 
-    The two populations are NOT cleanly separated -- measured over 83 healthy
-    generators the largest genuine in-band |lambda| reaches 2.38 * eps*||L||,
-    while the marginal unresolved case sits at 4.87, about 2x away. The split
-    is therefore placed at 30x: well above everything healthy, still below the
-    case it is meant to catch (4.87e2). This test pins both margins, so a
-    future change that narrows either one fails loudly rather than silently
-    turning the check into a coin flip.
+    The two populations are NOT cleanly separated. Enumerated in
+    ``benchmarks/calibrate_zero_mode_ambiguity.py`` (artefact:
+    ``benchmarks/calibration/zero_mode_calibration.json``), the largest genuine
+    in-band |lambda| over 96 healthy generators reaches 3.36 * eps*||L||, and
+    4.23 over the n=339 tail sweep; the marginal unresolved case sits at 4.87.
+    The nearest pair is thus a factor 1.15 apart, not the ~2x this docstring
+    claimed while the sample behind it was uncommitted.
+
+    The split is placed at 30x: above everything healthy measured so far, still
+    below the case it is meant to catch (4.87e2). This test pins both margins on
+    the specific fixtures below, so a future change that narrows either one
+    fails loudly. It does NOT establish separation of the populations -- the
+    artefact shows they nearly touch, and ``test_threshold_calibration.py``
+    pins that fact so it cannot be forgotten again.
     """
     def level_of(m: np.ndarray) -> float:
         return float(np.finfo(float).eps * np.linalg.norm(m, 2))

@@ -262,22 +262,37 @@ def certified_eigvals(
             # tolerance, which carries a factor ``rtol`` on top -- it is
             # neither machine-zero nor resolved.
             #
-            # The factor is set from a MEASURED distribution, not from taste.
-            # Across 83 healthy generators (single/two-qubit families plus
-            # random GKSL, unique and degenerate steady states alike) the
-            # largest in-band |lambda| reaches 2.38 * eps*||L||, median 0.39.
-            # Unresolved slow modes were measured at 4.87 and 4.87e2. The two
-            # populations are therefore NOT cleanly separated -- the nearest
-            # pair is 2.38 against 4.87, about 2x -- so the split is placed at
-            # 30x, roughly an order of magnitude clear of the healthy maximum
-            # rather than midway between the two.
+            # The factor is set from a MEASURED distribution, not from taste,
+            # and the distribution is committed rather than quoted:
             #
-            # That choice is deliberately conservative: a false NaN on a
+            #   python benchmarks/calibrate_zero_mode_ambiguity.py
+            #   -> benchmarks/calibration/zero_mode_calibration.json
+            #
+            # Population membership there is fixed by CONSTRUCTION (Lindblad
+            # rate spread), never by the measured ratio, so the sample cannot
+            # be curated into agreeing with the constant it justifies.
+            #
+            # Measured over 96 healthy generators (8 families x 3 rate scales,
+            # unique and degenerate steady states alike): median 0.0, p95 1.72,
+            # max 3.36 -- rising to 4.23 over the n=339 tail sweep, because a
+            # maximum is an order statistic and grows with the sample. The
+            # unresolved slow modes sit at 4.87, 48.7 and 487.
+            #
+            # The two populations are therefore NOT cleanly separated: the
+            # nearest pair is 4.23 against 4.87, a factor 1.15. (This comment
+            # previously said "2.38 against 4.87, about 2x" from an
+            # uncommitted sample; enumeration did not reproduce it.) No value
+            # of this constant separates the populations cleanly, so 30x is
+            # chosen conservatively rather than midway: a false NaN on a
             # healthy generator destroys a correct analysis, while a missed
             # marginal case leaves behaviour exactly as it was before this
-            # check existed. The cost is bounded reach -- above a spectral
-            # spread of ~1e14 the slow modes sink below the split and the
-            # defect is undetectable by any magnitude test, because double
+            # check existed.
+            #
+            # The cost is measured, not assumed: at a rate spread of 1.4e15
+            # the genuine defect lands at 4.87, below this split, so the check
+            # stays silent while the reported gap is wrong by 4.7e14. Above a
+            # spectral spread of ~1e14 the slow modes sink below the split and
+            # the defect is undetectable by any magnitude test, because double
             # precision has genuinely lost the information. That residual is
             # documented in issue #113 rather than papered over here.
             split = ZERO_MODE_AMBIGUITY_FACTOR * float(np.finfo(float).eps) * norm2

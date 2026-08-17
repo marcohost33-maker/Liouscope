@@ -62,14 +62,34 @@ EPS_GAP: Final[float] = 1.0e-10
 # because "only rescaled generators change" would be false.
 ZERO_MODE_EPS_FACTOR: Final[float] = 1.0e3
 # Issue #113. Splits the zero-mode tolerance band into "machine-zero" and
-# "inside the safety factor, hence undecidable". Measured across 83 healthy
-# generators the largest genuine in-band |lambda| reaches 2.38 * eps*||L||
-# (median 0.39); unresolved slow modes were measured at 4.87 and 4.87e2. The
-# populations overlap within ~2x, so this sits an order of magnitude above the
-# healthy maximum rather than midway: a false "unresolved" verdict destroys a
-# correct analysis, whereas a missed marginal case only leaves the pre-#113
-# behaviour. Consequence, stated rather than hidden: above a spectral spread of
-# ~1e14 the defect is not detectable by any magnitude test.
+# "inside the safety factor, hence undecidable".
+#
+# EVIDENCE (regenerate, do not trust this comment):
+#   python benchmarks/calibrate_zero_mode_ambiguity.py
+#   -> benchmarks/calibration/zero_mode_calibration.json
+# The population is enumerated there by CONSTRUCTION (rate spread, not measured
+# outcome), so the numbers below can be re-derived, re-run on another BLAS and
+# seen to drift. An earlier version of this comment quoted "83 healthy
+# generators, max 2.38, median 0.39" from a sample that was never committed;
+# those three numbers did not survive enumeration and are corrected here.
+#
+# Measured (seed 20260816, 96 healthy generators x 8 families x 3 rate scales,
+# NumPy 2.4.6 / SciPy 1.17.1 / Windows AMD64):
+#   healthy max|lambda| / (eps*||L||):  median 0.0, p95 1.72, max 3.36
+#     -- and 4.23 over the larger n=339 tail sweep. The MAX is an order
+#        statistic: it grows with the sample (1.52 at n=78, 3.36 at n=96,
+#        4.23 at n=339), which is exactly why the old "2.38" read as a bound.
+#   unresolved slow modes: 4.87, 48.7, 487 (three cases, not two).
+# The nearest pair is therefore 4.23 against 4.87 -- a factor 1.15, NOT the
+# ~2x previously claimed. The populations very nearly touch, so this constant
+# cannot be read as a clean separator at any value.
+#
+# 30x is chosen conservatively rather than midway: a false "unresolved" verdict
+# destroys a correct analysis, whereas a missed marginal case only leaves the
+# pre-#113 behaviour. The price is measured, not assumed: at a rate spread of
+# 1.4e15 (fast=1e10 in the artefact) the genuine defect lands at 4.87 and this
+# split does NOT fire, while its gap is wrong by a factor 4.7e14. Above a
+# spectral spread of ~1e14 the defect is not detectable by any magnitude test.
 ZERO_MODE_AMBIGUITY_FACTOR: Final[float] = 3.0e1
 EPS_HERMITICITY: Final[float] = 1.0e-9
 EPS_TRACE: Final[float] = 1.0e-10

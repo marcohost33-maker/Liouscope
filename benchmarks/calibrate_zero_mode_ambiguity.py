@@ -50,9 +50,20 @@ Usage
 ``python benchmarks/calibrate_zero_mode_ambiguity.py --out other.json --seed 7``
     same sweep with a different RNG seed for the random-GKSL family.
 
+To check that the committed artefact is still the one this code produces::
+
+    python benchmarks/calibrate_zero_mode_ambiguity.py
+    git diff --stat benchmarks/calibration/zero_mode_calibration.json
+
+The structural part of that agreement (population sizes, family list, defect
+verdicts) is asserted in ``tests/test_threshold_calibration.py``; the round-off
+digits deliberately are NOT, see below.
+
 The JSON records the environment (Python / NumPy / SciPy / platform / BLAS)
 because the quantity being measured IS round-off; a number from another BLAS
-is a different measurement, not a contradiction.
+is a different measurement, not a contradiction. That is also why a test must
+not pin the digits: it would turn a legitimate platform difference into a red
+build and teach the next reader to widen the tolerance until it means nothing.
 """
 
 from __future__ import annotations
@@ -623,7 +634,13 @@ def main(argv: list[str] | None = None) -> int:
     if args.print_only:
         return 0
     args.out.parent.mkdir(parents=True, exist_ok=True)
-    args.out.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+    # newline="\n" explicitly: the default translates to CRLF on Windows, so the
+    # SAME sweep would produce different BYTES per platform and "regenerate, then
+    # check `git diff` is empty" -- the check that keeps this artefact honest --
+    # would fail on a Windows clone for a reason that has nothing to do with the
+    # measurement. .gitattributes normalises the stored blob; this keeps the
+    # working tree agreeing with it.
+    args.out.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8", newline="\n")
     print(f"wrote {args.out}")
     return 0
 
