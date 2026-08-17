@@ -66,23 +66,40 @@ ZERO_MODE_EPS_FACTOR: Final[float] = 1.0e3
 #
 # EVIDENCE (regenerate, do not trust this comment):
 #   python benchmarks/calibrate_zero_mode_ambiguity.py
-#   -> benchmarks/calibration/zero_mode_calibration.json
+#   -> benchmarks/calibration/zero_mode_calibration.json      (one seed)
+#   python benchmarks/calibrate_zero_mode_seed_sweep.py
+#   -> benchmarks/calibration/zero_mode_seed_sweep.json       (ten seeds)
 # The population is enumerated there by CONSTRUCTION (rate spread, not measured
 # outcome), so the numbers below can be re-derived, re-run on another BLAS and
 # seen to drift. An earlier version of this comment quoted "83 healthy
 # generators, max 2.38, median 0.39" from a sample that was never committed;
-# those three numbers did not survive enumeration and are corrected here.
+# those three numbers did not survive enumeration. A later version quoted
+# single-seed numbers ("max 3.36", "4.23 at n=339", "a factor 1.15"); the seed
+# sweep shows those are draws from a distribution and they are widened here.
 #
-# Measured (seed 20260816, 96 healthy generators x 8 families x 3 rate scales,
-# NumPy 2.4.6 / SciPy 1.17.1 / Windows AMD64):
-#   healthy max|lambda| / (eps*||L||):  median 0.0, p95 1.72, max 3.36
-#     -- and 4.23 over the larger n=339 tail sweep. The MAX is an order
-#        statistic: it grows with the sample (1.52 at n=78, 3.36 at n=96,
-#        4.23 at n=339), which is exactly why the old "2.38" read as a bound.
-#   unresolved slow modes: 4.87, 48.7, 487 (three cases, not two).
-# The nearest pair is therefore 4.23 against 4.87 -- a factor 1.15, NOT the
-# ~2x previously claimed. The populations very nearly touch, so this constant
-# cannot be read as a clean separator at any value.
+# WHAT IS STABLE AND WHAT IS NOT (10 seeds x 3 sample sizes, NumPy 2.4.6 /
+# SciPy 1.17.1 / Windows AMD64). Healthy max|lambda| / (eps*||L||):
+#   n=96 /seed:  max 1.93..4.71 across seeds (2.45x), p95 1.05..1.72
+#   n=339/seed:  max 3.21..4.34 across seeds (1.35x), p95 1.58..1.88
+#   n=969/seed:  max 2.94..4.28 across seeds (1.46x), p95 1.82..2.00
+# The MAX is an order statistic and its seed-to-seed spread (up to 2.45x at
+# fixed n) is larger than its growth with n (mean 3.05 -> 3.68 -> 3.69, i.e.
+# already flat between n=339 and n=969). So no single maximum -- neither 3.36
+# nor 4.23 -- is a property of the population; the p95 is the stable statistic.
+# In all 30 cells the largest healthy ratio came from the random_gksl family,
+# the only seed-dependent one, so this is seed noise and not fixture drift.
+#
+# HOW OFTEN DOES A HEALTHY GENERATOR REACH THIS SPLIT? Zero times: 0 of 14040
+# measurements (4013 distinct generator matrices, each at 3 rate scales). The
+# largest healthy value anywhere in the sweep is 4.71, so the shipped 30 sits
+# 6.4x above the observed healthy tail. That is an observed absence over this
+# population, not a proof of impossibility.
+#
+# SEPARATION -- WORSE THAN THE SINGLE SEED SUGGESTED. Unresolved slow modes
+# (seed-free by construction): 4.87, 48.7, 487. Against a swept healthy max of
+# 4.71 the nearest pair is a factor 1.03, not the 1.15 read off one seed. The
+# populations essentially touch, so this constant is a deliberately one-sided
+# choice and must never be read as a classifier.
 #
 # 30x is chosen conservatively rather than midway: a false "unresolved" verdict
 # destroys a correct analysis, whereas a missed marginal case only leaves the

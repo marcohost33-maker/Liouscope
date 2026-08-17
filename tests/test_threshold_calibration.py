@@ -41,11 +41,13 @@ from typing import Any
 import numpy as np
 import pytest
 
+from liouscope._consts import ZERO_MODE_AMBIGUITY_FACTOR
 from liouscope.core.lindblad import build_liouvillian
 from liouscope.diagnostics.nonnormality import henrici_eta_n, henrici_relative
 
 _ROOT = Path(__file__).resolve().parent.parent
 _ARTEFACT = _ROOT / "benchmarks" / "calibration" / "zero_mode_calibration.json"
+_SWEEP = _ROOT / "benchmarks" / "calibration" / "zero_mode_seed_sweep.json"
 
 _SM = np.array([[0.0, 1.0], [0.0, 0.0]], dtype=complex)
 _SZ = np.array([[1.0, 0.0], [0.0, -1.0]], dtype=complex)
@@ -71,8 +73,27 @@ def _calibration_module() -> Any:
 
 
 @cache
+def _sweep_module() -> Any:
+    """Load the seed-sweep script by path (``benchmarks`` is not a package)."""
+    path = _ROOT / "benchmarks" / "calibrate_zero_mode_seed_sweep.py"
+    spec = importlib.util.spec_from_file_location(
+        "calibrate_zero_mode_seed_sweep", path
+    )
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+@cache
 def _committed() -> dict[str, Any]:
     return json.loads(_ARTEFACT.read_text(encoding="utf-8"))
+
+
+@cache
+def _committed_sweep() -> dict[str, Any]:
+    return json.loads(_SWEEP.read_text(encoding="utf-8"))
 
 
 def _amplitude_damping(gamma: float) -> np.ndarray:
@@ -146,11 +167,13 @@ def test_the_healthy_sample_is_large_enough_to_expose_an_order_statistic() -> No
 def test_the_two_populations_are_not_cleanly_separated() -> None:
     """LIMITATION PIN. The healthy and defective ratios nearly touch.
 
-    Measured: healthy max 4.23, lowest genuine defect 4.87 -- a factor 1.15.
-    The comment this replaces claimed ~2x. No value of
-    ``ZERO_MODE_AMBIGUITY_FACTOR`` separates these populations, so the constant
-    must be read as a deliberately conservative one-sided choice, never as a
-    classifier.
+    Measured at this artefact's single seed: healthy max 4.23, lowest genuine
+    defect 4.87 -- a factor 1.15. Over ten seeds the healthy max reaches 4.71
+    and the factor falls to 1.03 (``test_seed_sweep_*`` below), so 1.15 is
+    itself a draw, not a bound. The comment this replaces claimed ~2x. No value
+    of ``ZERO_MODE_AMBIGUITY_FACTOR`` separates these populations, so the
+    constant must be read as a deliberately conservative one-sided choice,
+    never as a classifier.
 
     If a future change genuinely separates them, this test SHOULD fail: replace
     it with the stronger claim rather than widening the bound.
@@ -207,6 +230,201 @@ def test_stiff_gap_oracle_is_closed_form_and_needs_no_eigensolver() -> None:
         assert mod._analytic_gap(rates) == pytest.approx(hand_computed, rel=1e-12), (
             f"closed-form gap moved at fast={fast:g}"
         )
+
+
+# ---------------------------------------------------------------------------
+# Seed dependence of the #113 calibration.
+#
+# The single-seed artefact above pins ONE draw. Its own tail block varies the
+# seed by +0/+1/+2, which is a hint rather than a measurement, and the numbers
+# that reached _consts.py ("max 3.36", "4.23 at n=339", "a factor 1.15") were
+# read off that one draw. These tests pin what a ten-seed sweep actually shows:
+# the maximum is seed noise, the p95 is not, and no healthy generator in the
+# sweep comes anywhere near the shipped split.
+# ---------------------------------------------------------------------------
+
+
+def test_seed_sweep_artefact_exists_and_declares_its_seeds() -> None:
+    """A sweep whose seeds are not written down cannot be distinguished from a re-roll."""
+    payload = _committed_sweep()
+    assert payload["artefact"] == "zero_mode_ambiguity_seed_sweep"
+    for key in ("python", "numpy", "scipy", "platform", "eps"):
+        assert key in payload["environment"], f"sweep artefact does not record {key}"
+    assert len(payload["seeds"]) >= 5, (
+        "fewer than five seeds cannot separate seed noise from a population fact"
+    )
+    assert len(set(payload["seeds"])) == len(payload["seeds"]), "seeds must be distinct"
+    assert len(payload["draws_levels"]) >= 2, (
+        "one sample size cannot separate the seed axis from the order-statistic axis"
+    )
+    # The shipped constant must be the one that was swept against, or the
+    # exceedance count below is about some other threshold.
+    assert payload["shipped_split"] == pytest.approx(ZERO_MODE_AMBIGUITY_FACTOR)
+
+
+def test_no_healthy_generator_in_the_sweep_reaches_the_shipped_split() -> None:
+    """The question the ``_consts.py`` comment left open, answered with a count.
+
+    A one-sided conservative threshold is only conservative if the healthy side
+    stays below it. That is a claim about a tail, so it needs a sample, and the
+    sample must be reported with the denominator it was measured against --
+    both denominators, because every generator is measured at three rate scales
+    and the fixed fixtures repeat in every cell.
+
+    If this ever goes red, the constant is too low and D1 has started emitting
+    false ``NaN`` on healthy physics: a P0 finding, not a test to relax.
+    """
+    pooled = _committed_sweep()["pooled"]
+    assert pooled["n_healthy_measurements"] >= 10_000, (
+        "the exceedance claim needs a sample large enough to be worth making"
+    )
+    assert pooled["n_distinct_base_generators"] >= 3_000
+    assert pooled["n_at_or_above_shipped_split"] == 0, (
+        f"{pooled['n_at_or_above_shipped_split']} healthy generators reached the "
+        f"shipped split of {_committed_sweep()['shipped_split']}: the constant is "
+        "too low -- do not widen this test"
+    )
+    # The stronger statement: they do not even reach the WEAKEST genuine defect,
+    # so on this population the two are disjoint (by a hair -- see below).
+    assert pooled["n_at_or_above_lowest_defect"] == 0
+    assert pooled["margin_shipped_split_over_pooled_healthy_max"] > 2.0
+
+
+def test_a_live_healthy_sample_stays_below_the_shipped_split() -> None:
+    """DISCRIMINATION: re-measure instead of re-reading the artefact.
+
+    Every other test in this block reads committed JSON, which pins the
+    evidence but not the code. This one rebuilds the healthy population and
+    compares against the constant as imported, so lowering
+    ``ZERO_MODE_AMBIGUITY_FACTOR`` into the healthy distribution turns it red.
+
+    Seed 1234 is not arbitrary: it produced the largest healthy ratio anywhere
+    in the sweep, so it is the worst case this population is known to contain.
+    """
+    cal = _calibration_module()
+    worst = 0.0
+    for seed in (1234, _committed()["seed"]):
+        rows = [cal.measure(g) for g in cal._healthy_generators(seed, 3)]
+        assert rows, "empty sample"
+        for row in rows:
+            assert row.certified, f"{row.label} did not certify -- not a healthy sample"
+            if np.isfinite(row.ratio):
+                worst = max(worst, float(row.ratio))
+    assert worst > 0.0, "a sample of all-zero ratios would pass vacuously"
+    assert worst < ZERO_MODE_AMBIGUITY_FACTOR, (
+        f"a freshly measured healthy generator reaches {worst:.3g}x, at or above "
+        f"the shipped split {ZERO_MODE_AMBIGUITY_FACTOR:g}"
+    )
+
+
+def test_the_healthy_maximum_is_seed_noise_and_not_a_population_bound() -> None:
+    """LIMITATION PIN. Quoting one maximum is quoting one draw.
+
+    Two facts together make the point. First, the maximum moves substantially
+    between seeds at a FIXED sample size. Second, in every cell of the sweep the
+    largest healthy ratio comes from ``random_gksl`` -- the only family the seed
+    controls -- so the movement is the RNG, not fixture drift.
+
+    Note for whoever touches
+    ``test_the_healthy_sample_is_large_enough_to_expose_an_order_statistic``
+    above: it compares maxima across sample sizes at three neighbouring seeds.
+    The sweep shows that comparison is seed-luck -- the mean maximum is 3.05 at
+    n=96, 3.68 at n=339 and 3.69 at n=969, i.e. already flat, while the
+    seed-to-seed spread at fixed n reaches 2.45x. That test still passes on the
+    committed seed and is left alone; do not read it as evidence of growth.
+    """
+    payload = _committed_sweep()
+    smallest = str(min(payload["draws_levels"]))
+    block = payload["by_draws"][smallest]
+    spread = block["across_seeds_max"]["spread_factor_max_over_min"]
+    assert spread > 1.5, (
+        f"the healthy maximum now moves only {spread:.2f}x across seeds -- if it "
+        "has genuinely become stable, say what made it stable instead of "
+        "quoting a maximum again"
+    )
+    families = {c["argmax_family"] for b in payload["by_draws"].values() for c in b["cells"]}
+    assert families == {"random_gksl"}, (
+        f"the largest healthy ratio no longer comes only from the seeded family: "
+        f"{sorted(families)} -- the 'this is seed noise' diagnosis needs redoing"
+    )
+    # The p95 is the statistic that survives: it must move less than the max.
+    largest = str(max(payload["draws_levels"]))
+    big = payload["by_draws"][largest]
+    assert (
+        big["across_seeds_p95"]["spread_factor_max_over_min"]
+        < big["across_seeds_max"]["spread_factor_max_over_min"]
+    )
+
+
+def test_the_seed_sweep_does_not_flatter_the_separation() -> None:
+    """Sweeping seeds may only make the nearest pair TIGHTER, never wider.
+
+    The single-seed artefact's healthy maximum is one draw; pooling more draws
+    of the same population can only find a larger maximum, hence a smaller gap
+    to the lowest genuine defect. If this inequality ever inverted, the two
+    artefacts would be measuring different populations.
+
+    Measured: 1.15 at the single seed, 1.03 over the sweep.
+    """
+    sweep = _committed_sweep()
+    assert _committed()["seed"] in sweep["seeds"], (
+        "the sweep must contain the single-seed artefact's seed, or the two "
+        "numbers below are not comparable"
+    )
+    single = _committed()["separation"]
+    pooled = sweep["pooled"]
+    assert pooled["healthy_max_over_whole_sweep"] >= single["healthy_max_ratio"]
+    assert pooled["nearest_pair_factor_over_whole_sweep"] <= (
+        single["separation_factor_healthy_max_to_lowest_defect"]
+    )
+    assert 1.0 < pooled["nearest_pair_factor_over_whole_sweep"] < 1.5, (
+        "if the populations are now comfortably apart, the constant's "
+        "justification changed and the comments must be re-derived"
+    )
+
+
+def test_both_calibration_artefacts_agree_on_the_seed_free_stiff_reference() -> None:
+    """The stiff population takes no seed, so both artefacts must see it identically.
+
+    This is what makes the cross-artefact comparison above legitimate: the
+    defect side is the same six generators, not a second sample.
+    """
+    single = _committed()["separation"]
+    stiff = _committed_sweep()["stiff_reference"]
+    assert stiff["lowest_defective_ratio"] == pytest.approx(
+        single["lowest_defective_ratio"], rel=1e-12
+    )
+    assert stiff["missed_by_shipped_split"] == sorted(
+        single["defects_missed_by_current_split"]
+    )
+    assert len(stiff["defective_labels"]) == single["n_stiff_actually_defective"]
+
+
+@pytest.mark.slow
+def test_seed_sweep_is_reproducible_in_its_structure() -> None:
+    """Re-run one cell of the sweep and compare what round-off cannot move.
+
+    Same rule as the single-seed artefact: counts and provenance are pinned,
+    the digits are not, because the measured quantity IS backward error.
+    """
+    payload = _committed_sweep()
+    mod = _sweep_module()
+    cal = _calibration_module()
+    seed = payload["seeds"][0]
+    draws = min(payload["draws_levels"])
+    fresh = mod._one_cell(
+        cal, seed, draws, payload["pooled"]["lowest_defective_stiff_ratio"]
+    )
+    committed = next(
+        c for c in payload["by_draws"][str(draws)]["cells"] if c["seed"] == seed
+    )
+    assert fresh["all"]["n"] == committed["all"]["n"]
+    assert fresh["n_base_random_generators"] == committed["n_base_random_generators"]
+    assert fresh["n_base_fixed_generators"] == committed["n_base_fixed_generators"]
+    assert fresh["argmax_family"] == committed["argmax_family"]
+    assert fresh["n_at_or_above_shipped_split"] == (
+        committed["n_at_or_above_shipped_split"]
+    )
 
 
 # ---------------------------------------------------------------------------
