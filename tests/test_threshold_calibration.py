@@ -262,6 +262,31 @@ def test_seed_sweep_artefact_exists_and_declares_its_seeds() -> None:
     assert payload["shipped_split"] == pytest.approx(ZERO_MODE_AMBIGUITY_FACTOR)
 
 
+@pytest.mark.parametrize("path", [_ARTEFACT, _SWEEP], ids=["single_seed", "seed_sweep"])
+def test_calibration_artefacts_are_standards_compliant_json(path: Path) -> None:
+    """SILENT FAILURE GUARD. ``json.dumps`` writes ``Infinity``; RFC 8259 has no such literal.
+
+    Python round-trips it without complaint, so an artefact can be committed,
+    read back by every test here, and still be rejected by jq, by a JS consumer
+    or by any strict re-parse. Caught exactly that way while building the seed
+    sweep: the across-seed spread of the MEDIAN divides by zero at the small
+    sample size, where every median is exactly 0.0, and the fallback wrote
+    ``Infinity`` into the file.
+
+    ``parse_constant`` is the only hook that sees those three bare words, so
+    raising from it is the test. Reading the file with plain ``json.loads``
+    would pass on a broken artefact.
+    """
+    def reject(literal: str) -> float:
+        raise AssertionError(
+            f"{path.name} contains the non-standard JSON literal {literal!r}: "
+            "encode undefined values as null (see _jsonable in both benchmark "
+            "scripts), do not widen this test"
+        )
+
+    json.loads(path.read_text(encoding="utf-8"), parse_constant=reject)
+
+
 def test_no_healthy_generator_in_the_sweep_reaches_the_shipped_split() -> None:
     """The question the ``_consts.py`` comment left open, answered with a count.
 

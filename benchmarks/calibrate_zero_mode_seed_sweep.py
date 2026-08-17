@@ -119,6 +119,22 @@ def _calibration_module() -> Any:
     return module
 
 
+def _jsonable(value: float) -> float | None:
+    """RFC 8259 has no NaN/Infinity literal -- same rule as the sibling script.
+
+    ``json.dumps`` happily writes the bare word ``Infinity``, which Python reads
+    back without complaint and every standards-compliant parser rejects. That is
+    a silent failure: the tests here go green while the artefact is unreadable
+    to jq, to a JS consumer, or to any strict re-parse. Found exactly that way
+    -- the across-seed spread of the MEDIAN divides by zero at the small sample
+    size, where every median is exactly 0.0.
+
+    A ratio with a zero denominator is genuinely undefined, so ``null`` is also
+    the honest encoding, not merely the portable one.
+    """
+    return float(value) if np.isfinite(value) else None
+
+
 def _percentiles(values: list[float]) -> dict[str, Any]:
     """Percentile summary; refuses an empty sample instead of emitting NaN."""
     finite = [v for v in values if np.isfinite(v)]
@@ -161,12 +177,14 @@ def _stiff_reference(mod: Any) -> dict[str, Any]:
             "the healthy population FROM, so the sweep has no reference"
         )
     return {
-        "ratios": {r.label: float(r.ratio) for r in rows},
+        "ratios": {r.label: _jsonable(r.ratio) for r in rows},
         "defective_labels": sorted(r.label for r in defective),
         "unresolved_slow_mode_ratios": sorted(
-            (float(r.ratio) for r in defective), reverse=True
+            (float(r.ratio) for r in defective if np.isfinite(r.ratio)), reverse=True
         ),
-        "lowest_defective_ratio": float(min(r.ratio for r in defective)),
+        "lowest_defective_ratio": float(
+            min(r.ratio for r in defective if np.isfinite(r.ratio))
+        ),
         "flagged_by_shipped_split": sorted(r.label for r in defective if not r.resolved),
         "missed_by_shipped_split": sorted(r.label for r in defective if r.resolved),
     }
@@ -229,7 +247,10 @@ def _across_seeds(cells: list[dict[str, Any]], key: str) -> dict[str, Any]:
         "min": lo,
         "max": hi,
         "mean": float(np.mean(vals)),
-        "spread_factor_max_over_min": (hi / lo) if lo > 0.0 else float("inf"),
+        # null, not Infinity: see _jsonable. A zero denominator means the
+        # statistic is identically zero at every seed (the median at the small
+        # sample size), i.e. the spread is undefined rather than infinite.
+        "spread_factor_max_over_min": _jsonable(hi / lo) if lo > 0.0 else None,
         "values_by_seed": {str(c["seed"]): float(c["all"][key]) for c in cells},
     }
 
@@ -322,15 +343,15 @@ def run(
             "n_at_or_above_lowest_defect": total_ge_defect,
             "lowest_defective_stiff_ratio": overlap_level,
             "margin_shipped_split_over_pooled_healthy_max": (
-                float(ZERO_MODE_AMBIGUITY_FACTOR) / pooled_max
+                _jsonable(float(ZERO_MODE_AMBIGUITY_FACTOR) / pooled_max)
                 if pooled_max > 0.0
-                else float("inf")
+                else None
             ),
             # The number the _consts.py comment quotes as "4.23 against 4.87,
             # a factor 1.15" -- recomputed against the sweep's healthy max
             # instead of one seed's.
             "nearest_pair_factor_over_whole_sweep": (
-                overlap_level / pooled_max if pooled_max > 0.0 else float("inf")
+                _jsonable(overlap_level / pooled_max) if pooled_max > 0.0 else None
             ),
         },
     }
@@ -358,14 +379,19 @@ def main(argv: list[str] | None = None) -> int:
         f"seeds={len(payload['seeds'])}  draws levels={payload['draws_levels']}  "
         f"shipped split={payload['shipped_split']:g}"
     )
+    def _fmt(value: float | None) -> str:
+        # The undefined spread (zero denominator) must print as "n/a", not
+        # crash the summary and not silently read as a number.
+        return "n/a" if value is None else f"{value:.2f}x"
+
     for draws in payload["draws_levels"]:
         block = payload["by_draws"][str(draws)]
         mx, p95 = block["across_seeds_max"], block["across_seeds_p95"]
         n_per_seed = block["cells"][0]["all"]["n"]
         print(
             f"  draws={draws:<4d} n/seed={n_per_seed:<5d} "
-            f"max {mx['min']:.3g}..{mx['max']:.3g} ({mx['spread_factor_max_over_min']:.2f}x)  "
-            f"p95 {p95['min']:.3g}..{p95['max']:.3g} ({p95['spread_factor_max_over_min']:.2f}x)"
+            f"max {mx['min']:.3g}..{mx['max']:.3g} ({_fmt(mx['spread_factor_max_over_min'])})  "
+            f"p95 {p95['min']:.3g}..{p95['max']:.3g} ({_fmt(p95['spread_factor_max_over_min'])})"
         )
     pooled = payload["pooled"]
     print(
@@ -381,9 +407,9 @@ def main(argv: list[str] | None = None) -> int:
     )
     print(
         f"margin of the shipped split over the pooled healthy max: "
-        f"{pooled['margin_shipped_split_over_pooled_healthy_max']:.2f}x  |  "
+        f"{_fmt(pooled['margin_shipped_split_over_pooled_healthy_max'])}  |  "
         f"nearest pair (lowest defect / healthy max): "
-        f"{pooled['nearest_pair_factor_over_whole_sweep']:.2f}x"
+        f"{_fmt(pooled['nearest_pair_factor_over_whole_sweep'])}"
     )
 
     if args.print_only:
