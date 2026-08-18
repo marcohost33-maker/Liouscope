@@ -312,6 +312,10 @@ def compute_relaxation_layer(
     # Bootstrap on the winning model for beta_D
     beta_D = _beta_from_params(winner, fits[winner].params) if winner in fits else float("nan")
     bca_lo, bca_hi = beta_D, beta_D
+    # Issue #116: record which interval estimator actually ran. "none" covers
+    # both no-interval outcomes (non-finite point estimate -> degenerate CI,
+    # bootstrap failure -> (nan, nan)); the success path overwrites it.
+    interval_method = "none"
     if winner in fits and np.isfinite(beta_D):
         winner_fn = {"M0": M0, "M1": M1, "M2": M2, "M3a": M3a, "M3b": M3b}[winner]
         try:
@@ -320,9 +324,17 @@ def compute_relaxation_layer(
                 B=bootstrap_B, rng=np.random.default_rng(seed),
             )
             jk = None
+            # Latency guard, not a statistical choice: the leave-one-out
+            # jackknife refits the winning model once per grid point on top of
+            # bootstrap_B refits, so it is skipped on long grids. The default
+            # grid has 80 points, so the default pipeline lands in the a = 0
+            # fallback of bca_ci and reports a bias-corrected (BC) interval,
+            # not BCa. That is disclosed via interval_method (issue #116)
+            # rather than silently carried by the field name.
             if t_grid.size <= 60:
                 jk = _jackknife(winner_fn, t_grid, rel_entropy, theta_hat, None)
             cis = bca_ci(samples, theta_hat, jackknife_estimates=jk)
+            interval_method = "BCa" if jk is not None else "BC"
             beta_idx = _beta_index(winner, fits[winner].params)
             bca_lo, bca_hi = float(cis[beta_idx, 0]), float(cis[beta_idx, 1])
         except (ValueError, RuntimeError, np.linalg.LinAlgError) as exc:
@@ -369,4 +381,5 @@ def compute_relaxation_layer(
         bca_ci_beta=(bca_lo, bca_hi),
         beta_D_linear=float(beta_D_linear),
         linear_fit_model=linear_fit_model,
+        interval_method=interval_method,
     )
