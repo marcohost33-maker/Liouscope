@@ -205,3 +205,19 @@ def test_chi1_lower_bound_matches_dense_petermann_sqrt(pauli):
     # And it must be attained by one of the modes (not K^(1/4) of one).
     sqrt_Ks = np.sqrt(K)
     assert np.min(np.abs(sqrt_Ks - chi)) < 1e-6 * max(1.0, chi)
+
+
+def test_sparse_hermiticity_gate_is_invariant_to_real_energy_offsets():
+    """Parity with the dense builder (twelfth-round review)."""
+    import scipy.sparse as _sp
+
+    bad = _sp.csr_matrix(
+        np.array([[0.0, 1.0e-3], [0.0, 0.0]], dtype=complex)
+    )
+    sm = _sp.csr_matrix(np.array([[0, 1], [0, 0]], dtype=complex))
+    eye = _sp.identity(2, dtype=complex, format="csr")
+
+    with pytest.raises(ValueError, match=r"[Hh]ermitian"):
+        build_sparse_liouvillian(bad, [sm], [1.0])
+    with pytest.raises(ValueError, match=r"[Hh]ermitian"):
+        build_sparse_liouvillian(bad + 1.0e9 * eye, [sm], [1.0])

@@ -24,7 +24,9 @@ from typing import Literal
 
 import numpy as np
 
+from .._consts import EPS_HERMITICITY
 from ..numerics.kronecker import unvec, vec
+from ..numerics.linalg import hermiticity_defect
 
 # Near-zero-trace threshold for the unit-2-norm null-vector candidate in
 # steady_state(). The candidate's trace is dimensionless (bounded by sqrt(d)),
@@ -98,12 +100,30 @@ def build_liouvillian(
     if not np.all(np.isfinite(H)):
         raise ValueError("H contains non-finite entries")
     d = H.shape[0]
-    # rtol=0 explicit: np.allclose's default rtol=1e-5 would let an H that is
-    # non-Hermitian at ~1e-5*|entry| pass a gate the message advertises as
-    # 1e-9 absolute (physical Hamiltonians are Hermitian to machine precision,
-    # so a true 1e-9 gate rejects only genuinely malformed input).
-    if not np.allclose(H, H.conj().T, rtol=0.0, atol=1.0e-9):
-        raise ValueError("H must be Hermitian within 1e-9 atol")
+    # Scale-relative Hermiticity gate (issue #109). H carries energy/rate
+    # dimension, so an ABSOLUTE 1e-9 made the verdict depend on the caller's
+    # units: it accepted a genuinely non-Hermitian H once ||H|| fell below
+    # ~1e-3 (fail-open into a non-GKSL generator) and rejected an exactly
+    # Hermitian H once ||H|| rose above ~1e8, where similarity round-off alone
+    # exceeds 1e-9. EPS_HERMITICITY is now read as a RELATIVE tolerance, so at
+    # unit scale the gate is unchanged.
+    # Gauge invariance (twelfth-round review): the dynamics depend on H only
+    # through the commutator, so adding a REAL multiple of the identity changes
+    # nothing physical -- but it inflates max|H| and thereby loosens a
+    # scale-relative gate (H + 1e9*I passed with the same non-Hermitian part
+    # that H alone rejected). The defect is measured on H itself (a real
+    # diagonal shift cannot change H - H^dag), while the SCALE comes from the
+    # gauge-fixed traceless part.
+    d_h = H.shape[0]
+    H_gauge = H - (np.trace(H).real / d_h) * np.eye(d_h, dtype=complex)
+    defect, _ = hermiticity_defect(H)
+    _, scale = hermiticity_defect(H_gauge)
+    if defect > EPS_HERMITICITY * scale:
+        raise ValueError(
+            f"H must be Hermitian within a relative {EPS_HERMITICITY:g} "
+            f"(max|H - H^dag| = {defect:.3e}, max|H| = {scale:.3e}, "
+            f"relative defect = {defect / scale if scale else float('inf'):.3e})"
+        )
 
     if jump_ops is None:
         jump_ops = []

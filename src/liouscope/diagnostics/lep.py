@@ -11,14 +11,19 @@ from __future__ import annotations
 import numpy as np
 import scipy.linalg as sla
 
-from .._consts import EPS_GAP
 from .._types import LepResult
 from ..core.lindblad import steady_state
 from ..io.seed import RNGLike, SeedLike, derive_seed
 from ..numerics.kronecker import unvec, vec
+from ..numerics.scale import spectral_zero_tolerance
 
 
-def lep_proximity(eigenvalues: np.ndarray, *, atol: float = EPS_GAP) -> tuple[float, int]:
+def lep_proximity(
+    eigenvalues: np.ndarray,
+    *,
+    rtol: float | None = None,
+    atol: float | None = None,
+) -> tuple[float, int]:
     """Minimum eigenvalue-pair separation, including complex-conjugate pairs.
 
     Returns ``(min_sep, candidate_count)`` where ``candidate_count`` is the
@@ -55,6 +60,17 @@ def lep_proximity(eigenvalues: np.ndarray, *, atol: float = EPS_GAP) -> tuple[fl
             "lep_proximity requires finite eigenvalues; "
             f"non-finite entries at indices {bad}"
         )
+    # Issue #108: the coalescence threshold is a rate-dimensioned SEPARATION,
+    # so an absolute floor made "are these two eigenvalues coalesced?" depend on
+    # the choice of rate unit -- under L -> cL with small c every separation
+    # fell below the floor and reported proximity 0.0, the STRONGEST possible EP
+    # signal, for an ordinary well-separated spectrum. Both the clamp and the
+    # candidate-count window now scale with the spectral radius.
+    tol = (
+        spectral_zero_tolerance(eigenvalues, atol=atol, name="eigenvalues")
+        if rtol is None
+        else spectral_zero_tolerance(eigenvalues, rtol=rtol, atol=atol, name="eigenvalues")
+    )
     n = eigenvalues.size
     if n < 2:
         return float("inf"), 0
@@ -65,9 +81,9 @@ def lep_proximity(eigenvalues: np.ndarray, *, atol: float = EPS_GAP) -> tuple[fl
             if sep < min_sep:
                 min_sep = sep
     # Exact / numerically-degenerate closest pair == strongest EP signal.
-    if min_sep <= atol:
+    if min_sep <= tol:
         min_sep = 0.0
-    window = max(10.0 * min_sep, atol)
+    window = max(10.0 * min_sep, tol)
     pairs_close = 0
     for i in range(n):
         for j in range(i + 1, n):
