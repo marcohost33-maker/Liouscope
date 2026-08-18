@@ -37,7 +37,53 @@ abstract: >-
 # mechanism hypotheses are reported alongside the dominant label with their
 # priority-shadowing status (`ClassificationResult.triggered_hypotheses`,
 # issue #102), and the support score is a documented deterministic heuristic
-# rather than a calibrated probability.
+# rather than a calibrated probability; a hypothesis-wise evidence matrix
+# spanning the full A1-A12 taxonomy reports supporting measurements,
+# counterevidence, missing evidence and explicit fail-closed claim floors, with
+# the schema-reserved classes excluded from claims and coverage denominators
+# (`ClassificationResult.hypothesis_matrix`, issue #102); and the zero-mode
+# separation underlying D1/D3/D4/D9/D16/D19/D20/D24 is scale-relative, so those
+# diagnostics no longer depend on the choice of rate unit (issue #108). The
+# last item CHANGES NUMERICAL RESULTS for generators whose spectral radius is
+# far from unity and must be described as a correction, not merely an addition,
+# when the release is cut. It must NOT be described as making the mechanism
+# verdict unit-invariant in general: the A10/F5 branch still gates on the
+# rate-dimensioned henrici_eta threshold (open in #101).
+# Also pending for the next cut: the spectral layer verifies the computed
+# spectrum against the exact identity vec(I)^H L = 0 before reading D1/D3/D4
+# off it, and re-solves by an alternative LAPACK route when a stiff generator
+# makes zgeev deflate the zero mode away (issue #112). This too CHANGES
+# NUMERICAL RESULTS -- on stiff generators only -- and must be described as a
+# correction rather than an addition: the previously reported gap could be a
+# spurious mode rather than an inaccurate one (measured 7.28e-6 against a true
+# 1.074e-5 on a four-level classical jump network). It must NOT be described as
+# making the dense spectral layer reliable for arbitrarily stiff generators:
+# when no route satisfies the certificate the layer is marked unresolved, which
+# is a disclosure, not a repair. Certification and downstream zero-mode
+# filtering share ONE operator-derived scale (rtol * eps * ||L||_2) at every
+# call site that holds the operator -- spectral layer, Mpemba layer, Petermann
+# factors and the D24 predictor, which is now itself routed through the
+# certified eigensolve and returns an unconverged record on unresolved spectra
+# (round-13 review). This corrects spurious near-zero or negative D1 gaps on
+# strongly non-normal generators, where the spectral radius understates the
+# eigensolver backward error by the ||L||_2 / max|lambda| ratio (measured
+# 3.9e3 at dimension four). The operator-derived bound applies only when the
+# certificate is applicable (trace preservation established); otherwise the
+# filters fall back to the radius-based tolerance, and the Petermann factors
+# (D9) likewise consume the certified eigendecomposition, withholding NaN on
+# unresolved spectra (round-14 review). The eigenvector-producing certificate
+# additionally validates per-mode left/right eigenvector residuals before
+# certifying (a small |lambda| does not vouch for the vectors D19/D9 consume),
+# and the repair ladder continues past ambiguous candidates so a later route
+# can resolve what the incumbent cannot (round-15 review). The Prony fallback
+# seeds for the M3b fit are grid-relative (round-16 review), removing a
+# rate-unit dependence that corrupted fitted rates on non-uniform grids far
+# from unit span; D24's partial recomputation and D11's eigenvalue input now
+# match the certificate of what they actually consume. Hermiticity
+# validation of the Hamiltonian is
+# likewise scale-relative rather than absolute (issue #109), which closes a
+# fail-open path that admitted non-GKSL generators at small ||H||; this changes
+# which inputs are ACCEPTED, not the numerics of accepted ones.
 keywords:
   - open quantum systems
   - Lindblad

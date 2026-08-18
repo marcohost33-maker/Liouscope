@@ -561,13 +561,83 @@ def test_unresolved_spectrum_withholds_the_mpemba_overlap():
     assert result.is_mpemba_candidate is False
 
 
-# HINWEIS (Zuschnitt 2026-08-18): hier stand
-# `test_unresolved_certificate_floors_the_verdict_to_undefined`.
-# Er ist NICHT geloescht, sondern in den zweiten Teil des Zuschnitts verschoben:
-# er prueft, dass ein nicht aufgeloestes Zertifikat den VERDIKT auf UNDEFINED
-# floort, und das ist Verhalten der Klassifikations-Schicht
-# (`_apply_spectral_certificate_floor`), die in diesem Teil nicht enthalten ist.
-# Er war der EINZIGE Test von 856, der die Schnittkante ueberschreitet.
+def test_unresolved_certificate_floors_the_verdict_to_undefined():
+    """No mechanism claim may stand on a spectrum the solver could not resolve.
+
+    Fail-closed at the VERDICT level, exactly like the non-finite-beta_D floor:
+    class and family remain the best-fit hypothesis, the claim degrades to
+    UNDEFINED / EXPLORATION. Synthetic certificates keep the test independent
+    of which fixtures happen to defeat the current repair ladder.
+    """
+    from liouscope._types import (
+        LepResult,
+        MpembaResult,
+        NonNormalityResult,
+        RelaxationResult,
+        ResolventResult,
+        SpectralResult,
+        TransientResult,
+    )
+    from liouscope.diagnostics.classification import classify_mechanism
+
+    arr = np.zeros(1, dtype=complex)
+
+    def _classify(certificate):
+        # Local synthetic results (no cross-test import: the ``tests``
+        # directory is not an importable package on the CI runner).
+        return classify_mechanism(
+            SpectralResult(
+                gap=0.5, gns_gap=0.5, kms_gap=0.5, oscillating_gap=0.1,
+                spectral_spread=1.0, eigenvalues=arr,
+                steady_state=np.zeros((1, 1), dtype=complex),
+                has_complex_pairs=False, zero_mode_certificate=certificate,
+            ),
+            NonNormalityResult(
+                henrici_eta=0.5, petermann_max=1.0, petermann_factors=arr,
+                kreiss=1.0, bohr_ap_length=1, bohr_ap_pauli_bound=0.0,
+            ),
+            RelaxationResult(
+                von_neumann_entropy=0.0, relative_entropy_curve=arr.real,
+                fidelity_curve=arr.real, entanglement_asymmetry=None, fits={},
+                aicc_model="M1", beta_D=0.5, bca_ci_beta=(0.4, 0.6),
+            ),
+            ResolventResult(
+                resolvent_peak=1.0, ridge_fwhm=1.0, pseudospectral_radius=0.5,
+                pseudospec_eps=1.0e-3,
+            ),
+            TransientResult(
+                trans_amplitude_ratio=1.0, kappa_trans=1.0, numerical_abscissa=0.0,
+            ),
+            LepResult(
+                lep_proximity=1.0, gap_rate_consistency=0.01,
+                initial_state_sensitivity=0.0, lep_candidate_count=0,
+            ),
+            MpembaResult(
+                overlap_c1=0.5, expansion_alpha=1.0, is_mpemba_candidate=False,
+            ),
+        )
+
+    resolved = _classify(
+        {"applicable": True, "certified": True, "resolved": True}
+    )
+    assert resolved.verdict != "UNDEFINED"
+
+    for bad in (
+        {"applicable": True, "certified": False, "resolved": False},
+        {"applicable": True, "certified": True, "resolved": False},  # ambiguous
+    ):
+        floored = _classify(bad)
+        assert floored.verdict == "UNDEFINED"
+        assert floored.tier == "EXPLORATION"
+        assert floored.a_class == resolved.a_class  # hypothesis label preserved
+        assert floored.evidence["spectral_resolved"] == 0.0
+
+    # Not applicable (non-trace-preserving input): no floor, no evidence key.
+    inapplicable = _classify(
+        {"applicable": False, "certified": False, "resolved": False}
+    )
+    assert inapplicable.verdict == resolved.verdict
+    assert "spectral_resolved" not in inapplicable.evidence
 
 
 # --------------------------------------------------------------------------

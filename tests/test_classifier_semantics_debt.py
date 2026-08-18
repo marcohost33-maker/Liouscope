@@ -76,10 +76,14 @@ def _returned_a_classes_via_ast() -> set[str]:
     forces ``RESERVED_A_CLASSES`` to be updated in lock-step.
 
     Issue #102 moved the branch conditions out of ``_pick_a_class`` and into
-    ``_hypothesis_ladder``, which is now the single source for BOTH the winning
-    class and the shadow report. The scan follows: any ``"Ax"`` literal in
-    either function counts. Rule identifiers such as ``"A1_LINEAR_SINGLE_EXP"``
-    are excluded by the strict pattern, so they cannot inflate the set.
+    ``_hypothesis_ladder``, and then (evidence-matrix slice) into the
+    declarative ``_ladder_spec``, which is now the single source for the
+    winning class, the shadow report AND the hypothesis evidence matrix. The
+    scan follows: any ``"Ax"`` literal in these functions counts. Rule
+    identifiers such as ``"A1_LINEAR_SINGLE_EXP"`` are excluded by the strict
+    pattern, so they cannot inflate the set. ``hypothesis_evidence_matrix`` is
+    deliberately NOT scanned: it also lists the reserved classes (as
+    RESERVED / non-claims), which must not count as reachable.
     """
     tree = ast.parse(_CLF_SRC.read_text(encoding="utf-8"))
     a_class_re = re.compile(r"^A(?:[1-9]|1[0-2])$")
@@ -88,6 +92,7 @@ def _returned_a_classes_via_ast() -> set[str]:
         if isinstance(node, ast.FunctionDef) and node.name in {
             "_pick_a_class",
             "_hypothesis_ladder",
+            "_ladder_spec",
         }:
             for inner in ast.walk(node):
                 if (
@@ -373,3 +378,19 @@ def test_advisory_non_influence_holds_across_several_base_classes():
             a, f = _pick_a_class(ev, relaxation=relaxation)
             assert (a, f) == (a0, f0)
             assert _confidence(ev, a) == c0
+
+
+def test_reserved_a_classes_mapping_is_immutable():
+    """A consumer must not be able to mutate the reachability contract.
+
+    The import-time coverage guard compares the ladder against
+    ``REACHABLE_A_CLASSES``, which is precomputed from this mapping — a
+    post-import ``pop("A6")`` would silently desynchronise the taxonomy from
+    the guard that certifies it.
+    """
+    import pytest
+
+    with pytest.raises(TypeError):
+        RESERVED_A_CLASSES["A6"] = "mutated"  # type: ignore[index]
+    with pytest.raises((TypeError, AttributeError)):
+        RESERVED_A_CLASSES.pop("A6")  # type: ignore[attr-defined]

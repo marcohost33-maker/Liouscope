@@ -6,6 +6,8 @@ packaged schemas and public documentation.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+from types import MappingProxyType
 from typing import Final
 
 TAXONOMY_VERSION: Final[str] = "A1-A12-v3.1"
@@ -113,15 +115,30 @@ A_CLASSES: Final[tuple[str, ...]] = (
     "A7", "A8", "A9", "A10", "A11", "A12",
 )
 
-RESERVED_A_CLASSES: Final[dict[str, str]] = {
+# Immutable BY DESIGN (ninth-round review, both directions weighed): the
+# import-time reachability guard and REACHABLE_A_CLASSES derive from this
+# mapping, so a consumer-side ``pop("A6")`` would silently desynchronise the
+# taxonomy from the guard that certifies it. The three catalogs above stay
+# plain dicts -- they are long-established public exports whose consumers
+# legitimately ``json.dumps``/``deepcopy`` them, and mutating them desyncs no
+# decision logic. This mapping is NEW public API in the same release that
+# freezes it, so nothing established loses serialisability.
+RESERVED_A_CLASSES: Final[Mapping[str, str]] = MappingProxyType({
     "A6": "reserved (taxonomy A1-A12-v3.1; no classifier branch yet -- needs an "
     "accelerated-decay / operator-spreading detector distinct from A5)",
     "A7": "reserved (taxonomy A1-A12-v3.1; no classifier branch yet -- needs a "
     "weak-dissipation singular-perturbation probe, Mori 2024)",
     "A9": "reserved (taxonomy A1-A12-v3.1; no classifier branch yet -- needs "
     "ETH / level-statistics signals for the prethermalization regime)",
-}
+})
 
+# Issue #102 reachability/ontology gate: the coverage DENOMINATOR for any
+# "n of N classes" statement. Reserved classes have no code-backed decision
+# rule, are excluded from claims (their hypothesis-matrix claim floor is
+# permanently UNDEFINED) and must not inflate coverage denominators.
+REACHABLE_A_CLASSES: Final[tuple[str, ...]] = tuple(
+    a for a in A_CLASSES if a not in RESERVED_A_CLASSES
+)
 
 F_FAMILIES: Final[tuple[str, ...]] = ("F1", "F2", "F3", "F4", "F5", "none")
 
