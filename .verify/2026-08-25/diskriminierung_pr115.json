@@ -1,0 +1,59 @@
+{
+  "repo": "C:/Users/marco/dev/Liouscope",
+  "test_befehl": [".venv/Scripts/python.exe", "-m", "pytest"],
+  "faelle": [
+    {"name": "PR115-1 Kernfix zurueck: absolutes Fenster statt gap-skaliert",
+     "datei": "src/liouscope/diagnostics/relaxation.py",
+     "alt": "    return np.linspace(0.0, horizon / float(gap), n_points)",
+     "neu": "    return np.linspace(0.0, _LEGACY_T_MAX, n_points)",
+     "test": "tests/test_relaxation_grid_scale.py::test_fitted_rates_scale_with_the_rate_unit"},
+
+    {"name": "PR115-2 Modellwahl-Invarianz faellt mit dem absoluten Fenster",
+     "datei": "src/liouscope/diagnostics/relaxation.py",
+     "alt": "    return np.linspace(0.0, horizon / float(gap), n_points)",
+     "neu": "    return np.linspace(0.0, _LEGACY_T_MAX, n_points)",
+     "test": "tests/test_relaxation_grid_scale.py::test_aicc_model_selection_is_rate_unit_invariant"},
+
+    {"name": "PR115-3 Rueckwaertskompatibilitaet: HORIZON verstellt",
+     "datei": "src/liouscope/diagnostics/relaxation.py",
+     "alt": "RELAXATION_HORIZON: float = 10.0",
+     "neu": "RELAXATION_HORIZON: float = 11.0",
+     "test": "tests/test_relaxation_grid_scale.py::test_default_grid_is_bit_identical_to_the_legacy_window_at_unit_gap"},
+
+    {"name": "PR115-4 Legacy-Rueckfall verstellt (kein Decay-Scale)",
+     "datei": "src/liouscope/diagnostics/relaxation.py",
+     "alt": "_LEGACY_T_MAX: float = 10.0",
+     "neu": "_LEGACY_T_MAX: float = 20.0",
+     "test": "tests/test_relaxation_grid_scale.py::test_default_grid_falls_back_when_no_decay_scale_exists"},
+
+    {"name": "PR115-5 Herkunft luegt: legacy_fixed wird als gap_scaled gemeldet",
+     "datei": "src/liouscope/diagnostics/relaxation.py",
+     "alt": "        t_grid_source = (\n            \"gap_scaled\" if np.isfinite(gap) and gap > 0.0 else \"legacy_fixed\"\n        )",
+     "neu": "        t_grid_source = \"gap_scaled\"",
+     "test": "tests/test_relaxation_grid_scale.py::test_unresolved_gap_degrades_to_the_documented_legacy_window"},
+
+    {"name": "PR115-6 Caller-Gitter wird als Default ausgegeben",
+     "datei": "src/liouscope/diagnostics/relaxation.py",
+     "alt": "        t_grid_source = \"caller\"",
+     "neu": "        t_grid_source = \"gap_scaled\"",
+     "test": "tests/test_relaxation_grid_scale.py::test_grid_provenance_records_an_explicit_caller_grid"},
+
+    {"name": "PR115-7 Runde-3-Fix zurueck: blinder Vorlauf ignoriert",
+     "datei": "src/liouscope/diagnostics/relaxation.py",
+     "alt": "    blind = max(dt, lead_in)",
+     "neu": "    blind = dt",
+     "test": "tests/test_relaxation_grid_scale.py::test_late_starting_grid_counts_its_unsampled_lead_in"},
+
+    {"name": "PR115-8 Offenlegung abgeschaltet (Warnung faellt aus)",
+     "datei": "src/liouscope/diagnostics/relaxation.py",
+     "alt": "    if np.isfinite(fast_resolution) and fast_resolution < MIN_SAMPLES_PER_FAST_EFOLD:",
+     "neu": "    if False:",
+     "test": "tests/test_relaxation_grid_scale.py::test_widely_separated_rates_disclose_the_unsampled_fast_mode"},
+
+    {"name": "PR115-9 Momentaufnahme wird zum Alias",
+     "datei": "src/liouscope/diagnostics/relaxation.py",
+     "alt": "        t_grid=t_grid.copy(),",
+     "neu": "        t_grid=t_grid,",
+     "test": "tests/test_relaxation_grid_scale.py::test_stored_grid_is_a_snapshot_not_an_alias"}
+  ]
+}
