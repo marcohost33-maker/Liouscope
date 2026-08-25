@@ -1,0 +1,17 @@
+{
+  "repo": "C:/Users/marco/dev/Liouscope",
+  "test_befehl": [".venv/Scripts/python.exe", "-m", "pytest"],
+  "faelle": [
+    {"name": "PR119-5a Gate nach unten verschoben (<=60 -> <60), Test n=60",
+     "datei": "src/liouscope/diagnostics/relaxation.py",
+     "alt": "            if t_grid.size <= 60:",
+     "neu": "            if t_grid.size < 60:",
+     "test": "tests/test_interval_method.py::test_short_grid_reports_bca"},
+
+    {"name": "PR119-5b Gate nach oben verschoben (<=60 -> <=61), Test n=61",
+     "datei": "src/liouscope/diagnostics/relaxation.py",
+     "alt": "            if t_grid.size <= 60:",
+     "neu": "            if t_grid.size <= 61:",
+     "test": "tests/test_interval_method.py::test_gate_boundary_is_60_points"}
+  ]
+}

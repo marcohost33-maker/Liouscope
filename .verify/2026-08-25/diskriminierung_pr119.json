@@ -1,0 +1,47 @@
+{
+  "repo": "C:/Users/marco/dev/Liouscope",
+  "test_befehl": [".venv/Scripts/python.exe", "-m", "pytest"],
+  "faelle": [
+    {"name": "PR119-1 Label behauptet immer BCa",
+     "datei": "src/liouscope/diagnostics/relaxation.py",
+     "alt": "            interval_method = \"BCa\" if jk is not None else \"BC\"",
+     "neu": "            interval_method = \"BCa\"",
+     "test": "tests/test_interval_method.py::test_default_grid_reports_bc_not_bca"},
+
+    {"name": "PR119-2 Label behauptet immer BC (BCa-Fall verschwindet)",
+     "datei": "src/liouscope/diagnostics/relaxation.py",
+     "alt": "            interval_method = \"BCa\" if jk is not None else \"BC\"",
+     "neu": "            interval_method = \"BC\"",
+     "test": "tests/test_interval_method.py::test_short_grid_reports_bca"},
+
+    {"name": "PR119-3 Fehlschlag-Pfad meldet BC statt none",
+     "datei": "src/liouscope/diagnostics/relaxation.py",
+     "alt": "    interval_method = \"none\"",
+     "neu": "    interval_method = \"BC\"",
+     "test": "tests/test_interval_method.py::test_bootstrap_failure_reports_none"},
+
+    {"name": "PR119-4 Additiver Default luegt (unreported -> BCa)",
+     "datei": "src/liouscope/_types.py",
+     "alt": "    interval_method: str = \"unreported\"",
+     "neu": "    interval_method: str = \"BCa\"",
+     "test": "tests/test_interval_method.py::test_field_is_additive_with_honest_default"},
+
+    {"name": "PR119-5 Gate-Grenze verschoben (<=60 -> <60)",
+     "datei": "src/liouscope/diagnostics/relaxation.py",
+     "alt": "            if t_grid.size <= 60:",
+     "neu": "            if t_grid.size < 60:",
+     "test": "tests/test_interval_method.py::test_gate_boundary_is_60_points"},
+
+    {"name": "PR119-6 Acceleration tot: BCa waere relabeltes BC",
+     "datei": "src/liouscope/fitting/bootstrap.py",
+     "alt": "            a = float(num / den) if den != 0.0 else 0.0",
+     "neu": "            a = 0.0",
+     "test": "tests/test_interval_method.py::test_acceleration_term_is_live_when_jackknife_supplied"},
+
+    {"name": "PR119-7 Report-Pfad (diagnose) traegt das Feld nicht durch",
+     "datei": "src/liouscope/diagnostics/relaxation.py",
+     "alt": "        interval_method=interval_method,",
+     "neu": "        interval_method=\"BCa\",",
+     "test": "tests/test_interval_method.py::test_diagnose_default_pipeline_reports_bc"}
+  ]
+}
