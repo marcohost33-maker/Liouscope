@@ -38,7 +38,122 @@ from __future__ import annotations
 
 import numpy as np
 
+from .._consts import ZERO_MODE_EPS_FACTOR
 from .linalg import require_finite_square_2d
+
+
+def spectral_zero_tolerance(
+    eigenvalues: np.ndarray,
+    *,
+    rtol: float = ZERO_MODE_EPS_FACTOR,
+    atol: float | None = None,
+    name: str = "eigenvalues",
+) -> float:
+    """Backward-error tolerance separating numerical zero modes from real ones.
+
+    Issue #108. The zero-mode filter ``|lambda| > tol`` decides which modes are
+    the steady state and which carry physics. With an ABSOLUTE ``tol`` it is not
+    invariant under a change of rate units ``L -> cL``, and it fails in BOTH
+    directions:
+
+    * small ``c`` -- every genuine mode drops below a fixed floor, so the gap
+      collapses to ``0.0`` and the Mpemba slow-mode overlap collapses to
+      ``0.0``, firing a FALSE A11/F4 candidate (the highest-priority rung);
+    * large ``c`` -- the numerical zero mode (``~eps * ||L||``) grows ABOVE a
+      fixed floor and is counted as a genuine mode, which yields a NEGATIVE
+      spectral gap -- impossible for a GKSL generator by definition.
+
+    The functions that need this tolerance receive only the spectrum, not the
+    operator, so the scale is taken from the spectrum itself: the **spectral
+    radius** ``max|lambda|``, which like :func:`rate_scale` is homogeneous of
+    degree one and invariant under unitary similarity.
+
+    The threshold is a multiple of the eigensolver BACKWARD ERROR,
+    ``tol = rtol * eps * max|lambda|``, rather than a fixed fraction of the
+    radius. A fixed fraction would impose a dynamic-range ceiling and discard
+    the genuine slow modes of a METASTABLE generator: with ``1e-10 *
+    max|lambda|``, two damping channels at rates ``1.0`` and ``1e-12`` (true
+    gap ``5e-13``) report a gap of ``5e-1`` -- wrong by ten orders of
+    magnitude, and precisely on the A5 systems the library exists to study.
+    A computed eigenvalue is uncertain to order ``eps * ||L||``, so that is the
+    scale on which "indistinguishable from zero" is properly decided; see
+    :data:`liouscope._consts.ZERO_MODE_EPS_FACTOR` for the measured
+    calibration behind the default factor.
+
+    Parameters
+    ----------
+    eigenvalues
+        Spectrum to derive the scale from.
+    rtol
+        Multiplier on the backward error ``eps * max|lambda|``.
+    atol
+        ABSOLUTE tolerance, returned verbatim in place of the computed
+        radius-relative one. Two documented uses: (a) the reproducibility
+        opt-in for pre-#108 behaviour, mirroring how #99 preserved the old
+        absolute steady-state tolerance; (b) forwarding the operator-derived
+        backward-error bound ``rtol * eps * ||L||_2`` (round-13 review; see
+        :func:`liouscope.numerics.linalg.operator_zero_tolerance`) from call
+        sites that hold the operator, where the spectral radius is only a
+        proxy for the true backward-error scale. The spectrum is still
+        validated (see ``Raises``): an absolute override may replace the
+        THRESHOLD, but it must not reintroduce the old silent acceptance of
+        corrupted solver output.
+    name
+        Argument name used in the fail-closed error message.
+
+    Returns
+    -------
+    float
+        The tolerance. Exactly ``0.0`` for an empty spectrum and for the zero
+        operator (all eigenvalues zero): there is no scale to normalise by, and
+        with ``tol = 0`` the strict ``|lambda| > tol`` test correctly classifies
+        every exactly-zero mode as a zero mode.
+
+    Raises
+    ------
+    ValueError
+        If ``rtol``/``atol`` is negative or non-finite, or if ``eigenvalues``
+        contains NaN/inf. Fail-closed: a non-finite spectrum would make
+        ``max|lambda|`` non-finite, and every ``|lambda| > NaN`` comparison
+        would evaluate ``False`` -- silently reporting "no non-zero modes"
+        (gap ``0.0``) for corrupted eigensolver output.
+    """
+    if not np.isfinite(rtol) or rtol < 0.0:
+        raise ValueError(f"rtol must be finite and non-negative, got {rtol}")
+    if atol is not None and (not np.isfinite(atol) or atol < 0.0):
+        raise ValueError(f"atol must be finite and non-negative, got {atol}")
+    ev = np.asarray(eigenvalues)
+    # Validate BEFORE honouring the legacy override: the fail-closed contract
+    # on corrupted solver output is not part of what the compatibility switch
+    # is allowed to turn off.
+    if ev.size and not np.all(np.isfinite(ev)):
+        bad = np.flatnonzero(~np.isfinite(ev.ravel())).tolist()
+        raise ValueError(
+            f"{name} must be finite to derive a zero-mode tolerance; "
+            f"non-finite entries at flat indices {bad}"
+        )
+    if atol is not None:
+        return float(atol)
+    if ev.size == 0:
+        return 0.0
+    # eps is the DOUBLE-precision machine epsilon, deliberately independent of
+    # the array's storage dtype. The backward error is set by the precision the
+    # eigensolver COMPUTED in, and NumPy/SciPy solve in double regardless of the
+    # input dtype -- measured: a complex64 generator yields a numerical zero mode
+    # at ~1.5e-19, i.e. double-level, even though the returned array is
+    # complex64. Deriving eps from the storage dtype instead reads that as
+    # single-precision round-off and inflates the threshold to ~1.2e-4 relative,
+    # which discards clearly resolved slow modes: a complex64 two-channel
+    # generator with rates 1.0 and 1e-4 then reports a gap of 5e-1 instead of
+    # 5e-5, corrupting exactly the metastable case this tolerance was widened to
+    # protect.
+    #
+    # A genuinely single-precision spectrum (an external or GPU solver) is the
+    # one case where a coarser threshold is right, and it is indistinguishable
+    # from a downcast double result by inspection. Such callers pass ``rtol``
+    # explicitly -- an argument the caller has, and this function does not.
+    eps = float(np.finfo(float).eps)
+    return float(rtol * eps * float(np.max(np.abs(ev))))
 
 
 def rate_scale(L: np.ndarray, *, name: str = "L") -> float:
@@ -66,4 +181,4 @@ def rate_scale(L: np.ndarray, *, name: str = "L") -> float:
     return float(np.linalg.norm(L, ord="fro"))
 
 
-__all__ = ["rate_scale"]
+__all__ = ["rate_scale", "spectral_zero_tolerance"]

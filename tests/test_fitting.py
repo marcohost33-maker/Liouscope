@@ -273,12 +273,39 @@ def test_prony_seed_short_signal_falls_back():
 
 
 def test_prony_seed_non_uniform_sampling_falls_back():
-    """Non-uniform ``t`` (Prony assumes uniform) -> decaying-oscillator seed."""
+    """Non-uniform ``t`` (Prony assumes uniform) -> decaying-oscillator seed.
+
+    The fallback rates are GRID-RELATIVE (sixteenth review round): ``beta``
+    and ``omega`` carry rate dimension, so the former absolute ``(1, 1)``
+    seeded the M3b fit orders of magnitude off on valid grids far from unit
+    span, and least-squares "converged" onto the seed itself.
+    """
     t = np.array([0.0, 0.1, 0.3, 0.6, 1.0, 1.5, 2.1])
     y = np.exp(-0.5 * t) * np.cos(2.0 * t)
     seed = prony_seed(t, y)
     assert all(np.isfinite(v) for v in seed)
-    assert seed[1] == 1.0 and seed[2] == 1.0  # beta, omega fallback conventions
+    assert seed[1] == pytest.approx(5.0 / 2.1)  # beta = FRAC / t_span
+    assert seed[2] == pytest.approx(5.0 / 2.1)
+
+
+def test_prony_seed_fallback_reproduces_historical_at_span_five():
+    """frac = 5.0 was chosen to keep the canonical t_span = 5 seeds unchanged."""
+    t = np.concatenate([np.linspace(0.0, 4.0, 4), [5.0]])  # non-uniform, span 5
+    y = np.exp(-t)
+    seed = prony_seed(t, y)
+    assert seed[1] == pytest.approx(1.0)
+    assert seed[2] == pytest.approx(1.0)
+
+
+def test_prony_seed_fallback_is_unit_invariant():
+    """A pure rescale t -> t/c must rescale the fallback rates by c exactly."""
+    t = np.array([0.0, 0.1, 0.3, 0.6, 1.0, 1.5, 2.1])
+    y = np.exp(-0.5 * t) * np.cos(2.0 * t)
+    base = prony_seed(t, y)
+    for c in (1.0e-6, 1.0e6):
+        scaled = prony_seed(t / c, y)
+        assert scaled[1] == pytest.approx(base[1] * c)
+        assert scaled[2] == pytest.approx(base[2] * c)
 
 
 def test_prony_seed_too_few_for_model_order_falls_back():
@@ -287,10 +314,26 @@ def test_prony_seed_too_few_for_model_order_falls_back():
     y = np.exp(-t)
     seed = prony_seed(t, y)
     assert all(np.isfinite(v) for v in seed)
-    assert seed[1] == 1.0 and seed[2] == 1.0
+    assert seed[1] == pytest.approx(5.0) and seed[2] == pytest.approx(5.0)
 
 
 def test_gaussian_log_likelihood_returns_finite(rng):
     res = rng.standard_normal(50)
     ll = gaussian_log_likelihood(res)
     assert np.isfinite(ll)
+
+
+def test_m3b_fit_is_unit_invariant_on_a_non_uniform_grid():
+    """Round-16: the grid-relative Prony fallback keeps the fitted M3b rate
+    unit-invariant where the absolute (1, 1) seed made least-squares
+    "converge" onto the seed itself (measured: beta = 1 for a true 5e-8)."""
+    from liouscope.fitting.gls import fit_gls_ar1
+    from liouscope.fitting.models import M3b
+
+    for c in (1.0, 1.0e-6, 1.0e6):
+        t = (np.linspace(0.0, 1.0, 80) ** 1.5) * 10.0 / c
+        y = np.exp(-0.05 * c * t) * np.cos(2.0 * c * t)
+        fit = fit_gls_ar1(M3b, t, y, np.asarray(prony_seed(t, y)))
+        assert fit.success
+        assert fit.params[1] == pytest.approx(0.05 * c, rel=1e-3)
+        assert abs(fit.params[2]) == pytest.approx(2.0 * c, rel=1e-3)

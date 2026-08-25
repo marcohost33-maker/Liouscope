@@ -5,6 +5,7 @@ from .kronecker import unvec, vec
 from .linalg import (
     EigenDecomposition,
     eig_nonhermitian,
+    hermiticity_defect,
     is_density_matrix,
     is_hermitian,
     support_check,
@@ -17,6 +18,7 @@ __all__ = [
     "EigenDecomposition",
     "alicki_adjoint",
     "eig_nonhermitian",
+    "hermiticity_defect",
     "hs_adjoint",
     "is_density_matrix",
     "is_hermitian",
