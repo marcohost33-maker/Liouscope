@@ -233,7 +233,12 @@ def compute_spectral_layer(
     # spectrum (measured: bound 2.2e3 against eigenvalues of order 1) and
     # would discard every mode, reporting the gapless D1 = 0.0. The
     # radius-based default (``atol=None``) is the honest filter there.
-    zero_tol = certificate.bound if certificate.applicable else None
+    # ``applied_tolerance``, not ``bound``: when the a posteriori certificate
+    # (issue #113 second axis) has kept a genuine slow mode out of the zero
+    # set, filtering by the raw band here would discard it one layer later
+    # and hand D1 the next, faster eigenvalue -- the very defect certified
+    # against. Without a refinement the two are identical.
+    zero_tol = certificate.applied_tolerance if certificate.applicable else None
     if certificate.applicable and not certificate.certified:
         warnings.warn(
             "Spectral layer: the eigensolver returned no zero mode for a "

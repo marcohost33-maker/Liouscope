@@ -7,6 +7,48 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Fixed
+- **The zero-mode band gets a second, independent axis: an a posteriori
+  backward-error certificate (issue #118 finding 15). CHANGES NUMERICAL
+  RESULTS** on generators whose slowest decay sits far below the scale their
+  Hamiltonian sets. The band is `1e3 * eps * ||L||_2`, and `||L||_2` is fixed
+  by the *oscillation* frequency while the decision is about *decay*: a
+  two-level system with `omega = 1` and jump rates `1e-15 / 1e-14` had its
+  genuine slowest mode (D1 = 1e-15) swallowed by the band, was certified
+  `resolved` with `zero_mode_count = 2`, and D1 reported the next, twentyfold
+  faster eigenvalue (2.05e-14) with full confidence.
+  The magnitude axis cannot fix this, and the `ZERO_MODE_AMBIGUITY_FACTOR`
+  comment already said why: healthy round-off reaches `2.38 * eps*||L||` while
+  unresolved slow modes were measured at `4.87` — populations a factor of two
+  apart, which no threshold separates. `certified_nonzero_modes` therefore adds
+  the per-mode bound
+  `|lambda - lambda_hat| <~ max(||L x - lambda_hat x||, ||L^H y - conj(lambda_hat) y||) / |y^H x|`,
+  which is a *certificate*: were the mode stationary, the bound would force
+  `|lambda_hat| <= bound`, so exceeding it proves it is not. Measured over the
+  same corpus that calibrated the existing factor (96 healthy generators / 132
+  in-band modes; 6 stiff generators with analytic gaps): **0 healthy modes
+  reached `q = 1`** (max 0.472) and **all 3 stiff members carrying a genuine
+  in-band mode were rescued**. The refinement is one-directional — it can only
+  take a mode OUT of the zero set — so it cannot produce the false "unresolved"
+  verdict the ambiguity split guards against. The certificate now carries
+  `zero_tolerance`, which D1/D3/D4 filter by; without a rescue it equals
+  `bound` and the healthy path is unchanged bit for bit.
+- **A GLS fit that ends inside the model magnitude guards fails closed
+  (issue #118 finding 9).** The guards keep an out-of-range optimiser probe
+  finite, which is what they are for — but the value they return is *constant*,
+  so its derivatives vanish and `least_squares` terminates on "gradient is
+  small". Measured: `fit_gls_ar1(M0, t in [0, 1e10], y = exp(-5t/1e10),
+  p0 = [1, -1])` returned `success=True` with `p0` unchanged and a residual
+  norm of `7.9e100`. Only the FINAL evaluation is judged (probes passing
+  through the plateau are exactly what the caps exist for); `GLSFitOutput`
+  gains `saturated`, naming which guard fired.
+
+### Documentation
+- `SpectralResult.zero_mode_certificate` is no longer described as
+  "report-only" (issue #118 finding 16). It was load-bearing from the commit
+  that introduced `_apply_spectral_certificate_floor`, and is now load-bearing
+  on a second path through `zero_tolerance`. See the corrected entry below.
+
+### Fixed
 - **Prony fallback seeds are grid-relative (round-16 review; the #108 class
   of defect). CHANGES NUMERICAL RESULTS** on grids far from unit span where
   the Prony estimate falls back (non-uniform sampling, short signals,
@@ -211,9 +253,17 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   alike, `zgeev` was retained in 400/400 and no system's gap got worse.
   If no route is certified, `compute_spectral_layer` emits a `RuntimeWarning`
   and marks the layer unresolved rather than reporting a gap it cannot stand
-  behind. `SpectralResult.zero_mode_certificate` records the outcome
-  (report-only, additive field with a default — the run-manifest contract is
-  unchanged).
+  behind. `SpectralResult.zero_mode_certificate` records the outcome. The
+  **field is additive** (it has a default, so the run-manifest contract is
+  unchanged), but it is **not report-only**: `classify` reads
+  `certificate["resolved"]` and applies `_apply_spectral_certificate_floor`,
+  which caps verdict and tier. An unresolved certificate therefore changes the
+  reported classification, by design — a certificate that could not withhold a
+  verdict would be decoration. This entry previously called the field
+  "report-only"; that description was wrong from the commit that introduced the
+  floor, and the correction is recorded here rather than silently dropped.
+  Since the a posteriori refinement below, the certificate also carries
+  `zero_tolerance`, which D1/D3/D4 filter by — a second load-bearing path.
 - **Hermiticity validation is scale-relative: `H` is no longer accepted or
   rejected on the basis of its units (issue #109).**
   `is_hermitian` and both Liouvillian builders applied an **absolute**

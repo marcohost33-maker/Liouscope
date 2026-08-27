@@ -165,3 +165,36 @@ F_FAMILY_DESCRIPTIONS: Final[dict[str, str]] = {
     "F5": "Phantom relaxation (arXiv:2306.07876, 2023)",
     "none": "No gap-failure mechanism flagged",
 }
+# Issue #113 follow-up, second axis. The magnitude test above cannot separate a
+# genuine slow mode from round-off once the two populations overlap: measured,
+# healthy zero modes reach 2.38 * eps*||L|| while unresolved slow modes were
+# seen at 4.87 -- a factor of 2, so no threshold on |lambda| alone can split
+# them, and the split above sits at 30 precisely to avoid false NaN rather than
+# because it separates anything.
+#
+# The a posteriori backward-error bound is a SECOND, independent axis, and it
+# is a certificate rather than a threshold. For a computed eigenpair
+# ``(lambda_hat, x)`` with left vector ``y``, ``||x|| = ||y|| = 1``,
+#
+#     |lambda - lambda_hat| <~ max(||L x - lambda_hat x||, ||L^H y - conj(lambda_hat) y||)
+#                              / |y^H x|
+#
+# to first order in the residuals (Dongarra et al., *Templates for the Solution
+# of Algebraic Eigenvalue Problems*, section on error bounds for computed
+# eigenvalues; the 1/|y^H x| factor is the individual eigenvalue condition
+# number). If ``lambda`` were exactly zero the bound would force
+# ``|lambda_hat| <= bound``, so ``q = |lambda_hat| / bound > 1`` PROVES the mode
+# is not the stationary one -- no calibration required for the claim itself.
+#
+# The margin below only covers the "to first order" caveat. Measured over the
+# same corpus that calibrated the factor above (96 healthy generators, 132
+# in-band modes; 6 stiff generators with analytically known gaps): healthy
+# ``q`` never exceeded 0.472 and never once reached 1, while the three stiff
+# members carrying a genuine in-band mode were certified with ``q = inf`` (an
+# exactly representable residual). A margin of 10 therefore keeps ~21x headroom
+# above the healthy maximum and still rescues every genuine case in the corpus.
+#
+# Direction matters: this constant can only move a mode OUT of the zero set, so
+# a mis-set value cannot manufacture the false NaN the split above guards
+# against.
+ZERO_MODE_APOSTERIORI_MARGIN: Final[float] = 1.0e1

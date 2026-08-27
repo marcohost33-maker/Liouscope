@@ -24,6 +24,7 @@ from .._consts import (
     EPS_TRACE,
     VECTOR_RESIDUAL_REL_MAX,
     ZERO_MODE_AMBIGUITY_FACTOR,
+    ZERO_MODE_APOSTERIORI_MARGIN,
     ZERO_MODE_EPS_FACTOR,
 )
 
@@ -97,6 +98,16 @@ class ZeroModeCertificate:
     trace_defect: float
     zero_mode_count: int = 1
     ambiguous_count: int = 0
+    #: Tolerance the gap filters must apply. Equal to ``bound`` unless the a
+    #: posteriori certificate (issue #113 second axis) pulled a genuine slow
+    #: mode out of the band -- then it separates the refined zero set from that
+    #: mode, so D1/D3/D4 stop discarding physics the certificate has kept.
+    zero_tolerance: float = float("nan")
+
+    @property
+    def applied_tolerance(self) -> float:
+        """``zero_tolerance`` with the pre-refinement fallback to ``bound``."""
+        return self.bound if not np.isfinite(self.zero_tolerance) else self.zero_tolerance
 
     @property
     def resolved(self) -> bool:
@@ -134,6 +145,7 @@ class ZeroModeCertificate:
             "trace_defect": _f(self.trace_defect),
             "zero_mode_count": int(self.zero_mode_count),
             "ambiguous_count": int(self.ambiguous_count),
+            "zero_tolerance": _f(self.applied_tolerance),
         }
 
 
@@ -200,6 +212,132 @@ def trace_preservation_defect(L_super: np.ndarray) -> tuple[float, float]:
     vec_i = np.eye(d, dtype=complex).reshape(-1, order="F")
     defect = float(np.linalg.norm(vec_i.conj() @ L_super))
     return defect, float(np.linalg.norm(L_super, ord="fro"))
+
+
+def certified_nonzero_modes(
+    L_c: np.ndarray,
+    eigenvalues: np.ndarray,
+    in_band: np.ndarray,
+    *,
+    right_vectors: np.ndarray | None = None,
+    left_vectors: np.ndarray | None = None,
+    margin: float = ZERO_MODE_APOSTERIORI_MARGIN,
+) -> np.ndarray:
+    """Modes inside the zero band that are provably NOT the stationary mode.
+
+    The magnitude band ``|lambda| <= rtol * eps * ||L||`` is a worst-case
+    backward-error argument: it assumes the eigensolver was as inaccurate as it
+    is allowed to be. On a well-conditioned generator it usually was not, and
+    the assumption is what discards genuine slow modes -- the
+    ``ZERO_MODE_AMBIGUITY_FACTOR`` comment records that no threshold on
+    ``|lambda|`` alone can separate the two populations, which are measured
+    only a factor of 2 apart.
+
+    This is the second axis. For each in-band mode we compute the *a
+    posteriori* bound from the residuals actually attained,
+
+        |lambda - lambda_hat| <~ max(||L x - lambda_hat x||,
+                                     ||L^H y - conj(lambda_hat) y||) / |y^H x|
+
+    with ``||x|| = ||y|| = 1``. Were ``lambda`` exactly zero, that bound would
+    force ``|lambda_hat| <= bound``; so ``|lambda_hat| > margin * bound``
+    certifies a genuine mode instead of merely scoring one. ``margin`` covers
+    the first-order caveat only -- see ``ZERO_MODE_APOSTERIORI_MARGIN`` for the
+    corpus measurement behind its value.
+
+    Deliberately one-directional: the result can only move a mode OUT of the
+    zero set, never into it, so it cannot manufacture the false "unresolved"
+    verdict that the ambiguity split exists to avoid.
+
+    Two invariants are enforced fail-closed:
+
+    * fewer than two in-band modes -> nothing is certified. A trace-preserving
+      generator has at least one stationary mode, so a lone in-band mode is the
+      expected one and there is no decision to make.
+    * the smallest-magnitude in-band mode is never certified. Trace
+      preservation guarantees a zero eigenvalue exists; emptying the band would
+      contradict the very precondition under which this certificate applies.
+    """
+    idx = np.flatnonzero(in_band)
+    out = np.zeros(eigenvalues.shape, dtype=bool)
+    if idx.size < 2:
+        return out
+    # The stationary mode itself is never a candidate (see docstring).
+    idx = idx[idx != idx[int(np.argmin(np.abs(eigenvalues[idx])))]]
+
+    vr, vl, ref = right_vectors, left_vectors, eigenvalues
+    if vr is None or vl is None:
+        # Own decomposition: the certificate is a property of the OPERATOR, so
+        # it is legitimate to certify a candidate ladder's spectrum from the
+        # operator's own eigenpairs -- but only where the two agree.
+        try:
+            ref, vl, vr = sla.eig(L_c, left=True, right=True)
+        except (ValueError, sla.LinAlgError):
+            return out
+
+    tiny = np.finfo(float).tiny
+    for i in idx:
+        lam = eigenvalues[i]
+        j = int(np.argmin(np.abs(ref - lam)))
+        mag = float(abs(ref[j]))
+        # Fail closed when the borrowed decomposition disagrees about this mode:
+        # a bound computed for a different eigenvalue certifies nothing.
+        if abs(ref[j] - lam) > 0.1 * max(abs(lam), mag) or mag == 0.0:
+            continue
+        x = vr[:, j] / max(float(np.linalg.norm(vr[:, j])), tiny)
+        y = vl[:, j] / max(float(np.linalg.norm(vl[:, j])), tiny)
+        sep = float(abs(np.vdot(y, x)))
+        if sep <= 0.0:
+            continue  # defective pair: the first-order bound does not apply
+        res = max(
+            float(np.linalg.norm(L_c @ x - ref[j] * x)),
+            float(np.linalg.norm(L_c.conj().T @ y - np.conj(ref[j]) * y)),
+        )
+        if mag > margin * (res / sep):
+            out[i] = True
+    return out
+
+
+def refine_zero_band(
+    L_c: np.ndarray,
+    eigenvalues: np.ndarray,
+    magnitudes: np.ndarray,
+    bound: float,
+    *,
+    right_vectors: np.ndarray | None = None,
+    left_vectors: np.ndarray | None = None,
+) -> tuple[np.ndarray, float]:
+    """Zero-mode membership plus the tolerance the gap filters must then apply.
+
+    Returns ``(in_band, zero_tolerance)``. Without a certified non-stationary
+    mode both are exactly the pre-refinement values, so the healthy path is
+    unchanged bit for bit.
+
+    The tolerance has to travel with the membership: D1/D3/D4 filter by
+    magnitude, so a mode this certificate rescues would be discarded again one
+    layer later if they kept reading the raw ``bound``. It is placed at the
+    geometric mean of the two populations -- the scale-free midpoint, which is
+    the right notion of "between" for quantities spanning decades.
+
+    Fail-closed on inversion: if some mode kept as zero is LARGER than the
+    smallest certified one, no single threshold can express the split, and the
+    refinement is abandoned wholesale rather than applied half-way.
+    """
+    nonzero = certified_nonzero_modes(
+        L_c,
+        eigenvalues,
+        magnitudes <= bound,
+        right_vectors=right_vectors,
+        left_vectors=left_vectors,
+    )
+    in_band = (magnitudes <= bound) & ~nonzero
+    if not nonzero.any():
+        return in_band, bound
+    hi = float(np.min(magnitudes[nonzero]))
+    lo = float(np.max(magnitudes[in_band])) if in_band.any() else 0.0
+    if lo >= hi:
+        return magnitudes <= bound, bound
+    return in_band, float(np.sqrt(lo * hi)) if lo > 0.0 else hi * 0.5
 
 
 def certified_eigvals(
@@ -341,12 +479,18 @@ def certified_eigvals(
     # here.
     split = ZERO_MODE_AMBIGUITY_FACTOR * float(np.finfo(float).eps) * norm2
     best: tuple[str, np.ndarray, float] | None = None
-    ambiguous_best: tuple[str, np.ndarray, float, int, int] | None = None
+    ambiguous_best: tuple[str, np.ndarray, float, int, int, float] | None = None
     for name, ev in _candidates():
         magnitudes = np.abs(ev)
         residual = float(np.min(magnitudes)) if ev.size else float("inf")
         if residual <= bound:
-            in_band = magnitudes <= bound
+            # Issue #113 second axis: a mode the a posteriori bound certifies
+            # as non-stationary leaves the zero set before it is counted, so a
+            # genuine slow mode no longer masquerades as a second zero mode and
+            # hands D1 the NEXT eigenvalue as the gap.
+            in_band, zero_tolerance = refine_zero_band(
+                L_c, ev, magnitudes, bound
+            )
             zero_count = int(np.count_nonzero(in_band))
             ambiguous = int(np.count_nonzero(in_band & (magnitudes > split)))
             if ambiguous == 0:
@@ -358,6 +502,7 @@ def certified_eigvals(
                     bound=bound,
                     trace_defect=tp_defect,
                     zero_mode_count=zero_count,
+                    zero_tolerance=zero_tolerance,
                 )
             # Round-15 review: an AMBIGUOUS candidate must not end the
             # ladder -- a later route can resolve the very modes this one
@@ -367,13 +512,15 @@ def certified_eigvals(
             # fail-closed fallback when EVERY route stays ambiguous, keyed
             # by the fewest ambiguous modes (ties: ladder order).
             if ambiguous_best is None or ambiguous < ambiguous_best[4]:
-                ambiguous_best = (name, ev, residual, zero_count, ambiguous)
+                ambiguous_best = (
+                    name, ev, residual, zero_count, ambiguous, zero_tolerance
+                )
             continue
         if best is None or residual < best[2]:
             best = (name, ev, residual)
 
     if ambiguous_best is not None:
-        name, ev, residual, zero_count, ambiguous = ambiguous_best
+        name, ev, residual, zero_count, ambiguous, zero_tolerance = ambiguous_best
         return ev, ZeroModeCertificate(
             applicable=True,
             certified=True,
@@ -383,6 +530,7 @@ def certified_eigvals(
             trace_defect=tp_defect,
             zero_mode_count=zero_count,
             ambiguous_count=ambiguous,
+            zero_tolerance=zero_tolerance,
         )
     assert best is not None
     return best[1], ZeroModeCertificate(
@@ -530,13 +678,26 @@ def certified_eig(
 
     split = ZERO_MODE_AMBIGUITY_FACTOR * float(np.finfo(float).eps) * norm2
     best: tuple[str, EigenDecomposition, float] | None = None
-    ambiguous_best: tuple[str, EigenDecomposition, float, int, int] | None = None
+    ambiguous_best: (
+        tuple[str, EigenDecomposition, float, int, int, float] | None
+    ) = None
     vector_failed: tuple[str, EigenDecomposition, float, float] | None = None
     for name, decomp in _candidates():
         magnitudes = np.abs(decomp.eigenvalues)
         residual = float(np.min(magnitudes)) if magnitudes.size else float("inf")
         if residual <= bound:
-            in_band = magnitudes <= bound
+            # Issue #113 second axis: a mode the a posteriori bound certifies
+            # as non-stationary leaves the zero set before it is counted, so a
+            # genuine slow mode no longer masquerades as a second zero mode and
+            # hands D1 the NEXT eigenvalue as the gap.
+            in_band, zero_tolerance = refine_zero_band(
+                L_c,
+                decomp.eigenvalues,
+                magnitudes,
+                bound,
+                right_vectors=decomp.right_vectors,
+                left_vectors=decomp.left_vectors,
+            )
             zero_count = int(np.count_nonzero(in_band))
             ambiguous = int(np.count_nonzero(in_band & (magnitudes > split)))
             if ambiguous == 0:
@@ -550,6 +711,7 @@ def certified_eig(
                         bound=bound,
                         trace_defect=tp_defect,
                         zero_mode_count=zero_count,
+                        zero_tolerance=zero_tolerance,
                     )
                 # Eigenvalues fine, eigenvectors demonstrably not: keep for
                 # the fail-closed record and try the next route.
@@ -559,13 +721,17 @@ def certified_eig(
             # Round-15 review: an ambiguous candidate must not end the
             # ladder (same rule as certified_eigvals).
             if ambiguous_best is None or ambiguous < ambiguous_best[4]:
-                ambiguous_best = (name, decomp, residual, zero_count, ambiguous)
+                ambiguous_best = (
+                    name, decomp, residual, zero_count, ambiguous, zero_tolerance
+                )
             continue
         if best is None or residual < best[2]:
             best = (name, decomp, residual)
 
     if ambiguous_best is not None:
-        name, decomp, residual, zero_count, ambiguous = ambiguous_best
+        name, decomp, residual, zero_count, ambiguous, zero_tolerance = (
+            ambiguous_best
+        )
         return decomp, ZeroModeCertificate(
             applicable=True,
             certified=True,
@@ -575,6 +741,7 @@ def certified_eig(
             trace_defect=tp_defect,
             zero_mode_count=zero_count,
             ambiguous_count=ambiguous,
+            zero_tolerance=zero_tolerance,
         )
     if vector_failed is not None:
         # No route produced consumable eigenvectors. certified=False keeps

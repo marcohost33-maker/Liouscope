@@ -20,6 +20,7 @@ import numpy as np
 from scipy.optimize import least_squares
 
 from .aicc import gaussian_log_likelihood
+from .models import saturation_watch
 from .neff import _AR1_SMALL_N, ar1_correlation_corrected
 
 
@@ -31,6 +32,10 @@ class GLSFitOutput:
     sigma: float
     log_likelihood: float
     success: bool
+    #: Magnitude guards that fired on the FINAL model evaluation, if any
+    #: (``"exponent"`` / ``"magnitude"``). Non-empty implies ``success`` is
+    #: False -- see the note at the final evaluation below.
+    saturated: tuple[str, ...] = ()
 
 
 def _whiten(y: np.ndarray, rho: float) -> np.ndarray:
@@ -113,7 +118,18 @@ def fit_gls_ar1(
         # B-fold bootstrap does not raise B identical warnings.
         rho = ar1_correlation_corrected(residuals_raw, warn_small_n=False)
 
-    y_hat_final = model(t, p)
+    # Fail closed on a fit that ENDED inside the model's magnitude guards. The
+    # guards keep an out-of-range probe finite so the optimiser can step away
+    # from it, but the finite value they return is constant, so its derivatives
+    # vanish and ``least_squares`` reports "gradient is small" -- convergence
+    # for the wrong reason. Measured (issue #118 finding 9): M0 on
+    # ``t in [0, 1e10]`` from ``p0 = [1, -1]`` returned ``success=True`` with p0
+    # unchanged and a residual norm of 7.9e100. Probes that merely PASS through
+    # the plateau stay untouched; only the reported optimum is judged.
+    with saturation_watch() as fired:
+        y_hat_final = model(t, p)
+    if fired:
+        success = False
     residuals_raw = y - y_hat_final
     n_resid = residuals_raw.size
     if n_resid <= _AR1_SMALL_N:
@@ -141,4 +157,5 @@ def fit_gls_ar1(
         sigma=sigma,
         log_likelihood=log_lik,
         success=success,
+        saturated=tuple(sorted(fired)),
     )
