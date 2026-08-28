@@ -7,6 +7,52 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Fixed
+- **The second repair step ended the eigenvalue ladder instead of continuing it
+  (PR #121 round-18 review).** `certified_eigvals` guarded its primary solve
+  but not the `dgeev-real` step that runs next -- and unlike the primary, that
+  step sits BEFORE `zgees-schur` and `balanced-zgeev`. A `LinAlgError` there
+  left the generator and discarded two repair routes that could still have
+  certified the spectrum. The sibling ladder in `certified_eig` already
+  suppressed exactly this step, so the defect was two ladders drifting apart,
+  not an overlooked case. A structural test now fails if either `dgeev-real`
+  route is left outside a suppression block.
+- **The anti-overfit gate scored fits that never converged (PR #121 round-19
+  review). CHANGES `HoldoutResult.accept`** for saturated fits.
+  `holdout_validate` ignored `fit.success` and scored `fit.params` regardless.
+  On the saturation plateau the model is CONSTANT, so train and holdout RMSE
+  are equally enormous and their ratio is about 1 -- measured `1.0106` on
+  `holdout_validate(M0, linspace(0, 1e10, 64), exp(-5t/1e10), [1, -1])`, which
+  passed the `1 + delta` criterion and returned `accept=True`. The gate that
+  exists to catch non-generalising models was satisfied by a non-model.
+  `accept` now requires `fit.success`, and the new `HoldoutResult.fit_success`
+  field keeps "did not generalise" separable from "was never fitted" -- they
+  demand different responses.
+- **D3, D4 and the oscillating-pair flag are withheld with D1 (PR #121
+  round-19 review). CHANGES `SpectralResult` OUTPUTS** when an applicable
+  certificate stays uncertified. The round-17 repair withheld D1 and stopped
+  there; `oscillating_gap`, `spectral_spread` and `has_complex_pairs` were
+  still published from the same candidate spectrum the layer's own warning
+  calls untrustworthy. Withholding D1 alone was not a partial fix but an
+  inconsistent one: it taught consumers that this layer withholds what it
+  cannot stand behind, which made the surviving finite values *more* credible,
+  not less. `has_complex_pairs` is now `bool | None`, because a bool has no
+  NaN and `False` would assert "no oscillating modes" rather than report an
+  unanswered question; `classification` maps `None` to the evidence dict's NaN
+  sentinel, where `_strip_unavailable` removes it and the A8 rung does not
+  hold.
+- **A comparison against NaN read as "no Hermiticity violation" (PR #121
+  round-19 review).** `np.trace(H)` sums the diagonal before dividing, so it
+  overflows to `inf` for a FINITE `H` with large entries -- the explicit
+  finiteness gate immediately above has already passed at that point. The
+  gauge-fixed `scale` then became NaN and `defect > EPS_HERMITICITY * scale`
+  evaluated False, so `build_liouvillian` accepted a two-dimensional
+  `1e308 * I` carrying a one-sided `1e290` entry, an order-one gauge-fixed
+  Hermiticity defect. The gauge shift is now computed as
+  `sum(diag(H) / d)`, which is bounded by `max|diag(H)|` and cannot overflow
+  while `H` is finite; independently, a non-finite derived scale is refused
+  outright so that any future route to one cannot silently reopen the hole.
+  A genuinely Hermitian `1e308 * I` is still accepted -- the repair is not a
+  size limit.
 - **One zero-mode cutoff, obtained one way (PR #121 round-17 review, four
   findings). CHANGES NUMERICAL RESULTS** on any generator where the a
   posteriori refinement rescues a genuine slow mode. Four consumer layers kept

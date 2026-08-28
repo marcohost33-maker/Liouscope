@@ -115,9 +115,31 @@ def build_liouvillian(
     # diagonal shift cannot change H - H^dag), while the SCALE comes from the
     # gauge-fixed traceless part.
     d_h = H.shape[0]
-    H_gauge = H - (np.trace(H).real / d_h) * np.eye(d_h, dtype=complex)
+    # OVERFLOW-SAFE gauge shift (round-18 review). ``np.trace(H)`` sums the
+    # diagonal BEFORE dividing, so it overflows to ``inf`` for a finite H
+    # whose entries are large -- e.g. ``1e308 * I`` in two dimensions. The
+    # finiteness gate above has already passed at that point, ``H_gauge``
+    # becomes NaN, ``scale`` becomes NaN, and ``defect > EPS * NaN`` is
+    # FALSE. The gate then accepted an H with an order-one gauge-fixed
+    # Hermiticity defect. A comparison against NaN silently answering "no
+    # violation" is the fail-open shape this layer exists to prevent.
+    #
+    # Dividing each diagonal entry first makes the shift bounded by
+    # ``max|diag(H)|``, so it cannot overflow while H itself is finite.
+    gauge_shift = float(np.sum(np.real(np.diag(H)) / d_h))
+    H_gauge = H - gauge_shift * np.eye(d_h, dtype=complex)
     defect, _ = hermiticity_defect(H)
     _, scale = hermiticity_defect(H_gauge)
+    # Second line of defence, independent of the arithmetic above: a scale
+    # that is not finite and positive cannot decide anything, so the gate
+    # refuses rather than comparing against it. Without this, ANY future
+    # route to a non-finite scale would silently reopen the same hole.
+    if not np.isfinite(scale) or not np.isfinite(defect):
+        raise ValueError(
+            "H is finite but its gauge-fixed Hermiticity scale is not "
+            f"(max|H - H^dag| = {defect}, gauge-fixed max|H| = {scale}); "
+            "the Hermiticity gate cannot be evaluated, so H is refused"
+        )
     if defect > EPS_HERMITICITY * scale:
         raise ValueError(
             f"H must be Hermitian within a relative {EPS_HERMITICITY:g} "

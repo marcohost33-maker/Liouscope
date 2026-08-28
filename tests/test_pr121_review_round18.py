@@ -108,8 +108,9 @@ def test_a_total_solver_failure_still_raises(monkeypatch) -> None:
     turned a total failure into a silent success would be a worse defect than
     the one being repaired.
     """
-    from liouscope.numerics import linalg as la
     import scipy.linalg as sla
+
+    from liouscope.numerics import linalg as la
 
     L = _real_classical_network()
     monkeypatch.setattr(la, "eig_nonhermitian", _raise_nonconvergence)

@@ -312,7 +312,14 @@ def _gather_evidence(
         )
         else 0.0
     )
-    ev["has_complex_pairs"] = float(spectral.has_complex_pairs)
+    # ``None`` is the unavailable marker for this bool (withheld together
+    # with D1/D3/D4 when the certificate is applicable but uncertified). NaN
+    # is the evidence dict's unavailable sentinel, and ``_strip_unavailable``
+    # removes it so the A8 rung does not hold on an unanswered question.
+    ev["has_complex_pairs"] = (
+        float("nan") if spectral.has_complex_pairs is None
+        else float(spectral.has_complex_pairs)
+    )
     ev["kreiss"] = float(nonnorm.kreiss)
     ev["petermann_max"] = float(nonnorm.petermann_max)
     ev["henrici_eta"] = float(nonnorm.henrici_eta)

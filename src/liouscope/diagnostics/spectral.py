@@ -296,17 +296,36 @@ def compute_spectral_layer(
     kms = kms_gap(L_super, rho_steady)
     osc = oscillating_mode_gap(eigenvalues, atol=zero_tol)
     spread = spectral_spread(eigenvalues, atol=zero_tol)
+    if certificate.applicable and not certificate.certified:
+        # ROUND-18 REVIEW: the round-17 repair above withheld D1 and stopped
+        # there. D3 (``oscillating_gap``), D4 (``spectral_spread``) and the
+        # ``has_complex_pairs`` signal are read off the SAME candidate
+        # spectrum that the warning calls untrustworthy, and they were still
+        # published as finite numbers. A caller reading ``SpectralResult``
+        # directly could therefore treat them as measurements in exactly the
+        # failure scenario the layer had just declared.
+        #
+        # Withholding D1 alone was not a partial fix but an inconsistent one:
+        # it taught consumers that the layer withholds what it cannot stand
+        # behind, which made the surviving finite values MORE credible than
+        # before, not less.
+        osc = float("nan")
+        spread = float("nan")
     # Same separation as D3: with an absolute floor a rescaled spectrum
     # flipped this flag, and ``has_complex_pairs`` gates the A8
     # oscillatory-transient rung. The threshold is the shared operator-derived
     # bound (round-13): an imaginary part below the eigensolve backward error
     # is round-off, not an oscillating pair. Radius fallback when the
     # certificate is inapplicable (round-14), same as D1/D3/D4 above.
-    has_complex = bool(
+    has_complex: bool | None = bool(
         np.any(
             np.abs(np.imag(eigenvalues)) > zero_tol
         )
     )
+    if certificate.applicable and not certificate.certified:
+        # Same spectrum, same reason. ``False`` here would assert "no
+        # oscillating modes"; ``None`` says the question was not answered.
+        has_complex = None
     # Sort by real part descending so [0] is the steady state.
     order = np.argsort(-np.real(eigenvalues))
     return SpectralResult(

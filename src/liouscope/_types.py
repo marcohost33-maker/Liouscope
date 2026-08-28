@@ -36,7 +36,19 @@ class SpectralResult:
     spectral_spread: float      # D4 max|Re| minus min|Re| (non-zero modes)
     eigenvalues: np.ndarray     # full sigma(L) sorted by real part
     steady_state: np.ndarray    # rho_ss matrix, d x d
-    has_complex_pairs: bool
+    has_complex_pairs: bool | None
+    """D3 oscillating-pair signal -- ``None`` when it is UNAVAILABLE.
+
+    A bool has no NaN, so the library's unavailable sentinel is ``None`` here.
+    It is set when the zero-mode certificate is applicable but uncertified:
+    the flag is derived from the same candidate spectrum that D1/D3/D4 are
+    withheld from, and ``False`` would be a claim ("no oscillating modes")
+    rather than an absence of one.
+
+    ``classification`` maps ``None`` to NaN in the evidence dict, where
+    ``_strip_unavailable`` removes it and the A8 rung consequently does not
+    hold -- the established route for an unavailable measurement.
+    """
     # Issue #112. Structural check that the computed spectrum contains the zero
     # mode that vec(I)^H L = 0 guarantees for a trace-preserving generator, plus
     # which LAPACK route produced the accepted spectrum.
