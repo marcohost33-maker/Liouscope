@@ -523,7 +523,20 @@ def certified_eigvals(
         # to ~9.7e-6 under a pure L -> 1e-10 L rescale). Exact realness is the
         # only scale-invariant criterion under which the route is valid.
         if not np.any(L_c.imag):
-            yield ("dgeev-real", np.linalg.eigvals(L_c.real).astype(complex))
+            # GUARDED (round-16 review): an exactly real generator whose
+            # ``dgeev`` solve raises must not end the ladder. Without this
+            # suppression the exception propagates out of the generator and
+            # the two remaining repair routes below -- ``zgees-schur`` and
+            # ``balanced-zgeev`` -- never run, even when either could recover
+            # a certifiable spectrum. The route is a REPAIR attempt like the
+            # others; a repair that fails is a route that did not work, not a
+            # reason to abandon the remaining ones.
+            #
+            # The sibling ladder in ``certified_eig`` already guarded exactly
+            # this step. The omission here was the inconsistency, not the
+            # guard there.
+            with contextlib.suppress(ValueError, sla.LinAlgError):
+                yield ("dgeev-real", np.linalg.eigvals(L_c.real).astype(complex))
         with contextlib.suppress(ValueError, sla.LinAlgError):
             yield ("zgees-schur", np.diag(sla.schur(L_c, output="complex")[0]))
         with contextlib.suppress(ValueError, sla.LinAlgError):
