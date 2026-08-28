@@ -258,10 +258,25 @@ def _dominant_rate(t: np.ndarray, curve: np.ndarray) -> tuple[float, str]:
     # a finite AICc, and the old ``next(iter(fits))`` then handed back an
     # arbitrary FAILED fit's rate. Every candidate saturated == the rate is
     # unknown, which D17 already knows how to read.
-    selectable = {n: fr.aicc for n, fr in fits.items() if np.isfinite(fr.aicc)}
+    # Round-17 review, CORRECTED after the full suite. The predicate is
+    # ``success``, NOT ``isfinite(aicc)``: a non-finite AICc is not the same
+    # event as a failed fit. Measured on validation system V4 (thermal
+    # two-level), trace-distance curve: all five models converge, yet every
+    # AICc is ``inf`` because the Geyer-corrected ``n_eff`` of that smooth,
+    # strongly autocorrelated residual series is too small for the
+    # small-sample correction. Keying on finiteness withheld D17 on a system
+    # where nothing had failed. ``choose_model`` keeps its documented "all
+    # entries inf -> M0" fallback; the only thing enforced here is that the
+    # winner must come from the SUCCEEDED set.
+    selectable = {n: fr.aicc for n, fr in fits.items() if fr.success}
     if not selectable:
         return float("nan"), "none"
     winner = choose_model(selectable)
+    if winner not in selectable:
+        # The all-inf fallback named a model outside the succeeded set. Keep
+        # it inside, in ladder order -- deterministic, and identical to the
+        # previous behaviour whenever M0 itself succeeded.
+        winner = next(iter(selectable))
     return _beta_from_params(winner, fits[winner].params), winner
 
 
@@ -329,8 +344,20 @@ def compute_relaxation_layer(
     # ``_dominant_rate`` and ``linear_fit_model`` already use -- beta_D then
     # falls through to NaN below instead of being read off a failed fit, and
     # the A-class rungs that compare ``aicc_model`` simply do not fire.
-    selectable = {name: fr.aicc for name, fr in fits.items() if np.isfinite(fr.aicc)}
+    # Round-17 review, CORRECTED after the full suite. The predicate is
+    # ``success``, NOT ``isfinite(aicc)``: a non-finite AICc is not the same
+    # event as a failed fit. Measured on validation system V4 (thermal
+    # two-level), trace-distance curve: all five models converge, yet every
+    # AICc is ``inf`` because the Geyer-corrected ``n_eff`` of that smooth,
+    # strongly autocorrelated residual series is too small for the
+    # small-sample correction. Keying on finiteness withheld D17 on a system
+    # where nothing had failed. ``choose_model`` keeps its documented "all
+    # entries inf -> M0" fallback; the only thing enforced here is that the
+    # winner must come from the SUCCEEDED set.
+    selectable = {name: fr.aicc for name, fr in fits.items() if fr.success}
     winner = choose_model(selectable) if selectable else "none"
+    if selectable and winner not in selectable:
+        winner = next(iter(selectable))
 
     # Bootstrap on the winning model for beta_D
     beta_D = _beta_from_params(winner, fits[winner].params) if winner in fits else float("nan")

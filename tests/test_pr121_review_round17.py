@@ -560,3 +560,25 @@ def test_certificate_field_documents_its_classifier_effect() -> None:
     )
     assert "verdict, tier = _apply_spectral_certificate_floor(" in classification
     assert "certificate = getattr(spectral" in classification
+
+
+def test_a_successful_fit_with_a_non_finite_aicc_stays_selectable(monkeypatch) -> None:
+    """A non-finite AICc is not a failed fit -- the V4 near-miss.
+
+    Measured on validation system V4 (thermal two-level), trace-distance
+    curve: all five models converge, and all five AICc values are ``inf``
+    because the Geyer-corrected ``n_eff`` of that smooth residual series is
+    too small for the small-sample correction. A selection rule keyed on
+    finiteness withholds D17 on a system where nothing failed.
+    """
+    from liouscope.diagnostics import relaxation as rx
+
+    monkeypatch.setattr(rx, "aicc", lambda *_a, **_kw: float("inf"))
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        result = rx.compute_relaxation_layer(_decay_generator(), bootstrap_B=20)
+
+    assert all(fr.success for fr in result.fits.values())
+    assert all(not np.isfinite(fr.aicc) for fr in result.fits.values())
+    assert result.aicc_model in {"M0", "M1", "M2", "M3a", "M3b"}
+    assert np.isfinite(result.beta_D)
