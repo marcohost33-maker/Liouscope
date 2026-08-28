@@ -39,10 +39,22 @@ class SpectralResult:
     has_complex_pairs: bool
     # Issue #112. Structural check that the computed spectrum contains the zero
     # mode that vec(I)^H L = 0 guarantees for a trace-preserving generator, plus
-    # which LAPACK route produced the accepted spectrum. Report-only: it does
-    # not enter any verdict, but a ``certified=False`` entry marks D1/D3/D4 as
-    # unresolved for that system. Optional with a default so the run-manifest
-    # contract is unchanged (additive field).
+    # which LAPACK route produced the accepted spectrum.
+    #
+    # LOAD-BEARING, not report-only (round-17 review, PR #121; the wording here
+    # said the opposite and contradicted both the code and the changelog).
+    # Three effects:
+    #   * ``classify_mechanism`` reads it and derives the
+    #     ``spectral_resolved`` evidence key from it;
+    #   * ``_apply_spectral_certificate_floor`` then caps BOTH the reported
+    #     verdict (-> UNDEFINED) and the tier (-> EXPLORATION) whenever an
+    #     applicable certificate is unresolved -- a fail-closed contract, not a
+    #     note in the margin;
+    #   * D1 is withheld as NaN for an applicable-but-unresolved certificate,
+    #     and D1/D3/D4 filter on the tolerance it carries
+    #     (``zero_tolerance``, issue #113 second axis).
+    # Optional with a default so the run-manifest contract is unchanged
+    # (additive field).
     zero_mode_certificate: dict[str, object] | None = None
 
 

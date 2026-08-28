@@ -274,3 +274,289 @@ def test_the_certificate_exposes_one_way_to_get_a_filter_cutoff() -> None:
     assert cert.zero_set_tolerance(ev) == pytest.approx(cert.applied_tolerance)
     assert cert.zero_set_tolerance(ev, atol=1.0e-9) == pytest.approx(1.0e-9)
     assert cert.zero_set_tolerance(ev) < cert.bound
+
+
+# --------------------------------------------------------------------------
+# src/liouscope/diagnostics/spectral.py -- D1 must not be published fail-open
+# --------------------------------------------------------------------------
+
+
+def _forced_certificate(**kw):
+    """A ``certified_eigvals`` stand-in with a caller-chosen certificate.
+
+    A real all-routes-fail solver outcome cannot be produced on demand, and
+    the existing suite already exercises this reporting path the same way
+    (``test_spectral_certificate.py``). Patched by string target so the module
+    is not imported twice under different styles.
+    """
+    from liouscope.numerics.linalg import ZeroModeCertificate, eig_nonhermitian
+
+    def _fake(l_super, **_kw):
+        return (
+            eig_nonhermitian(l_super).eigenvalues,
+            ZeroModeCertificate(**kw),
+        )
+
+    return _fake
+
+
+def _two_level_decay() -> tuple[np.ndarray, np.ndarray]:
+    sm = np.array([[0, 1], [0, 0]], dtype=complex)
+    L = build_liouvillian(np.zeros((2, 2), dtype=complex), [sm], [1.0])
+    return L, np.array([[1, 0], [0, 0]], dtype=complex)
+
+
+def test_d1_is_withheld_when_no_repair_route_certifies(monkeypatch) -> None:
+    """An applicable certificate with ``certified=False`` must not publish a gap."""
+    from liouscope.diagnostics.spectral import compute_spectral_layer
+
+    L, rho_ss = _two_level_decay()
+    monkeypatch.setattr(
+        "liouscope.diagnostics.spectral.certified_eigvals",
+        _forced_certificate(
+            applicable=True, certified=False, solver="zgeev",
+            residual=1.0, bound=0.0, trace_defect=0.0,
+        ),
+    )
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        layer = compute_spectral_layer(L, rho_ss)
+
+    assert np.isnan(layer.gap), (
+        "a gap read off a spectrum the certificate calls untrustworthy was "
+        "published to every caller of SpectralResult.gap"
+    )
+    assert layer.zero_mode_certificate["certified"] is False
+    # The warning must still fire -- withholding replaces the silent number,
+    # it does not replace the explanation.
+    assert any("issue #112" in str(w.message) for w in caught)
+
+
+def test_d1_is_still_published_for_a_resolved_certificate(monkeypatch) -> None:
+    """Positive control: the withholding keys on the certificate, not on the run."""
+    from liouscope.diagnostics.spectral import compute_spectral_layer
+
+    L, rho_ss = _two_level_decay()
+    layer = compute_spectral_layer(L, rho_ss)
+    assert layer.zero_mode_certificate["resolved"] is True
+    assert np.isfinite(layer.gap)
+    assert layer.gap == pytest.approx(0.5, rel=1.0e-9)
+
+
+# --------------------------------------------------------------------------
+# src/liouscope/fitting/gls.py -- a saturated fit must not be selectable
+# --------------------------------------------------------------------------
+
+
+def _decay_generator() -> np.ndarray:
+    sm = np.array([[0, 1], [0, 0]], dtype=complex)
+    return build_liouvillian(np.zeros((2, 2), dtype=complex), [sm], [1.0])
+
+
+def _saturating_fit_patch(monkeypatch, *, only: str | None):
+    """Make ``fit_gls_ar1`` report a saturated fit with an IRRESISTIBLE likelihood.
+
+    A saturated fit is convergence for the wrong reason: the magnitude guards
+    return a constant, every derivative vanishes and ``least_squares`` stops on
+    "gradient is small". The pre-fix code flipped ``success`` and nothing else,
+    so such a fit still produced a finite AICc and could win the hierarchy.
+    """
+    import dataclasses
+
+    from liouscope.diagnostics import relaxation as rx
+
+    real = rx.fit_gls_ar1
+    names = {rx.M0: "M0", rx.M1: "M1", rx.M2: "M2", rx.M3a: "M3a", rx.M3b: "M3b"}
+
+    def _fake(model, t, y, p0, **kw):
+        out = real(model, t, y, p0, **kw)
+        if only is None or names.get(model) == only:
+            return dataclasses.replace(
+                out, success=False, saturated=("magnitude",), log_likelihood=1.0e6
+            )
+        return out
+
+    monkeypatch.setattr(rx, "fit_gls_ar1", _fake)
+    return rx
+
+
+def test_a_saturated_fit_cannot_win_the_model_hierarchy(monkeypatch) -> None:
+    rx = _saturating_fit_patch(monkeypatch, only="M0")
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        result = rx.compute_relaxation_layer(_decay_generator(), bootstrap_B=20)
+
+    assert result.fits["M0"].success is False
+    # log_likelihood 1e6 would give M0 by far the smallest AICc.
+    assert not np.isfinite(result.fits["M0"].aicc)
+    assert result.aicc_model != "M0"
+    assert np.isfinite(result.beta_D)
+
+
+def test_all_models_saturated_reports_no_winner(monkeypatch) -> None:
+    rx = _saturating_fit_patch(monkeypatch, only=None)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        result = rx.compute_relaxation_layer(_decay_generator(), bootstrap_B=20)
+
+    # Pre-fix: choose_model fell back to "M0" and beta_D was read off a fit
+    # the guard had just declared a non-result.
+    assert result.aicc_model == "none"
+    assert np.isnan(result.beta_D)
+    assert all(np.isnan(v) for v in result.bca_ci_beta)
+
+
+def test_relaxation_layer_is_unchanged_when_nothing_saturates() -> None:
+    """Positive control: the rule keys on saturation, not on the generator."""
+    from liouscope.diagnostics.relaxation import compute_relaxation_layer
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        result = compute_relaxation_layer(_decay_generator(), bootstrap_B=20)
+    assert result.aicc_model in {"M0", "M1", "M2", "M3a", "M3b"}
+    assert np.isfinite(result.fits[result.aicc_model].aicc)
+    assert np.isfinite(result.beta_D)
+
+
+def test_bootstrap_refuses_a_saturated_base_fit() -> None:
+    """A resample around a non-estimate is not an uncertainty."""
+    from liouscope.fitting.bootstrap import parametric_bootstrap
+    from liouscope.fitting.models import M0
+
+    t = np.linspace(0.0, 1.0e10, 64)
+    y = np.exp(-5.0 * t / 1.0e10)
+    # The refusal is asserted, not merely raised: without the guard the run
+    # continues and emits the retained-replicate warning instead, and a test
+    # that dies of a WARNING proves nothing about the guard.
+    raised: RuntimeError | None = None
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        try:
+            parametric_bootstrap(M0, t, y, np.array([1.0, -1.0]), B=5)
+        except RuntimeError as exc:
+            raised = exc
+    assert raised is not None, (
+        "a bootstrap was resampled around a base fit that ended on the "
+        "magnitude plateau"
+    )
+    assert "did not converge" in str(raised)
+
+    # Positive control: the same grid with a well-posed seed still bootstraps.
+    samples, theta_hat = parametric_bootstrap(
+        M0, t, y, np.array([1.0, 5.0e-10]), B=5
+    )
+    assert samples.shape == (5, 2)
+    assert np.all(np.isfinite(theta_hat))
+
+
+# --------------------------------------------------------------------------
+# src/liouscope/numerics/linalg.py -- the repair ladder must survive the primary
+# --------------------------------------------------------------------------
+
+_STIFF_PAIRS = [(0, 3), (0, 2), (1, 0), (3, 2), (2, 1)]
+_STIFF_RATES = [7.28e-6, 3.67e-5, 1.53e-5, 2.70e5, 1.42e-5]
+
+
+def _real_classical_network() -> np.ndarray:
+    jumps = []
+    for to, frm in _STIFF_PAIRS:
+        j = np.zeros((4, 4), dtype=complex)
+        j[to, frm] = 1.0
+        jumps.append(j)
+    return build_liouvillian(np.zeros((4, 4), dtype=complex), jumps, _STIFF_RATES)
+
+
+def _raise_nonconvergence(*_a, **_kw):
+    raise np.linalg.LinAlgError("eig algorithm (zgeev) did not converge")
+
+
+def test_eigvals_ladder_continues_past_a_primary_nonconvergence(monkeypatch) -> None:
+    from liouscope.numerics import linalg as la
+
+    L = _real_classical_network()
+    monkeypatch.setattr(la, "eig_nonhermitian", _raise_nonconvergence)
+
+    # The ladder failure is asserted, not crashed into: an uncaught
+    # LinAlgError would kill the test without saying which mutation did it.
+    ended: Exception | None = None
+    ev = cert = None
+    try:
+        ev, cert = la.certified_eigvals(L)
+    except np.linalg.LinAlgError as exc:
+        ended = exc
+    assert ended is None, f"the primary solve ended the repair ladder: {ended!r}"
+    assert cert is not None and ev is not None
+    assert cert.applicable is True
+    assert cert.certified is True, "a later repair route certified this spectrum"
+    assert cert.solver != "zgeev"
+    assert ev.size == 16
+
+
+def test_eig_ladder_continues_past_a_primary_nonconvergence(monkeypatch) -> None:
+    from liouscope.numerics import linalg as la
+
+    L = _real_classical_network()
+    monkeypatch.setattr(la, "eig_nonhermitian", _raise_nonconvergence)
+
+    ended: Exception | None = None
+    decomp = cert = None
+    try:
+        decomp, cert = la.certified_eig(L)
+    except np.linalg.LinAlgError as exc:
+        ended = exc
+    assert ended is None, f"the primary solve ended the repair ladder: {ended!r}"
+    assert cert is not None and decomp is not None
+    assert cert.solver == "dgeev-real"
+    assert cert.certified is True
+    assert decomp.left_vectors is not None
+
+
+def test_a_total_solver_failure_still_raises(monkeypatch) -> None:
+    """Fail-closed control: with no route left the original error surfaces."""
+    from liouscope.numerics import linalg as la
+
+    # A complex generator has no ``dgeev-real`` route, so ``certified_eig``
+    # has exactly one candidate -- and it is the one that raises.
+    H = np.diag([0.0, 1.0]).astype(complex)
+    lowering = np.array([[0, 1], [0, 0]], dtype=complex)
+    L = build_liouvillian(H, [lowering], [0.5])
+    assert np.any(np.asarray(L, dtype=complex).imag)
+
+    monkeypatch.setattr(la, "eig_nonhermitian", _raise_nonconvergence)
+    with pytest.raises(np.linalg.LinAlgError, match="did not converge"):
+        la.certified_eig(L)
+
+
+# --------------------------------------------------------------------------
+# src/liouscope/_types.py -- the field documentation must match the contract
+# --------------------------------------------------------------------------
+
+
+def _certificate_field_comment() -> str:
+    text = (_SRC / "_types.py").read_text(encoding="utf-8").splitlines()
+    idx = next(
+        i for i, ln in enumerate(text)
+        if ln.strip().startswith("zero_mode_certificate:")
+    )
+    block: list[str] = []
+    for line in reversed(text[:idx]):
+        if not line.strip().startswith("#"):
+            break
+        block.append(line.strip())
+    return "\n".join(reversed(block))
+
+
+def test_certificate_field_documents_its_classifier_effect() -> None:
+    block = _certificate_field_comment()
+    assert block, "guard is vacuous if the comment block was not found"
+    # The false CLAIM, not the word: the field does enter a verdict.
+    assert "does not enter any verdict" not in block.lower()
+    assert "load-bearing" in block.lower()
+    assert "_apply_spectral_certificate_floor" in block
+
+    # Positive control: the described contract must actually be in the code.
+    classification = (_SRC / "diagnostics" / "classification.py").read_text(
+        encoding="utf-8"
+    )
+    assert "verdict, tier = _apply_spectral_certificate_floor(" in classification
+    assert "certificate = getattr(spectral" in classification

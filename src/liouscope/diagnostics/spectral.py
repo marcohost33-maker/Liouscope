@@ -246,8 +246,9 @@ def compute_spectral_layer(
             f"{certificate.residual:.3e}, admissible backward error = "
             f"{certificate.bound:.3e}). The generator is too stiff for a dense "
             "eigensolve in this basis, so D1/D3/D4 are NOT reliable for this "
-            "system; no repair route succeeded. Treat the spectral layer as "
-            "unresolved rather than as a measurement (issue #112).",
+            "system; no repair route succeeded. D1 is withheld as NaN below; "
+            "treat the whole spectral layer as unresolved rather than as a "
+            "measurement (issue #112).",
             RuntimeWarning,
             stacklevel=2,
         )
@@ -275,6 +276,21 @@ def compute_spectral_layer(
             RuntimeWarning,
             stacklevel=2,
         )
+    if certificate.applicable and not certificate.resolved:
+        # Round-17 review (PR #121), fail-CLOSED for BOTH unresolved kinds.
+        # Until now only the ambiguous branch above withheld D1, while a
+        # certificate that is applicable but whose every repair route left
+        # ``certified=False`` still published a finite gap read off the
+        # explicitly untrustworthy candidate spectrum. The warning does not
+        # protect a caller that reads ``SpectralResult.gap``, and
+        # ``_gather_evidence`` derives ratios from that value, so the number
+        # travelled further than the caveat attached to it. The classifier
+        # floor caps the VERDICT, which is a different guarantee from not
+        # publishing a measurement the layer itself calls unreliable.
+        #
+        # NaN is the library's unavailable sentinel, deliberately not 0.0
+        # ("gapless", which fires the F5 reach leg) and deliberately not the
+        # next surviving mode, which is a fast one.
         delta = float("nan")
     delta_s = gns_gap(L_super, rho_steady)
     kms = kms_gap(L_super, rho_steady)

@@ -7,6 +7,57 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Fixed
+- **One zero-mode cutoff, obtained one way (PR #121 round-17 review, four
+  findings). CHANGES NUMERICAL RESULTS** on any generator where the a
+  posteriori refinement rescues a genuine slow mode. Four consumer layers kept
+  filtering with the certificate's *raw* band after the refinement had lowered
+  the applied tolerance, discarding the rescued mode one layer after the
+  certificate saved it. Measured on the two-level `omega = 1`, rates
+  `1e-15 / 1e-14` generator (`bound = 2.22e-13`, `applied = 5e-16`, ratio 444):
+  D24 gap `2.05e-14 -> 1e-15` and the mixing-time window `3.37e14 -> 6.91e15`;
+  D9 kept 2 modes with `petermann_max = 1.0` and now keeps 3 with `2.0`; the
+  D19 overlap moved from `0.0` — the *false* A11/F4 trigger on the highest
+  rung — to `0.141`, and `expansion_alpha` from `-1e-15` to `-33.6`; the D11
+  fallback scanned 12 of 15 certified modes and now scans all 15.
+  These were not four independent mistakes: the same two-branch expression was
+  copy-written at five sites, only the spectral layer was migrated when the
+  refinement landed, and the docstring of `operator_zero_tolerance` still told
+  readers to filter "equivalently, with the `bound` of the
+  `ZeroModeCertificate`" — true when written, false since. The decision now
+  lives once, in `ZeroModeCertificate.zero_set_tolerance()`; `bound` is
+  documented as report-only; `_certified_decomposition` hands its consumers the
+  certificate instead of a bare number; and a guard test pins the remaining
+  `.bound` readers so a sixth site fails the suite instead of a review.
+- **D1 is withheld when no repair route certifies the spectrum (PR #121).**
+  With an applicable certificate and `certified=False`, `compute_spectral_layer`
+  still published a finite gap read off the explicitly untrustworthy candidate
+  spectrum. The warning does not reach a caller that consumes
+  `SpectralResult.gap`, and `_gather_evidence` derives ratios from that value,
+  so the number travelled further than its caveat. `gap` is now the NaN
+  unavailable sentinel for *both* unresolved kinds, as the ambiguous case
+  already was. D3/D4 are unchanged (see the note in `spectral.py`).
+- **A saturated GLS fit is no longer selectable (PR #121).** Flipping
+  `GLSFitOutput.success` changed nothing: no consumer read the flag, the fit
+  still carried a finite AICc, and the exact plateau case the guard detects
+  could win `choose_model` and supply the reported decay rate. The failure is
+  made non-selectable at the single choke point (`_fit_with_model` assigns
+  `aicc = inf`) rather than as four separate obligations on the consumers; with
+  no selectable model left, `aicc_model` is the existing `"none"` sentinel and
+  `beta_D` is NaN instead of being read off a failed fit.
+  `parametric_bootstrap` refuses a saturated *base* fit outright — a resample
+  around a non-estimate is not an uncertainty — and reports the count of
+  non-converged replicates it retained (retaining widens the interval;
+  dropping them would narrow it).
+- **The eigensolver repair ladder survives a primary nonconvergence (PR #121).**
+  A `LinAlgError` from the incumbent `zgeev` call ended `certified_eigvals` /
+  `certified_eig` before the real-driver, Schur and balanced routes were tried
+  — defeating the ladder in precisely the case it exists for. The error is now
+  carried and re-raised only if *no* route produced a spectrum.
+- **The `zero_mode_certificate` field documentation matched neither the code nor
+  this changelog (PR #121).** It described a report-only field while
+  `classify_mechanism` reads it and `_apply_spectral_certificate_floor` caps
+  both the reported verdict and the tier from it. Documentation only; no
+  behaviour change.
 - **The zero-mode band gets a second, independent axis: an a posteriori
   backward-error certificate (issue #118 finding 15). CHANGES NUMERICAL
   RESULTS** on generators whose slowest decay sits far below the scale their

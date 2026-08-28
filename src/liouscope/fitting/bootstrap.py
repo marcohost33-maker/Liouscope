@@ -13,6 +13,7 @@ Anchor G: standard iid bootstrap on ODE trajectories violates independence
 
 from __future__ import annotations
 
+import warnings
 from collections.abc import Callable
 
 import numpy as np
@@ -52,13 +53,41 @@ def parametric_bootstrap(
     if rng is None:
         rng = np.random.default_rng(0)
     base = fit_gls_ar1(model, t, y, p0, bounds=bounds)
+    if not base.success:
+        # Round-17 review (PR #121). Every replicate is simulated AROUND
+        # ``theta_hat``; if the base fit ended on the model's magnitude
+        # plateau, that centre is not an estimate and the whole resample is
+        # a distribution around a non-result. Raising routes this into the
+        # caller's existing handler, which reports the CI as NaN -- "fit
+        # uncertainty UNKNOWN" -- rather than as a narrow interval around a
+        # failure.
+        raise RuntimeError(
+            "parametric_bootstrap: the base fit did not converge"
+            + (f" (saturated: {', '.join(base.saturated)})" if base.saturated else "")
+            + "; a bootstrap around a non-estimate has no meaning"
+        )
     theta_hat = base.params
     samples = np.empty((B, theta_hat.size))
+    failed = 0
     for b in range(B):
         eps_b = _ar1_resample(rng, t.size, base.rho_ar1, base.sigma)
         y_b = model(t, theta_hat) + eps_b
         fit_b = fit_gls_ar1(model, t, y_b, theta_hat, bounds=bounds)
+        failed += not fit_b.success
         samples[b] = fit_b.params
+    if failed:
+        # Reported, not silently dropped, and deliberately WITHOUT a
+        # retain-fraction threshold: dropping replicates narrows the interval
+        # (the dangerous direction), while keeping them widens it (the
+        # conservative one). The count is what an auditor needs; a cut-off
+        # calibrated from nothing is not.
+        warnings.warn(
+            f"parametric_bootstrap: {failed} of {B} replicates did not "
+            "converge and are retained in the resample, so the reported "
+            "interval is wider than the data warrant -- not narrower.",
+            RuntimeWarning,
+            stacklevel=2,
+        )
     return samples, theta_hat
 
 

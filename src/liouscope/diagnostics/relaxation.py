@@ -191,7 +191,22 @@ def _fit_with_model(
     fit = fit_gls_ar1(model, t, y, p0)
     k = p0.size
     n_eff = estimate_neff_geyer(fit.residuals)
-    aic = aicc(fit.log_likelihood, k, n_eff)
+    # Round-17 review (PR #121). ``fit_gls_ar1`` flips ``success`` when the
+    # final model evaluation ended inside the magnitude guards -- convergence
+    # for the wrong reason, the plateau where every derivative is exactly
+    # zero. Flipping a flag no consumer reads changed nothing: the failed fit
+    # still carried a finite log-likelihood, hence a finite AICc, and could
+    # WIN ``choose_model`` and supply the reported decay rate.
+    #
+    # Made non-selectable HERE rather than enforced at each consumer, and
+    # deliberately so: ``_dominant_rate``, ``compute_relaxation_layer``, the
+    # bootstrap and the holdout path are four independent obligations to
+    # remember, which is precisely the shape of the four-fold miss this same
+    # review round found in the zero-mode filters. ``choose_model`` already
+    # drops non-finite entries, so ``inf`` is the existing vocabulary for
+    # "not a candidate"; the fit itself stays in ``fits`` so the report still
+    # shows that the model was tried and why it lost.
+    aic = aicc(fit.log_likelihood, k, n_eff) if fit.success else float("inf")
     fit_result = FitResult(
         model=model_name,
         params=fit.params,
@@ -239,9 +254,14 @@ def _dominant_rate(t: np.ndarray, curve: np.ndarray) -> tuple[float, str]:
             continue
     if not fits:
         return float("nan"), "none"
-    winner = choose_model({n: fr.aicc for n, fr in fits.items()})
-    if winner not in fits:
-        winner = next(iter(fits))
+    # Round-17 review: ``choose_model`` falls back to "M0" when nothing has
+    # a finite AICc, and the old ``next(iter(fits))`` then handed back an
+    # arbitrary FAILED fit's rate. Every candidate saturated == the rate is
+    # unknown, which D17 already knows how to read.
+    selectable = {n: fr.aicc for n, fr in fits.items() if np.isfinite(fr.aicc)}
+    if not selectable:
+        return float("nan"), "none"
+    winner = choose_model(selectable)
     return _beta_from_params(winner, fits[winner].params), winner
 
 
@@ -304,10 +324,13 @@ def compute_relaxation_layer(
         except (ValueError, RuntimeError):
             continue
 
-    aiccs = {name: fr.aicc for name, fr in fits.items()}
-    winner = choose_model(aiccs) if fits else "M0"
-    if winner not in fits:
-        winner = next(iter(fits)) if fits else "M0"
+    # Round-17 review: only fits that did NOT end on the magnitude plateau
+    # are candidates. With none left the winner is the "none" sentinel that
+    # ``_dominant_rate`` and ``linear_fit_model`` already use -- beta_D then
+    # falls through to NaN below instead of being read off a failed fit, and
+    # the A-class rungs that compare ``aicc_model`` simply do not fire.
+    selectable = {name: fr.aicc for name, fr in fits.items() if np.isfinite(fr.aicc)}
+    winner = choose_model(selectable) if selectable else "none"
 
     # Bootstrap on the winning model for beta_D
     beta_D = _beta_from_params(winner, fits[winner].params) if winner in fits else float("nan")

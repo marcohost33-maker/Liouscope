@@ -479,8 +479,27 @@ def certified_eigvals(
     norm2 = float(np.linalg.norm(L_c, 2)) if L_c.size else 0.0
     bound = rtol * float(np.finfo(float).eps) * norm2
 
-    primary = np.asarray(eig_nonhermitian(L_c).eigenvalues)
+    # Round-17 review (PR #121). The primary solve must not be able to end the
+    # ladder. ``zgeev`` raising ``LinAlgError`` IS a nonconvergence -- exactly
+    # the failure the real-driver / Schur / balanced routes exist to repair --
+    # and letting the exception propagate defeated the ladder precisely in the
+    # case it was built for. The error is carried instead and re-raised only
+    # if NO route produced a spectrum at all, so the caller still sees the
+    # original diagnosis when nothing worked.
+    primary: np.ndarray | None
+    primary_error: sla.LinAlgError | None
+    try:
+        primary = np.asarray(eig_nonhermitian(L_c).eigenvalues)
+        primary_error = None
+    except sla.LinAlgError as exc:
+        primary, primary_error = None, exc
     if not np.isfinite(tp_defect) or tp_defect > tp_rtol * max(fro, np.finfo(float).tiny):
+        # No certificate applies without trace preservation, so there is
+        # nothing to repair TOWARDS and the ladder is not run: the primary
+        # failure is the honest answer.
+        if primary is None:
+            assert primary_error is not None
+            raise primary_error
         return primary, ZeroModeCertificate(
             applicable=False,
             certified=False,
@@ -495,7 +514,8 @@ def certified_eigvals(
         # certified spectrum, and the healthy path is the primary solve -- an
         # eager list would charge every caller three additional cubic
         # decompositions that the loop then never looks at.
-        yield ("zgeev", primary)
+        if primary is not None:
+            yield ("zgeev", primary)
         # ``dgeev`` genuinely solves a DIFFERENT matrix unless L is EXACTLY
         # real: ``np.allclose`` carries an absolute default atol, so a stiff
         # complex generator in small rate units read as "real" and the repair
@@ -587,7 +607,10 @@ def certified_eigvals(
             ambiguous_count=ambiguous,
             zero_tolerance=zero_tolerance,
         )
-    assert best is not None
+    if best is None:
+        # Every route raised (only reachable when the primary solve did too).
+        assert primary_error is not None
+        raise primary_error
     return best[1], ZeroModeCertificate(
         applicable=True,
         certified=False,
@@ -654,8 +677,24 @@ def certified_eig(
     norm2 = float(np.linalg.norm(L_c, 2)) if L_c.size else 0.0
     bound = rtol * float(np.finfo(float).eps) * norm2
 
-    primary = eig_nonhermitian(L_c, compute_left=True)
+    # Round-17 review (PR #121). The primary solve must not be able to end the
+    # ladder. ``zgeev`` raising ``LinAlgError`` IS a nonconvergence -- exactly
+    # the failure the real-driver / Schur / balanced routes exist to repair --
+    # and letting the exception propagate defeated the ladder precisely in the
+    # case it was built for. The error is carried instead and re-raised only
+    # if NO route produced a spectrum at all, so the caller still sees the
+    # original diagnosis when nothing worked.
+    primary: EigenDecomposition | None
+    primary_error: sla.LinAlgError | None
+    try:
+        primary = eig_nonhermitian(L_c, compute_left=True)
+        primary_error = None
+    except sla.LinAlgError as exc:
+        primary, primary_error = None, exc
     if not np.isfinite(tp_defect) or tp_defect > tp_rtol * max(fro, np.finfo(float).tiny):
+        if primary is None:
+            assert primary_error is not None
+            raise primary_error
         return primary, ZeroModeCertificate(
             applicable=False,
             certified=False,
@@ -671,7 +710,8 @@ def certified_eig(
 
     def _candidates() -> Iterator[tuple[str, EigenDecomposition]]:
         # Lazy + exact realness, for the same reasons as the eigenvalue ladder.
-        yield ("zgeev", primary)
+        if primary is not None:
+            yield ("zgeev", primary)
         if not np.any(L_c.imag):
             with contextlib.suppress(ValueError, sla.LinAlgError):
                 w, vl, vr = sla.eig(L_c.real, left=True, right=True)
@@ -813,7 +853,10 @@ def certified_eig(
             trace_defect=tp_defect,
             zero_mode_count=0,
         )
-    assert best is not None
+    if best is None:
+        # Every route raised (only reachable when the primary solve did too).
+        assert primary_error is not None
+        raise primary_error
     return best[1], ZeroModeCertificate(
         applicable=True,
         certified=False,
