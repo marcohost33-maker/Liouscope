@@ -61,7 +61,7 @@ from .._consts import EPS_DIV
 from .._types import KreissGridEstimate, NonNormalityResult
 from ..numerics.linalg import certified_eig, certified_eigvals, require_finite_square_2d
 from ..numerics.resolvent import resolvent_norm
-from ..numerics.scale import rate_scale, spectral_zero_tolerance
+from ..numerics.scale import rate_scale
 
 # Fail-closed ceiling for the dimensionless Henrici index: mathematically
 # ``eta_N <= ||L||_F`` (Schur unitary invariance), so ``henrici_relative`` can
@@ -323,19 +323,16 @@ def petermann_factors(
     # separation (issue #108): with an absolute floor, a rescaled generator
     # either dropped every mode (empty K array) or retained the round-off zero
     # mode, whose Petermann factor is numerical noise feeding the F1 gate.
-    # The scale is the certificate's own operator-derived bound (round-13
-    # review): on a strongly non-normal generator the radius-based proxy is
-    # smaller than the eigensolve backward error ``eps * ||L||_2``, so the
-    # displaced zero mode survived the filter as a spurious extra eigenmode
-    # (measured: 4 modes reported where 3 exist). Radius fallback when the
-    # certificate is inapplicable (round-14): without established trace
-    # preservation no zero mode is guaranteed and the operator-norm bound can
-    # exceed the whole spectrum of a strongly non-normal input.
-    default_tol = certificate.bound if certificate.applicable else None
-    mask = np.abs(eigvals) > spectral_zero_tolerance(
-        eigvals,
-        atol=default_tol if atol is None else atol,
-        name="eigenvalues of L_super",
+    # The scale comes from the certificate's single filter entry point
+    # (round-13, corrected round-17 review / PR #121). This site used the raw
+    # ``bound``, which after an a posteriori refinement is LARGER than the
+    # tolerance actually applied: the slow mode the certificate had just
+    # rescued -- precisely the one whose eigenvector conditioning can dominate
+    # ``petermann_max`` -- was dropped from the D9 arrays again, which can
+    # change the F1 classification. ``zero_set_tolerance`` also carries the
+    # radius fallback for an inapplicable certificate (round-14).
+    mask = np.abs(eigvals) > certificate.zero_set_tolerance(
+        eigvals, atol=atol, name="eigenvalues of L_super"
     )
     eigvals_filt = eigvals[mask]
     K_filt = K_arr[mask]
@@ -470,11 +467,12 @@ def compute_nonnormality_layer(L_super: np.ndarray) -> NonNormalityResult:
         if cert.applicable and not cert.resolved:
             ap_length, pauli_bound = float("nan"), float(np.log2(max(d, 2)))
         else:
-            tol = (
-                cert.bound
-                if cert.applicable
-                else spectral_zero_tolerance(ev_c, name="eigenvalues of L_super")
-            )
+            # Round-17 review (PR #121): the raw ``bound`` discarded a mode
+            # the eigenvalue certificate had rescued by refinement, so D11
+            # could report the wrong progression depth. The refined zero set
+            # is what the spectral layer uses -- and now so does this
+            # fallback.
+            tol = cert.zero_set_tolerance(ev_c, name="eigenvalues of L_super")
             ap_length, pauli_bound = bohr_arithmetic_progression(
                 ev_c[np.abs(ev_c) > tol], d
             )

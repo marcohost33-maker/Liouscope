@@ -94,6 +94,12 @@ class ZeroModeCertificate:
     certified: bool
     solver: str
     residual: float
+    #: The RAW operator-derived band ``rtol * eps * ||L||_2`` that certification
+    #: was carried out against. REPORT AND DIAGNOSTICS ONLY -- it is NOT a
+    #: filter cutoff. After an a posteriori refinement (issue #113 second axis)
+    #: it is strictly LARGER than the tolerance actually applied, so filtering
+    #: by it discards the very slow mode the certificate rescued. Every filter
+    #: takes its cutoff from :meth:`zero_set_tolerance`.
     bound: float
     trace_defect: float
     zero_mode_count: int = 1
@@ -108,6 +114,48 @@ class ZeroModeCertificate:
     def applied_tolerance(self) -> float:
         """``zero_tolerance`` with the pre-refinement fallback to ``bound``."""
         return self.bound if not np.isfinite(self.zero_tolerance) else self.zero_tolerance
+
+    def zero_set_tolerance(
+        self,
+        eigenvalues: np.ndarray,
+        *,
+        atol: float | None = None,
+        name: str = "eigenvalues",
+    ) -> float:
+        """The ONE cutoff a zero-mode filter may apply to this spectrum.
+
+        Round-17 review (PR #121). Five call sites had independently written
+        the same two-branch expression -- the certificate's band when it is
+        applicable, the radius-based proxy otherwise -- and four of them were
+        never migrated when the a posteriori refinement (issue #113 second
+        axis) made ``bound`` the wrong half of that branch. Duplicating a
+        DECISION at five sites is what made a four-fold miss possible, so the
+        decision is made here, once:
+
+        * applicable certificate -> :attr:`applied_tolerance`: the raw band
+          ``bound``, unless the refinement pulled a genuine slow mode out of
+          it, in which case the refined split (never larger) is used, so the
+          rescued mode survives the filter it was rescued for;
+        * inapplicable certificate -> the radius-based proxy of
+          :func:`liouscope.numerics.scale.spectral_zero_tolerance`. Without
+          established trace preservation no zero mode is guaranteed and the
+          operator-norm band can exceed the entire spectrum of a strongly
+          non-normal input (measured: 2.2e3 against eigenvalues of order 1),
+          which would discard every mode and report a gapless D1;
+        * an explicit ``atol`` (the legacy pre-#108 absolute opt-in) still
+          wins over both.
+
+        The spectrum is validated by ``spectral_zero_tolerance`` in every
+        branch, so an override cannot reintroduce silent acceptance of
+        corrupted solver output.
+        """
+        # Deferred import: ``numerics.scale`` imports ``require_finite_square_2d``
+        # from this module, so a module-level import would be circular.
+        from .scale import spectral_zero_tolerance
+
+        if atol is None and self.applicable:
+            atol = self.applied_tolerance
+        return spectral_zero_tolerance(eigenvalues, atol=atol, name=name)
 
     @property
     def resolved(self) -> bool:
@@ -170,9 +218,16 @@ def operator_zero_tolerance(
     gap ``1``.
 
     Every consumer that holds the OPERATOR (not just its spectrum) must
-    therefore filter with this function or, equivalently, with the
-    ``bound`` of the :class:`ZeroModeCertificate`, which is computed from
-    the same expression. The radius-based
+    therefore filter on this scale -- but a consumer holding a
+    :class:`ZeroModeCertificate` must take its cutoff from
+    :meth:`ZeroModeCertificate.zero_set_tolerance` and NOT from the
+    certificate's ``bound``. Round-17 review (PR #121): the two WERE the
+    same expression when this paragraph was written, and stopped being so
+    with the a posteriori refinement (issue #113 second axis), which lowers
+    the applied tolerance below ``bound`` precisely when a genuine slow mode
+    was rescued from the band. Filtering by ``bound`` there discards that
+    mode again, one layer after the certificate saved it -- four call sites
+    did exactly that, following this paragraph. The radius-based
     :func:`~liouscope.numerics.scale.spectral_zero_tolerance` remains the
     correct fallback for spectrum-only call sites. Genuine slow modes
     falling inside this coarser band are not silently swallowed: they are

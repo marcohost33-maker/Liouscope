@@ -233,12 +233,12 @@ def compute_spectral_layer(
     # spectrum (measured: bound 2.2e3 against eigenvalues of order 1) and
     # would discard every mode, reporting the gapless D1 = 0.0. The
     # radius-based default (``atol=None``) is the honest filter there.
-    # ``applied_tolerance``, not ``bound``: when the a posteriori certificate
-    # (issue #113 second axis) has kept a genuine slow mode out of the zero
-    # set, filtering by the raw band here would discard it one layer later
-    # and hand D1 the next, faster eigenvalue -- the very defect certified
-    # against. Without a refinement the two are identical.
-    zero_tol = certificate.applied_tolerance if certificate.applicable else None
+    # Round-17 review (PR #121): applicability, the radius fallback and the
+    # a posteriori refinement (issue #113 second axis) are all resolved by
+    # ``ZeroModeCertificate.zero_set_tolerance``, which is now the only way
+    # any layer obtains a zero-mode cutoff. This layer already used the
+    # applied tolerance; four other sites still read the raw band.
+    zero_tol = certificate.zero_set_tolerance(eigenvalues, name="eigenvalues")
     if certificate.applicable and not certificate.certified:
         warnings.warn(
             "Spectral layer: the eigensolver returned no zero mode for a "
@@ -268,7 +268,7 @@ def compute_spectral_layer(
         # taken from the complement is correct.
         warnings.warn(
             f"Spectral layer: {certificate.ambiguous_count} eigenvalue(s) fall "
-            f"inside the zero-mode tolerance ({certificate.bound:.3e}) without "
+            f"inside the zero-mode tolerance ({zero_tol:.3e}) without "
             "being machine-zero, so the slow spectrum is not resolvable at "
             "double precision. D1 is reported as NaN rather than as the next "
             "surviving mode, which would be a fast one (issue #113).",
@@ -288,12 +288,7 @@ def compute_spectral_layer(
     # certificate is inapplicable (round-14), same as D1/D3/D4 above.
     has_complex = bool(
         np.any(
-            np.abs(np.imag(eigenvalues))
-            > (
-                zero_tol
-                if zero_tol is not None
-                else spectral_zero_tolerance(eigenvalues, name="eigenvalues")
-            )
+            np.abs(np.imag(eigenvalues)) > zero_tol
         )
     )
     # Sort by real part descending so [0] is the steady state.

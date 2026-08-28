@@ -75,7 +75,6 @@ import numpy as np
 from ._consts import EPS_DIV
 from ._types import ZhouPredictorResult
 from .numerics.linalg import certified_eig, certified_eigvals
-from .numerics.scale import spectral_zero_tolerance
 
 # S6 re-audit 2026-06-04: the cited reference is independently verified to
 # exist (arXiv PDF v3). Our implemented bound is the same family as Zhou's
@@ -164,22 +163,19 @@ def compute_zhou_predictor(
                     else float("nan")
                 ),
             )
-        # Zero-mode separation on the certificate's own operator-derived
-        # scale (round-13): the radius-based proxy is smaller than the
-        # eigensolve backward error on strongly non-normal generators, so a
-        # certified-resolved stationary mode would survive it as a spurious
-        # slow mode. ONLY when the certificate is applicable (round-14):
-        # without established trace preservation no zero mode is guaranteed
-        # and the operator-norm bound can exceed the whole spectrum of a
-        # strongly non-normal input, discarding every eigenvalue; the
-        # radius-based filter is the honest fallback there. Scale-relative in
-        # either case (issue #108): D24 consumes the gap, so an absolute
-        # floor made the predicted mixing-time window depend on the choice of
-        # rate unit.
-        nonzero = np.abs(eigvals) > (
-            certificate.bound
-            if certificate.applicable
-            else spectral_zero_tolerance(eigvals, name="eigenvalues of L_super")
+        # Zero-mode separation from the certificate's single filter entry
+        # point (round-17 review, PR #121). It resolves the applicable /
+        # inapplicable branch and the a posteriori refinement in ONE place;
+        # see ``ZeroModeCertificate.zero_set_tolerance``. This site used the
+        # raw ``bound``, which after a refinement is LARGER than the tolerance
+        # actually applied: a genuine slow mode the certificate had just
+        # rescued from the zero band was filtered out again here, and D24 then
+        # read the next, faster eigenvalue -- understating the mixing-time
+        # window by orders of magnitude. Scale-relative in either branch
+        # (issue #108): D24 consumes the gap, so an absolute floor made the
+        # predicted window depend on the choice of rate unit.
+        nonzero = np.abs(eigvals) > certificate.zero_set_tolerance(
+            eigvals, name="eigenvalues of L_super"
         )
         if not nonzero.any():
             # Honour caller-supplied values in the unconverged record:
