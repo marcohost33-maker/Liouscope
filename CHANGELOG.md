@@ -7,6 +7,72 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Fixed
+- **Eight gates that decided from what they never had (PR #121 round-22
+  review). CHANGES `StabilityReport` PAYLOAD TYPES and the A10/F5 CLASSIFIER
+  BRANCH.** All eight share one shape: a value that is not a measurement is
+  used as if it were one.
+  - *Non-finite tolerances were honoured instead of refused.* `defect >
+    tp_rtol * fro` is False for every operator when `tp_rtol` is NaN, and has
+    an infinite right-hand side when it is `inf`, so
+    `certified_eigvals(diag([0,-1,-2,-3]), tp_rtol=nan)` came back
+    `applicable=True, certified=True` for a trace defect of 3.0. Round 21
+    closed this shape one variable further along (the reference scale `fro`)
+    and left the parameter beside it unchecked; `rtol` and `tp_rtol` are now
+    validated in `certified_eigvals` **and** `certified_eig`.
+  - *An inapplicable certificate reported one zero mode.* `zero_mode_count`
+    kept its dataclass default of `1` in both inapplicable branches, so
+    `diag([1,2,3,4])` -- a spectrum with no zero eigenvalue -- claimed a
+    stationary mode into persisted audit metadata. It is now `0`.
+  - *The refined tolerance underflowed to zero.* `sqrt(lo * hi)` forms the
+    product first, and that product scales as `c^2` under a uniform rate
+    rescale while the refinement itself is scale free; below `c ~ 1e-139` the
+    tolerance became `0.0` and the numerical stationary residual survived the
+    gap filter as physics. `sqrt(lo) * sqrt(hi)` is the same number and cannot
+    underflow (measured: `lo=1e-177, hi=1e-165` gave `0.0`, now `1e-171`).
+  - *An overflowing spectral radius produced a gapless verdict.*
+    `|1.3e308 + 1.3e308j|` exceeds the double range, so `np.abs` returned
+    `inf` although every component is finite and passed the finiteness gate.
+    `spectral_zero_tolerance` returned `inf`, no mode satisfied
+    `|lambda| > tol`, and D1/D3/D4 all reported `0.0` for a spectrum with
+    modes of order `1e308`. Now computed by scaling on the largest component
+    (measured after: tolerance `4.08e295`, D1 `5.0e307`, D3 `1.3e308`,
+    D4 `8.0e307`); a tolerance that is still not finite is refused.
+  - *The sparse builder inherited none of the dense overflow repair.* The
+    round-18 fix divided each diagonal entry before summing in
+    `build_liouvillian` only; `build_sparse_liouvillian` still called
+    `diagonal().sum()`, overflowed to `inf`, and accepted the very matrix its
+    dense twin rejected on the same input (Hermiticity defect `1e290`). Both
+    paths now share the overflow-safe gauge shift and the refusal of a
+    non-finite derived scale.
+  - *The jackknife never asked whether its fits converged.* The round-20 guard
+    protects the bootstrap replicates only; `_jackknife` copied `fit.params`
+    unconditionally, and a failed `least_squares` returns its unchanged
+    starting value -- `theta_hat` itself. The BCa acceleration is a third
+    moment of exactly these estimates, so the endpoints moved with no data
+    behind them (measured: one non-fit in forty shifted one interval width to
+    `0.923x`). `_jackknife` now raises `RuntimeError`, which
+    `compute_relaxation_layer` already routes to `bca_ci_beta = (nan, nan)`.
+  - *The unresolved run was the one whose report would not serialise.*
+    `build_stability_report` copied D1/D3/D9 through as raw floats while the
+    layers above deliberately publish NaN when a certificate is unresolved,
+    and `dump_stability_report` writes with `allow_nan=False` -- so
+    `json.dumps` raised on precisely the run whose audit record matters most.
+    Non-finite diagnostic values are now encoded as `null`, the placeholder
+    already used for D8b/D10b and by `ZeroModeCertificate.as_dict`.
+    **Consumers reading `diagnostics["D1_gap"]` must accept `None`.**
+  - *A missing gap was read as the gapless limit.* `_f5_reach` defaulted
+    `gap` to `0.0`, which is positive evidence for the phantom-relaxation
+    reach leg. With an unresolved certificate the spectral layer withholds D1
+    as NaN, `_strip_unavailable` removes the key, and with `henrici_eta > 1`
+    the classifier returned A10/F5 and marked the hypothesis `SUPPORTED` for a
+    reach it could not compute. The downstream certificate floor caps the
+    verdict at `UNDEFINED` but does not withdraw the class, the family or the
+    matrix status. `gap` is now a REQUIRED key of that condition, so the rung
+    is `UNEVALUABLE` without it; a gap MEASURED as `0.0` still fires the
+    documented gapless branch. This reverses the deliberate choice recorded in
+    `test_missing_optional_key_is_reported_without_forcing_unevaluable`, whose
+    invariant now travels on `gap_to_gns_ratio` -- a key that genuinely has
+    documented semantics without a value.
 - **The second repair step ended the eigenvalue ladder instead of continuing it
   (PR #121 round-18 review).** `certified_eigvals` guarded its primary solve
   but not the `dgeev-real` step that runs next -- and unlike the primary, that

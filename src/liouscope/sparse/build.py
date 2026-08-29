@@ -50,9 +50,33 @@ def build_sparse_liouvillian(
     # review): a real identity offset is physically inert but inflates the
     # scale, loosening the gate. Subtracting the real trace part touches only
     # the diagonal, so sparsity is preserved.
-    H_gauge = (H_sp - sp.identity(d, dtype=complex, format="csr")
-               * (H_sp.diagonal().sum().real / d)).tocsr()
+    #
+    # ROUND-22 REVIEW (PR #121). The dense twin was made overflow-safe in
+    # round 18; this path was not, and the two had to be repaired together
+    # because the whole point of these lines is parity. ``diagonal().sum()``
+    # adds the diagonal BEFORE dividing, so it returns inf for a finite H
+    # whose entries are large -- ``1.3e308 * I`` in two dimensions is enough.
+    # ``H_gauge`` then becomes NaN, ``scale`` becomes NaN, and
+    # ``defect > EPS * NaN`` is False, so the gate ACCEPTED a matrix with a
+    # Hermiticity defect of 1e290 that the dense builder rejected on the same
+    # input. Dividing each diagonal entry first bounds the shift by
+    # ``max|diag(H)|``, which cannot overflow while H itself is finite.
+    gauge_shift = float(np.sum(H_sp.diagonal().real / d))
+    H_gauge = (
+        H_sp - sp.identity(d, dtype=complex, format="csr") * gauge_shift
+    ).tocsr()
     scale = float(np.max(np.abs(H_gauge.data))) if H_gauge.nnz else 0.0
+    # Second line of defence, identical to the dense builder: a scale or a
+    # defect that is not finite cannot decide anything, so the gate refuses
+    # rather than comparing against it. Without this, ANY future route to a
+    # non-finite scale silently reopens the same hole -- which is exactly how
+    # this one survived round 18.
+    if not np.isfinite(scale) or not np.isfinite(defect):
+        raise ValueError(
+            "H is finite but its gauge-fixed Hermiticity scale is not "
+            f"(max|H - H^dag| = {defect}, gauge-fixed max|H| = {scale}); "
+            "the Hermiticity gate cannot be evaluated, so H is refused"
+        )
     if defect > EPS_HERMITICITY * scale:
         raise ValueError(
             f"H must be Hermitian within a relative {EPS_HERMITICITY:g} "

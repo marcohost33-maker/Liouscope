@@ -117,6 +117,13 @@ def spectral_zero_tolerance(
         ``max|lambda|`` non-finite, and every ``|lambda| > NaN`` comparison
         would evaluate ``False`` -- silently reporting "no non-zero modes"
         (gap ``0.0``) for corrupted eigensolver output.
+
+        Also if the DERIVED tolerance is not finite (round-22 review). A
+        spectrum can be entirely finite while a modulus is not -- ``|1.3e308 +
+        1.3e308j|`` overflows -- which produced exactly the silent "no
+        non-zero modes" answer above from valid input. The overflowing case is
+        now computed by scaling on the largest component; only if that still
+        does not fit does the function refuse.
     """
     if not np.isfinite(rtol) or rtol < 0.0:
         raise ValueError(f"rtol must be finite and non-negative, got {rtol}")

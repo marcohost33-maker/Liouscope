@@ -395,9 +395,16 @@ class _Condition:
     Keeping the two apart is what preserves the matrix/ladder equivalence: if a
     defaulted key were declared required, the matrix would report UNEVALUABLE
     for evidence on which the ladder happily fires (the F5 reach leg reads
-    ``ev.get("gap", 0.0)`` and treats a missing gap as the gapless limit), and
-    the two would disagree exactly on the partially collected evidence the
-    matrix exists to describe.
+    ``ev.get("gap_to_gns_ratio", 1.0)`` and has documented semantics without
+    it), and the two would disagree exactly on the partially collected
+    evidence the matrix exists to describe.
+
+    The converse error is the round-22 finding: a key whose DEFAULT is
+    positive evidence must not be optional. ``gap`` was defaulted to ``0.0``
+    in the F5 reach leg, i.e. to the gapless limit, so a missing D1 read as
+    support for the phantom-relaxation hypothesis rather than as the absence
+    of the measurement. A default is only admissible when the predicate has
+    documented semantics WITHOUT the value -- not when it invents one.
 
     ``relaxation_fields`` names any :class:`RelaxationResult` attributes read,
     for the same audit purpose. ``fn`` MUST reproduce the decision predicate
@@ -437,7 +444,23 @@ def _f5_reach(ev: dict[str, float], relaxation: RelaxationResult) -> bool:
     # leading order (both radius and gap scale as c). A vanishing gap (no
     # spectral gap) is treated as inf reach: a gapless, strongly non-normal
     # operator is the phantom/critical limit.
-    _gap = ev.get("gap", 0.0)
+    # ROUND-22 REVIEW (PR #121). ``ev.get("gap", 0.0)`` read a MISSING
+    # measurement as a measured zero. When the certificate is unresolved the
+    # spectral layer withholds D1 as NaN, ``_strip_unavailable`` removes the
+    # key, and the default then supplied the gapless limit -- positive
+    # evidence for the very leg that could not be computed. With
+    # ``henrici_eta > 1`` the rung fired, the classifier returned A10/F5 and
+    # the matrix reported the F5 hypothesis SUPPORTED. The certificate floor
+    # downstream caps the VERDICT at UNDEFINED, but it does not withdraw the
+    # class, the family or the matrix status, so a fabricated mechanism label
+    # survived the floor that was supposed to contain it.
+    #
+    # ``gap`` is therefore a REQUIRED key of this condition (see the rung
+    # below): absent, the rung is unevaluable and cannot fire. A gap that was
+    # MEASURED as 0.0 still means gapless and still counts as reach evidence --
+    # the distinction is between "no gap" and "no measurement", which is
+    # exactly the distinction the default erased.
+    _gap = ev["gap"]
     if _gap > 0.0:
         return bool(
             ev["pseudospectral_radius"] / _gap > 2.0 * ev.get("gap_to_gns_ratio", 1.0)
@@ -503,8 +526,8 @@ def _ladder_spec() -> tuple[_Rung, ...]:
             _Condition(
                 description="pseudospectral reach: radius/gap > 2 * gap_to_gns_ratio "
                 "(gapless => infinite reach; see #101 gapless blind spot)",
-                keys=("pseudospectral_radius",),
-                optional_keys=("gap", "gap_to_gns_ratio"),
+                keys=("pseudospectral_radius", "gap"),
+                optional_keys=("gap_to_gns_ratio",),
                 fn=_f5_reach,
             ),
             _Condition(

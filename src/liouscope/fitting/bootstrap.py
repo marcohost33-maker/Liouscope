@@ -113,14 +113,47 @@ def _jackknife(
     theta_hat: np.ndarray,
     bounds: tuple[np.ndarray, np.ndarray] | None,
 ) -> np.ndarray:
-    """Leave-one-out jackknife on the time grid."""
+    """Leave-one-out jackknife on the time grid.
+
+    Raises
+    ------
+    RuntimeError
+        If any leave-one-out fit fails to converge. Round-22 review (PR #121):
+        the round-20 guard on the BOOTSTRAP branch does not protect the
+        interval when every replicate converges but a jackknife fit does not.
+        The acceleration ``a`` in :func:`bca_ci` is a third moment of exactly
+        these estimates, and a failed ``least_squares`` returns its unchanged
+        STARTING value -- here ``theta_hat`` itself. One such value pulls the
+        jackknife distribution towards its own centre, which shifts ``a``, and
+        the BCa quantiles with it: the endpoints move without any data having
+        said so, and the interval that comes back is finite, narrow and
+        unwarranted.
+
+        The same two routes as in ``parametric_bootstrap`` are available and
+        the same objection applies to both: retaining a non-fit deposits mass
+        at the centre, dropping it biases the endpoints in a direction nobody
+        has characterised (a leave-one-out fit fails on the points that matter
+        most). Neither has a validated rule, so no interval is reported. The
+        caller in ``compute_relaxation_layer`` already routes RuntimeError to
+        ``bca_ci_beta = (nan, nan)`` -- "fit uncertainty UNKNOWN".
+    """
     n = t.size
     out = np.empty((n, theta_hat.size))
+    failed = 0
     for i in range(n):
         t_i = np.delete(t, i)
         y_i = np.delete(y, i)
         fit_i = fit_gls_ar1(model, t_i, y_i, theta_hat, bounds=bounds)
+        failed += not fit_i.success
         out[i] = fit_i.params
+    if failed:
+        raise RuntimeError(
+            f"_jackknife: {failed} of {n} leave-one-out fits did not "
+            "converge. A failed fit returns its unchanged starting value, so "
+            "the BCa acceleration would be computed from estimates that are "
+            "not estimates; no confidence interval is reported from this "
+            "jackknife"
+        )
     return out
 
 

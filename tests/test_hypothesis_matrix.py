@@ -282,14 +282,24 @@ def test_all_partial_rungs_refuted_restores_the_a12_equivalence():
 def test_missing_optional_key_is_reported_without_forcing_unevaluable():
     """A defaulted key must not make the matrix contradict the ladder.
 
-    `_f5_reach` reads `ev.get("gap", 0.0)` and treats a missing gap as the
-    gapless limit, so with `henrici_eta > 1` the ladder FIRES F5. Declaring
-    `gap` required would have the matrix report UNEVALUABLE for exactly that
-    input — the two disagreeing on the partially collected evidence the matrix
-    exists to describe. The absence is still surfaced in `missing`.
+    `_f5_reach` reads `ev.get("gap_to_gns_ratio", 1.0)` and has documented
+    semantics without it, so with `henrici_eta > 1` and a reach ratio above the
+    threshold the ladder FIRES F5. Declaring the ratio required would have the
+    matrix report UNEVALUABLE for exactly that input - the two disagreeing on
+    the partially collected evidence the matrix exists to describe. The absence
+    is still surfaced in `missing_optional`.
+
+    ROUND-22 (PR #121): this test used to make the same point with `gap`.
+    `gap` is now REQUIRED for the F5 reach leg, because its old default was
+    0.0 - the gapless limit, i.e. positive evidence invented for a measurement
+    that was never taken. A default is admissible only when the predicate has
+    documented semantics WITHOUT the value, which is true of
+    `gap_to_gns_ratio` and was never true of `gap`. The invariant under test is
+    unchanged; only the example carrying it moved to a key that satisfies the
+    premise.
     """
-    ev = _ev(henrici_eta=2.0)
-    del ev["gap"]
+    ev = _ev(pseudospectral_radius=10.0, henrici_eta=2.0)
+    del ev["gap_to_gns_ratio"]
     rel = _Rel()
     ladder = {r[0]: r[3] for r in _hypothesis_ladder(ev, relaxation=rel)}
     assert ladder["F5_PSEUDOSPECTRAL"] is True, "control: the ladder must fire here"
@@ -297,7 +307,38 @@ def test_missing_optional_key_is_reported_without_forcing_unevaluable():
     f5 = _entry(hypothesis_evidence_matrix(ev, relaxation=rel), "F5_PSEUDOSPECTRAL")
     assert f5["status"] == HYPOTHESIS_SUPPORTED
     assert f5["missing"] == ()                      # nothing REQUIRED is absent
-    assert "gap" in f5["missing_optional"]          # but the absence is audited
+    assert "gap_to_gns_ratio" in f5["missing_optional"]   # absence still audited
+
+
+def test_a_missing_gap_makes_the_reach_leg_unevaluable_not_supported():
+    """ROUND-22 (PR #121): absence of a measurement is not evidence.
+
+    When the zero-mode certificate is unresolved the spectral layer withholds
+    D1 as NaN. `_strip_unavailable` then removes the key, and the old
+    `ev.get("gap", 0.0)` default supplied the gapless limit - so the rung
+    fired, the classifier returned A10/F5 and the matrix reported the
+    hypothesis SUPPORTED for a reach that could not be computed at all. The
+    downstream certificate floor caps the VERDICT at UNDEFINED but does not
+    withdraw the class, the family or this status.
+    """
+    ev = _ev(pseudospectral_radius=10.0, henrici_eta=2.0)
+    del ev["gap"]
+    rel = _Rel()
+    ladder = {r[0]: r[3] for r in _hypothesis_ladder(ev, relaxation=rel)}
+    assert ladder["F5_PSEUDOSPECTRAL"] is False
+
+    f5 = _entry(hypothesis_evidence_matrix(ev, relaxation=rel), "F5_PSEUDOSPECTRAL")
+    assert f5["status"] == HYPOTHESIS_UNEVALUABLE
+    assert "gap" in f5["missing"]
+
+    # POSITIVE CONTROL: a gap MEASURED as 0.0 is the documented gapless limit
+    # and must still fire. The repair separates "no gap" from "no measurement".
+    gapless = _ev(pseudospectral_radius=10.0, henrici_eta=2.0, gap=0.0)
+    gapless_ladder = {r[0]: r[3] for r in _hypothesis_ladder(gapless, relaxation=rel)}
+    assert gapless_ladder["F5_PSEUDOSPECTRAL"] is True
+    assert _entry(
+        hypothesis_evidence_matrix(gapless, relaxation=rel), "F5_PSEUDOSPECTRAL"
+    )["status"] == HYPOTHESIS_SUPPORTED
 
 
 @pytest.mark.parametrize("dropped", [
@@ -572,14 +613,36 @@ def test_legacy_construction_still_honours_the_alias_contract():
 def test_nan_optional_evidence_behaves_exactly_like_its_absence():
     """The claim floor must not depend on how a missing value is ENCODED.
 
-    `gap` is optional for F5 (the reach predicate reads it with the documented
-    gapless default). Before the NaN strip, the absent encoding applied the
-    default and fired the rung, while the NaN encoding made the comparison
-    False — same missing measurement, different claim floor, and the matrix
-    diverged from the ladder.
+    `gap_to_gns_ratio` is optional for F5 (the reach predicate reads it with a
+    documented default of 1.0). Before the NaN strip, the absent encoding
+    applied the default and fired the rung, while the NaN encoding made the
+    comparison False - same missing measurement, different claim floor, and the
+    matrix diverged from the ladder.
+
+    ROUND-22 (PR #121): carried by `gap_to_gns_ratio` since `gap` became a
+    required key of this leg; see
+    ``test_a_nan_gap_and_an_absent_gap_are_the_same_non_evidence`` for the
+    encoding-independence of the newly required case.
     """
     base = _ev(pseudospectral_radius=10.0, henrici_eta=2.0)
 
+    absent = dict(base)
+    del absent["gap_to_gns_ratio"]
+    as_nan = dict(base)
+    as_nan["gap_to_gns_ratio"] = float("nan")
+
+    rel = _Rel()
+    for ev in (absent, as_nan):
+        ladder = {r[0]: r[3] for r in _hypothesis_ladder(ev, relaxation=rel)}
+        f5 = _entry(hypothesis_evidence_matrix(ev, relaxation=rel), "F5_PSEUDOSPECTRAL")
+        assert ladder["F5_PSEUDOSPECTRAL"] is True
+        assert f5["status"] == HYPOTHESIS_SUPPORTED
+        assert "gap_to_gns_ratio" in f5["missing_optional"]
+
+
+def test_a_nan_gap_and_an_absent_gap_are_the_same_non_evidence():
+    """Encoding-independence for the newly REQUIRED key (round 22)."""
+    base = _ev(pseudospectral_radius=10.0, henrici_eta=2.0)
     absent = dict(base)
     del absent["gap"]
     as_nan = dict(base)
@@ -589,9 +652,9 @@ def test_nan_optional_evidence_behaves_exactly_like_its_absence():
     for ev in (absent, as_nan):
         ladder = {r[0]: r[3] for r in _hypothesis_ladder(ev, relaxation=rel)}
         f5 = _entry(hypothesis_evidence_matrix(ev, relaxation=rel), "F5_PSEUDOSPECTRAL")
-        assert ladder["F5_PSEUDOSPECTRAL"] is True
-        assert f5["status"] == HYPOTHESIS_SUPPORTED
-        assert "gap" in f5["missing_optional"]
+        assert ladder["F5_PSEUDOSPECTRAL"] is False
+        assert f5["status"] == HYPOTHESIS_UNEVALUABLE
+        assert "gap" in f5["missing"]
 
 
 def test_nan_required_evidence_also_behaves_exactly_like_its_absence():

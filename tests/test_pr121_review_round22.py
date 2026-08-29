@@ -21,6 +21,8 @@ discriminates nothing and must not be able to pass this file.
 
 from __future__ import annotations
 
+import warnings
+
 import numpy as np
 import pytest
 
@@ -267,3 +269,326 @@ def test_a_tolerance_that_cannot_be_represented_is_refused() -> None:
 
     with pytest.raises(ValueError, match="not finite"):
         spectral_zero_tolerance(_OVERFLOWING_SPECTRUM, rtol=1.0e300)
+
+
+# ---------------------------------------------------------------------------
+# Finding 1: the sparse builder inherited none of the dense overflow repair
+# ---------------------------------------------------------------------------
+
+# The round-18 repair divided each diagonal entry BEFORE summing, in the dense
+# builder only. The sparse twin kept ``diagonal().sum()``, which overflows to
+# inf for a finite H with large entries; the gauge-fixed matrix becomes NaN,
+# the scale becomes NaN, and ``defect > EPS * NaN`` is False -- so a matrix
+# with a Hermiticity defect of 1e290 was accepted by one builder and rejected
+# by the other, on the same input.
+_OVERFLOWING_H = np.array([[1.3e308, 1.0e290], [0.0, 1.3e308]], dtype=complex)
+
+
+def test_sparse_builder_rejects_what_the_dense_builder_rejects() -> None:
+    import scipy.sparse as sp
+
+    from liouscope.sparse.build import build_sparse_liouvillian
+
+    assert np.all(np.isfinite(_OVERFLOWING_H)), "fixture H must be finite"
+    assert float(np.max(np.abs(_OVERFLOWING_H - _OVERFLOWING_H.conj().T))) == 1.0e290
+    with pytest.raises(ValueError, match=r"Hermitian|Hermiticity"):
+        build_liouvillian(_OVERFLOWING_H, [], [])
+    with pytest.raises(ValueError, match=r"Hermitian|Hermiticity"):
+        build_sparse_liouvillian(sp.csr_matrix(_OVERFLOWING_H), [], [])
+
+
+def test_sparse_and_dense_builders_agree_on_valid_and_invalid_input() -> None:
+    """POSITIVE CONTROL: parity in BOTH directions, not just refusal."""
+    import scipy.sparse as sp
+
+    from liouscope.sparse.build import build_sparse_liouvillian
+
+    hermitian = np.array([[1.0, 0.5j], [-0.5j, 2.0]], dtype=complex)
+    dense = build_liouvillian(hermitian, [_LOWER], [0.5])
+    sparse = build_sparse_liouvillian(
+        sp.csr_matrix(hermitian), [sp.csr_matrix(_LOWER)], [0.5]
+    )
+    assert np.allclose(dense, sparse.toarray())
+
+    # A real identity offset is physically inert and must still be accepted by
+    # both -- the overflow repair must not have turned the gauge shift into a
+    # rejection criterion.
+    shifted = hermitian + 1.0e12 * np.eye(2, dtype=complex)
+    assert build_liouvillian(shifted, [], []).shape == (4, 4)
+    assert build_sparse_liouvillian(sp.csr_matrix(shifted), [], []).shape == (4, 4)
+
+    # ... and an ordinary non-Hermitian H must still be refused by both.
+    not_hermitian = np.array([[1.0, 1.0], [0.0, 2.0]], dtype=complex)
+    with pytest.raises(ValueError):
+        build_liouvillian(not_hermitian, [], [])
+    with pytest.raises(ValueError):
+        build_sparse_liouvillian(sp.csr_matrix(not_hermitian), [], [])
+
+
+# ---------------------------------------------------------------------------
+# Finding 2: the jackknife never asked whether its fits converged
+# ---------------------------------------------------------------------------
+
+
+def _noisy_decay() -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    t = np.linspace(0.0, 5.0, 40)
+    rng = np.random.default_rng(11)
+    y = np.exp(-1.3 * t) + rng.normal(0.0, 0.02, size=t.size)
+    return t, y, np.array([1.0, 1.2])
+
+
+def test_jackknife_refuses_when_a_leave_one_out_fit_fails(monkeypatch) -> None:
+    """THE regression: the round-20 bootstrap guard does not cover this path.
+
+    Injected at the documented contract surface (``success is False``) rather
+    than by hunting for data that makes ``least_squares`` give up, so the test
+    depends on the rule and not on SciPy's convergence heuristics.
+    """
+    from dataclasses import replace
+
+    from liouscope.fitting import bootstrap as bs
+    from liouscope.fitting.models import M0
+
+    t, y, p0 = _noisy_decay()
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        samples, theta_hat = bs.parametric_bootstrap(M0, t, y, p0, B=25)
+    assert samples.shape == (25, 2), (
+        "every bootstrap replicate must converge here -- the point of the "
+        "finding is that the bootstrap guard passes while the jackknife fails"
+    )
+
+    real_fit = bs.fit_gls_ar1
+    calls = {"n": 0}
+
+    def flaky(*args, **kwargs):
+        out = real_fit(*args, **kwargs)
+        calls["n"] += 1
+        return replace(out, success=False) if calls["n"] == 4 else out
+
+    monkeypatch.setattr(bs, "fit_gls_ar1", flaky)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        with pytest.raises(RuntimeError, match="did not converge"):
+            bs._jackknife(M0, t, y, theta_hat, None)
+
+
+def test_a_failed_jackknife_estimate_moves_the_bca_interval() -> None:
+    """Why refusing is not pedantry: the endpoints move with no data behind it.
+
+    A failed ``least_squares`` returns its unchanged starting value, which is
+    ``theta_hat`` itself, so the jackknife distribution is pulled towards its
+    own centre and the acceleration -- a third moment of exactly these
+    estimates -- shifts. Measured here for ONE failure out of 40: the
+    amplitude interval narrows to 0.923x of its width. The direction is
+    parameter dependent (the rate interval moves by 0.2 %), so the assertion
+    is on the SHIFT, not on a claimed direction.
+    """
+    from liouscope.fitting.bootstrap import _jackknife, bca_ci, parametric_bootstrap
+    from liouscope.fitting.models import M0
+
+    t, y, p0 = _noisy_decay()
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        samples, theta_hat = parametric_bootstrap(M0, t, y, p0, B=200)
+        clean = _jackknife(M0, t, y, theta_hat, None)
+
+    corrupted = clean.copy()
+    corrupted[0] = theta_hat  # what a non-converged leave-one-out fit deposits
+    ci_clean = bca_ci(samples, theta_hat, jackknife_estimates=clean)
+    ci_corrupt = bca_ci(samples, theta_hat, jackknife_estimates=corrupted)
+
+    w_clean = ci_clean[:, 1] - ci_clean[:, 0]
+    w_corrupt = ci_corrupt[:, 1] - ci_corrupt[:, 0]
+    ratio = w_corrupt / w_clean
+    assert np.all(np.isfinite(ci_corrupt)), (
+        "the corrupted interval is FINITE -- that is what made it dangerous"
+    )
+    assert np.min(ratio) < 0.95, (
+        f"width ratios {ratio.tolist()}; a single non-fit is expected to move "
+        "at least one endpoint pair by more than 5 %"
+    )
+
+
+def test_jackknife_still_returns_estimates_when_every_fit_converges() -> None:
+    """POSITIVE CONTROL: the refusal must not have become unconditional."""
+    from liouscope.fitting.bootstrap import _jackknife, bca_ci, parametric_bootstrap
+    from liouscope.fitting.models import M0
+
+    t, y, p0 = _noisy_decay()
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        samples, theta_hat = parametric_bootstrap(M0, t, y, p0, B=40)
+        jk = _jackknife(M0, t, y, theta_hat, None)
+
+    assert jk.shape == (t.size, theta_hat.size)
+    ci = bca_ci(samples, theta_hat, jackknife_estimates=jk)
+    assert np.all(np.isfinite(ci))
+    assert np.all(ci[:, 1] > ci[:, 0]), "a real jackknife gives a real interval"
+
+
+# ---------------------------------------------------------------------------
+# Finding 5: the unresolved run was the one whose report would not serialise
+# ---------------------------------------------------------------------------
+
+
+def _damped_qubit() -> tuple[np.ndarray, np.ndarray]:
+    from liouscope import steady_state
+
+    L = build_liouvillian(np.zeros((2, 2), dtype=complex), [_LOWER], [0.6])
+    return L, steady_state(L)
+
+
+def _diagnosed():
+    from liouscope import diagnose
+
+    L, rho = _damped_qubit()
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        report = diagnose(L, rho_steady_state=rho, bootstrap_B=30, include_mpemba=False)
+    return report, L, rho
+
+
+def _payload(report, L, rho):
+    from liouscope.io.stability_report import build_stability_report
+
+    return build_stability_report(
+        report,
+        L_super=L,
+        rho_ss=rho,
+        claim_level="BLOCK",
+        direction="slowdown",
+        cp_evidence_level="construction_only",
+    )
+
+
+def test_a_withheld_diagnostic_does_not_break_the_report(tmp_path) -> None:
+    """THE regression: D1/D3/D9 are NaN by design when a certificate is
+    unresolved, and ``allow_nan=False`` then raised on exactly that run."""
+    from dataclasses import replace
+
+    from liouscope.io.stability_report import (
+        dump_stability_report,
+        validate_stability_report,
+    )
+
+    report, L, rho = _diagnosed()
+    unresolved = replace(
+        report,
+        spectral=replace(
+            report.spectral, gap=float("nan"), oscillating_gap=float("nan")
+        ),
+        nonnorm=replace(report.nonnorm, petermann_max=float("nan")),
+    )
+    payload = _payload(unresolved, L, rho)
+    assert payload["diagnostics"]["D1_gap"] is None
+    assert payload["diagnostics"]["D3_oscillating_gap"] is None
+    assert payload["diagnostics"]["D9_petermann_max"] is None
+    validate_stability_report(payload)
+    out = tmp_path / "unresolved.json"
+    dump_stability_report(payload, out)
+    import json
+
+    loaded = json.loads(out.read_text(encoding="utf-8"))
+    assert loaded["diagnostics"]["D1_gap"] is None
+
+
+def test_an_infinite_diagnostic_is_also_encoded_as_unavailable(tmp_path) -> None:
+    """+-inf is equally non-conforming under RFC 8259 and raised in the same
+    place; the projection must not stop at NaN."""
+    from dataclasses import replace
+
+    from liouscope.io.stability_report import dump_stability_report
+
+    report, L, rho = _diagnosed()
+    infinite = replace(report, nonnorm=replace(report.nonnorm, kreiss=float("inf")))
+    payload = _payload(infinite, L, rho)
+    assert payload["diagnostics"]["D10_kreiss"] is None
+    dump_stability_report(payload, tmp_path / "infinite.json")
+
+
+def test_a_resolved_run_still_carries_its_numbers(tmp_path) -> None:
+    """POSITIVE CONTROL: the projection must not blank out real measurements."""
+    from liouscope.io.stability_report import dump_stability_report
+
+    report, L, rho = _diagnosed()
+    payload = _payload(report, L, rho)
+    for key in (
+        "D1_gap",
+        "D2_gns_gap",
+        "D2b_kms_gap",
+        "D3_oscillating_gap",
+        "D8_henrici",
+        "D9_petermann_max",
+        "D10_kreiss",
+    ):
+        value = payload["diagnostics"][key]
+        assert isinstance(value, float) and np.isfinite(value), (
+            f"{key} came back as {value!r} for a perfectly ordinary run"
+        )
+    assert payload["diagnostics"]["D1_gap"] == pytest.approx(report.spectral.gap)
+    dump_stability_report(payload, tmp_path / "resolved.json")
+
+
+# ---------------------------------------------------------------------------
+# Finding 8: a missing gap was read as the gapless limit
+# ---------------------------------------------------------------------------
+
+_F5_EVIDENCE = {
+    "pseudospectral_radius": 12.0,
+    "henrici_eta": 3.0,
+    "gns_gap": 0.1,
+    "kreiss": 1.0,
+    "petermann_max": 1.0,
+}
+
+
+def _classify(ev: dict[str, float]):
+    from liouscope.diagnostics.classification import (
+        _pick_a_class,
+        hypothesis_evidence_matrix,
+    )
+
+    report, _, _ = _diagnosed()
+    picked = _pick_a_class(ev, relaxation=report.relaxation)
+    matrix = hypothesis_evidence_matrix(ev, relaxation=report.relaxation)
+    f5 = next(e for e in matrix if e["a_class"] == "A10")
+    return picked, f5["status"]
+
+
+def test_an_unmeasured_gap_does_not_support_the_phantom_hypothesis() -> None:
+    """THE regression: NaN D1 must be absence of evidence, not evidence."""
+    picked, status = _classify({**_F5_EVIDENCE, "gap": float("nan")})
+    assert picked != ("A10", "F5"), (
+        "the classifier claimed the phantom-relaxation mechanism although its "
+        "dimensionless reach could not be computed at all"
+    )
+    assert status == "UNEVALUABLE"
+
+
+def test_an_absent_gap_key_behaves_the_same_as_a_nan_one() -> None:
+    """The NaN encoding and the missing key must not decide differently."""
+    assert _classify({**_F5_EVIDENCE, "gap": float("nan")}) == _classify(
+        dict(_F5_EVIDENCE)
+    )
+
+
+def test_a_measured_zero_gap_still_fires_the_gapless_reach_leg() -> None:
+    """POSITIVE CONTROL, and the over-correction control in one.
+
+    A gap that was MEASURED as 0.0 is the documented gapless limit and must
+    still count as reach evidence -- the repair distinguishes "no gap" from
+    "no measurement", it does not abolish the gapless branch.
+    """
+    picked, status = _classify({**_F5_EVIDENCE, "gap": 0.0})
+    assert picked == ("A10", "F5")
+    assert status == "SUPPORTED"
+
+
+def test_a_measured_positive_gap_still_decides_on_the_reach_ratio() -> None:
+    """POSITIVE CONTROL: the ordinary quantitative branch is untouched."""
+    fires, _ = _classify({**_F5_EVIDENCE, "gap": 1.0, "gap_to_gns_ratio": 1.0})
+    assert fires == ("A10", "F5"), "radius/gap = 12 > 2 must still fire"
+    quiet, status = _classify({**_F5_EVIDENCE, "gap": 12.0, "gap_to_gns_ratio": 1.0})
+    assert quiet != ("A10", "F5"), "radius/gap = 1 must not fire"
+    assert status == "NOT_SUPPORTED"
