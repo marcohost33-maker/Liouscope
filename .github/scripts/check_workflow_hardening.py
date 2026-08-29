@@ -14,7 +14,14 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 WORKFLOWS = ROOT / ".github" / "workflows"
 FULL_SHA_RE = re.compile(r"^[0-9a-f]{40}$", re.IGNORECASE)
-USES_RE = re.compile(r"^\s*uses:\s*([^\s#]+)")
+# Container images pin by digest, which is a different shape from a git SHA.
+DIGEST_RE = re.compile(r"^sha256:[0-9a-f]{64}$", re.IGNORECASE)
+# ``- uses:`` (list form) is the commonest way to write a step, and the
+# previous pattern did not match it: 7 of 27 refs in this tree were
+# invisible to the gate, including every ``actions/checkout``. They were
+# pinned by discipline, not by this check. Proven as a pair -- the same
+# unpinned ref passes in list form and is caught in block form.
+USES_RE = re.compile(r"^\s*(?:-\s*)?uses:\s*([^\s#]+)")
 
 
 def _iter_workflow_files() -> list[Path]:
@@ -28,11 +35,23 @@ def _iter_workflow_files() -> list[Path]:
 
 
 def _is_third_party_uses(ref: str) -> bool:
-    return not (
-        ref.startswith("./")
-        or ref.startswith("docker://")
-        or ref.startswith("github.com/")
-    )
+    """Which refs must carry a pin.
+
+    ``docker://`` was exempt outright, so ``docker://org/img:latest`` -- a
+    mutable tag from a third party -- passed the gate. It is exempt only
+    when it carries an immutable digest. The former ``github.com/``
+    exemption was dead code: ``uses:`` does not accept that prefix, and a
+    GitHub owner name cannot contain a dot, so no such org can exist. It
+    also tripped a CodeQL incomplete-substring alert, which is how it was
+    found.
+    """
+    if ref.startswith("./"):
+        return False
+    if ref.startswith("docker://"):
+        # Third party either way. Whether the pin is adequate is decided
+        # in _check_uses_pin, which alone sees the ref undivided.
+        return True
+    return True
 
 
 def _check_uses_pin(path: Path, line_number: int, line: str, errors: list[str]) -> None:
@@ -49,6 +68,15 @@ def _check_uses_pin(path: Path, line_number: int, line: str, errors: list[str]) 
     action, version = ref.rsplit("@", 1)
     if not _is_third_party_uses(action):
         return
+    if action.startswith("docker://"):
+        # A container pins by image digest, not by a git SHA. Requiring the
+        # git form here would reject the very thing the rule asks for.
+        if not DIGEST_RE.fullmatch(version):
+            errors.append(
+                f"{path}:{line_number}: container must be pinned to an "
+                f"immutable @sha256: digest, got {ref}"
+            )
+        return
     if not FULL_SHA_RE.fullmatch(version):
         errors.append(
             f"{path}:{line_number}: action must be pinned to a full 40-char SHA, got {ref}"
@@ -56,17 +84,41 @@ def _check_uses_pin(path: Path, line_number: int, line: str, errors: list[str]) 
 
 
 def _check_privileged_trigger(path: Path, text: str, errors: list[str]) -> None:
-    if "pull_request_target" in text and "ALLOW_PULL_REQUEST_TARGET:" not in text:
+    """The rationale must be a real key, not the words in a comment.
+
+    ``"ALLOW_PULL_REQUEST_TARGET:" in text`` was satisfied by any
+    occurrence -- including one inside a ``#`` comment, i.e. by writing the
+    name of the waiver rather than declaring it.
+    """
+    uncommented = chr(10).join(
+        line.split("#", 1)[0] for line in text.splitlines()
+    )
+    if "pull_request_target" in uncommented and (
+        "ALLOW_PULL_REQUEST_TARGET:" not in uncommented
+    ):
         errors.append(
             f"{path}: uses pull_request_target without ALLOW_PULL_REQUEST_TARGET rationale"
         )
 
 
 def _check_permissions_declared(path: Path, text: str, errors: list[str]) -> None:
-    # Minimal parser: require an explicit top-level permissions key before jobs.
+    """Require a top-level permissions block AND check what it grants.
+
+    Presence alone was the whole test, so ``permissions: write-all``
+    satisfied it -- a declaration of total access counted as evidence of
+    least privilege.
+    """
     before_jobs = text.split("\njobs:", 1)[0]
     if "\npermissions:" not in f"\n{before_jobs}":
         errors.append(f"{path}: missing explicit top-level permissions block")
+        return
+    for number, line in enumerate(text.splitlines(), start=1):
+        stripped = line.split("#", 1)[0].strip()
+        if stripped in {"permissions: write-all", "permissions: read-all"}:
+            errors.append(
+                f"{path}:{number}: blanket '{stripped}' -- grant the "
+                f"individual scopes the workflow needs instead"
+            )
 
 
 def main() -> int:
