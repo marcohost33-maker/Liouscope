@@ -24,6 +24,7 @@ from __future__ import annotations
 import warnings
 
 import numpy as np
+import pytest
 
 from liouscope import build_liouvillian
 
@@ -128,3 +129,120 @@ def test_a_resolved_certificate_still_publishes_d3_d4_and_the_flag(monkeypatch) 
     assert np.isfinite(result.oscillating_gap)
     assert np.isfinite(result.spectral_spread)
     assert result.has_complex_pairs is not None
+
+
+# ---------------------------------------------------------------------------
+# 2. A band that accepts the whole spectrum has certified nothing
+# ---------------------------------------------------------------------------
+
+def _overflowing_norm_operator() -> np.ndarray:
+    """The reviewer's counterexample, entry for entry.
+
+    Finite 4x4, cancelling ``+-1e308`` in the ``vec(I)^H L`` combination, so
+    the absolute trace defect is ``sqrt(17) = 4.12`` while ``||L||_F``
+    overflows to ``inf``. Eigenvalues are exactly ``{1, 2, 3, 4}``: column 0
+    and column 2 each carry a single diagonal entry, and the remaining 2x2 on
+    indices ``{1, 3}`` is lower triangular.
+    """
+    L = np.diag([1.0, 2.0, 3.0, 4.0]).astype(complex)
+    L[0, 1] = 1.0e308
+    L[3, 1] = -1.0e308
+    return L
+
+
+def _nilpotent_wide_band_operator() -> np.ndarray:
+    """The same failure WITHOUT any overflow, to show the class is general.
+
+    Strictly upper triangular with ``1e10`` entries confined to row 1, so
+    ``vec(I)^H L = 0`` EXACTLY (trace preserving, defect 0.0), ``||L||_F`` is
+    a perfectly ordinary ``1.4e10``, and every eigenvalue is exactly zero.
+    The band ``rtol * eps * ||L||_2`` is then ``3.1e-3`` and swallows all four
+    -- a nilpotent generator certified as a four-dimensional stationary
+    manifold, on finite, well-scaled arithmetic.
+    """
+    L = np.zeros((4, 4), dtype=complex)
+    L[1, 2] = 1.0e10
+    L[1, 3] = 1.0e10
+    return L
+
+
+def test_the_overflowing_operator_is_the_state_the_reviewer_described() -> None:
+    """Pins the preconditions, so a numpy change cannot hollow out the test."""
+    from liouscope.numerics.linalg import trace_preservation_defect
+
+    L = _overflowing_norm_operator()
+    assert np.all(np.isfinite(L)), "the input must be FINITE for this to be the bug"
+    with np.errstate(over="ignore"):
+        defect, fro = trace_preservation_defect(L)
+    assert defect == pytest.approx(np.sqrt(17.0)), "a real, order-one trace defect"
+    assert not np.isfinite(fro), (
+        "the whole failure is that ``defect > tp_rtol * fro`` compares "
+        "against infinity; if ||L||_F stops overflowing the test is hollow"
+    )
+    assert np.allclose(np.sort(np.linalg.eigvals(L).real), [1.0, 2.0, 3.0, 4.0])
+
+
+@pytest.mark.parametrize(
+    "make", [_overflowing_norm_operator, _nilpotent_wide_band_operator]
+)
+def test_a_band_that_swallows_the_spectrum_does_not_certify(make) -> None:
+    """THE regression, on both ladders.
+
+    Before this guard the certificate read ``certified=True, resolved=True``
+    with ``zero_mode_count = 4`` -- every eigenvalue declared stationary,
+    which for a d=2 system asserts that the entire operator space is a steady
+    state. ``resolved=True`` is the damaging half: it tells the spectral layer
+    that D1/D3/D4 may be published.
+    """
+    from liouscope.numerics.linalg import certified_eig, certified_eigvals
+
+    L = make()
+    with np.errstate(over="ignore"), warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        _, cert_vals = certified_eigvals(L)
+        _, cert_vec = certified_eig(L)
+
+    for cert in (cert_vals, cert_vec):
+        assert cert.applicable is True, (
+            "the operator is trace preserving RELATIVE to its own scale, "
+            "which is the criterion this module chose; the repair is not a "
+            "trace-preservation verdict"
+        )
+        assert cert.certified is False
+        assert cert.resolved is False
+        assert cert.zero_mode_count == 0
+
+
+def test_a_healthy_generator_still_certifies() -> None:
+    """Positive control: an ordinary band still separates and still passes."""
+    from liouscope.numerics.linalg import certified_eig, certified_eigvals
+
+    L = _healthy_generator()
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        _, cert_vals = certified_eigvals(L)
+        _, cert_vec = certified_eig(L)
+
+    for cert in (cert_vals, cert_vec):
+        assert cert.resolved is True
+        assert cert.zero_mode_count == 1
+
+
+def test_the_exactly_zero_generator_is_not_caught_by_the_guard() -> None:
+    """Over-correction guard, and the one case the criterion must exempt.
+
+    ``L = 0`` has ``bound = 0``: a band of width zero accepts only exact
+    zeros, so it discriminates by construction even though it contains the
+    whole spectrum. "Everything is stationary" is here the correct physics,
+    measured exactly. A guard phrased as "zero_count == size" alone would
+    have refused it.
+    """
+    from liouscope.numerics.linalg import certified_eigvals
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        _, cert = certified_eigvals(np.zeros((4, 4), dtype=complex))
+
+    assert cert.bound == 0.0
+    assert cert.certified is True
+    assert cert.zero_mode_count == 4

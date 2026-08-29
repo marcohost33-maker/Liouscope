@@ -269,6 +269,37 @@ def trace_preservation_defect(L_super: np.ndarray) -> tuple[float, float]:
     return defect, float(np.linalg.norm(L_super, ord="fro"))
 
 
+def band_discriminates(
+    magnitudes: np.ndarray, zero_count: int, bound: float
+) -> bool:
+    """Did the zero-mode band decide anything, or accept everything?
+
+    Round-20 review (PR #121). ``residual <= bound`` certifies that a zero
+    mode was found. It says nothing about whether the band SEPARATED that mode
+    from the rest, and on the reviewer's counterexample it did not: a finite
+    4x4 with cancelling ``+-1e308`` entries has ``||L||_2 = 1.4e308``, hence a
+    band of ``3.1e295``, and all four eigenvalues ``{1, 2, 3, 4}`` fall inside
+    it. The certificate came back ``certified=True, resolved=True`` with
+    ``zero_mode_count = 4`` -- a claim that the ENTIRE space is stationary,
+    for a generator whose spectrum is nothing of the kind.
+
+    An acceptance region that contains every measured value has discriminated
+    nothing; passing it is not evidence. Note this is NOT a tightened
+    threshold -- tightening ``rtol`` would move the same band, not repair its
+    logic -- but a second, structural axis: the band must have had the
+    OPPORTUNITY to reject.
+
+    The one legitimate way for a band to contain the whole spectrum is
+    ``bound == 0``: the exactly-zero generator, whose eigenvalues are exactly
+    zero and for which "everything is stationary" is the correct physics
+    measured exactly. A band of width zero accepts only exact zeros, so it
+    discriminates by construction and is excluded here.
+    """
+    if bound <= 0.0:
+        return True
+    return zero_count < int(magnitudes.size)
+
+
 def certified_nonzero_modes(
     L_c: np.ndarray,
     eigenvalues: np.ndarray,
@@ -581,6 +612,15 @@ def certified_eigvals(
             )
             zero_count = int(np.count_nonzero(in_band))
             ambiguous = int(np.count_nonzero(in_band & (magnitudes > split)))
+            if not band_discriminates(magnitudes, zero_count, bound):
+                # ROUND-20: the band swallowed the whole spectrum, so this
+                # route proved nothing. Carried on as an UNcertified
+                # candidate, exactly like a route whose residual missed the
+                # band -- a later route on a different deflation path may
+                # still produce a spectrum the band can separate.
+                if best is None or residual < best[2]:
+                    best = (name, ev, residual)
+                continue
             if ambiguous == 0:
                 return ev, ZeroModeCertificate(
                     applicable=True,
@@ -808,6 +848,13 @@ def certified_eig(
             )
             zero_count = int(np.count_nonzero(in_band))
             ambiguous = int(np.count_nonzero(in_band & (magnitudes > split)))
+            if not band_discriminates(magnitudes, zero_count, bound):
+                # ROUND-20, same guard as the sibling ladder. The two loops
+                # having drifted apart is what produced the round-16 finding;
+                # this one is added to both in the same commit.
+                if best is None or residual < best[2]:
+                    best = (name, decomp, residual)
+                continue
             if ambiguous == 0:
                 vec_residual = _vector_residual(decomp)
                 if vec_residual == 0.0:
