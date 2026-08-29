@@ -58,6 +58,21 @@ def test_non_finite_tp_rtol_is_refused_not_honoured(api, bad: float) -> None:
         api(_NOT_TRACE_PRESERVING, tp_rtol=bad)
 
 
+def test_a_nan_tp_rtol_cannot_certify_a_non_generator() -> None:
+    """The reviewer's example verbatim, un-parametrised.
+
+    The parametrised twin above covers both APIs and all three bad values; it
+    is kept for breadth. This single case exists because the mutation proof
+    classifies a parametrised ``pytest.raises`` death as ART-UNBESTIMMT --
+    every failure arrives as ``Failed: DID NOT RAISE``, which the tool accepts
+    for a single test but not in its multi-line aggregation. That is a
+    property of the measuring tool, not of the guard; a case it can read makes
+    the evidence checkable without weakening anything.
+    """
+    with pytest.raises(ValueError, match="tp_rtol"):
+        certified_eigvals(_NOT_TRACE_PRESERVING, tp_rtol=float("nan"))
+
+
 @pytest.mark.parametrize("api", [certified_eigvals, certified_eig])
 @pytest.mark.parametrize("bad", [float("nan"), float("inf"), -1.0])
 def test_non_finite_rtol_is_refused_too(api, bad: float) -> None:
@@ -291,10 +306,40 @@ def test_sparse_builder_rejects_what_the_dense_builder_rejects() -> None:
 
     assert np.all(np.isfinite(_OVERFLOWING_H)), "fixture H must be finite"
     assert float(np.max(np.abs(_OVERFLOWING_H - _OVERFLOWING_H.conj().T))) == 1.0e290
-    with pytest.raises(ValueError, match=r"Hermitian|Hermiticity"):
-        build_liouvillian(_OVERFLOWING_H, [], [])
-    with pytest.raises(ValueError, match=r"Hermitian|Hermiticity"):
-        build_sparse_liouvillian(sp.csr_matrix(_OVERFLOWING_H), [], [])
+    # Warnings are suppressed DELIBERATELY, and the reason is a measurement:
+    # the repo runs pytest with ``filterwarnings = ["error"]``, and the
+    # unrepaired arithmetic emits ``RuntimeWarning: overflow encountered in
+    # reduce`` on this input. Without the suppression the test dies of that
+    # warning before it reaches its own judgement -- red, but by crash, so it
+    # could not distinguish "the gate refused" from "the gate accepted".
+    # Measured in the mutation proof: the un-suppressed form scored
+    # "ROT DURCH ABSTURZ -- kein Beleg". What the test asserts is the REFUSAL;
+    # the absence of the warning is asserted separately below, where it is the
+    # subject rather than a side effect.
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        with pytest.raises(ValueError, match=r"Hermitian|Hermiticity"):
+            build_liouvillian(_OVERFLOWING_H, [], [])
+        with pytest.raises(ValueError, match=r"Hermitian|Hermiticity"):
+            build_sparse_liouvillian(sp.csr_matrix(_OVERFLOWING_H), [], [])
+
+
+def test_the_repaired_sparse_gate_does_not_overflow_on_the_way() -> None:
+    """The repair is arithmetic, so the absence of the overflow is testable.
+
+    Refusing for the right reason and refusing after an overflow are different
+    states, and only the first one is the fix. ``filterwarnings = ["error"]``
+    turns any ``RuntimeWarning`` here into a failure, so this records the
+    stronger property directly.
+    """
+    import scipy.sparse as sp
+
+    from liouscope.sparse.build import build_sparse_liouvillian
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        with pytest.raises(ValueError, match=r"Hermitian|Hermiticity"):
+            build_sparse_liouvillian(sp.csr_matrix(_OVERFLOWING_H), [], [])
 
 
 def test_sparse_and_dense_builders_agree_on_valid_and_invalid_input() -> None:
