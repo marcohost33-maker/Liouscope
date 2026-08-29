@@ -296,7 +296,7 @@ def compute_spectral_layer(
     kms = kms_gap(L_super, rho_steady)
     osc = oscillating_mode_gap(eigenvalues, atol=zero_tol)
     spread = spectral_spread(eigenvalues, atol=zero_tol)
-    if certificate.applicable and not certificate.certified:
+    if certificate.applicable and not certificate.resolved:
         # ROUND-18 REVIEW: the round-17 repair above withheld D1 and stopped
         # there. D3 (``oscillating_gap``), D4 (``spectral_spread``) and the
         # ``has_complex_pairs`` signal are read off the SAME candidate
@@ -309,6 +309,18 @@ def compute_spectral_layer(
         # it taught consumers that the layer withholds what it cannot stand
         # behind, which made the surviving finite values MORE credible than
         # before, not less.
+        #
+        # ROUND-20 REVIEW: that repair used the NARROWER predicate
+        # ``not certified`` while D1 above already used ``not resolved``, and
+        # the two are not the same event. A certificate can be
+        # ``certified=True`` and still ``resolved=False`` when an in-band mode
+        # is ambiguous (#113) -- and that is precisely the case in which the
+        # ambiguous mode is a SLOW oscillatory one that ``zero_tol`` discards.
+        # D3 then reads the next surviving pair, D4 a spread taken over a
+        # truncated spectrum: both finite, both wrong, and D3 wrong in the
+        # direction of reporting the ABSENCE of the oscillation that was the
+        # reason the spectrum is unresolved. Same predicate as D1, so the
+        # whole layer withholds on one condition rather than on two.
         osc = float("nan")
         spread = float("nan")
     # Same separation as D3: with an absolute floor a rescaled spectrum
@@ -322,9 +334,13 @@ def compute_spectral_layer(
             np.abs(np.imag(eigenvalues)) > zero_tol
         )
     )
-    if certificate.applicable and not certificate.certified:
-        # Same spectrum, same reason. ``False`` here would assert "no
-        # oscillating modes"; ``None`` says the question was not answered.
+    if certificate.applicable and not certificate.resolved:
+        # Same spectrum, same reason, and after round 20 the same predicate as
+        # D1/D3/D4. ``False`` here would assert "no oscillating modes" -- the
+        # single most misleading answer available when the mode that cannot be
+        # resolved is an ambiguous in-band one with a nonzero imaginary part,
+        # because ``zero_tol`` excludes exactly that mode from the test.
+        # ``None`` says the question was not answered.
         has_complex = None
     # Sort by real part descending so [0] is the steady state.
     order = np.argsort(-np.real(eigenvalues))
