@@ -328,18 +328,31 @@ def test_the_repaired_sparse_gate_does_not_overflow_on_the_way() -> None:
     """The repair is arithmetic, so the absence of the overflow is testable.
 
     Refusing for the right reason and refusing after an overflow are different
-    states, and only the first one is the fix. ``filterwarnings = ["error"]``
-    turns any ``RuntimeWarning`` here into a failure, so this records the
-    stronger property directly.
+    states, and only the first is the fix -- the finiteness guard alone would
+    still refuse, one step too late and for a reason nobody chose.
+
+    The warnings are RECORDED and then asserted on, rather than left to
+    ``filterwarnings = ["error"]`` to convert into a failure. Both forms go red
+    when the overflow returns, but only this one goes red by the test's own
+    judgement: a test whose death is a raised warning cannot be told apart from
+    a test that crashed, which is the same conflation this whole file is about.
+    Measured: the ``simplefilter("error")`` form scored "ROT DURCH ABSTURZ --
+    kein Beleg" in the mutation proof although it detected the defect
+    perfectly well.
     """
     import scipy.sparse as sp
 
     from liouscope.sparse.build import build_sparse_liouvillian
 
-    with warnings.catch_warnings():
-        warnings.simplefilter("error")
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
         with pytest.raises(ValueError, match=r"Hermitian|Hermiticity"):
             build_sparse_liouvillian(sp.csr_matrix(_OVERFLOWING_H), [], [])
+    overflows = [w for w in caught if issubclass(w.category, RuntimeWarning)]
+    assert not overflows, (
+        "the sparse gate refused, but only after overflowing on the way: "
+        f"{[str(w.message) for w in overflows]}"
+    )
 
 
 def test_sparse_and_dense_builders_agree_on_valid_and_invalid_input() -> None:
