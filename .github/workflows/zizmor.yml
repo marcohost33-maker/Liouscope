@@ -48,8 +48,18 @@ jobs:
           # coworkerz-ci — repo-scoped GITHUB_TOKEN, docs.zizmor.sh). Das ist
           # die praezisere Loesung gegenueber online-audits:false (Webrecherche
           # 06-06): known-vulnerable-actions + stale-action-refs bleiben aktiv.
-          # privates Repo ohne GHAS: kein Action-internes Code-Scanning-Upload (wirft sonst
-          # "Resource not accessible"). Stattdessen Findings als inline-Annotationen.
-          advanced-security: false
-          annotations: true
+          # [2026-08-29] Auf true gesetzt. Die alte Begruendung lautete
+          # "privates Repo ohne GHAS" -- das Repo ist oeffentlich (gemessen:
+          # gh api repos/... --jq .visibility -> "public"), also steht das
+          # Code Scanning offen. Solange dies false war, wurden zizmor-Befunde
+          # nie hochgeladen: sie fehlten im Code Scanning nicht mangels
+          # Befunden, sondern mangels Upload.
+          advanced-security: true
+          # Mutually exclusive with advanced-security: the action refuses to
+          # start if both are set. Findings now go to Code Scanning, which is
+          # the point of turning advanced-security on -- inline annotations
+          # vanish with the run, a Code Scanning alert persists and can be
+          # triaged. Not caught locally: running zizmor directly does not
+          # exercise the action's own option validation.
+          annotations: false
 
