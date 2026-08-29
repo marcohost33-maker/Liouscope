@@ -233,7 +233,7 @@ class UnderResolvedTransientWarning(UserWarning):
 
 def _resolution_detail(
     L_super: np.ndarray, t_grid: np.ndarray
-) -> tuple[float, float, float]:
+) -> tuple[float, float, float, float]:
     """How finely the grid samples the WORST-RESOLVED decaying mode.
 
     Returns ``(samples_per_efolding, rate, blind_interval, blind_start)`` for

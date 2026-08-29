@@ -198,53 +198,83 @@ bit-identical to the historical `linspace(0.0, 10.0, 80)`; when no decay scale
 is resolved (`Delta <= 0`) that historical window is used, since there is then
 no timescale to scale by.
 
-The grid is **uniform** by requirement, not by convenience: the GLS layer
-whitens residuals with a single AR(1) coefficient, which presumes a constant
-sample interval. The transient layer's two-scale grid is appropriate there —
-a `sup_t` search with no noise model — but reusing it here would make the
-lag-1 correlation position-dependent and silently invalidate the whitening,
-the AR(1) bootstrap and `N_eff`.
+The grid is **uniform whenever a uniform grid suffices** — which is whenever
+the spread between the slowest and the fastest mode stays under about
+`(n_points − 1) / horizon = 7.9`. Past that the window switches to a two-scale
+grid (below), and the residual model switches with it.
 
 Which window produced a given run is recorded on the report, so it never has
 to be inferred — including the grid itself, which is the abscissa the exported
 D5/D6/D7 curves are sampled on:
 
 ```python
-report.relaxation.t_grid_source  # "caller" | "gap_scaled" | "legacy_fixed"
+report.relaxation.t_grid_source
+#   "caller" | "gap_scaled" | "gap_scaled_multiscale" | "legacy_fixed"
 report.relaxation.t_grid_span
 report.relaxation.t_grid         # the sampling, not just its extent
+report.relaxation.residual_model # "ar1" (uniform) | "car1" (non-uniform)
 ```
 
-### What a uniform window cannot do
+### What one uniform window cannot do — and what replaced it
 
 The two requirements pull against each other. The window must reach `~1/Δ` to
-see the slowest mode relax; the step must stay below `~1/r_max` to see the
-fastest mode at all. Eighty uniform samples over ten e-foldings give
+see the slowest mode relax; the step must stay below `~1/r` to see a mode at
+rate `r` at all. Eighty uniform samples over ten e-foldings give
 
 ```text
-samples_per_fast_efolding = 1 / (r_max · blind) ≈ 7.9 · Δ / r_max
+samples_per_fast_efolding = min over modes of  1 / (r · blind_r)
 ```
 
-where `blind = max(dt, t[0])` is the largest interval the grid leaves
-unsampled. The lead-in matters because `diagnose()` accepts any non-negative
-start: on `linspace(100, 101, 101)` a rate-1 mode is sampled a hundred times
-per e-folding and is still long gone by the first sample. For the default
-grid, which starts at zero, `blind` is exactly `dt`.
-
-so roughly an **eightfold** spread of timescales is the most one uniform grid
-can straddle. Beyond that the fast mode is stepped over rather than measured —
-with rates `1e-6` and `1` it decays to exactly zero within a single step.
+where `blind_r` is the largest interval the grid leaves unsampled **while that
+mode still has amplitude** — i.e. the largest gap that starts before `1/r`,
+counting the lead-in `[0, t[0]]` as a gap. The lead-in matters because
+`diagnose()` accepts any non-negative start: on `linspace(100, 101, 101)` a
+rate-1 mode is sampled a hundred times per e-folding by its step and is still
+long gone by the first sample. On a uniform grid starting at zero this reduces
+to `1 / (r_max · dt) ≈ 7.9 · Δ / r_max`, so roughly an **eightfold** spread of
+timescales is the most one uniform grid can straddle.
 
 Widening the window does not help: an absolute window resolves the fast mode
 and misses the relaxation entirely, which is worse for the quantity this layer
 reports (measured `beta_D_linear` `3.5e4` relative from the true gap, against
-`0.58` for the gap-scaled window). Log spacing is also unavailable, for the
-AR(1) reason above. So the layer **discloses** rather than repairs: below one
-sample per fast e-folding it emits an `UnderResolvedTransientWarning` and
-records `report.relaxation.samples_per_fast_efolding`. The reported rates then
-describe the slow dynamics the window resolves, and a caller who needs the fast
-component must supply a `t_grid` that resolves it — reading the resulting rates
-as describing *that* window.
+`0.58` for the uniform gap-scaled window).
+
+What *does* help is a non-uniform grid — and the reason this layer long
+declined to use one turned out to be false. The objection was that the GLS
+layer "whitens with a single AR(1) coefficient, which presumes a constant
+sample interval". That is a property of the **discrete parametrisation**, not
+of the noise. The stationary continuous-time process (Ornstein–Uhlenbeck,
+equivalently CAR(1)) has `Corr(t, t+d) = exp(−θ·d)` for any `d`, so on an
+arbitrary grid one whitens with the per-step `a_k = exp(−θ·dt_k)` and rescales
+by `sqrt(1 − a_k²)` to keep the result homoskedastic. Measured on a two-scale
+grid with exact OU noise, `|lag-1 autocorrelation|` of the whitened residuals
+is `0.42` with one constant `ρ` and `0.094` with the per-step coefficient — the
+latter at the level of the near-uniform positive control (`0.073`).
+
+So the default window is now **repaired**, not merely disclosed. When the
+uniform grid cannot resolve the fastest mode (`max(−Re λ)`, taken from the
+spectrum, never guessed), half the points cover `[0, horizon/r_max]` and the
+rest carry the window out to `horizon/Δ`; `liouscope.fitting.car1` supplies the
+whitening, the exact `N_eff = n² / Σ_jk exp(−θ|t_j − t_k|)` and the
+exact-transition bootstrap resampler that go with it. On the reviewer's case
+(rates `1e-6` and `1`) the AICc winner M2 now recovers the fast rate as `1.10`
+against a true `1.0`, where the uniform window's M2 reported `2.17e-05` for it,
+and the D17 linear rate lands `0.021` from the gap instead of `0.58`.
+
+The disclosure remains for what the two-scale grid still cannot reach:
+
+- a **caller-supplied** `t_grid` that does not resolve its own system;
+- an **intermediate** timescale. The two segments resolve the fastest and the
+  slowest mode; a mode between them can fall entirely between the coarse late
+  samples. On three damped qubits at `1e-6`, `1e-3` and `1` the middle mode is
+  sampled `0.0019` times per e-folding and the warning fires, naming that mode.
+
+Below one sample per e-folding the layer emits an
+`UnderResolvedTransientWarning` and records
+`report.relaxation.samples_per_fast_efolding`. The reported rates then describe
+the dynamics the window *does* resolve, and a caller who needs the missing
+component must supply a `t_grid` covering it — reading the resulting rates as
+describing *that* window.
 
 This closes the time-grid unit dependence only. The `henrici_eta > 1.0` gate
 above is unaffected: `henrici_eta` is rate-dimensioned, so on an

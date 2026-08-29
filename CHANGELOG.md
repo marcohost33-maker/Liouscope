@@ -7,6 +7,72 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Fixed
+- **The multiscale disclosure is now a repair (PR #115, follow-up).** The
+  disclosure below rested on a stated impossibility: that a non-uniform grid
+  cannot be used because the GLS layer "whitens with a single AR(1)
+  coefficient, which presumes a constant sample interval". That premise is
+  false. It describes the *discrete* parametrisation, not the noise process:
+  the stationary continuous-time analogue (Ornstein–Uhlenbeck, equivalently
+  CAR(1)) has `Corr(t, t+d) = exp(−θ·d)`, so on an arbitrary grid one whitens
+  with the per-step `a_k = exp(−θ·dt_k)` and rescales by `sqrt(1 − a_k²)` to
+  keep the result homoskedastic. Measured on a two-scale grid with exact OU
+  noise, `|lag-1 autocorrelation|` of the whitened residuals is `0.42` under one
+  constant `ρ` against `0.094` under the per-step coefficient, the latter at the
+  level of the near-uniform positive control (`0.073`).
+
+  Consequences, carried through the whole chain rather than only the grid call:
+
+  - **New module `liouscope.fitting.car1`** — grid classification, the CAR(1)
+    θ estimator (profiled conditional MLE), the whitening and its log-Jacobian,
+    the exact effective sample size `n² / Σ_jk exp(−θ|t_j − t_k|)`, and an
+    exact-transition resampler.
+  - **`default_relaxation_grid(gap, *, fast_rate=...)`** builds a two-scale
+    window — half the points across `[0, horizon/fast_rate]`, the rest out to
+    `horizon/gap` — but **only** when the uniform grid cannot resolve the fast
+    mode. Below that threshold the uniform grid is returned bit-for-bit, so no
+    system that was already well sampled changes at all. `fast_rate` comes from
+    the spectrum (`fastest_decay_rate`, `max(−Re λ)`) and is fail-closed: no
+    usable rate means the uniform window plus its warning, never a guess.
+  - **`fit_gls_ar1` switches on the grid**, not on the data. `GLSFitOutput`
+    gains `theta_car1`, which also disambiguates `sigma` (innovation sd on the
+    AR(1) path, stationary sd on the CAR(1) one). The parametric bootstrap
+    resamples under whichever model the fit used; feeding CAR(1) parameters to
+    the AR(1) resampler was measured to shrink the interval to `0.46` of an
+    independent Monte-Carlo spread, against `0.80` for the correct one.
+  - **`N_eff` on a non-uniform grid** comes from the CAR(1) form rather than
+    Geyer's lag-indexed IPS estimator, which has no fixed time separation to
+    sum over there. Against the closed-form ESS on a uniform grid, where both
+    are valid, the CAR(1) route sits within `0.97–1.19` across `ρ ∈ [0, 0.99]`
+    while Geyer runs to `3.93×` optimistic at `ρ = 0.99`. The uniform path
+    nevertheless keeps Geyer: switching it would move every existing anchor and
+    is a separate decision.
+  - **`samples_per_fast_efolding` is now the minimum over ALL decay modes**,
+    and counts only intervals that begin while the mode still has amplitude.
+    The old form read `t[1] − t[0]`, which on a fine-then-coarse grid reports
+    the fine step and would wave through a mode lost in the coarse tail — a case
+    the new default grid creates rather than merely permits. On uniform and
+    late-starting grids the value is unchanged.
+  - `RelaxationResult` gains `residual_model` (`"ar1"` / `"car1"`) and
+    `FitResult` gains `residual_theta_car1`; `t_grid_source` gains
+    `"gap_scaled_multiscale"`. All additive and defaulted.
+
+  Measured end to end on two independent damped qubits with rates `1e-6` and
+  `1`: the AICc winner M2 now recovers the fast rate as `1.10` (true `1.0`)
+  where the uniform window reported `2.17e-05` for it — a confident-looking fit
+  of a component that was never sampled — and `beta_D_linear` lands `0.021`
+  relative from the certified gap against `0.58` before (and `3.5e4` for the
+  legacy absolute window).
+
+  **What is NOT fixed.** The two segments resolve the fastest and the slowest
+  mode; an intermediate timescale can still fall between the coarse late
+  samples, so `UnderResolvedTransientWarning` remains — measured `0.0019`
+  samples per e-folding for the middle mode of a `1e-6 / 1e-3 / 1` system,
+  where it correctly fires and names that mode. The AR(1) small-sample bias
+  correction is also not carried over to the CAR(1) path: anchoring it at any
+  single step of a multi-decade grid was measured to pin the estimate at a
+  constant (`1.7158e-05` for every input tested, including true θ of `1e-4`,
+  `1e-2`, `1` and `10`), so it is disclosed rather than applied.
+
 - **Multiscale disclosure + stored time grid (PR #115 review round).** Two
   findings on the relaxation-window change below.
 

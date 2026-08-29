@@ -101,6 +101,24 @@ abstract: >-
 # measured -- beta_D and beta_D_linear track the rescaling to <=1.2e-3 relative
 # over c in [1e-6, 1e6] with a stable AICc winner, and the A-class is stable
 # over c in [1e-6, 1] -- on the two qubit systems tested.
+# Also pending for the next cut: on a system whose rates are separated by more
+# than about eightfold the default window is now TWO-SCALE rather than uniform,
+# and the GLS residual model switches with it from discrete AR(1) to
+# continuous-time CAR(1) (per-step exp(-theta dt_k)). This CHANGES NUMERICAL
+# RESULTS for exactly those runs and is a correction, not an addition: on two
+# independent damped qubits with rates 1e-6 and 1 the uniform window's winning
+# M2 fit reported a second rate of 2.17e-05 for a component that was never
+# sampled (true value 1), and the D17 linear rate sat 0.58 relative from the
+# certified gap; the two-scale window recovers 1.10 and 0.021 respectively.
+# It must NOT be described as resolving arbitrary multiscale dynamics: the two
+# segments resolve the FASTEST and the SLOWEST mode, and an intermediate
+# timescale can still fall between the coarse late samples -- measured 0.0019
+# samples per e-folding for the middle mode of a 1e-6 / 1e-3 / 1 system, where
+# the UnderResolvedTransientWarning correctly still fires. Nor is the
+# small-sample bias correction of the AR(1) path carried over to CAR(1): every
+# way of anchoring it to a single step of a multi-decade grid was measured to
+# destroy the estimator's discrimination, so it is disclosed rather than
+# applied.
 keywords:
   - open quantum systems
   - Lindblad

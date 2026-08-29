@@ -128,12 +128,14 @@ def test_default_grid_spans_a_fixed_number_of_e_foldings():
         assert grid[-1] * gap == pytest.approx(RELAXATION_HORIZON, rel=1.0e-12)
 
 
-def test_default_grid_is_uniform():
-    """The AR(1) whitening in the GLS fit presumes a constant sample interval.
+def test_default_grid_is_uniform_without_a_fast_rate():
+    """No second timescale supplied means no second segment: one uniform grid.
 
-    ``_whiten`` forms ``r_k - rho r_{k-1}`` with a single ``rho``; on a
-    log-spaced or two-scale grid the lag-1 correlation would vary along the
-    grid and quietly invalidate the whitening, the AR(1) bootstrap and N_eff.
+    This used to be justified by the AR(1) whitening "presuming a constant
+    sample interval" -- a premise since measured to be false and replaced by
+    the CAR(1) model (see ``tests/test_car1.py``). The contract survives the
+    correction for a different reason: without a ``fast_rate`` the layer has no
+    evidence that a second scale exists, and inventing one would be a guess.
     """
     steps = np.diff(default_relaxation_grid(0.37))
     np.testing.assert_allclose(steps, steps[0], rtol=1.0e-12)

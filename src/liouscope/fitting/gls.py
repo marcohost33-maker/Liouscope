@@ -121,23 +121,20 @@ def fit_gls_ar1(
     theta = float("nan")
     success = True
     for _ in range(n_iters):
-        if uniform:
-            def residual(params: np.ndarray, rho_local: float = rho) -> np.ndarray:
-                y_hat = model(t, params)
-                r = y - y_hat
+        def residual(
+            params: np.ndarray,
+            rho_local: float = rho,
+            theta_local: float = theta,
+        ) -> np.ndarray:
+            r = np.asarray(y - model(t, params), dtype=float)
+            if uniform:
                 return _whiten(r, rho_local)
-        else:
-            def residual(
-                params: np.ndarray, theta_local: float = theta
-            ) -> np.ndarray:
-                y_hat = model(t, params)
-                r = y - y_hat
-                if not np.isfinite(theta_local):
-                    # First pass (and any pass after a failed estimate): plain
-                    # least squares, exactly as ``_whiten(r, 0.0)`` is on the
-                    # uniform path.
-                    return r
-                return whiten_car1(r, t, theta_local)
+            if not np.isfinite(theta_local):
+                # First pass (and any pass after a failed estimate): plain
+                # least squares, exactly as ``_whiten(r, 0.0)`` is on the
+                # uniform path.
+                return r
+            return whiten_car1(r, t, theta_local)
 
         ls_kwargs: dict[str, object] = {"max_nfev": max_nfev}
         if bounds is not None:

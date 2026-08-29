@@ -75,8 +75,13 @@ def diagnose(
         default is therefore invariant under a pure change of rate units
         ``L -> cL``; an absolute default would make every fitted rate, the AICc
         model choice and the reported A-class depend on the caller's unit of
-        time. Which window was used is recorded on
-        ``report.relaxation.t_grid_source`` / ``.t_grid_span``.
+        time. When the spectrum is spread too widely for one uniform grid to
+        resolve both ends (beyond roughly eightfold), the window becomes
+        two-scale and the residual model switches from AR(1) to CAR(1) with it.
+        Which window was used is recorded on
+        ``report.relaxation.t_grid_source`` (``"caller"`` / ``"gap_scaled"`` /
+        ``"gap_scaled_multiscale"`` / ``"legacy_fixed"``), ``.t_grid_span``,
+        ``.t_grid`` and ``.residual_model``.
     include_mpemba
         Compute D19/D20.
     bootstrap_B
