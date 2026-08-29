@@ -55,5 +55,11 @@ jobs:
           # nie hochgeladen: sie fehlten im Code Scanning nicht mangels
           # Befunden, sondern mangels Upload.
           advanced-security: true
-          annotations: true
+          # Mutually exclusive with advanced-security: the action refuses to
+          # start if both are set. Findings now go to Code Scanning, which is
+          # the point of turning advanced-security on -- inline annotations
+          # vanish with the run, a Code Scanning alert persists and can be
+          # triaged. Not caught locally: running zizmor directly does not
+          # exercise the action's own option validation.
+          annotations: false
 

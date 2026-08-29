@@ -75,7 +75,7 @@ def test_a_clean_workflow_is_accepted(tmp_path: Path) -> None:
             # invisible to the gate, every ``actions/checkout`` among them. They
             # were pinned by discipline, not by this check.
             "unpinned action in list form",
-            f"""name: l1
+            """name: l1
 on: [push]
 permissions:
   contents: read
