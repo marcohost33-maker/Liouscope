@@ -212,7 +212,13 @@ report.relaxation.t_grid_source
 #   "caller" | "gap_scaled" | "gap_scaled_multiscale" | "legacy_fixed"
 report.relaxation.t_grid_span
 report.relaxation.t_grid         # the sampling, not just its extent
-report.relaxation.residual_model # "ar1" (uniform) | "car1" (non-uniform)
+report.relaxation.residual_model
+#   what the fits were ACTUALLY whitened with, not what the grid asked for:
+#   "ar1"               uniform grid, discrete AR(1)
+#   "car1"              non-uniform grid, every fit whitened continuous-time
+#   "car1_fallback_ar1" CAR(1) theta failed on every fit -> AR(1) fallback
+#   "car1_mixed"        some fits CAR(1), some fallen back
+#   "car1_unavailable"  non-uniform grid and no fit succeeded
 ```
 
 ### What one uniform window cannot do — and what replaced it

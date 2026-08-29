@@ -50,6 +50,70 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   not for want of findings. (`annotations` is set to `false` alongside it; the
   action refuses to start with both enabled.)
 
+- **The zero-mode certificate accepted its premise on a coarser scale than its
+  conclusion (PR #127 review).** `certified_eigvals` / `certified_eig` assert
+  that `0` is an *exact* eigenvalue, which follows from exact trace
+  preservation -- but applicability was granted whenever the trace defect
+  stayed below `1e-10 * ||L||_F`, six orders of magnitude above the backward
+  error the conclusion is stated on. A generator whose defect fell in that
+  band (measured: an amplitude-damped qubit plus `1e-11 * I`, defect `1.4e-11`
+  against the old cutoff `7.9e-11`) has its smallest eigenvalue at exactly
+  `1e-11` against a certificate bound of `1.6e-13`: every repair route
+  "failed", the spectral layer warned about an eigensolve that was in fact
+  correct, and the classifier was floored to `UNDEFINED`. The cutoff is now
+  derived rather than tuned -- with `u = vec(I)/sqrt(d)` and `r^H = u^H L` the
+  matrix `L - u r^H` has an exact zero mode and lies at spectral distance
+  `tp_defect / sqrt(d)` from `L`, so `tp_defect <= sqrt(d) * bound` is what the
+  claim can carry. Headroom measured, not assumed: across 205 healthy GKSL
+  generators (the five canonical systems, 160 random ones spanning 16 orders of
+  rate magnitude at `d = 2..5`, 40 stiff four-level jump networks) the largest
+  defect is `0.44 * eps * ||L||_F`. The rule now lives in one helper used by
+  both entry points; it was duplicated, and one-sided repairs of that pair are
+  a defect this repository has shipped twice.
+
+- **D1 was reported from a spectrum the certificate had just declared unusable
+  (PR #127 review).** When `applicable and not certified`, `compute_spectral_layer`
+  warned that D1/D3/D4 are unreliable and then computed D1 anyway. That number
+  did not stay in the report: `diagnose` forwards D1 to
+  `default_relaxation_grid`, so an eigenvalue of a failed solve set the
+  relaxation window and therefore every fitted rate, while only the closing
+  verdict was floored. D1 is now NaN there, for the same reasons as in the
+  ambiguous case -- not `0.0`, which means "gapless" and fires the F5 reach
+  leg, and not the surviving mode, which is a fast one. The other five
+  certificate consumers (`mpemba`, the Petermann factors, D11, and both
+  `_zhou` paths) already withheld on `applicable and not resolved`; the
+  spectral layer was the only site that warned and measured anyway.
+
+- **`residual_model` reported the whitening that should have happened
+  (PR #127 review).** The field was derived from the grid geometry alone, so a
+  non-uniform grid always exported `"car1"`. `fit_gls_ar1` falls back to the
+  discrete AR(1) treatment whenever `estimate_car1_theta` returns NaN --
+  degenerate residuals, e.g. an exactly stationary trajectory with
+  `rho_initial == rho_steady_state` -- and individual fits of one hierarchy can
+  differ from one another, which a single geometry-derived label cannot express
+  at all. It is now read off the fits, with `car1_fallback_ar1`, `car1_mixed`
+  and `car1_unavailable` for the states that were previously reported as plain
+  `"car1"`.
+
+- **The grid-relative Prony fallback seed was a regression on the two-scale
+  grid (PR #127 review).** `prony_seed` derived both `beta` and `omega` from
+  the total time span on any non-uniform grid, i.e. from the slow gap scale --
+  although `default_relaxation_grid` carries a uniform fine head for exactly
+  the purpose of resolving the fast dynamics. Measured on
+  `default_relaxation_grid(1e-4, fast_rate=1)` (80 points, uniform head of 41
+  at `dt = 0.25`, span `1e5`): over 60 random exact curves with `beta` in
+  `[0.05, 2]` and `omega` in `[0.1, 10]` the span seed drove the M3b fit onto a
+  spurious solution twice (true `omega = 1.68` reported as `0.037`) where the
+  historical absolute `(1, 1)` seed recovered all 60; on a slower family
+  (`beta`, `omega` in `[1e-4, 1e-1]`) the span seed failed 41 of 60. The seed
+  is now estimated by Prony on the longest uniform *prefix*, where the method
+  is valid by construction: 0 of 60 in both families. The grid-relative
+  fallback stands where no prefix is long enough for the Hankel system, so the
+  short non-uniform grids keep their documented behaviour. This corrects an
+  earlier report of mine on PR #127 which stated that both seeds were unusable
+  on this grid and that the change was therefore not a regression; the external
+  reviewer's counter-example holds as a class, and the claim was too broad.
+
 ### Added
 - **Tests for the hardening gate itself (PR #129).** It had none. Each unsafe
   workflow is asserted next to a positive control that must still pass --
