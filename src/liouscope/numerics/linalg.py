@@ -423,7 +423,24 @@ def refine_zero_band(
     lo = float(np.max(magnitudes[in_band])) if in_band.any() else 0.0
     if lo >= hi:
         return magnitudes <= bound, bound
-    return in_band, float(np.sqrt(lo * hi)) if lo > 0.0 else hi * 0.5
+    if lo <= 0.0:
+        return in_band, hi * 0.5
+    # ROUND-22 REVIEW (PR #121). ``sqrt(lo * hi)`` forms the PRODUCT first,
+    # and that product underflows to exactly 0 whenever ``lo * hi`` drops
+    # below ~5e-324 -- while ``lo``, ``hi`` and their geometric mean are all
+    # perfectly representable. The tolerance then becomes 0.0, the strict
+    # ``|lambda| > tol`` filters keep the numerical stationary residual as a
+    # physical mode, and D1 reports it as the gap. Since ``lo * hi`` scales as
+    # c^2 under a uniform rate rescale ``L -> cL`` while the refinement itself
+    # is scale free, the failure is purely a units artefact: the same physics
+    # in smaller rate units silently changes the answer.
+    #
+    # ``sqrt(lo) * sqrt(hi)`` is the same number mathematically and forms each
+    # factor separately, so it can neither underflow (sqrt of the smallest
+    # subnormal is ~2.2e-162) nor overflow (sqrt of the largest float is
+    # ~1.3e154, and the product of two such factors is at most the largest
+    # float again).
+    return in_band, float(np.sqrt(lo) * np.sqrt(hi))
 
 
 def certified_eigvals(
@@ -504,6 +521,25 @@ def certified_eigvals(
     tuple
         ``(eigenvalues, certificate)``.
     """
+    # ROUND-22 REVIEW (PR #121). A tolerance that is not a number cannot
+    # decide anything. With ``tp_rtol = NaN`` the trace-preservation test
+    # ``defect > tp_rtol * fro`` is False for EVERY operator (all NaN
+    # comparisons are), and with ``tp_rtol = inf`` its right-hand side is
+    # infinite -- so a demonstrably non-trace-preserving generator walks
+    # straight past the applicability gate and can come back
+    # ``applicable=True, certified=True``. Measured before this guard:
+    # ``certified_eigvals(diag([0,-1,-2,-3]), tp_rtol=nan)`` reported
+    # applicable and certified with a trace defect of 3.0.
+    #
+    # Round 21 closed exactly this shape one variable further along (a
+    # non-finite REFERENCE scale ``fro``) and left the PARAMETER beside it
+    # unchecked. The generalisation is the fix: every tolerance this layer
+    # compares against is validated the way ``operator_zero_tolerance`` and
+    # ``spectral_zero_tolerance`` already validate theirs.
+    if not np.isfinite(rtol) or rtol < 0.0:
+        raise ValueError(f"rtol must be finite and non-negative, got {rtol}")
+    if not np.isfinite(tp_rtol) or tp_rtol < 0.0:
+        raise ValueError(f"tp_rtol must be finite and non-negative, got {tp_rtol}")
     L_super = require_finite_square_2d(L_super, name="L_super")
     L_c = np.asarray(L_super, dtype=complex)
     tp_defect, fro = trace_preservation_defect(L_c)
@@ -543,6 +579,14 @@ def certified_eigvals(
         if primary is None:
             assert primary_error is not None
             raise primary_error
+        # ROUND-22 REVIEW (PR #121). ``zero_mode_count`` kept its dataclass
+        # default of 1 here, which asserts a stationary mode that nothing
+        # counted and nothing guarantees -- the whole point of
+        # ``applicable=False`` is that no zero eigenvalue is implied. Both
+        # certificate APIs reported ``zero_mode_count: 1`` for
+        # ``diag([1,2,3,4])``, a spectrum containing no zero at all, and the
+        # dict is persisted as audit metadata. 0 is the honest count: nothing
+        # was certified as stationary.
         return primary, ZeroModeCertificate(
             applicable=False,
             certified=False,
@@ -550,6 +594,7 @@ def certified_eigvals(
             residual=float(np.min(np.abs(primary))) if primary.size else float("nan"),
             bound=bound,
             trace_defect=tp_defect,
+            zero_mode_count=0,
         )
 
     def _candidates() -> Iterator[tuple[str, np.ndarray]]:
@@ -736,6 +781,25 @@ def certified_eig(
     tuple
         ``(EigenDecomposition with left_vectors set, certificate)``.
     """
+    # ROUND-22 REVIEW (PR #121). A tolerance that is not a number cannot
+    # decide anything. With ``tp_rtol = NaN`` the trace-preservation test
+    # ``defect > tp_rtol * fro`` is False for EVERY operator (all NaN
+    # comparisons are), and with ``tp_rtol = inf`` its right-hand side is
+    # infinite -- so a demonstrably non-trace-preserving generator walks
+    # straight past the applicability gate and can come back
+    # ``applicable=True, certified=True``. Measured before this guard:
+    # ``certified_eigvals(diag([0,-1,-2,-3]), tp_rtol=nan)`` reported
+    # applicable and certified with a trace defect of 3.0.
+    #
+    # Round 21 closed exactly this shape one variable further along (a
+    # non-finite REFERENCE scale ``fro``) and left the PARAMETER beside it
+    # unchecked. The generalisation is the fix: every tolerance this layer
+    # compares against is validated the way ``operator_zero_tolerance`` and
+    # ``spectral_zero_tolerance`` already validate theirs.
+    if not np.isfinite(rtol) or rtol < 0.0:
+        raise ValueError(f"rtol must be finite and non-negative, got {rtol}")
+    if not np.isfinite(tp_rtol) or tp_rtol < 0.0:
+        raise ValueError(f"tp_rtol must be finite and non-negative, got {tp_rtol}")
     L_super = require_finite_square_2d(L_super, name="L_super")
     L_c = np.asarray(L_super, dtype=complex)
     tp_defect, fro = trace_preservation_defect(L_c)
@@ -772,6 +836,14 @@ def certified_eig(
         if primary is None:
             assert primary_error is not None
             raise primary_error
+        # ROUND-22 REVIEW (PR #121). ``zero_mode_count`` kept its dataclass
+        # default of 1 here, which asserts a stationary mode that nothing
+        # counted and nothing guarantees -- the whole point of
+        # ``applicable=False`` is that no zero eigenvalue is implied. Both
+        # certificate APIs reported ``zero_mode_count: 1`` for
+        # ``diag([1,2,3,4])``, a spectrum containing no zero at all, and the
+        # dict is persisted as audit metadata. 0 is the honest count: nothing
+        # was certified as stationary.
         return primary, ZeroModeCertificate(
             applicable=False,
             certified=False,
@@ -783,6 +855,7 @@ def certified_eig(
             ),
             bound=bound,
             trace_defect=tp_defect,
+            zero_mode_count=0,
         )
 
     def _candidates() -> Iterator[tuple[str, EigenDecomposition]]:

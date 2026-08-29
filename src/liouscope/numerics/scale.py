@@ -153,7 +153,42 @@ def spectral_zero_tolerance(
     # from a downcast double result by inspection. Such callers pass ``rtol``
     # explicitly -- an argument the caller has, and this function does not.
     eps = float(np.finfo(float).eps)
-    return float(rtol * eps * float(np.max(np.abs(ev))))
+    radius = float(np.max(np.abs(ev)))
+    if np.isfinite(radius):
+        tol = float(rtol * eps * radius)
+    else:
+        # ROUND-22 REVIEW (PR #121). Every COMPONENT of an eigenvalue can be
+        # finite while its modulus is not: ``|1.3e308 + 1.3e308j|`` is about
+        # 1.84e308 and exceeds the double range, so ``np.abs`` returns inf and
+        # the finiteness gate above -- which inspects the eigenvalues, not
+        # their moduli -- has nothing to object to. The tolerance then came
+        # back inf, every strict ``|lambda| > tol`` test was False, and D1/D3/
+        # D4 all reported 0.0 for a spectrum containing a huge non-zero mode:
+        # a gapless verdict manufactured from valid input, which is exactly
+        # the silent acceptance documented in ``Raises`` above.
+        #
+        # The threshold itself is ~1e-14 times the radius and therefore
+        # comfortably representable. Scaling by the largest COMPONENT first
+        # keeps every intermediate in range: ``max|lambda / m| <= sqrt(2)`` by
+        # construction, and ``rtol * eps`` is formed before ``m`` is
+        # reintroduced. ``m > 0`` holds here because a spectrum of all zeros
+        # has a finite (zero) radius and never reaches this branch.
+        m = float(np.max(np.maximum(np.abs(np.real(ev)), np.abs(np.imag(ev)))))
+        tol = float(rtol * eps) * m * float(np.max(np.abs(ev / m)))
+    if not np.isfinite(tol):
+        # Second line of defence, independent of the arithmetic above. A
+        # tolerance that is not finite cannot separate anything: no mode
+        # satisfies ``|lambda| > inf``, so the caller would receive a gapless
+        # spectrum rather than an error. Refusing is the fail-closed
+        # direction, and it is the same rule the finiteness gate applies to
+        # the spectrum itself.
+        raise ValueError(
+            f"the zero-mode tolerance derived from {name} is not finite "
+            f"(rtol = {rtol}, spectral radius = {radius}); no mode could "
+            "exceed it, so the spectrum is refused rather than filtered "
+            "against an unusable threshold"
+        )
+    return tol
 
 
 def rate_scale(L: np.ndarray, *, name: str = "L") -> float:
