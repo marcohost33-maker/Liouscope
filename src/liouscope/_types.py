@@ -163,6 +163,17 @@ class FitResult:
     n_eff: float
     residual_ar1_rho: float
     success: bool
+    # Which residual model the GLS layer actually used, and hence what
+    # ``residual_ar1_rho`` and ``n_eff`` mean:
+    #   NaN    -- discrete AR(1) on a uniform grid; ``residual_ar1_rho`` is the
+    #             fitted lag-1 correlation, ``n_eff`` the Geyer IPS estimate.
+    #   finite -- continuous-time CAR(1) on a NON-uniform grid; the whitening
+    #             used ``exp(-theta dt_k)`` per step, ``residual_ar1_rho`` is
+    #             that correlation at the mean step (reported for continuity
+    #             only), and ``n_eff`` is the exact CAR(1) value
+    #             ``n^2 / sum_jk exp(-theta |t_j - t_k|)``.
+    # Additive + defaulted, so older callers and serialised fits stay valid.
+    residual_theta_car1: float = float("nan")
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -211,6 +222,12 @@ class RelaxationResult:
     # the slow dynamics the window resolves and an
     # ``UnderResolvedTransientWarning`` is emitted. ``inf`` when nothing decays.
     samples_per_fast_efolding: float = float("nan")
+    # Residual model the whole M0..M3b hierarchy was whitened with on this
+    # grid: "ar1" (uniform grid, historical discrete AR(1)) or "car1"
+    # (non-uniform grid, continuous-time exp(-theta dt_k) per step). The grid
+    # decides, so it is one value for the layer rather than one per fit; the
+    # per-fit value is ``FitResult.residual_theta_car1``. Additive + defaulted.
+    residual_model: str = "ar1"
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)

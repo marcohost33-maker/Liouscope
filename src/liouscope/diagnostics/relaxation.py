@@ -14,6 +14,7 @@ from .._types import FitResult, RelaxationResult
 from ..core.lindblad import steady_state
 from ..fitting.aicc import aicc, choose_model
 from ..fitting.bootstrap import _jackknife, bca_ci, parametric_bootstrap
+from ..fitting.car1 import is_uniform_grid, neff_car1
 from ..fitting.gls import fit_gls_ar1
 from ..fitting.models import (
     M0,
@@ -66,62 +67,10 @@ RELAXATION_N_POINTS: int = 80
 _LEGACY_T_MAX: float = 10.0
 
 
-def default_relaxation_grid(
-    gap: float,
-    *,
-    horizon: float = RELAXATION_HORIZON,
-    n_points: int = RELAXATION_N_POINTS,
-) -> np.ndarray:
-    """Uniform time grid spanning ``horizon`` e-foldings of the slowest mode.
-
-    Returns ``linspace(0, horizon / gap, n_points)``, i.e. a window measured in
-    the system's own relaxation time ``1 / gap`` (D1). See the module-level
-    note on :data:`RELAXATION_HORIZON` for why the default must not be an
-    absolute window.
-
-    The grid is deliberately **uniform**. The GLS fit whitens residuals with an
-    AR(1) model (``r_k - rho r_{k-1}``), which presumes a constant sampling
-    interval; a log-spaced or two-scale grid -- appropriate for the transient
-    layer's ``sup_t`` search, where no noise model is involved -- would make
-    that lag-1 correlation a function of position on the grid and quietly
-    invalidate the whitening, the AR(1) bootstrap and ``N_eff``.
-
-    ``gap <= 0`` or a non-finite ``gap`` means no usable decay scale was
-    resolved; the historical absolute window is returned in that case.
-    """
-    if not np.isfinite(gap) or gap <= 0.0:
-        return np.linspace(0.0, _LEGACY_T_MAX, n_points)
-    return np.linspace(0.0, horizon / float(gap), n_points)
-
-
-class UnderResolvedTransientWarning(UserWarning):
-    """The fastest mode decays within one grid step, so it is never sampled.
-
-    A uniform grid can only resolve dynamics slower than its own step. When a
-    system carries widely separated rates the two requirements collide: the
-    window must reach ``~1/Delta`` to see the SLOWEST mode relax, while the
-    step must stay below ``~1/r_max`` to see the FASTEST one at all, and 80
-    uniform samples span barely two decades between them.
-
-    Widening the grid is not the fix -- an absolute window resolves the fast
-    mode and misses the relaxation entirely, which is strictly worse for the
-    quantity this layer reports (measured on two independent damped qubits with
-    rates 1e-6 and 1: the absolute window put ``beta_D_linear`` 3.5e4 relative
-    away from the true gap, the gap-scaled window 0.58). Nor is a log-spaced
-    grid: the GLS layer whitens with a single AR(1) coefficient, which presumes
-    a constant sample interval.
-
-    So this is a disclosure, not a repair. The slow rate the layer reports
-    remains the meaningful one; what is lost is the FAST component, and callers
-    who need it must supply their own ``t_grid`` resolving that timescale (and
-    read the resulting rates as describing that window).
-    """
-
-
-# Minimum samples per e-folding of the FASTEST mode before that mode counts as
-# stepped over rather than measured. Below 1 the fastest component loses more
-# than 63% of its amplitude between consecutive samples, so no fit can identify
-# it from this grid.
+# Minimum samples per e-folding of the WORST-RESOLVED decaying mode before
+# that mode counts as stepped over rather than measured. Below 1 the component
+# loses more than 63% of its amplitude between consecutive samples, so no fit
+# can identify it from this grid.
 #
 # A curve-shape heuristic was tried first and rejected: the share of the decay
 # landing in the first interval measures how much AMPLITUDE the fast component
@@ -130,45 +79,249 @@ class UnderResolvedTransientWarning(UserWarning):
 # one). The spectrum answers the actual question directly.
 MIN_SAMPLES_PER_FAST_EFOLD: float = 1.0
 
+# Number of samples the two-scale grid places inside the fast mode's own
+# window, as a fraction of ``n_points``. With ``n_points = 80`` and
+# ``horizon = 10`` this puts 40 points across ten e-foldings of the fastest
+# mode -- exactly 4 samples per fast e-folding, INDEPENDENTLY of the rates,
+# because the segment is measured in that mode's own relaxation time. The
+# remaining points carry the window out to ``horizon / gap`` so the slow mode
+# is still measured over the same ten e-foldings as before.
+_FAST_SEGMENT_FRAC: float = 0.5
 
-def samples_per_fast_efolding(L_super: np.ndarray, t_grid: np.ndarray) -> float:
-    """How finely the grid samples the fastest decaying mode of ``L_super``.
 
-    ``1 / (r_max * blind)`` with ``r_max = max(-Re lambda)`` and ``blind`` the
-    largest interval the grid leaves unsampled. On the gap-scaled default this
-    reduces to ``7.9 * Delta / r_max``, i.e. a uniform 80-point window covering
-    ten e-foldings of the slowest mode resolves at most about an eightfold
-    spread of timescales -- past that the two ends of the spectrum cannot both
-    be sampled by one uniform grid.
+def decay_rates(L_super: np.ndarray) -> np.ndarray:
+    """Distinct positive decay rates ``-Re lambda`` of the Liouvillian.
 
-    ``blind`` is ``max(dt, t[0])``, not merely the step. The dynamics starts at
-    ``rho_initial`` at ``t = 0`` while the trajectory is only evaluated from
-    ``t[0]``, and :func:`liouscope.diagnose` permits any non-negative start, so
-    a late-starting grid leaves a lead-in that no step size compensates for: a
-    rate-1 mode on ``linspace(100, 101, 101)`` is sampled 100x per e-folding
-    and is nonetheless long gone by the first sample (amplitude ``e^-100``, and
-    the whole relative-entropy curve measures identically zero while the fit
-    still returns a confident-looking rate). Counting the lead-in as what it is
-    -- an unsampled interval, and usually the largest one -- catches that with
-    the same comparison, and is exactly ``dt`` for any grid starting at zero,
-    so the default path is unchanged.
-
-    Returns ``inf`` when nothing decays (no finite positive rate) and NaN when
-    the grid has no usable step.
+    Every mode of ``exp(L t)`` decays as ``exp(-r t)`` with ``r = -Re lambda``;
+    the zero mode (steady state) and any numerically non-finite eigenvalue are
+    dropped. Returned sorted ascending, so ``[-1]`` is the fastest rate.
+    Empty when nothing decays.
     """
-    t = np.asarray(t_grid, dtype=float)
-    if t.size < 2:
-        return float("nan")
-    dt = float(t[1] - t[0])
-    if not np.isfinite(dt) or dt <= 0.0:
-        return float("nan")
-    lead_in = float(t[0]) if np.isfinite(t[0]) and t[0] > 0.0 else 0.0
-    blind = max(dt, lead_in)
     rates = -np.real(np.linalg.eigvals(np.asarray(L_super)))
     positive = rates[np.isfinite(rates) & (rates > 0.0)]
-    if positive.size == 0:
-        return float("inf")
-    return float(1.0 / (float(np.max(positive)) * blind))
+    return np.sort(positive)
+
+
+def fastest_decay_rate(L_super: np.ndarray) -> float:
+    """``max(-Re lambda)``: the rate that sets the finest timescale to resolve.
+
+    Returns NaN when no finite positive rate exists -- fail-closed, so a caller
+    sizing a grid from this value falls back to its documented default instead
+    of scaling by a fabricated rate.
+    """
+    rates = decay_rates(L_super)
+    return float(rates[-1]) if rates.size else float("nan")
+
+
+def default_relaxation_grid(
+    gap: float,
+    *,
+    fast_rate: float | None = None,
+    horizon: float = RELAXATION_HORIZON,
+    n_points: int = RELAXATION_N_POINTS,
+) -> np.ndarray:
+    """Time grid spanning ``horizon`` e-foldings of the slowest mode.
+
+    Without ``fast_rate`` this is ``linspace(0, horizon / gap, n_points)``:
+    a uniform window measured in the system's own relaxation time ``1 / gap``
+    (D1). See the module-level note on :data:`RELAXATION_HORIZON` for why the
+    default must not be an absolute window.
+
+    With a ``fast_rate`` that the uniform grid cannot resolve, the grid becomes
+    **two-scale**: the first ``_FAST_SEGMENT_FRAC`` of the points cover
+    ``[0, horizon / fast_rate]`` -- ten e-foldings of the FASTEST mode -- and
+    the rest carry the window out to ``horizon / gap`` as before. Both ends of
+    the spectrum are then sampled by one grid, at 4 samples per fast e-folding
+    for the default constants, whatever the separation.
+
+    This replaces a disclosure with a repair. The previous docstring argued a
+    non-uniform grid was impossible because the GLS layer "whitens with a
+    single AR(1) coefficient, which presumes a constant sample interval". That
+    is a property of the DISCRETE parametrisation, not of the noise: the
+    stationary continuous-time process has ``Corr(t, t+d) = exp(-theta d)``, so
+    whitening with the per-step ``exp(-theta dt_k)`` is valid on ANY grid.
+    :mod:`liouscope.fitting.car1` implements that, and the fitting layer
+    switches to it whenever the grid is non-uniform -- measured lag-1
+    autocorrelation of the whitened residuals on a two-scale grid: 0.4231 with
+    one constant rho against 0.0945 with the per-step coefficient, the latter
+    at the level of the near-uniform positive control (0.0728).
+
+    The uniform grid is kept, bit-for-bit, whenever it already resolves the
+    fast mode (``1 / (fast_rate * dt) >= MIN_SAMPLES_PER_FAST_EFOLD``), so no
+    system that was well sampled before changes at all, and the switch happens
+    exactly in the regime that previously only got a warning.
+
+    ``gap <= 0`` or a non-finite ``gap`` means no usable decay scale was
+    resolved; the historical absolute window is returned in that case. A
+    missing, non-finite or non-positive ``fast_rate`` likewise falls back to
+    the uniform grid rather than guessing a fast scale.
+    """
+    if not np.isfinite(gap) or gap <= 0.0:
+        return np.linspace(0.0, _LEGACY_T_MAX, n_points)
+    t_max = horizon / float(gap)
+    uniform = np.linspace(0.0, t_max, n_points)
+
+    # --- fail-closed guards: any doubt keeps the historical uniform grid ---
+    if fast_rate is None or not np.isfinite(fast_rate) or fast_rate <= 0.0:
+        return uniform
+    n_fast = int(n_points * _FAST_SEGMENT_FRAC)
+    if n_fast < 2 or n_points - n_fast < 2:
+        return uniform
+    dt_uniform = float(uniform[1] - uniform[0])
+    if dt_uniform <= 0.0:
+        return uniform
+    # Already resolved: leave it exactly as it was.
+    if 1.0 / (float(fast_rate) * dt_uniform) >= MIN_SAMPLES_PER_FAST_EFOLD:
+        return uniform
+    t_split = horizon / float(fast_rate)
+    if not np.isfinite(t_split) or t_split <= 0.0 or t_split >= t_max:
+        return uniform
+
+    early = np.linspace(0.0, t_split, n_fast, endpoint=False)
+    late = np.linspace(t_split, t_max, n_points - n_fast)
+    grid = np.concatenate([early, late])
+    # Structural post-condition rather than trust in the arithmetic above: a
+    # grid that is not strictly increasing and finite would corrupt every
+    # consumer downstream (the propagator, the whitening, N_eff), so a failure
+    # here degrades to the uniform grid instead of propagating.
+    if (
+        grid.size != n_points
+        or not np.all(np.isfinite(grid))
+        or np.any(np.diff(grid) <= 0.0)
+        or grid[0] != 0.0
+    ):
+        return uniform
+    return grid
+
+
+class UnderResolvedTransientWarning(UserWarning):
+    """A decaying mode is stepped over by the grid rather than measured.
+
+    A grid can only resolve dynamics slower than the largest interval it leaves
+    unsampled in the region where that mode still has amplitude. On the DEFAULT
+    path this is now largely repaired rather than merely disclosed: when the
+    uniform gap-scaled window cannot resolve the fastest mode,
+    :func:`default_relaxation_grid` switches to a two-scale grid that samples
+    both ends of the spectrum, and the fitting layer switches to the CAR(1)
+    residual model that is valid on it (:mod:`liouscope.fitting.car1`).
+
+    Two situations remain, and this warning exists for them:
+
+    * a CALLER-supplied ``t_grid`` that does not resolve its own system -- for
+      instance one starting long after the mode has decayed, where no step size
+      compensates for the unsampled lead-in;
+    * an INTERMEDIATE timescale on the default two-scale grid. The two segments
+      resolve the fastest and the slowest mode; a mode between them can still
+      fall between the coarse late samples. Measured on three independent
+      damped qubits with rates 1e-6, 1e-3 and 1, the middle mode is sampled
+      0.0039 times per e-folding and the warning fires -- correctly.
+
+    Widening the window is still not a fix -- an absolute window resolves the
+    fast mode and misses the relaxation entirely (measured on two independent
+    damped qubits with rates 1e-6 and 1: the absolute window put
+    ``beta_D_linear`` 3.5e4 relative away from the true gap, the gap-scaled
+    window 0.58). What changed is that a non-uniform grid IS now available,
+    because the whitening it needs was implemented rather than assumed
+    impossible.
+
+    When this warning does fire, the rates the layer reports describe the
+    dynamics the window resolves; a caller who needs the unresolved component
+    must supply a ``t_grid`` covering that timescale (and read the resulting
+    rates as describing that window).
+    """
+
+
+def _resolution_detail(
+    L_super: np.ndarray, t_grid: np.ndarray
+) -> tuple[float, float, float]:
+    """How finely the grid samples the WORST-RESOLVED decaying mode.
+
+    Returns ``(samples_per_efolding, rate, blind_interval)`` for the mode that
+    the grid resolves least well.
+
+    For each decay rate ``r`` of ``L_super`` this forms ``1 / (r * blind_r)``,
+    where ``blind_r`` is the largest interval the grid leaves unsampled *while
+    that mode still has amplitude*, and returns the MINIMUM over modes.
+
+    Two deliberate choices:
+
+    ``blind_r`` counts the lead-in from ``t = 0``, not merely the step. The
+    dynamics starts at ``rho_initial`` at ``t = 0`` while the trajectory is
+    only evaluated from ``t[0]``, and :func:`liouscope.diagnose` permits any
+    non-negative start, so a late-starting grid leaves a lead-in that no step
+    size compensates for: a rate-1 mode on ``linspace(100, 101, 101)`` is
+    sampled 100x per e-folding by its step and is nonetheless long gone by the
+    first sample (amplitude ``e^-100``, and the whole relative-entropy curve
+    measures identically zero while the fit still returns a confident-looking
+    rate).
+
+    ``blind_r`` only considers intervals that START before ``1 / r``. A
+    coarse interval after the mode has decayed is not blindness -- there is
+    nothing left to see -- and counting it would make every two-scale grid look
+    under-resolved because of its own late segment. On a uniform grid the
+    restriction is inert (every interval has the same length), so this reduces
+    exactly to the historical ``1 / (r_max * max(dt, t[0]))``; the pinned
+    values for uniform and late-starting grids are unchanged.
+
+    Taking the minimum over ALL modes rather than only the fastest is what
+    makes the measure honest on a non-uniform grid. The old form read
+    ``t[1] - t[0]``, which on a fine-then-coarse grid reports the FINE step and
+    would wave through a middle timescale that falls entirely between the
+    coarse samples. That case is created, not hypothetical: it is exactly the
+    intermediate scale a two-scale grid does not resolve.
+
+    Returns ``inf`` when nothing decays (no finite positive rate) and NaN when
+    the grid has no usable interval.
+    """
+    t = np.asarray(t_grid, dtype=float)
+    if t.size < 2 or not np.all(np.isfinite(t)):
+        return float("nan"), float("nan"), float("nan")
+    rates = decay_rates(L_super)
+    if rates.size == 0:
+        return float("inf"), float("nan"), float("nan")
+
+    # Unsampled intervals as (start, length): the lead-in [0, t[0]] first, then
+    # every grid step. Starts are non-decreasing for an increasing grid, so a
+    # running maximum of the lengths answers "largest interval starting before
+    # T" by a single search.
+    lead_in = float(t[0]) if t[0] > 0.0 else 0.0
+    starts = np.concatenate([[0.0], t[:-1]])
+    lengths = np.concatenate([[lead_in], np.diff(t)])
+    if not np.all(np.isfinite(lengths)) or np.any(lengths[1:] <= 0.0):
+        return float("nan"), float("nan"), float("nan")
+    order = np.argsort(starts, kind="stable")
+    starts = starts[order]
+    running_max = np.maximum.accumulate(lengths[order])
+
+    worst = float("inf")
+    worst_rate = float("nan")
+    worst_blind = float("nan")
+    for r in rates:
+        horizon_r = 1.0 / float(r)
+        idx = int(np.searchsorted(starts, horizon_r, side="left"))
+        # ``starts[0] == 0.0 < horizon_r`` for any finite positive rate, so the
+        # slice is never empty.
+        blind = float(running_max[max(idx, 1) - 1])
+        if blind <= 0.0:
+            continue
+        value = 1.0 / (float(r) * blind)
+        if value < worst:
+            worst, worst_rate, worst_blind = value, float(r), blind
+    if not np.isfinite(worst):
+        # Every interval was zero-length: no usable step.
+        return float("nan"), float("nan"), float("nan")
+    return worst, worst_rate, worst_blind
+
+
+def samples_per_fast_efolding(L_super: np.ndarray, t_grid: np.ndarray) -> float:
+    """Samples per e-folding of the worst-resolved mode.
+
+    Thin wrapper over :func:`_resolution_detail`; see its docstring. The two
+    share one implementation deliberately, so the number this returns and the
+    number quoted in :class:`UnderResolvedTransientWarning` can never describe
+    different intervals.
+    """
+    return _resolution_detail(L_super, t_grid)[0]
 
 
 def _evolve(L_super: np.ndarray, rho0: np.ndarray, t_grid: np.ndarray) -> np.ndarray:
@@ -329,7 +482,18 @@ def _fit_with_model(
     p0 = seeds[model_name](t, y)
     fit = fit_gls_ar1(model, t, y, p0)
     k = p0.size
-    n_eff = estimate_neff_geyer(fit.residuals)
+    # N_eff must be computed under the SAME residual model the fit whitened
+    # with, or the AICc it feeds compares likelihoods from one model against a
+    # sample size from another. The Geyer IPS estimator sums autocorrelations
+    # indexed by LAG; on a grid whose step varies, lag 1 is not a fixed time
+    # separation, so the sequence it sums is not an autocorrelation function.
+    # The CAR(1) form is exact there and reduces to the same double sum on a
+    # uniform grid. Fail-closed: if it cannot be formed, fall back to Geyer.
+    n_eff = float("nan")
+    if np.isfinite(fit.theta_car1):
+        n_eff = neff_car1(t, fit.theta_car1)
+    if not np.isfinite(n_eff):
+        n_eff = estimate_neff_geyer(fit.residuals)
     aic = aicc(fit.log_likelihood, k, n_eff)
     fit_result = FitResult(
         model=model_name,
@@ -339,6 +503,7 @@ def _fit_with_model(
         n_eff=n_eff,
         residual_ar1_rho=fit.rho_ar1,
         success=fit.success,
+        residual_theta_car1=float(fit.theta_car1),
     )
     return fit_result, fit.params
 
@@ -446,11 +611,24 @@ def compute_relaxation_layer(
         # is recomputed, and a NaN gap degrades to the documented legacy window.
         if gap is None:
             gap = compute_spectral_layer(L_super, rho_steady_state).gap
-        t_grid = default_relaxation_grid(gap)
-        t_grid_source = (
-            "gap_scaled" if np.isfinite(gap) and gap > 0.0 else "legacy_fixed"
-        )
+        # The FAST scale comes from the spectrum, never from a guess: it is
+        # ``max(-Re lambda)``, the same eigenvalues the resolution guard reads.
+        # ``fastest_decay_rate`` returns NaN when no finite positive rate
+        # exists, and ``default_relaxation_grid`` then keeps the uniform window
+        # -- fail-closed, so an unusable spectrum degrades to the historical
+        # behaviour plus its warning rather than to an invented timescale.
+        fast_rate = fastest_decay_rate(L_super)
+        t_grid = default_relaxation_grid(gap, fast_rate=fast_rate)
+        if not (np.isfinite(gap) and gap > 0.0):
+            t_grid_source = "legacy_fixed"
+        elif is_uniform_grid(t_grid):
+            t_grid_source = "gap_scaled"
+        else:
+            t_grid_source = "gap_scaled_multiscale"
     t_grid = np.asarray(t_grid, dtype=float)
+    # One decision for the whole layer: the grid, not the data, selects the
+    # residual model, so every M0..M3b fit below is whitened the same way.
+    residual_model = "ar1" if is_uniform_grid(t_grid) else "car1"
 
     traj = _evolve(L_super, rho_initial, t_grid)
     final_rho = traj[-1]
@@ -466,24 +644,25 @@ def compute_relaxation_layer(
 
     # Under-resolution disclosure. Applies to the window actually used, so a
     # caller-supplied grid is checked on the same terms as the default.
-    fast_resolution = samples_per_fast_efolding(L_super, t_grid)
+    fast_resolution, worst_rate, blind = _resolution_detail(L_super, t_grid)
     if np.isfinite(fast_resolution) and fast_resolution < MIN_SAMPLES_PER_FAST_EFOLD:
-        blind = max(float(t_grid[1] - t_grid[0]), max(float(t_grid[0]), 0.0))
         span_kind = (
             "unsampled lead-in from t=0"
             if blind > float(t_grid[1] - t_grid[0])
             else "sample interval"
         )
         warnings.warn(
-            "Relaxation layer: the fastest mode decays by "
+            f"Relaxation layer: the mode at rate {worst_rate:.4g} decays by "
             f"{100.0 * (1.0 - np.exp(-1.0 / fast_resolution)):.1f}% across the "
-            f"largest gap the grid leaves ({span_kind} = {blind:.4g}, "
-            f"{fast_resolution:.3g} samples per fast e-folding), so it is "
-            "stepped over rather than measured. The reported rates describe "
-            "the SLOW dynamics this window resolves; the fast component is not "
+            f"largest gap the grid leaves before it ({span_kind} = "
+            f"{blind:.4g}, {fast_resolution:.3g} samples per e-folding), so it "
+            "is stepped over rather than measured. The reported rates describe "
+            "the dynamics this window DOES resolve; that component is not "
             "identifiable from this grid and the M0..M3b comparison cannot see "
-            "it. Supply an explicit t_grid resolving that timescale if you "
-            "need it -- note the rates then describe that window instead.",
+            "it. The default grid resolves the fastest and the slowest mode "
+            "(see default_relaxation_grid); supply an explicit t_grid if you "
+            "need an intermediate one -- note the rates then describe that "
+            "window instead.",
             UnderResolvedTransientWarning,
             stacklevel=2,
         )
@@ -566,4 +745,5 @@ def compute_relaxation_layer(
         t_grid_span=float(t_grid[-1] - t_grid[0]),
         t_grid=t_grid.copy(),
         samples_per_fast_efolding=fast_resolution,
+        residual_model=residual_model,
     )
