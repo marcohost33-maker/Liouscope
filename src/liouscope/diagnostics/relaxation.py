@@ -179,7 +179,14 @@ def default_relaxation_grid(
 
     early = np.linspace(0.0, t_split, n_fast, endpoint=False)
     late = np.linspace(t_split, t_max, n_points - n_fast)
-    grid = np.concatenate([early, late])
+    # ``np.asarray`` is not decoration: numpy's own stubs type
+    # ``np.concatenate`` as ``Any`` up to 2.2.x and as ``ndarray`` from 2.3
+    # onward, so without it this function silently returns ``Any`` and every
+    # caller downstream loses type checking on the grid. The repo already
+    # settles this the same way in ``transient.py`` (``_transient_grid``).
+    # Runtime is unaffected: ``concatenate`` already returns a float64 array,
+    # so this is a no-op view, not a copy or a cast.
+    grid = np.asarray(np.concatenate([early, late]), dtype=float)
     # Structural post-condition rather than trust in the arithmetic above: a
     # grid that is not strictly increasing and finite would corrupt every
     # consumer downstream (the propagator, the whitening, N_eff), so a failure
@@ -289,8 +296,12 @@ def _resolution_detail(
     # running maximum of the lengths answers "largest interval starting before
     # T" by a single search.
     lead_in = float(t[0]) if t[0] > 0.0 else 0.0
-    starts = np.concatenate([[0.0], t[:-1]])
-    lengths = np.concatenate([[lead_in], np.diff(t)])
+    # Same ``Any``-leak as in ``default_relaxation_grid`` above: unannotated,
+    # everything computed from these two arrays below (the running maximum, the
+    # searchsorted index, the returned interval) would be unchecked on numpy
+    # <= 2.2 while checking fine on newer stubs.
+    starts = np.asarray(np.concatenate([[0.0], t[:-1]]), dtype=float)
+    lengths = np.asarray(np.concatenate([[lead_in], np.diff(t)]), dtype=float)
     if not np.all(np.isfinite(lengths)) or np.any(lengths[1:] <= 0.0):
         return float("nan"), float("nan"), float("nan"), float("nan")
     order = np.argsort(starts, kind="stable")
