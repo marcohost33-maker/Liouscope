@@ -7,6 +7,64 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Fixed
+- **The workflow hardening gate was blind to the commonest way to write a step
+  (PR #129).** `.github/scripts/check_workflow_hardening.py` enforces the
+  SHA-pinning rule of AGENTS.md section 4 on every workflow, and nothing
+  enforced it in turn. It reported green while four classes of unsafe workflow
+  passed:
+  - `USES_RE` was `^\s*uses:`, which does not match the list form `- uses:`.
+    **Seven of 27 action references in this repository were invisible to the
+    gate**, every `actions/checkout` among them. They are correctly pinned
+    today by discipline, not by this check; a PR moving one to `@main` passed.
+  - `docker://` was exempt outright, so a mutable third-party tag
+    (`docker://org/img:latest`) was waved through. The exemption now requires
+    an immutable `@sha256:` digest.
+  - `permissions` was checked for *presence* only, so `permissions: write-all`
+    -- a declaration of total access -- counted as evidence of least privilege.
+  - The `pull_request_target` waiver was a substring test over the raw file, so
+    writing the waiver's *name* inside a `#` comment satisfied it.
+
+  The `github.com/` exemption is removed as dead code: `uses:` does not accept
+  that prefix and a GitHub owner name cannot contain a dot, so no such
+  organisation can exist. It was the subject of a CodeQL
+  incomplete-substring alert -- which is the only reason the file came under
+  scrutiny. CodeQL flagged the harmless line and missed the regex two lines
+  above it that actually broke the gate.
+
+  Closing the `docker://` hole initially rejected *digest-pinned* containers:
+  `_check_uses_pin` splits the reference at `@` before consulting
+  `_is_third_party_uses`, so a digest test there ran on the truncated string
+  and the digest then failed the 40-character git-SHA rule. Container digests
+  and git SHAs are now checked as the different pin shapes they are. That
+  regression was caught by an over-correction control, not by review.
+
+- **Two zizmor audits re-enabled whose suppression reasons no longer hold
+  (PR #129).** `impostor-commit` was disabled because the audit crashed on the
+  private cross-repo pin `coworkerz-ci`; that pin is gone, and the only two
+  occurrences of the name left in the tree are the comments explaining the
+  suppression. It is the one audit that verifies a 40-character SHA actually
+  exists upstream, so the entire pinning strategy was unverified without it.
+  `advanced-security: false` was justified with "private repo without GHAS" --
+  this repository is public, measured rather than assumed, so zizmor findings
+  were never uploaded to Code Scanning: absent there for want of an upload,
+  not for want of findings. (`annotations` is set to `false` alongside it; the
+  action refuses to start with both enabled.)
+
+### Added
+- **Tests for the hardening gate itself (PR #129).** It had none. Each unsafe
+  workflow is asserted next to a positive control that must still pass --
+  rejection alone would be satisfied by a gate that fails everything, which is
+  exactly as useless as one that passes everything. Includes a digest-pinned
+  container that must remain allowed, and a check that the real tree passes its
+  own gate.
+
+### Known gaps
+- `quality contract` is **not** a required status check on `main`; only
+  `test (3.10-3.14)` and `qutip-cross-check (3.11/3.12)` are. Five security
+  workflows run and none of them blocks a merge, so the comment in
+  `.github/workflows/zizmor.yml` claiming the step "GATET die CI (rot = blockt
+  merge)" is factually wrong. Making it required is the right follow-up, but
+  only after this fix lands -- otherwise a blind gate becomes mandatory.
 - **Eight gates that decided from what they never had (PR #121 round-22
   review). CHANGES `StabilityReport` PAYLOAD TYPES and the A10/F5 CLASSIFIER
   BRANCH.** All eight share one shape: a value that is not a measurement is

@@ -5,6 +5,11 @@
 # fremden privaten Repos lesen kann. SHA-Echtheit des Pins wird bei jedem Bump
 # via gh api Pre/Post verifiziert. Alle uebrigen Online-Audits (known-
 # vulnerable-actions, stale-action-refs) bleiben AKTIV.
-rules:
-  impostor-commit:
-    disable: true
+rules: {}
+# [2026-08-29] impostor-commit WIEDER AKTIV. Die Abschaltung vom 06-06 war
+# mit einem Crash am privaten Cross-Repo-Pin coworkerz-ci begruendet. Dieser
+# Pin existiert nicht mehr -- die einzigen Treffer im Baum waren die
+# Begruendungs-Kommentare selbst. Gegenprobe vor der Reaktivierung gefahren:
+# zizmor mit aktiven Online-Audits meldet keine Befunde, alle 25 Pins sind
+# upstream echt. Es ist der einzige Audit, der prueft, ob ein SHA-Pin
+# ueberhaupt existiert; ohne ihn ist die gesamte Pin-Strategie ungeprueft.
