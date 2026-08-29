@@ -25,10 +25,13 @@ rescaling by ``sqrt(1 - a_k^2)`` therefore yields residuals that are white AND
 homoskedastic on any grid. Uniform spacing is the special case
 ``a_k = rho = exp(-theta dt)``.
 
-Measured consequence (40 runs, exact OU transition density, two-scale grid
-spanning rates 1e-6 and 1): ``|lag-1 autocorrelation|`` of the whitened
-residuals was 0.4231 with one constant ``rho`` and 0.0945 with ``a_k`` -- the
-latter at the level of the positive control on a near-uniform grid (0.0728).
+Measured consequence (40 runs, exact OU transition density with theta = 0.7,
+on the two-scale grid this layer builds): median ``|lag-1 autocorrelation|`` of
+the whitened residuals is 0.3738 with one constant ``rho`` -- taken at the
+median step, i.e. that scheme's best case -- against 0.0728 with the per-step
+``a_k``. The positive control on a uniform grid gives 0.0728 for BOTH schemes,
+which is what shows the contrast comes from the grid and not from the
+comparison.
 
 Scope
 -----

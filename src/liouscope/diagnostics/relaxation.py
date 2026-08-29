@@ -141,10 +141,10 @@ def default_relaxation_grid(
     stationary continuous-time process has ``Corr(t, t+d) = exp(-theta d)``, so
     whitening with the per-step ``exp(-theta dt_k)`` is valid on ANY grid.
     :mod:`liouscope.fitting.car1` implements that, and the fitting layer
-    switches to it whenever the grid is non-uniform -- measured lag-1
-    autocorrelation of the whitened residuals on a two-scale grid: 0.4231 with
-    one constant rho against 0.0945 with the per-step coefficient, the latter
-    at the level of the near-uniform positive control (0.0728).
+    switches to it whenever the grid is non-uniform -- measured median lag-1
+    autocorrelation of the whitened residuals on a two-scale grid: 0.3738 with
+    one constant rho against 0.0728 with the per-step coefficient, the latter
+    equal to the uniform positive control, where both schemes give 0.0728.
 
     The uniform grid is kept, bit-for-bit, whenever it already resolves the
     fast mode (``1 / (fast_rate * dt) >= MIN_SAMPLES_PER_FAST_EFOLD``), so no

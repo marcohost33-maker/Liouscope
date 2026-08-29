@@ -247,9 +247,11 @@ of the noise. The stationary continuous-time process (Ornstein–Uhlenbeck,
 equivalently CAR(1)) has `Corr(t, t+d) = exp(−θ·d)` for any `d`, so on an
 arbitrary grid one whitens with the per-step `a_k = exp(−θ·dt_k)` and rescales
 by `sqrt(1 − a_k²)` to keep the result homoskedastic. Measured on a two-scale
-grid with exact OU noise, `|lag-1 autocorrelation|` of the whitened residuals
-is `0.42` with one constant `ρ` and `0.094` with the per-step coefficient — the
-latter at the level of the near-uniform positive control (`0.073`).
+grid with exact OU noise, the median `|lag-1 autocorrelation|` of the whitened
+residuals is `0.374` with one constant `ρ` — taken at the median step, that
+scheme's best case — against `0.073` with the per-step coefficient. On a
+uniform grid both schemes give `0.073`, which is what shows the contrast comes
+from the grid rather than from the comparison.
 
 So the default window is now **repaired**, not merely disclosed. When the
 uniform grid cannot resolve the fastest mode (`max(−Re λ)`, taken from the

@@ -16,9 +16,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   CAR(1)) has `Corr(t, t+d) = exp(−θ·d)`, so on an arbitrary grid one whitens
   with the per-step `a_k = exp(−θ·dt_k)` and rescales by `sqrt(1 − a_k²)` to
   keep the result homoskedastic. Measured on a two-scale grid with exact OU
-  noise, `|lag-1 autocorrelation|` of the whitened residuals is `0.42` under one
-  constant `ρ` against `0.094` under the per-step coefficient, the latter at the
-  level of the near-uniform positive control (`0.073`).
+  noise, the median `|lag-1 autocorrelation|` of the whitened residuals is
+  `0.374` under one constant `ρ` against `0.073` under the per-step coefficient;
+  on a uniform grid both give `0.073`.
 
   Consequences, carried through the whole chain rather than only the grid call:
 
