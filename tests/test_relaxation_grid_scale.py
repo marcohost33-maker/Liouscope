@@ -47,8 +47,12 @@ from liouscope.diagnostics.relaxation import (
     UnderResolvedTransientWarning,
     compute_relaxation_layer,
     default_relaxation_grid,
+    fastest_decay_rate,
+    samples_per_fast_efolding,
 )
 from liouscope.diagnostics.spectral import compute_spectral_layer
+from liouscope.fitting.car1 import neff_car1
+from liouscope.fitting.models import initial_guess_m2
 
 # Twelve decades of rate units. Measured worst-case drift across this set is
 # ~1.2e-3 relative; the defect this guards against was 2.2e-1, so RTOL_RATE
@@ -387,25 +391,179 @@ def _two_scale(slow: float, fast: float) -> tuple[np.ndarray, np.ndarray]:
     return L, np.outer(psi, psi.conj())
 
 
-def test_widely_separated_rates_disclose_the_unsampled_fast_mode():
-    """The grid cannot resolve six decades of separation, so it must say so.
+def _three_scale(slow: float, mid: float, fast: float):
+    """Three INDEPENDENT amplitude-damped qubits with separated rates."""
+    i2 = np.eye(2, dtype=complex)
 
-    Reviewer finding on PR #115 (Codex P1). Confirmed: with rates 1e-6 and 1 the
-    fast mode decays to exactly 0.0 within one grid step. The finding was NOT a
-    regression — on this same system the previous absolute window put
-    ``beta_D_linear`` 3.5e4 relative away from the true gap against 0.58 for the
-    gap-scaled one — but it is a real limitation, and silently fitting a
-    component that was never sampled is precisely what this project's
-    fail-loud convention exists to prevent.
+    def kron3(a, b, c):
+        return np.kron(np.kron(a, b), c)
+
+    L = build_liouvillian(
+        np.zeros((8, 8), dtype=complex),
+        [
+            np.sqrt(slow) * kron3(_SM, i2, i2),
+            np.sqrt(mid) * kron3(i2, _SM, i2),
+            np.sqrt(fast) * kron3(i2, i2, _SM),
+        ],
+    )
+    plus = np.array([1.0, 1.0], dtype=complex) / np.sqrt(2.0)
+    psi = np.kron(np.kron(plus, plus), plus)
+    return L, np.outer(psi, psi.conj())
+
+
+def test_widely_separated_rates_are_resolved_not_merely_disclosed():
+    """Reviewer finding on PR #115 (Codex P1): now repaired, not disclosed.
+
+    The previous answer to six decades of separation was an
+    ``UnderResolvedTransientWarning`` plus the argument that a non-uniform grid
+    is impossible because the GLS layer "whitens with a single AR(1)
+    coefficient, which presumes a constant sample interval". That premise is
+    false -- it describes the DISCRETE parametrisation, not the noise, whose
+    continuous-time form ``exp(-theta dt_k)`` is valid on any grid. With the
+    two-scale window and the CAR(1) whitening that goes with it, the fast mode
+    is sampled and the model comparison can see it.
+
+    Measured on this system: the fitted second rate is 1.10 against a true 1.0.
+    On the previous uniform window the same M2 fit reported 2.17e-05 for it --
+    a "successful" two-exponential fit of a component that was never sampled,
+    off by a factor 4.6e4. That is the defect this test exists to keep out.
     """
     L, rho0 = _two_scale(1.0e-6, 1.0)
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")
         rep = compute_relaxation_layer(L, rho_initial=rho0, bootstrap_B=5, seed=1)
-    assert any(
+
+    assert not any(
         issubclass(w.category, UnderResolvedTransientWarning) for w in caught
-    ), "no disclosure emitted for a 1e-6 / 1 timescale separation"
+    ), "still disclosing under-resolution on a separation the grid now resolves"
+    assert rep.samples_per_fast_efolding > MIN_SAMPLES_PER_FAST_EFOLD
+    assert rep.t_grid_source == "gap_scaled_multiscale"
+    assert rep.residual_model == "car1"
+    # The grid must still cover the SLOW mode: a fast-resolving window that
+    # loses the relaxation would be the strictly-worse absolute window again.
+    gap = compute_spectral_layer(L, None).gap
+    assert rep.t_grid_span == pytest.approx(RELAXATION_HORIZON / gap, rel=1.0e-9)
+
+    assert rep.aicc_model == "M2", rep.aicc_model
+    rates = sorted(
+        abs(float(v)) for v in (rep.fits["M2"].params[1], rep.fits["M2"].params[3])
+    )
+    assert rates[1] == pytest.approx(1.0, rel=0.5), rates
+    # The fit must actually have USED the continuous-time whitening; a run that
+    # built the two-scale grid and then whitened it with one constant rho would
+    # satisfy every assertion above while the residual model was wrong.
+    assert np.isfinite(rep.fits["M2"].residual_theta_car1)
+
+
+def test_neff_on_a_non_uniform_grid_is_the_exact_car1_value():
+    """N_eff must come from the same residual model the fit whitened with.
+
+    Geyer's IPS estimator indexes autocorrelation by LAG; on a grid whose step
+    varies, lag 1 is not a fixed time separation, so the sequence it sums is
+    not an autocorrelation function. Measured against the closed-form ESS on a
+    uniform grid, where both are valid, the CAR(1) route is within a factor
+    0.97-1.19 across rho in [0, 0.99] while Geyer runs to 3.9x optimistic at
+    rho = 0.99 -- so this is not merely a consistency preference.
+    """
+    L, rho0 = _two_scale(1.0e-6, 1.0)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        rep = compute_relaxation_layer(L, rho_initial=rho0, bootstrap_B=5, seed=1)
+    for name, fit in rep.fits.items():
+        assert np.isfinite(fit.residual_theta_car1), name
+        assert fit.n_eff == pytest.approx(
+            neff_car1(rep.t_grid, fit.residual_theta_car1), rel=1.0e-12
+        ), name
+
+
+def test_the_recovered_fast_rate_is_not_the_seed_it_started_from():
+    """A parameter that never moved returns its start value and looks perfect.
+
+    This is the failure mode that makes an unresolved mode dangerous rather
+    than merely absent: where a component is unsampled the optimiser has no
+    gradient on its rate and hands the seed straight back, which reads as a
+    confident fit. So the assertion is on the DISPLACEMENT, not on the value:
+    ``initial_guess_m2`` seeds the second rate at three times the M0 slope --
+    order 3e-06 here -- and the fit must travel five decades away from it.
+    """
+    L, rho0 = _two_scale(1.0e-6, 1.0)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        rep = compute_relaxation_layer(L, rho_initial=rho0, bootstrap_B=5, seed=1)
+    seed = initial_guess_m2(rep.t_grid, rep.relative_entropy_curve)
+    fitted = rep.fits["M2"].params
+    moved = abs(fitted[3] - seed[3]) / abs(seed[3])
+    assert moved > 1.0e3, (seed, fitted, moved)
+
+
+def test_the_two_scale_window_sharpens_the_d17_linear_rate():
+    """The repair has to show up in a REPORTED quantity, not only in the grid.
+
+    ``beta_D_linear`` is the rate D17 compares against the spectral gap, so it
+    is the end of the chain this change runs through. Measured relative error
+    against the certified D1 gap on this system: 3.5e+04 for the legacy
+    absolute window, 0.58 for the uniform gap-scaled one, 0.021 for the
+    two-scale one. The ordering is the claim; the tolerances leave room for
+    solver noise without admitting either of the other two windows.
+    """
+    L, rho0 = _two_scale(1.0e-6, 1.0)
+    gap = compute_spectral_layer(L, None).gap
+
+    def linear_rate(grid):
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            rep = compute_relaxation_layer(
+                L, rho_initial=rho0, t_grid=grid, bootstrap_B=5, seed=1
+            )
+        return abs(rep.beta_D_linear - gap) / gap
+
+    err_absolute = linear_rate(np.linspace(0.0, 10.0, RELAXATION_N_POINTS))
+    err_uniform = linear_rate(np.linspace(0.0, 10.0 / gap, RELAXATION_N_POINTS))
+    err_two_scale = linear_rate(
+        default_relaxation_grid(gap, fast_rate=fastest_decay_rate(L))
+    )
+    assert err_absolute > 1.0e3, err_absolute
+    assert err_uniform > 0.2, err_uniform
+    assert err_two_scale < 0.1, err_two_scale
+    assert err_two_scale < err_uniform
+
+
+def test_an_intermediate_timescale_is_still_disclosed():
+    """The repair is partial, and the warning must keep saying where.
+
+    A two-scale grid resolves the fastest and the slowest mode by construction;
+    a mode BETWEEN them can still fall entirely between the coarse late
+    samples. On three independent damped qubits at 1e-6, 1e-3 and 1 the middle
+    mode is sampled 0.0019 times per e-folding. Silence here would be the
+    original defect moved one scale inward.
+    """
+    L, rho0 = _three_scale(1.0e-6, 1.0e-3, 1.0)
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        rep = compute_relaxation_layer(L, rho_initial=rho0, bootstrap_B=5, seed=1)
+    hits = [w for w in caught if issubclass(w.category, UnderResolvedTransientWarning)]
+    assert hits, "no disclosure for a middle timescale the two-scale grid misses"
     assert rep.samples_per_fast_efolding < MIN_SAMPLES_PER_FAST_EFOLD
+    # It must name the mode it means, not the fastest one.
+    assert "0.001" in str(hits[0].message), str(hits[0].message)
+
+
+def test_a_fine_head_cannot_hide_a_mode_lost_in_the_coarse_tail():
+    """The resolution measure must not be fooled by the FIRST step.
+
+    The historical form read ``t[1] - t[0]``, so a grid that starts fine and
+    turns coarse reported the fine step and passed. That is not hypothetical
+    once the default grid is two-scale: here a rate-1 mode is sampled twice at
+    1e-3 spacing and then not at all for ten e-foldings, and the old form would
+    have scored it at 1000 samples per e-folding.
+    """
+    L = _amp_damped(1.0)  # fastest decay rate 1
+    grid = np.concatenate([[0.0, 1.0e-3], np.linspace(0.002, 1.0e4, 78)])
+    # What the historical ``1 / (r_max * (t[1] - t[0]))`` form would have read:
+    assert 1.0 / float(grid[1] - grid[0]) == pytest.approx(1000.0, rel=1.0e-9)
+    # What the grid actually does to a rate-1 mode: two samples at 1e-3 spacing
+    # and then a 128-unit hole, i.e. 128 e-foldings unobserved.
+    assert samples_per_fast_efolding(L, grid) < MIN_SAMPLES_PER_FAST_EFOLD
 
 
 def test_late_starting_grid_counts_its_unsampled_lead_in():
@@ -497,3 +655,109 @@ def test_unresolved_gap_degrades_to_the_documented_legacy_window():
         rep = compute_relaxation_layer(L, gap=float("nan"), bootstrap_B=5, seed=1)
     assert rep.t_grid_source == "legacy_fixed"
     assert rep.t_grid_span == pytest.approx(10.0)
+
+
+# ---------------------------------------------------------------------------
+# Positive controls: nothing that already worked may move
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("c", [1.0e-4, 1.0, 1.0e4])
+def test_single_timescale_default_window_is_untouched(c):
+    """The regime that was already fine must be bit-identical, not merely close.
+
+    The two-scale branch may only fire where the uniform grid FAILS to resolve
+    the fast mode. If it also fired on ordinary systems it would move every
+    anchor, and "the fix did not break anything" would be a matter of
+    tolerances rather than of identity.
+    """
+    L = _amp_damped(c)
+    gap = compute_spectral_layer(L, None).gap
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        rep = compute_relaxation_layer(
+            L, rho_initial=_RHO_PLUS, bootstrap_B=5, seed=1
+        )
+    np.testing.assert_array_equal(
+        rep.t_grid, np.linspace(0.0, RELAXATION_HORIZON / gap, RELAXATION_N_POINTS)
+    )
+    assert rep.t_grid_source == "gap_scaled"
+    assert rep.residual_model == "ar1"
+    for fit in rep.fits.values():
+        assert np.isnan(fit.residual_theta_car1)
+
+
+def test_a_fast_rate_the_uniform_grid_already_resolves_changes_nothing():
+    """Supplying ``fast_rate`` is not by itself a request for a new grid.
+
+    The uniform window reaches a spread of ``(n_points - 1) / horizon = 7.9``
+    between the slowest and the fastest mode; below that it already samples the
+    fast mode at least once per e-folding and must be returned untouched.
+    """
+    for ratio in (1.0, 4.0, 7.8):
+        np.testing.assert_array_equal(
+            default_relaxation_grid(1.0, fast_rate=ratio),
+            default_relaxation_grid(1.0),
+        )
+
+
+def test_the_switch_happens_exactly_where_the_uniform_grid_stops_resolving():
+    """The trigger is the resolution criterion itself, not a separate constant.
+
+    Pinning both sides of the boundary is what makes this a contract rather
+    than an observation: a change that widened the trigger would keep the
+    "unchanged" assertions green while quietly moving every borderline system
+    onto the new path.
+    """
+    reach = (RELAXATION_N_POINTS - 1) / RELAXATION_HORIZON  # 7.9
+    np.testing.assert_array_equal(
+        default_relaxation_grid(1.0, fast_rate=reach * 0.99),
+        default_relaxation_grid(1.0),
+    )
+    switched = default_relaxation_grid(1.0, fast_rate=reach * 1.01)
+    assert not np.array_equal(switched, default_relaxation_grid(1.0))
+    assert not np.allclose(np.diff(switched), np.diff(switched)[0])
+
+
+def test_two_scale_grid_appears_only_past_the_uniform_grid_s_reach():
+    """And when it does appear, it resolves the fast mode by construction."""
+    grid = default_relaxation_grid(1.0e-6, fast_rate=1.0)
+    assert not np.allclose(np.diff(grid), np.diff(grid)[0])
+    assert grid[0] == 0.0
+    assert grid.size == RELAXATION_N_POINTS
+    assert np.all(np.diff(grid) > 0.0)
+    assert grid[-1] == pytest.approx(RELAXATION_HORIZON / 1.0e-6, rel=1.0e-12)
+    # n_fast points across HORIZON/fast e-foldings -> n_fast / HORIZON samples
+    # per fast e-folding, INDEPENDENT of the rates.
+    expected = (RELAXATION_N_POINTS // 2) / RELAXATION_HORIZON
+    assert 1.0 / (1.0 * float(np.diff(grid)[0])) == pytest.approx(expected, rel=1.0e-9)
+
+
+@pytest.mark.parametrize("bad_fast", [None, 0.0, -1.0, float("nan"), float("inf")])
+def test_an_unusable_fast_rate_falls_back_to_the_uniform_window(bad_fast):
+    """Fail-closed: no fast scale is not a licence to invent one."""
+    np.testing.assert_array_equal(
+        default_relaxation_grid(1.0e-6, fast_rate=bad_fast),
+        default_relaxation_grid(1.0e-6),
+    )
+
+
+def test_two_scale_resolution_is_rate_unit_invariant():
+    """The whole point of the module: a pure change of time unit changes nothing."""
+    values = []
+    for c in (1.0e-3, 1.0, 1.0e3):
+        L, rho0 = _two_scale(1.0e-6 * c, 1.0 * c)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            rep = compute_relaxation_layer(
+                L, rho_initial=rho0, bootstrap_B=5, seed=1
+            )
+        assert rep.t_grid_source == "gap_scaled_multiscale"
+        values.append(rep.samples_per_fast_efolding)
+    np.testing.assert_allclose(values, values[0], rtol=1.0e-6)
+
+
+def test_fastest_decay_rate_is_fail_closed_without_a_decaying_mode():
+    """No positive rate -> NaN, so the grid builder keeps its uniform default."""
+    assert np.isnan(fastest_decay_rate(np.zeros((4, 4))))
+    assert fastest_decay_rate(_amp_damped(1.0)) == pytest.approx(1.0, rel=1.0e-9)

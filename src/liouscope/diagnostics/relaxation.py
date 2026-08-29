@@ -236,8 +236,12 @@ def _resolution_detail(
 ) -> tuple[float, float, float]:
     """How finely the grid samples the WORST-RESOLVED decaying mode.
 
-    Returns ``(samples_per_efolding, rate, blind_interval)`` for the mode that
-    the grid resolves least well.
+    Returns ``(samples_per_efolding, rate, blind_interval, blind_start)`` for
+    the mode that the grid resolves least well. ``blind_start`` is the time the
+    offending interval begins, which is what distinguishes an unsampled lead-in
+    (``start == 0 < t[0]``) from an ordinary sample interval -- a distinction a
+    comparison against ``t[1] - t[0]`` gets wrong on a two-scale grid, where
+    the largest late step exceeds the first step without any lead-in existing.
 
     For each decay rate ``r`` of ``L_super`` this forms ``1 / (r * blind_r)``,
     where ``blind_r`` is the largest interval the grid leaves unsampled *while
@@ -275,10 +279,10 @@ def _resolution_detail(
     """
     t = np.asarray(t_grid, dtype=float)
     if t.size < 2 or not np.all(np.isfinite(t)):
-        return float("nan"), float("nan"), float("nan")
+        return float("nan"), float("nan"), float("nan"), float("nan")
     rates = decay_rates(L_super)
     if rates.size == 0:
-        return float("inf"), float("nan"), float("nan")
+        return float("inf"), float("nan"), float("nan"), float("nan")
 
     # Unsampled intervals as (start, length): the lead-in [0, t[0]] first, then
     # every grid step. Starts are non-decreasing for an increasing grid, so a
@@ -288,29 +292,45 @@ def _resolution_detail(
     starts = np.concatenate([[0.0], t[:-1]])
     lengths = np.concatenate([[lead_in], np.diff(t)])
     if not np.all(np.isfinite(lengths)) or np.any(lengths[1:] <= 0.0):
-        return float("nan"), float("nan"), float("nan")
+        return float("nan"), float("nan"), float("nan"), float("nan")
     order = np.argsort(starts, kind="stable")
     starts = starts[order]
-    running_max = np.maximum.accumulate(lengths[order])
+    lengths = lengths[order]
+    # Running maximum AND the index that produced it, so the warning can name
+    # where the offending interval is instead of inferring it from a size
+    # comparison that a two-scale grid breaks.
+    running_max = np.maximum.accumulate(lengths)
+    running_argmax = np.zeros(lengths.size, dtype=int)
+    best = -np.inf
+    best_i = 0
+    for i, val in enumerate(lengths):
+        if float(val) > best:
+            best, best_i = float(val), i
+        running_argmax[i] = best_i
 
     worst = float("inf")
     worst_rate = float("nan")
     worst_blind = float("nan")
+    worst_start = float("nan")
     for r in rates:
         horizon_r = 1.0 / float(r)
         idx = int(np.searchsorted(starts, horizon_r, side="left"))
         # ``starts[0] == 0.0 < horizon_r`` for any finite positive rate, so the
         # slice is never empty.
-        blind = float(running_max[max(idx, 1) - 1])
+        j = max(idx, 1) - 1
+        blind = float(running_max[j])
         if blind <= 0.0:
             continue
         value = 1.0 / (float(r) * blind)
         if value < worst:
-            worst, worst_rate, worst_blind = value, float(r), blind
+            worst = value
+            worst_rate = float(r)
+            worst_blind = blind
+            worst_start = float(starts[running_argmax[j]])
     if not np.isfinite(worst):
         # Every interval was zero-length: no usable step.
-        return float("nan"), float("nan"), float("nan")
-    return worst, worst_rate, worst_blind
+        return float("nan"), float("nan"), float("nan"), float("nan")
+    return worst, worst_rate, worst_blind, worst_start
 
 
 def samples_per_fast_efolding(L_super: np.ndarray, t_grid: np.ndarray) -> float:
@@ -644,12 +664,17 @@ def compute_relaxation_layer(
 
     # Under-resolution disclosure. Applies to the window actually used, so a
     # caller-supplied grid is checked on the same terms as the default.
-    fast_resolution, worst_rate, blind = _resolution_detail(L_super, t_grid)
+    fast_resolution, worst_rate, blind, blind_start = _resolution_detail(
+        L_super, t_grid
+    )
     if np.isfinite(fast_resolution) and fast_resolution < MIN_SAMPLES_PER_FAST_EFOLD:
+        # Name the interval from WHERE it is, not from a size comparison: on a
+        # two-scale grid the largest late step exceeds the first step while no
+        # lead-in exists at all, and the size test mislabelled it as one.
         span_kind = (
             "unsampled lead-in from t=0"
-            if blind > float(t_grid[1] - t_grid[0])
-            else "sample interval"
+            if blind_start == 0.0 and float(t_grid[0]) > 0.0
+            else f"sample interval starting at t={blind_start:.4g}"
         )
         warnings.warn(
             f"Relaxation layer: the mode at rate {worst_rate:.4g} decays by "
