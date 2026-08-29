@@ -657,9 +657,10 @@ def compute_relaxation_layer(
         else:
             t_grid_source = "gap_scaled_multiscale"
     t_grid = np.asarray(t_grid, dtype=float)
-    # One decision for the whole layer: the grid, not the data, selects the
-    # residual model, so every M0..M3b fit below is whitened the same way.
-    residual_model = "ar1" if is_uniform_grid(t_grid) else "car1"
+    # The grid selects which residual model every M0..M3b fit below ATTEMPTS;
+    # what each fit actually whitened with is decided per fit and reported
+    # after the hierarchy has run (see ``residual_model`` below).
+    grid_residual_model = "ar1" if is_uniform_grid(t_grid) else "car1"
 
     traj = _evolve(L_super, rho_initial, t_grid)
     final_rho = traj[-1]
@@ -711,6 +712,29 @@ def compute_relaxation_layer(
             fits[name] = fit_result
         except (ValueError, RuntimeError):
             continue
+
+    # Seventeenth review round (external, PR #127). This field used to be
+    # derived from the grid GEOMETRY alone, which made it a statement about
+    # what SHOULD have happened rather than about what did. ``fit_gls_ar1``
+    # falls back to the discrete AR(1) treatment whenever
+    # ``estimate_car1_theta`` returns NaN -- degenerate residuals on a
+    # non-uniform grid, e.g. an exactly stationary trajectory with
+    # ``rho_initial == rho_steady_state`` -- and the exported metadata then
+    # claimed a CAR(1) whitening that never took place. Individual fits can
+    # also differ from one another, which one label cannot express at all.
+    # Derived from the fits themselves, fail-closed: no fit, no claim.
+    if grid_residual_model == "ar1":
+        residual_model = "ar1"
+    else:
+        whitened_car1 = [np.isfinite(fr.residual_theta_car1) for fr in fits.values()]
+        if not whitened_car1:
+            residual_model = "car1_unavailable"
+        elif all(whitened_car1):
+            residual_model = "car1"
+        elif any(whitened_car1):
+            residual_model = "car1_mixed"
+        else:
+            residual_model = "car1_fallback_ar1"
 
     aiccs = {name: fr.aicc for name, fr in fits.items()}
     winner = choose_model(aiccs) if fits else "M0"

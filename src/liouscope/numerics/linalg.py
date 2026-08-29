@@ -202,6 +202,61 @@ def trace_preservation_defect(L_super: np.ndarray) -> tuple[float, float]:
     return defect, float(np.linalg.norm(L_super, ord="fro"))
 
 
+
+def _zero_mode_applicable(
+    tp_defect: float,
+    fro: float,
+    bound: float,
+    dim: int,
+    tp_rtol: float,
+) -> bool:
+    """Is the exact-zero-mode theorem usable for this operator at all?
+
+    Round-17 review (external, PR #127). The certificate asserts that ``0``
+    is an EXACT eigenvalue, which follows from ``vec(I)^H L = 0`` -- and that
+    premise was accepted on a scale six orders of magnitude coarser than the
+    conclusion. With the previous cutoff ``tp_defect <= 1e-10 * ||L||_F`` a
+    defect anywhere between the eigensolver backward error and ``1e-10``
+    made the certificate "applicable" although no zero eigenvalue need
+    exist. Measured: an amplitude-damped qubit plus ``1e-11 * I`` (defect
+    ``1.4e-11``, cutoff ``7.9e-11``) has its smallest eigenvalue at exactly
+    ``1e-11`` against a certificate bound of ``1.6e-13``; every repair route
+    then "fails", the spectral layer warns about an eigensolve that was in
+    fact correct, and the classifier is floored to ``UNDEFINED``.
+
+    The premise must therefore be checked on the SAME backward-error scale as
+    the conclusion, and the scale follows from the geometry rather than from
+    taste. With ``u = vec(I)/sqrt(d)`` (unit) and ``r^H = u^H L``, the matrix
+    ``L' = L - u r^H`` satisfies ``u^H L' = 0`` exactly, so ``L'`` HAS a zero
+    mode and ``||L - L'||_2 = ||r|| = tp_defect / sqrt(d)``. The defect can
+    thus displace the would-be zero eigenvalue by ``tp_defect / sqrt(d)``,
+    and requiring that displacement to stay inside the certificate's own
+    admissible band ``bound = rtol * eps * ||L||_2`` gives
+
+        tp_defect <= sqrt(d) * bound.
+
+    Headroom against real generators, measured rather than assumed: across
+    205 healthy GKSL generators (the five canonical systems, 160 random ones
+    spanning 16 orders of rate magnitude at ``d = 2..5``, and 40 stiff
+    four-level classical jump networks) the largest observed defect is
+    ``0.44 * eps * ||L||_F``, median ``0.13`` -- roughly three orders of
+    magnitude below the cutoff at the default ``rtol``. Tightening therefore
+    costs no legitimate certificate.
+
+    ``tp_rtol`` is retained as an additional, caller-supplied relative cutoff:
+    it can only tighten the requirement further, never loosen it past the
+    backward-error scale on which the theorem is stated.
+    """
+    if not np.isfinite(tp_defect) or tp_defect < 0.0:
+        return False
+    d = int(round(np.sqrt(dim)))
+    tp_bound = min(
+        tp_rtol * max(fro, np.finfo(float).tiny),
+        np.sqrt(max(d, 1)) * bound,
+    )
+    return bool(tp_defect <= tp_bound)
+
+
 def certified_eigvals(
     L_super: np.ndarray,
     *,
@@ -270,10 +325,14 @@ def certified_eigvals(
         Multiplier on the backward error ``eps * ||L||_2``, shared with
         :func:`liouscope.numerics.scale.spectral_zero_tolerance`.
     tp_rtol
-        Relative tolerance deciding whether ``L`` is trace preserving at all.
-        A non-trace-preserving operator has no guaranteed zero mode, so the
-        certificate is reported as ``applicable=False`` and the incumbent
-        spectrum is returned untouched.
+        Additional relative cutoff deciding whether ``L`` is trace preserving
+        at all. A non-trace-preserving operator has no guaranteed zero mode,
+        so the certificate is reported as ``applicable=False`` and the
+        incumbent spectrum is returned untouched. It can only TIGHTEN the
+        requirement: applicability is capped at the backward-error scale the
+        certificate itself claims on (see :func:`_zero_mode_applicable`), so
+        raising this value does not buy a certificate for an operator whose
+        trace defect exceeds ``sqrt(d) * rtol * eps * ||L||_2``.
 
     Returns
     -------
@@ -287,7 +346,7 @@ def certified_eigvals(
     bound = rtol * float(np.finfo(float).eps) * norm2
 
     primary = np.asarray(eig_nonhermitian(L_c).eigenvalues)
-    if not np.isfinite(tp_defect) or tp_defect > tp_rtol * max(fro, np.finfo(float).tiny):
+    if not _zero_mode_applicable(tp_defect, fro, bound, L_c.shape[0], tp_rtol):
         return primary, ZeroModeCertificate(
             applicable=False,
             certified=False,
@@ -452,7 +511,7 @@ def certified_eig(
     bound = rtol * float(np.finfo(float).eps) * norm2
 
     primary = eig_nonhermitian(L_c, compute_left=True)
-    if not np.isfinite(tp_defect) or tp_defect > tp_rtol * max(fro, np.finfo(float).tiny):
+    if not _zero_mode_applicable(tp_defect, fro, bound, L_c.shape[0], tp_rtol):
         return primary, ZeroModeCertificate(
             applicable=False,
             certified=False,

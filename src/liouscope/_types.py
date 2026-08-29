@@ -222,11 +222,19 @@ class RelaxationResult:
     # the slow dynamics the window resolves and an
     # ``UnderResolvedTransientWarning`` is emitted. ``inf`` when nothing decays.
     samples_per_fast_efolding: float = float("nan")
-    # Residual model the whole M0..M3b hierarchy was whitened with on this
-    # grid: "ar1" (uniform grid, historical discrete AR(1)) or "car1"
-    # (non-uniform grid, continuous-time exp(-theta dt_k) per step). The grid
-    # decides, so it is one value for the layer rather than one per fit; the
-    # per-fit value is ``FitResult.residual_theta_car1``. Additive + defaulted.
+    # Residual model the reported M0..M3b hierarchy was ACTUALLY whitened
+    # with -- read off the fits, not off the grid (PR #127 review):
+    #   "ar1"                uniform grid, historical discrete AR(1);
+    #   "car1"               non-uniform grid, every fit whitened with the
+    #                        continuous-time exp(-theta dt_k) per step;
+    #   "car1_fallback_ar1"  non-uniform grid, but CAR(1) theta estimation
+    #                        failed on every fit (degenerate residuals), so
+    #                        ``fit_gls_ar1`` fell back to discrete AR(1);
+    #   "car1_mixed"         non-uniform grid, some fits CAR(1), some fallen
+    #                        back -- one label cannot cover the hierarchy;
+    #   "car1_unavailable"   non-uniform grid and no fit succeeded at all.
+    # The per-fit value is ``FitResult.residual_theta_car1``. Additive +
+    # defaulted.
     residual_model: str = "ar1"
 
 

@@ -763,3 +763,65 @@ def test_fastest_decay_rate_is_fail_closed_without_a_decaying_mode():
     """No positive rate -> NaN, so the grid builder keeps its uniform default."""
     assert np.isnan(fastest_decay_rate(np.zeros((4, 4))))
     assert fastest_decay_rate(_amp_damped(1.0)) == pytest.approx(1.0, rel=1.0e-9)
+
+
+# --------------------------------------------------------------------------
+# PR #127 external review, finding 2: ``residual_model`` was derived from the
+# grid GEOMETRY, so it reported the whitening that SHOULD have happened
+# instead of the one that did.
+# --------------------------------------------------------------------------
+
+
+def _stationary_case():
+    """Exactly stationary trajectory on the two-scale (non-uniform) grid.
+
+    ``rho_initial == rho_steady_state`` makes every residual series
+    degenerate, which is the documented input on which
+    ``estimate_car1_theta`` returns NaN and ``fit_gls_ar1`` falls back to the
+    discrete AR(1) treatment.
+    """
+    from liouscope.core.lindblad import steady_state
+
+    L, _rho0 = _two_scale(1.0e-6, 1.0)
+    rho_ss = steady_state(L)
+    t_grid = default_relaxation_grid(
+        compute_spectral_layer(L, rho_ss).gap, fast_rate=fastest_decay_rate(L)
+    )
+    assert not np.allclose(np.diff(t_grid), t_grid[1] - t_grid[0]), "need a CAR(1) grid"
+    return L, rho_ss, t_grid
+
+
+def test_residual_model_does_not_claim_a_whitening_that_did_not_happen():
+    """The label must come from the fits, not from the grid geometry.
+
+    Before the fix this reported the flat ``"car1"`` for a run in which the
+    CAR(1) theta estimate failed and the fits were whitened as discrete AR(1)
+    -- audit metadata asserting a property of the analysis that the analysis
+    did not have.
+    """
+    L, rho_ss, t_grid = _stationary_case()
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        rep = compute_relaxation_layer(
+            L, rho_initial=rho_ss, rho_steady_state=rho_ss,
+            t_grid=t_grid, bootstrap_B=5, seed=1,
+        )
+
+    fell_back = [
+        name for name, fit in rep.fits.items()
+        if not np.isfinite(fit.residual_theta_car1)
+    ]
+    assert fell_back, "fixture no longer triggers the CAR(1) fallback"
+    assert rep.residual_model != "car1"
+    expected = "car1_fallback_ar1" if len(fell_back) == len(rep.fits) else "car1_mixed"
+    assert rep.residual_model == expected, (rep.residual_model, fell_back)
+
+
+def test_residual_model_still_reports_car1_when_every_fit_whitened_that_way():
+    """Over-correction control: a real CAR(1) run must keep its plain label."""
+    L, rho0 = _two_scale(1.0e-6, 1.0)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        rep = compute_relaxation_layer(L, rho_initial=rho0, bootstrap_B=5, seed=1)
+    assert all(np.isfinite(f.residual_theta_car1) for f in rep.fits.values())
+    assert rep.residual_model == "car1"

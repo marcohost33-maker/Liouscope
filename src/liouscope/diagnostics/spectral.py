@@ -247,6 +247,20 @@ def compute_spectral_layer(
             stacklevel=2,
         )
     delta = liouvillian_gap(eigenvalues, atol=zero_tol)
+    if certificate.applicable and not certificate.certified:
+        # Seventeenth review round (external, PR #127). The warning above
+        # states that D1 is not reliable here -- and the line before this one
+        # computed it anyway, from the very spectrum the certificate has just
+        # declared unusable. That number does not stay in the report:
+        # ``diagnose`` forwards D1 to ``default_relaxation_grid``, so a
+        # spurious eigenvalue of a failed solve would set the relaxation
+        # window and therefore every fitted rate downstream, while only the
+        # closing verdict is floored. NaN for the same reason as the
+        # ambiguous case below: not 0.0, which means "gapless" and fires the
+        # F5 reach leg, and not the surviving mode, which is a fast one.
+        # ``default_relaxation_grid`` treats a NaN gap as "no usable
+        # timescale" and keeps the documented legacy window.
+        delta = float("nan")
     if certificate.applicable and certificate.certified and not certificate.resolved:
         # Issue #113. Some eigenvalue sits inside the #108 zero-mode tolerance
         # while being far above the bare backward error -- neither machine-zero

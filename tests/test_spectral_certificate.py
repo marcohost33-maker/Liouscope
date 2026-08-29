@@ -960,3 +960,133 @@ def test_d11_is_nan_when_the_eigenvalues_are_unresolved() -> None:
         layer = compute_nonnormality_layer(lsup)
     assert np.isnan(layer.petermann_max)
     assert np.isnan(layer.bohr_ap_length)
+
+
+# --------------------------------------------------------------------------
+# PR #127 external review, finding 1: the certificate's PREMISE (exact trace
+# preservation) was accepted on a scale six orders of magnitude coarser than
+# its CONCLUSION (an exact zero eigenvalue).
+# --------------------------------------------------------------------------
+
+
+def _near_tp(lsup: np.ndarray, shift: float = 1.0e-11) -> np.ndarray:
+    """``L + shift * I``: trace preserving to ``1e-11``, and to nothing better.
+
+    Every eigenvalue moves by exactly ``shift``, so the operator provably has
+    NO eigenvalue inside the certificate's backward-error bound while still
+    passing the old ``1e-10`` relative trace-preservation cutoff.
+    """
+    return lsup + shift * np.eye(lsup.shape[0], dtype=complex)
+
+
+@pytest.mark.parametrize("entry", ["eigvals", "eig"])
+def test_certificate_declines_an_operator_that_is_only_approximately_tp(
+    entry: str,
+) -> None:
+    """Approximate trace preservation must not buy an EXACT-zero-mode claim.
+
+    Measured before the fix: on ``V3 + 1e-11 I`` the trace defect is 1.4e-11
+    against the old cutoff 7.9e-11, so the certificate declared itself
+    applicable; the smallest eigenvalue is then exactly 1e-11 against a bound
+    of 1.6e-13, every repair route "failed", and the spectral layer warned
+    about an eigensolve that was in fact correct.
+
+    Both entry points are checked in one parametrised test on purpose: the
+    applicability rule lived in duplicate, and a fix applied to one copy only
+    is a defect this repository has already shipped twice.
+    """
+    sm = np.array([[0, 1], [0, 0]], dtype=complex)
+    lsup = _near_tp(build_liouvillian(np.zeros((2, 2), dtype=complex), [sm], [1.0]))
+    defect, fro = trace_preservation_defect(lsup)
+    assert 0.0 < defect <= 1.0e-10 * fro, "fixture must pass the OLD cutoff"
+
+    cert = (
+        certified_eigvals(lsup)[1] if entry == "eigvals" else certified_eig(lsup)[1]
+    )
+    assert cert.applicable is False
+    assert cert.trace_defect > np.sqrt(lsup.shape[0]) * cert.bound
+
+
+@pytest.mark.parametrize("entry", ["eigvals", "eig"])
+def test_healthy_generators_keep_their_certificate(entry: str) -> None:
+    """Over-correction control: tightening must not withhold a valid claim.
+
+    A guard that declines everything "discriminates" too and is worthless.
+    Measured across 205 healthy GKSL generators the trace defect never exceeds
+    ``0.44 * eps * ||L||_F``, three orders below the new cutoff.
+    """
+    from liouscope import examples
+
+    for system in examples.all_systems():
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            cert = (
+                certified_eigvals(system.L)[1]
+                if entry == "eigvals"
+                else certified_eig(system.L)[1]
+            )
+        assert cert.applicable is True, system.name
+        assert cert.certified is True, system.name
+
+
+def test_stiff_repair_ladder_still_applies_to_the_measured_repro() -> None:
+    """The #112 fixture must keep its certificate under the tighter premise."""
+    lsup = _classical_network(STIFF_PAIRS, STIFF_RATES)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        _ev, cert = certified_eigvals(lsup)
+    assert cert.applicable is True
+    assert cert.certified is True
+
+
+# --------------------------------------------------------------------------
+# PR #127 external review, finding 3: D1 was still computed from a spectrum
+# the certificate had just declared unusable, and forwarded into the
+# relaxation grid.
+# --------------------------------------------------------------------------
+
+
+def test_d1_is_nan_when_no_repair_route_certified_the_spectrum(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An uncertified spectrum must not set D1 -- nor the relaxation window.
+
+    The repair ladder is good enough that no natural four-level fixture
+    reaches ``applicable and not certified`` (measured: fast rates 2.7e5 up to
+    1e17 all certify), so the reporting path is exercised the same way the
+    existing #112 warning test exercises it -- by patching the certificate.
+    """
+    sm = np.array([[0, 1], [0, 0]], dtype=complex)
+    lsup = build_liouvillian(np.zeros((2, 2), dtype=complex), [sm], [1.0])
+    rho_ss = np.array([[1, 0], [0, 0]], dtype=complex)
+
+    def _impossible(l_super, **_kw):
+        from liouscope.numerics.linalg import ZeroModeCertificate
+
+        return (
+            eig_nonhermitian(l_super).eigenvalues,
+            ZeroModeCertificate(
+                applicable=True, certified=False, solver="zgeev",
+                residual=1.0, bound=0.0, trace_defect=0.0,
+            ),
+        )
+
+    monkeypatch.setattr(
+        "liouscope.diagnostics.spectral.certified_eigvals", _impossible
+    )
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        result = compute_spectral_layer(lsup, rho_ss)
+    assert np.isnan(result.gap), result.gap
+
+
+def test_healthy_generator_still_reports_a_finite_d1() -> None:
+    """Over-correction control for finding 3: no blanket NaN."""
+    from liouscope import examples
+
+    for system in examples.all_systems():
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            result = compute_spectral_layer(system.L)
+        assert np.isfinite(result.gap), system.name
+        assert result.gap > 0.0, system.name
