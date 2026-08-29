@@ -524,7 +524,19 @@ def certified_eigvals(
         primary_error = None
     except sla.LinAlgError as exc:
         primary, primary_error = None, exc
-    if not np.isfinite(tp_defect) or tp_defect > tp_rtol * max(fro, np.finfo(float).tiny):
+    if (
+        not np.isfinite(tp_defect)
+        # ROUND-21: a non-finite REFERENCE scale is as unusable as a
+        # non-finite defect. ``defect <= tp_rtol * fro`` against an
+        # infinite ``fro`` admits every operator, so the band that
+        # follows is drawn from a scale that was never measured; which
+        # modes it then swallows is decided by the LAPACK build (2 of 4
+        # on the CI runners, 4 of 4 locally). Trace preservation
+        # RELATIVE to the operator's own scale is not a statement that
+        # can be made about infinity, so it is refused here.
+        or not np.isfinite(fro)
+        or tp_defect > tp_rtol * max(fro, np.finfo(float).tiny)
+    ):
         # No certificate applies without trace preservation, so there is
         # nothing to repair TOWARDS and the ladder is not run: the primary
         # failure is the honest answer.
@@ -744,7 +756,19 @@ def certified_eig(
         primary_error = None
     except sla.LinAlgError as exc:
         primary, primary_error = None, exc
-    if not np.isfinite(tp_defect) or tp_defect > tp_rtol * max(fro, np.finfo(float).tiny):
+    if (
+        not np.isfinite(tp_defect)
+        # ROUND-21: a non-finite REFERENCE scale is as unusable as a
+        # non-finite defect. ``defect <= tp_rtol * fro`` against an
+        # infinite ``fro`` admits every operator, so the band that
+        # follows is drawn from a scale that was never measured; which
+        # modes it then swallows is decided by the LAPACK build (2 of 4
+        # on the CI runners, 4 of 4 locally). Trace preservation
+        # RELATIVE to the operator's own scale is not a statement that
+        # can be made about infinity, so it is refused here.
+        or not np.isfinite(fro)
+        or tp_defect > tp_rtol * max(fro, np.finfo(float).tiny)
+    ):
         if primary is None:
             assert primary_error is not None
             raise primary_error
