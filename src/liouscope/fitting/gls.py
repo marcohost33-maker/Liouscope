@@ -36,6 +36,11 @@ class GLSFitOutput:
     #: (``"exponent"`` / ``"magnitude"``). Non-empty implies ``success`` is
     #: False -- see the note at the final evaluation below.
     saturated: tuple[str, ...] = ()
+    #: True when the CURVE carried no resolvable variation, so no fit was
+    #: attempted at all (issue #123). Distinct from ``saturated``, which
+    #: reports a fit that ran and ended on a magnitude plateau; here there was
+    #: nothing to fit. Implies ``success`` is False and ``params`` is NaN.
+    degenerate: bool = False
 
 
 def _whiten(y: np.ndarray, rho: float) -> np.ndarray:
@@ -91,6 +96,51 @@ def fit_gls_ar1(
                 f"fit_gls_ar1: {name} must be finite; non-finite entries at "
                 f"indices {bad}"
             )
+    # Fail closed on a curve with NO RESOLVABLE VARIATION (issue #123,
+    # round-20 review). Measured on ``t = linspace(0, 5, 64)`` against an
+    # identically-zero relative-entropy curve: the fit returned
+    # ``success=True`` with the rate parameter equal to its own seed, and the
+    # parametric bootstrap around that point produced a BCa interval of width
+    # EXACTLY 0.0 -- perfect confidence as the failure mode of an uncertainty
+    # pipeline. The optimiser is not at fault: with zero data variation every
+    # direction is equally optimal, so "gradient is small" is satisfied at the
+    # starting point and the seed comes back wearing the shape of a
+    # measurement.
+    #
+    # The criterion is relative to the curve's OWN scale, never absolute: an
+    # absolute floor would reintroduce exactly the rate-unit dependence that
+    # #108/#111 removed from the spectral layer. ``ptp(y) <= eps * max|y|``
+    # says the variation is at or below the representation resolution of the
+    # values it varies between -- for the identically-zero curve, ``0 <= 0``.
+    # It is scale-invariant by construction: multiplying ``y`` by any constant
+    # multiplies both sides.
+    #
+    # This is deliberately a statement about the CURVE, not about the grid.
+    # The resolution guard of PR #115 asks "was the mode sampled?"; a curve
+    # can be flat for reasons no grid can see -- a stationary initial state, a
+    # fully decayed one, an observable with no support on the dynamics.
+    spread = float(np.ptp(y)) if y.size else 0.0
+    y_scale = float(np.max(np.abs(y))) if y.size else 0.0
+    if spread <= float(np.finfo(float).eps) * y_scale:
+        warnings.warn(
+            f"fit_gls_ar1: the curve varies by {spread:.3e} over a scale of "
+            f"{y_scale:.3e}, at or below double-precision resolution -- there "
+            "is nothing to fit. Returning NaN parameters with success=False "
+            "rather than the seed, which is what the optimiser would hand "
+            "back unchanged (issue #123).",
+            RuntimeWarning,
+            stacklevel=2,
+        )
+        return GLSFitOutput(
+            params=np.full(p.shape, float("nan")),
+            residuals=np.full(y.shape, float("nan")),
+            rho_ar1=0.0,
+            sigma=float("nan"),
+            log_likelihood=float("nan"),
+            success=False,
+            degenerate=True,
+        )
+
     rho = 0.0
     success = True
     for _ in range(n_iters):

@@ -13,7 +13,6 @@ Anchor G: standard iid bootstrap on ODE trajectories violates independence
 
 from __future__ import annotations
 
-import warnings
 from collections.abc import Callable
 
 import numpy as np
@@ -64,6 +63,8 @@ def parametric_bootstrap(
         raise RuntimeError(
             "parametric_bootstrap: the base fit did not converge"
             + (f" (saturated: {', '.join(base.saturated)})" if base.saturated else "")
+            + (" (the curve carries no resolvable variation, issue #123)"
+               if base.degenerate else "")
             + "; a bootstrap around a non-estimate has no meaning"
         )
     theta_hat = base.params
@@ -76,17 +77,31 @@ def parametric_bootstrap(
         failed += not fit_b.success
         samples[b] = fit_b.params
     if failed:
-        # Reported, not silently dropped, and deliberately WITHOUT a
-        # retain-fraction threshold: dropping replicates narrows the interval
-        # (the dangerous direction), while keeping them widens it (the
-        # conservative one). The count is what an auditor needs; a cut-off
-        # calibrated from nothing is not.
-        warnings.warn(
+        # Round-20 review (PR #121). The previous round RETAINED failed
+        # replicates on the argument that keeping them can only widen the
+        # interval, hence err conservatively. That argument is wrong, and
+        # measurably so: a failed ``least_squares`` returns its unchanged
+        # STARTING value, which here is ``theta_hat`` itself, so every failure
+        # deposits mass exactly at the centre of the distribution. Measured on
+        # 400 replicates with 40 % failures, the BCa width fell to 0.93x and
+        # 0.87x of the interval computed without them -- NARROWER, in the
+        # dangerous direction, and narrower by more the more often the fit
+        # failed.
+        #
+        # Dropping them is not the alternative: that biases the endpoints in a
+        # direction nobody has characterised (a fit fails on the replicates
+        # that are hardest, which is not a random subset). Both routes need a
+        # failure-handling rule validated against something; there is none.
+        # Until there is, the honest output is no interval at all. The caller
+        # in ``compute_relaxation_layer`` already routes RuntimeError to
+        # ``bca_ci_beta = (nan, nan)`` -- "fit uncertainty UNKNOWN" -- which is
+        # the statement that survives review.
+        raise RuntimeError(
             f"parametric_bootstrap: {failed} of {B} replicates did not "
-            "converge and are retained in the resample, so the reported "
-            "interval is wider than the data warrant -- not narrower.",
-            RuntimeWarning,
-            stacklevel=2,
+            "converge. A failed fit returns its unchanged starting value, so "
+            "retaining them narrows the BCa interval instead of widening it, "
+            "and dropping them biases the endpoints; neither has a validated "
+            "rule. No confidence interval is reported from this resample"
         )
     return samples, theta_hat
 

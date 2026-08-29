@@ -22,6 +22,7 @@ refuses everything cannot pass.
 from __future__ import annotations
 
 import warnings
+from dataclasses import replace
 
 import numpy as np
 import pytest
@@ -246,3 +247,212 @@ def test_the_exactly_zero_generator_is_not_caught_by_the_guard() -> None:
     assert cert.bound == 0.0
     assert cert.certified is True
     assert cert.zero_mode_count == 4
+
+
+# ---------------------------------------------------------------------------
+# 3. No confidence interval from a resample that contains non-fits
+#    (this finding and issue #123 are the same defect, so one repair covers both)
+# ---------------------------------------------------------------------------
+
+def test_retaining_failed_replicates_narrows_the_interval() -> None:
+    """The premise the previous round got backwards, measured.
+
+    Round 19 retained non-converged replicates on the argument that keeping
+    them "widens the interval -- the conservative direction". A failed
+    ``least_squares`` returns its unchanged STARTING value, which in this
+    resample is ``theta_hat`` itself, so every failure piles mass on the
+    centre. This test computes both intervals and shows the retained one is
+    the NARROWER of the two; without it the repair would rest on an argument
+    rather than on a number.
+    """
+    from liouscope.fitting.bootstrap import bca_ci
+
+    rng = np.random.default_rng(0)
+    theta_hat = np.array([1.0, 1.3])
+    good = rng.normal(theta_hat, [0.05, 0.05], size=(400, 2))
+    n_fail = 160
+    mixed = good.copy()
+    mixed[:n_fail] = theta_hat  # what a failed fit hands back
+
+    dropped = bca_ci(good[n_fail:], theta_hat)
+    retained = bca_ci(mixed, theta_hat)
+    w_dropped = dropped[:, 1] - dropped[:, 0]
+    w_retained = retained[:, 1] - retained[:, 0]
+
+    assert np.all(w_retained < w_dropped), (
+        "retaining failed replicates must be shown to NARROW the interval; "
+        f"widths retained={w_retained} vs dropped={w_dropped}"
+    )
+
+
+def test_bootstrap_refuses_an_interval_containing_failed_replicates(monkeypatch) -> None:
+    """THE regression for the finding as stated.
+
+    The failure is injected at the documented contract surface -- a fit whose
+    ``success`` is False -- rather than by hunting for data that makes
+    ``least_squares`` give up, which would make the test depend on SciPy's
+    convergence heuristics instead of on the rule under test.
+    """
+    from liouscope.fitting import bootstrap as bs
+    from liouscope.fitting.models import M0
+
+    t = np.linspace(0.0, 5.0, 48)
+    y = np.exp(-1.3 * t)
+    p0 = np.array([1.0, 1.2])
+    real_fit = bs.fit_gls_ar1
+    calls = {"n": 0}
+
+    def flaky(*args, **kwargs):
+        out = real_fit(*args, **kwargs)
+        calls["n"] += 1
+        if calls["n"] > 1 and calls["n"] % 3 == 0:  # never the BASE fit
+            return replace(out, success=False)
+        return out
+
+    monkeypatch.setattr(bs, "fit_gls_ar1", flaky)
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        with pytest.raises(RuntimeError, match="did not converge"):
+            bs.parametric_bootstrap(M0, t, y, p0, B=9)
+
+
+def test_bootstrap_still_reports_when_every_replicate_converged() -> None:
+    """Positive control: the refusal must not have become unconditional.
+
+    The curve carries NOISE deliberately. A noise-free curve is fitted to
+    round-off, ``sigma`` comes out at ~1e-15, every replicate lands on
+    ``theta_hat`` and the interval collapses to zero width -- true to the
+    parametric bootstrap's own model and useless as a control, since it
+    cannot tell a working interval from a refusal.
+    """
+    from liouscope.fitting.bootstrap import bca_ci, parametric_bootstrap
+    from liouscope.fitting.models import M0
+
+    t = np.linspace(0.0, 5.0, 48)
+    rng = np.random.default_rng(7)
+    y = np.exp(-1.3 * t) + rng.normal(0.0, 0.01, size=t.size)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        samples, theta_hat = parametric_bootstrap(
+            M0, t, y, np.array([1.0, 1.2]), B=30
+        )
+        ci = bca_ci(samples, theta_hat)
+
+    assert samples.shape == (30, 2)
+    assert np.all(np.isfinite(ci))
+    assert np.all(ci[:, 1] > ci[:, 0]), "a real resample has a non-degenerate CI"
+
+
+# --- issue #123: the same defect one layer down -----------------------------
+
+def test_a_fit_on_a_curve_without_variation_returns_no_parameters() -> None:
+    """Issue #123: the seed came back wearing the shape of a measurement.
+
+    With zero data variation every direction is equally optimal, so
+    ``least_squares`` reports "gradient is small" at the STARTING point. The
+    seed is chosen here to differ from every rate in the positive control
+    below, so the regression pins that the old return value was the seed and
+    not a coincidence.
+    """
+    from liouscope.fitting.gls import fit_gls_ar1
+    from liouscope.fitting.models import M0
+
+    t = np.linspace(0.0, 5.0, 64)
+    seed = np.array([1.0, 1.0])
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        out = fit_gls_ar1(M0, t, np.zeros_like(t), seed)
+
+    assert out.success is False
+    assert out.degenerate is True
+    assert np.all(np.isnan(out.params)), (
+        "the old return was ``[~0, 1.0]`` -- the seed's rate, unchanged"
+    )
+
+
+def test_the_zero_curve_no_longer_yields_a_zero_width_confidence_interval() -> None:
+    """The two findings meet here: measured CI width was EXACTLY 0.0.
+
+    Perfect confidence about a parameter nothing was measured for is the
+    worst available output of an uncertainty pipeline, and it arose with
+    ZERO failed replicates -- which is why the resample guard alone could not
+    have caught it.
+    """
+    from liouscope.fitting.bootstrap import parametric_bootstrap
+    from liouscope.fitting.models import M0
+
+    t = np.linspace(0.0, 5.0, 64)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        with pytest.raises(RuntimeError, match="issue #123"):
+            parametric_bootstrap(M0, t, np.zeros_like(t), np.array([1.0, 1.0]), B=20)
+
+
+def test_a_curve_with_signal_is_still_fitted() -> None:
+    """Positive control: the guard must not have become a blanket refusal.
+
+    The seed's rate is 1.0 and the true rate is 1.3, so returning the seed
+    would be visible. Without this the degenerate-curve test above would pass
+    against an implementation that refuses every curve.
+    """
+    from liouscope.fitting.gls import fit_gls_ar1
+    from liouscope.fitting.models import M0
+
+    t = np.linspace(0.0, 5.0, 64)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        out = fit_gls_ar1(M0, t, np.exp(-1.3 * t), np.array([1.0, 1.0]))
+
+    assert out.success is True
+    assert out.degenerate is False
+    assert out.params[1] == pytest.approx(1.3, rel=1.0e-3), (
+        "and it must recover the rate, not return the seed 1.0"
+    )
+
+
+def test_the_guard_keys_on_variation_and_not_on_smallness() -> None:
+    """Anti-absolute-floor control, the #108/#111 lesson applied to a curve.
+
+    ``1e-40 * exp(-1.3 t)`` is minuscule in absolute terms and fully
+    resolvable in relative ones. An absolute floor would refuse it and
+    reintroduce exactly the rate-unit dependence the spectral layer spent
+    two issues removing, so ``degenerate`` must stay False.
+
+    Only ``degenerate`` is asserted. Whether the OPTIMISER can work at that
+    magnitude is a different question with a different answer -- measured,
+    ``least_squares`` stops at its absolute ``ftol``/``gtol`` on a cost of
+    order 1e-80 and returns the seed with ``success=True``. That is the same
+    seed-passthrough shape as issue #123, arriving through SciPy's absolute
+    tolerances rather than through flatness, and it is NOT repaired here;
+    pinning it as expected behaviour would be pinning a defect.
+    """
+    from liouscope.fitting.gls import fit_gls_ar1
+    from liouscope.fitting.models import M0
+
+    t = np.linspace(0.0, 5.0, 64)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        out = fit_gls_ar1(M0, t, 1.0e-40 * np.exp(-1.3 * t), np.array([1.0e-40, 1.0]))
+
+    assert out.degenerate is False, (
+        "a relative criterion must not refuse a small but well-resolved curve"
+    )
+
+
+def test_neff_does_not_launder_a_nan_series_into_the_full_sample_size() -> None:
+    """The fourth instance of the round's shape, found while building the third.
+
+    ``max(1.0, min(float(n), n_eff))`` returns ``float(n)`` for ``n_eff =
+    NaN``, because every comparison against NaN is false and ``min`` then
+    keeps its first argument. A clamp written to BOUND a number decided that
+    there WAS one -- and picked the most over-confident value in range. The
+    degenerate-fit path above returns NaN residuals, so this is now reachable.
+    """
+    from liouscope.fitting.neff import estimate_neff_geyer
+
+    assert np.isnan(estimate_neff_geyer(np.full(64, np.nan)))
+    # Positive control: a finite, genuinely uncorrelated series is unaffected.
+    rng = np.random.default_rng(1)
+    n_eff = estimate_neff_geyer(rng.normal(size=64))
+    assert np.isfinite(n_eff) and 1.0 <= n_eff <= 64.0
