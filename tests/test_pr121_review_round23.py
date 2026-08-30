@@ -154,13 +154,19 @@ def test_the_repair_reaches_into_the_subnormal_range() -> None:
         op = _non_tp_operator() * scale
         if not np.any(op):
             continue
-        with np.errstate(under="ignore"):
-            cert = certified_eigvals(op)[-1]
-        assert not cert.applicable, (
-            f"a relative trace defect of 3/sqrt(14) at scale {scale:g} was "
-            "declared trace preserving; the reference scale was floored at a "
-            "constant instead of measured"
-        )
+        # BOTH ladders: the floor was removed in each, and a guard that only
+        # one API exercises is a guard sitting off half its path.
+        for name, fn in (
+            ("certified_eigvals", certified_eigvals),
+            ("certified_eig", certified_eig),
+        ):
+            with np.errstate(under="ignore"):
+                cert = fn(op)[-1]
+            assert not cert.applicable, (
+                f"{name} at scale {scale:g}: a relative trace defect of "
+                "3/sqrt(14) was declared trace preserving; the reference scale "
+                "was floored at a constant instead of measured"
+            )
 
 
 def test_a_healthy_generator_survives_the_subnormal_repair() -> None:
