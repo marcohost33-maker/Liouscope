@@ -33,7 +33,7 @@ import warnings
 import numpy as np
 import pytest
 
-from liouscope import build_liouvillian
+from liouscope import build_liouvillian, diagnose
 from liouscope.diagnostics.lep import compute_lep_layer
 from liouscope.diagnostics.spectral import compute_spectral_layer
 from liouscope.numerics.linalg import (
@@ -247,6 +247,57 @@ def test_a_resolved_spectrum_still_reports_d16() -> None:
     assert cert["resolved"] is True
     assert np.isfinite(lep.lep_proximity), "D16 was withheld on a resolved spectrum"
     assert isinstance(lep.lep_candidate_count, int)
+
+
+def test_diagnose_itself_withholds_d16_on_an_unresolved_run() -> None:
+    """The WIRING, not just the layer.
+
+    ``compute_lep_layer`` can withhold correctly and still publish D16 to every
+    real caller if ``diagnose`` never tells it the certificate was unresolved.
+    Tests that exercise only the layer leave that line undefended -- the guard
+    would sit off the path that actually runs.
+    """
+    lsup = _classical_network(_UNRESOLVED_RATES)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        report = diagnose(
+            lsup,
+            rho_steady_state=_population_steady_state(_UNRESOLVED_RATES),
+            include_mpemba=False,
+            bootstrap_B=8,
+            seed=7,
+        )
+    cert = report.spectral.zero_mode_certificate
+    assert cert is not None
+    assert cert["applicable"] is True and cert["resolved"] is False
+    assert np.isnan(report.lep.lep_proximity), (
+        f"diagnose published D16 = {report.lep.lep_proximity!r} from an "
+        "unresolved spectrum; the layer withholds but the caller does not"
+    )
+    assert report.lep.lep_candidate_count is None
+
+
+def test_withholding_does_not_switch_off_the_non_finite_eigenvalue_refusal() -> None:
+    """Closing one fail-open must not open another.
+
+    ``lep_proximity`` carries the issue-#82 refusal of non-finite eigenvalues:
+    solver corruption is not an exceptional-point signal. Returning early to
+    withhold D16 would skip that call and, with it, that refusal -- the cheapest
+    way to turn a fix into a regression.
+    """
+    lsup = _classical_network(_RESOLVED_RATES)
+    bad = np.array([0.0, np.nan, -1.0, -2.0], dtype=complex)
+    with pytest.raises(ValueError, match="finite eigenvalues"):
+        compute_lep_layer(
+            lsup,
+            bad,
+            beta_D_linear=1.0,
+            gap=float("nan"),
+            rho_steady_state=_population_steady_state(_RESOLVED_RATES),
+            seed=7,
+            n_haar=3,
+            spectral_resolved=False,
+        )
 
 
 def test_the_default_keeps_the_layer_reporting() -> None:
