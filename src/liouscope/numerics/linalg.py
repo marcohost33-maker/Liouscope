@@ -291,18 +291,40 @@ def trace_preservation_defect(L_super: np.ndarray) -> tuple[float, float]:
     if fro == 0.0 and L_super.size:
         # ``max(|Re|, |Im|)`` rather than ``max|.|``: the modulus of a finite
         # complex entry can itself overflow, and this quantity cannot. It is
-        # within sqrt(2) of the true maximum modulus, which is irrelevant --
-        # it is used only as a divisor and multiplied straight back out.
+        # within sqrt(2) of the true maximum magnitude, which is all that is
+        # needed -- it only selects the exponent to shift by.
         m = float(np.max(np.maximum(np.abs(np.real(L_super)), np.abs(np.imag(L_super)))))
         if m > 0.0:
-            # ``max|L/m| <= sqrt(2)`` by construction, so no intermediate can
-            # underflow; and ``||L/m||_F >= 1``, so the reconstructed ``fro``
-            # is at least ``m > 0`` and cannot underflow back to zero. A
-            # genuinely zero operator has ``m == 0`` and keeps ``(0.0, 0.0)``,
-            # which is the correct answer rather than a lost one.
-            scaled = L_super / m
-            defect = float(np.linalg.norm(vec_i.conj() @ scaled)) * m
-            fro = float(np.linalg.norm(scaled, ord="fro")) * m
+            # Scaled by a POWER OF TWO, not by ``m`` itself. Two reasons, the
+            # second of which cost a regression before it was measured:
+            #
+            # 1. ``ldexp`` shifts the exponent and leaves every mantissa bit
+            #    alone, so the round trip is EXACT -- dividing by ``m`` and
+            #    multiplying back introduces two roundings into a number whose
+            #    whole purpose is to be compared against a tolerance.
+            # 2. ``L / m`` is COMPLEX division, and for a subnormal divisor
+            #    NumPy's algorithm forms an intermediate reciprocal that
+            #    overflows: measured for ``diag([0, -1e-310, -2e-310,
+            #    -3e-310])``, ``L / m`` came back ``[nan, -inf, -inf, -inf]``
+            #    and both norms became NaN. The round-21 guard then refused the
+            #    operator -- fail-closed, but on a value nothing had measured,
+            #    and a healthy GKSL generator at that scale was refused with it
+            #    (``applicable`` went True -> False for valid input). Repairing
+            #    a fail-open must not install a fail-closed defect in its place.
+            #
+            # ``frexp`` returns ``m = mantissa * 2**exp`` with the mantissa in
+            # [0.5, 1), so shifting by ``-exp`` puts every entry in a range
+            # where neither the squares below nor the reconstruction can leave
+            # the normal range. A genuinely zero operator has ``m == 0`` and
+            # keeps ``(0.0, 0.0)``, which is the correct answer, not a lost one.
+            exp = int(np.frexp(m)[1])
+            scaled = np.ldexp(np.real(L_super), -exp) + 1j * np.ldexp(
+                np.imag(L_super), -exp
+            )
+            defect = float(
+                np.ldexp(float(np.linalg.norm(vec_i.conj() @ scaled)), exp)
+            )
+            fro = float(np.ldexp(float(np.linalg.norm(scaled, ord="fro")), exp))
     return defect, fro
 
 
@@ -608,7 +630,18 @@ def certified_eigvals(
         # RELATIVE to the operator's own scale is not a statement that
         # can be made about infinity, so it is refused here.
         or not np.isfinite(fro)
-        or tp_defect > tp_rtol * max(fro, np.finfo(float).tiny)
+        # ROUND-23 REVIEW (PR #121), same finding one line further down.
+        # ``max(fro, tiny)`` floors the REFERENCE SCALE at a constant that
+        # is larger than the operator whenever the operator is subnormal,
+        # so the relative test stops being relative: measured for
+        # ``diag([0, -1e-320, -2e-320, -3e-320])``, defect 3e-320 against a
+        # floor-derived bound of 2.2e-318, hence 'trace preserving' for an
+        # operator whose relative defect is 0.80. Repairing the norms above
+        # without this leaves the rate-unit dependence intact below ~1e-317.
+        # The floor protected nothing: ``defect <= sqrt(d) * fro`` holds, so
+        # ``fro == 0`` forces ``defect == 0`` and the comparison ``0 > 0`` is
+        # False either way -- the exactly-zero generator stays applicable.
+        or tp_defect > tp_rtol * fro
     ):
         # No certificate applies without trace preservation, so there is
         # nothing to repair TOWARDS and the ladder is not run: the primary
@@ -868,7 +901,18 @@ def certified_eig(
         # RELATIVE to the operator's own scale is not a statement that
         # can be made about infinity, so it is refused here.
         or not np.isfinite(fro)
-        or tp_defect > tp_rtol * max(fro, np.finfo(float).tiny)
+        # ROUND-23 REVIEW (PR #121), same finding one line further down.
+        # ``max(fro, tiny)`` floors the REFERENCE SCALE at a constant that
+        # is larger than the operator whenever the operator is subnormal,
+        # so the relative test stops being relative: measured for
+        # ``diag([0, -1e-320, -2e-320, -3e-320])``, defect 3e-320 against a
+        # floor-derived bound of 2.2e-318, hence 'trace preserving' for an
+        # operator whose relative defect is 0.80. Repairing the norms above
+        # without this leaves the rate-unit dependence intact below ~1e-317.
+        # The floor protected nothing: ``defect <= sqrt(d) * fro`` holds, so
+        # ``fro == 0`` forces ``defect == 0`` and the comparison ``0 > 0`` is
+        # False either way -- the exactly-zero generator stays applicable.
+        or tp_defect > tp_rtol * fro
     ):
         if primary is None:
             assert primary_error is not None

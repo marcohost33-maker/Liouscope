@@ -141,6 +141,53 @@ def test_the_overflow_direction_is_deliberately_not_rescued() -> None:
     assert not cert.applicable and not cert.certified
 
 
+def test_the_repair_reaches_into_the_subnormal_range() -> None:
+    """The finding, continued past the scale the reviewer happened to name.
+
+    Fixing the norms alone left the rate-unit dependence intact below ~1e-317,
+    because the gate floors its reference scale at ``max(fro, tiny)`` and that
+    constant is LARGER than a subnormal operator. Measured with the norms
+    repaired but the floor still in place: defect 3e-320 against a floor-derived
+    bound of 2.2e-318, i.e. "trace preserving" for a relative defect of 0.80.
+    """
+    for scale in (1e-310, 1e-315, 1e-320, 5e-324):
+        op = _non_tp_operator() * scale
+        if not np.any(op):
+            continue
+        with np.errstate(under="ignore"):
+            cert = certified_eigvals(op)[-1]
+        assert not cert.applicable, (
+            f"a relative trace defect of 3/sqrt(14) at scale {scale:g} was "
+            "declared trace preserving; the reference scale was floored at a "
+            "constant instead of measured"
+        )
+
+
+def test_a_healthy_generator_survives_the_subnormal_repair() -> None:
+    """POSITIVE CONTROL, and a regression this run actually produced.
+
+    The first version of the rescue divided by the largest component. That is
+    COMPLEX division, and for a subnormal divisor NumPy forms an intermediate
+    reciprocal that overflows: both norms came back NaN, the round-21 guard
+    refused the operator, and a valid GKSL generator at 1e-310 went from
+    ``applicable=True`` to ``False``. Repairing a fail-open must not install a
+    fail-closed defect in its place, so the scaling is now an exact power-of-two
+    shift. This test is the one that would have caught it.
+    """
+    for scale in (1e-308, 1e-310, 1e-315):
+        gen = _healthy_generator() * scale
+        with np.errstate(under="ignore"):
+            defect, fro = trace_preservation_defect(gen)
+            cert = certified_eigvals(gen)[-1]
+        assert np.isfinite(defect) and np.isfinite(fro), (
+            f"scale {scale:g}: the scaled computation produced "
+            f"(defect, fro) = ({defect}, {fro}) for finite input"
+        )
+        assert cert.applicable and cert.certified, (
+            f"a GKSL generator at scale {scale:g} was refused"
+        )
+
+
 def test_the_exactly_zero_operator_keeps_its_zero_scale() -> None:
     """POSITIVE CONTROL for the other edge of the rescue.
 
