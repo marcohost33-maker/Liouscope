@@ -269,10 +269,14 @@ class LepResult:
     Note: conjugate-pair LEP candidates are INCLUDED (FIX-3, anchor I).
     """
 
-    lep_proximity: float                  # D16 min pair separation
+    lep_proximity: float                  # D16 min pair separation (NaN = withheld)
     gap_rate_consistency: float           # D17 |beta_D_linear - Delta| / Delta
     initial_state_sensitivity: float      # D18 std over Haar ensemble
-    lep_candidate_count: int
+    # ROUND-23 REVIEW (PR #121). ``None`` where D16 is withheld, in parity with
+    # ``SpectralResult.has_complex_pairs``. An integer count cannot express
+    # "not counted": 0 is a measured absence of close pairs, and the count is
+    # persisted as audit metadata.
+    lep_candidate_count: int | None
     # LIOU-#69: the LINEAR-metric rate actually fed to D17 (dimension-coherent
     # with the gap). Additive + defaulted so synthetic callers stay valid.
     beta_D_linear: float = float("nan")

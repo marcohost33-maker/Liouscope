@@ -7,6 +7,34 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Fixed
+- **D16 was published from the spectrum for which D1/D3/D4 had just been
+  withheld (PR #121, round-23 review, finding 13).** Where the zero-mode
+  certificate is applicable but unresolved, the spectral layer reports D1, D3,
+  D4 as NaN and `has_complex_pairs` as `None`, because the candidate spectrum
+  is explicitly untrustworthy. `diagnose()` nevertheless passed those same
+  eigenvalues into `lep_proximity`, and the LEP layer returned a finite D16.
+  Measured on the issue-#113 stiff fixture: `lep_proximity = 0.0` with 51
+  candidate pairs -- and `0.0` is not a neutral number but the *coalescence*
+  limit, i.e. the strongest exceptional-point signal the diagnostic can emit,
+  manufactured out of slow modes sitting below the eigensolver's backward
+  error. A missing or ambiguous slow mode changes the closest eigenvalue pair
+  directly, so the number was never a measurement.
+
+  `compute_lep_layer` gains `spectral_resolved` (default `True`, so callers
+  who say nothing keep measuring) and withholds D16 as NaN with
+  `lep_candidate_count=None` when it is `False`; `LepResult.lep_candidate_count`
+  is therefore `int | None`, in parity with `SpectralResult.has_complex_pairs`.
+  `diagnose()` derives the flag from the same `applicable and not resolved`
+  predicate the spectral layer uses, so the whole run withholds on one
+  condition rather than on two. The withheld value is deliberately
+  distinguishable from both measured extremes: `0.0` (coalesced) and `inf`
+  (no pair) are answers, NaN is the absence of one, and `_strip_unavailable`
+  in the classifier keys on exactly that. D17 and D18 stay measured -- D17
+  already inherits the withheld gap, D18 is computed from the operator.
+
+  The certificate floor downstream caps the classifier's *verdict*, which is a
+  different guarantee from not publishing the number: `LepResult` is returned
+  to callers and persisted as audit metadata.
 - **A non-trace-preserving operator became certificate-applicable when it was
   written in small enough rate units (PR #121, round-23 review, finding 12).**
   `trace_preservation_defect` squares its entries before summing, so for

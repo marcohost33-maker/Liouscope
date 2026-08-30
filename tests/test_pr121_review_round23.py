@@ -1,17 +1,29 @@
-"""Round-23 review of PR #121: a reference scale lost to underflow (finding 12).
+"""Round-23 review of PR #121: two measurements taken from what was never there.
 
-The shape the earlier rounds keep producing -- a gate that certifies something
-it did not measure -- one variable further along. trace_preservation_defect
-squares its entries before summing, so a generator in small enough rate units
-returns (0.0, 0.0); the applicability test 0 > tp_rtol * tiny is then
-False for EVERY operator and a non-trace-preserving one becomes certificate-
-applicable. The same operator fifty decades larger is correctly refused, so a
-pure change of rate unit decided whether the object is a legal generator.
+Both findings have the shape the earlier rounds keep producing -- a gate that
+certifies something it did not measure -- one layer further out each time:
+
+* **a reference scale lost to underflow** (finding 12). ``trace_preservation_
+  defect`` squares its entries before summing, so a generator in small enough
+  rate units returns ``(0.0, 0.0)``; the applicability test ``0 > tp_rtol *
+  tiny`` is then False for EVERY operator and a non-trace-preserving one
+  becomes certificate-applicable. The same operator fifty decades larger is
+  correctly refused, so a pure change of rate unit decided whether the object
+  is a legal generator.
+
+* **a diagnostic read off a spectrum the layer already refused to stand behind**
+  (finding 13). Where the zero-mode certificate is applicable but unresolved,
+  D1/D3/D4 are withheld as NaN -- and D16 was still published from that very
+  spectrum. Measured before the fix: ``lep_proximity = 0.0`` with 51 candidate
+  pairs. ``0.0`` is not a neutral number but the STRONGEST available
+  exceptional-point signal ("coalesced"), manufactured out of slow modes that
+  sit below the eigensolver's backward error.
 
 Every guard here is paired with a positive control: a guard that refuses
 everything discriminates nothing and must not be able to pass this file. The
-overflow twin has its own test for the opposite reason -- it pins a refusal
-that must NOT be repaired, because the round-21 guard depends on it.
+overflow twin of finding 12 has its own test for the opposite reason -- it
+pins a refusal that must NOT be repaired, because the round-21 guard depends
+on it.
 """
 
 from __future__ import annotations
@@ -22,6 +34,8 @@ import numpy as np
 import pytest
 
 from liouscope import build_liouvillian
+from liouscope.diagnostics.lep import compute_lep_layer
+from liouscope.diagnostics.spectral import compute_spectral_layer
 from liouscope.numerics.linalg import (
     certified_eig,
     certified_eigvals,
@@ -136,3 +150,120 @@ def test_the_exactly_zero_operator_keeps_its_zero_scale() -> None:
     """
     defect, fro = trace_preservation_defect(np.zeros((4, 4), dtype=complex))
     assert (defect, fro) == (0.0, 0.0)
+
+
+# ---------------------------------------------------------------------------
+# Finding 13: withhold D16 when the spectral certificate is unresolved.
+# ---------------------------------------------------------------------------
+
+_STIFF_PAIRS = [(0, 3), (0, 2), (1, 0), (3, 2), (2, 1)]
+_UNRESOLVED_RATES = [7.28e-6, 3.67e-5, 1.53e-5, 1e8, 1.42e-5]
+_RESOLVED_RATES = [7.28e-6, 3.67e-5, 1.53e-5, 2.70e5, 1.42e-5]
+
+
+def _classical_network(rates: list[float]) -> np.ndarray:
+    jumps = []
+    for (to, frm) in _STIFF_PAIRS:
+        j = np.zeros((4, 4), dtype=complex)
+        j[to, frm] = 1.0
+        jumps.append(j)
+    return build_liouvillian(np.zeros((4, 4), dtype=complex), jumps, rates)
+
+
+def _population_steady_state(rates: list[float]) -> np.ndarray:
+    k = np.zeros((4, 4))
+    for (to, frm), g in zip(_STIFF_PAIRS, rates):
+        k[to, frm] += g
+        k[frm, frm] -= g
+    w, v = np.linalg.eig(k)
+    p = np.real(v[:, int(np.argmin(np.abs(w)))])
+    return np.diag(p / p.sum()).astype(complex)
+
+
+def _layers(rates: list[float]):
+    lsup = _classical_network(rates)
+    rho = _population_steady_state(rates)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        spectral = compute_spectral_layer(lsup, rho)
+        cert = spectral.zero_mode_certificate
+        lep = compute_lep_layer(
+            lsup,
+            spectral.eigenvalues,
+            beta_D_linear=1.0,
+            gap=spectral.gap,
+            rho_steady_state=rho,
+            seed=7,
+            n_haar=3,
+            spectral_resolved=not (cert["applicable"] and not cert["resolved"]),
+        )
+    return spectral, lep
+
+
+def test_the_fixture_really_is_an_unresolved_certificate() -> None:
+    """PRECONDITION, asserted separately from the verdict it produces.
+
+    Without this the tests below could pass because the fixture stopped being
+    unresolved -- the failure mode in which a regression quietly starts testing
+    nothing.
+    """
+    spectral, _ = _layers(_UNRESOLVED_RATES)
+    cert = spectral.zero_mode_certificate
+    assert cert["applicable"] is True and cert["resolved"] is False
+    assert np.isnan(spectral.gap), "D1 must already be withheld here"
+
+
+def test_d16_is_withheld_on_an_unresolved_spectrum() -> None:
+    """D16 must not be published from a spectrum D1/D3/D4 refused to report.
+
+    Measured before the fix: ``lep_proximity = 0.0`` with 51 candidate pairs.
+    """
+    _, lep = _layers(_UNRESOLVED_RATES)
+    assert np.isnan(lep.lep_proximity), (
+        f"D16 reported {lep.lep_proximity!r} from an unresolved spectrum"
+    )
+    assert lep.lep_candidate_count is None, (
+        f"D16 candidate count {lep.lep_candidate_count!r} was counted on a "
+        "spectrum the layer declined to report"
+    )
+
+
+def test_zero_is_not_the_unavailable_value_it_is_the_strongest_signal() -> None:
+    """DISCRIMINATION: the withheld value must not be confusable with a measured one.
+
+    ``0.0`` means coalesced and ``inf`` means maximally separated; both are
+    measurements. Only NaN says the question was not answered, and
+    ``_strip_unavailable`` in the classifier keys on exactly that.
+    """
+    _, lep = _layers(_UNRESOLVED_RATES)
+    assert lep.lep_proximity != 0.0
+    assert not np.isinf(lep.lep_proximity)
+
+
+def test_a_resolved_spectrum_still_reports_d16() -> None:
+    """POSITIVE CONTROL. A guard that withheld D16 always discriminates nothing."""
+    spectral, lep = _layers(_RESOLVED_RATES)
+    cert = spectral.zero_mode_certificate
+    assert cert["resolved"] is True
+    assert np.isfinite(lep.lep_proximity), "D16 was withheld on a resolved spectrum"
+    assert isinstance(lep.lep_candidate_count, int)
+
+
+def test_the_default_keeps_the_layer_reporting() -> None:
+    """POSITIVE CONTROL for the parameter itself: callers who say nothing measure."""
+    lsup = _classical_network(_RESOLVED_RATES)
+    rho = _population_steady_state(_RESOLVED_RATES)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        spectral = compute_spectral_layer(lsup, rho)
+        lep = compute_lep_layer(
+            lsup,
+            spectral.eigenvalues,
+            beta_D_linear=1.0,
+            gap=spectral.gap,
+            rho_steady_state=rho,
+            seed=7,
+            n_haar=3,
+        )
+    assert np.isfinite(lep.lep_proximity)
+    assert isinstance(lep.lep_candidate_count, int)
