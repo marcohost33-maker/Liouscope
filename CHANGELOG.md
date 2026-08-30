@@ -7,6 +7,28 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Fixed
+- **A non-trace-preserving operator became certificate-applicable when it was
+  written in small enough rate units (PR #121, round-23 review, finding 12).**
+  `trace_preservation_defect` squares its entries before summing, so for
+  `diag([0, -1e-200, -2e-200, -3e-200])` every square falls below the smallest
+  subnormal and the pair comes back `(0.0, 0.0)`. The applicability gate then
+  evaluates `0.0 > tp_rtol * max(0.0, tiny)`, which is False for *every*
+  operator, and both certificate APIs reported `applicable=True,
+  certified=True` for an operator whose relative trace defect is
+  `3 / sqrt(14) ~ 0.80`. The same operator at `1e-150` was correctly refused,
+  so a pure change of rate unit decided whether the object counted as a legal
+  generator. Both norms are now recomputed on a copy scaled by the largest
+  finite component whenever the reference scale has been lost.
+
+  The rescue is deliberately **one-directional**: it repairs underflow and
+  leaves overflow alone. `||L||_F = inf` for the round-20 counterexample is
+  not an accident to be worked around but the input to the round-21 refusal of
+  a non-finite reference scale. That norm is mathematically about `1.4e308`
+  and therefore representable, so a scaled computation would hand back a
+  finite number, readmit the operator and silently reopen a hole that took
+  five interpreter versions of CI to close. The two directions look symmetric
+  and are not: only one of them has a decision behind it. A dedicated test
+  pins the overflow refusal so that a later "symmetric" tidy-up goes red.
 - **The workflow hardening gate was blind to the commonest way to write a step
   (PR #129).** `.github/scripts/check_workflow_hardening.py` enforces the
   SHA-pinning rule of AGENTS.md section 4 on every workflow, and nothing

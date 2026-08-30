@@ -258,6 +258,17 @@ def trace_preservation_defect(L_super: np.ndarray) -> tuple[float, float]:
     convention is the exact statement ``vec(I)^H L = 0``. The quotient of the
     two returned numbers is therefore a dimensionless, unit-invariant measure
     of how far ``L`` is from being a legal generator.
+
+    Both norms square their entries before summing, so a generator expressed
+    in small enough -- but still perfectly normal -- rate units loses its
+    reference scale to underflow: for ``diag([0, -1e-200, -2e-200, -3e-200])``
+    every square falls below ``5e-324`` and the pair comes back ``(0.0, 0.0)``.
+    The applicability gate then reads ``0 > tp_rtol * tiny``, which is False,
+    so a demonstrably non-trace-preserving operator becomes certificate-
+    applicable -- while the SAME operator at ``1e-150`` is correctly refused.
+    A pure change of rate unit must not decide whether an operator is a legal
+    generator, so the norms are recomputed on a scaled copy when the reference
+    scale has been lost (round-23 review, PR #121).
     """
     L_super = np.asarray(L_super)
     n = L_super.shape[0]
@@ -266,7 +277,33 @@ def trace_preservation_defect(L_super: np.ndarray) -> tuple[float, float]:
         return float("nan"), float("nan")
     vec_i = np.eye(d, dtype=complex).reshape(-1, order="F")
     defect = float(np.linalg.norm(vec_i.conj() @ L_super))
-    return defect, float(np.linalg.norm(L_super, ord="fro"))
+    fro = float(np.linalg.norm(L_super, ord="fro"))
+    # The rescue is deliberately ONE-DIRECTIONAL: it repairs underflow and
+    # leaves overflow alone. ``fro = inf`` is not an accident to be worked
+    # around but the input to the round-21 refusal of a non-finite reference
+    # scale -- the guard that closed the round-20 counterexample (cancelling
+    # +-1e308 entries, spectrum {1,2,3,4}, certified as entirely stationary).
+    # Computing that Frobenius norm by scaling would make it finite again at
+    # ~1.4e308, readmit the operator, and silently reopen a hole whose repair
+    # CI had to prove across five interpreter versions. Underflow and overflow
+    # look symmetric here and are not: only one of them has a documented
+    # decision behind it.
+    if fro == 0.0 and L_super.size:
+        # ``max(|Re|, |Im|)`` rather than ``max|.|``: the modulus of a finite
+        # complex entry can itself overflow, and this quantity cannot. It is
+        # within sqrt(2) of the true maximum modulus, which is irrelevant --
+        # it is used only as a divisor and multiplied straight back out.
+        m = float(np.max(np.maximum(np.abs(np.real(L_super)), np.abs(np.imag(L_super)))))
+        if m > 0.0:
+            # ``max|L/m| <= sqrt(2)`` by construction, so no intermediate can
+            # underflow; and ``||L/m||_F >= 1``, so the reconstructed ``fro``
+            # is at least ``m > 0`` and cannot underflow back to zero. A
+            # genuinely zero operator has ``m == 0`` and keeps ``(0.0, 0.0)``,
+            # which is the correct answer rather than a lost one.
+            scaled = L_super / m
+            defect = float(np.linalg.norm(vec_i.conj() @ scaled)) * m
+            fro = float(np.linalg.norm(scaled, ord="fro")) * m
+    return defect, fro
 
 
 def band_discriminates(
