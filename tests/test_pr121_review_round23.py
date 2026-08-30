@@ -182,7 +182,15 @@ def test_a_healthy_generator_survives_the_subnormal_repair() -> None:
     """
     for scale in (1e-308, 1e-310, 1e-315):
         gen = _healthy_generator() * scale
-        with np.errstate(under="ignore"):
+        # ``all="ignore"``, not ``under="ignore"``: the defect this pins is an
+        # OVERFLOW inside complex division. Left at numpy's default the mutation
+        # kills this test by RuntimeWarning-as-error, i.e. the test dies instead
+        # of judging, and a crash cannot tell detection from non-detection
+        # (measured: the discrimination run reported ROT DURCH ABSTURZ here).
+        # Silencing the warning is what forces the assertion below to be the
+        # thing that fails.
+        with np.errstate(all="ignore"), warnings.catch_warnings():
+            warnings.simplefilter("ignore")
             defect, fro = trace_preservation_defect(gen)
             cert = certified_eigvals(gen)[-1]
         assert np.isfinite(defect) and np.isfinite(fro), (
