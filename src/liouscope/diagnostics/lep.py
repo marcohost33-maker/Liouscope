@@ -163,17 +163,34 @@ def compute_lep_layer(
     :func:`gap_rate_consistency` for why the relative-entropy rate must not be
     used here (issue #69). ``seed`` (legacy, default 7) and the SPEC 7 ``rng``
     keyword are mutually exclusive and only feed the D18 Haar ensemble.
+
+    D16 and D1 share the certified slow spectrum. The spectral layer publishes
+    ``gap=NaN`` when its zero-mode certificate is applicable but unresolved;
+    in that state the candidate eigenvalues are explicitly not trustworthy
+    enough for D1/D3/D4, so D16 must not silently reuse them either. D18 is
+    independent of that eigenspectrum and remains measurable.
     """
     L_super = np.asarray(L_super)
     if rho_steady_state is None:
         rho_steady_state = steady_state(L_super)
-    proximity, candidates = lep_proximity(eigenvalues)
+
+    # Round-23 review (PR #121): NaN is the existing unavailable sentinel for
+    # an unresolved spectral certificate. Computing LEP proximity from the same
+    # candidate spectrum would turn "spectrum unresolved" into a finite D16
+    # measurement. Withhold instead. A measured finite gap, including 0.0,
+    # preserves the ordinary low-level LEP semantics and keeps the positive
+    # control path unchanged.
+    if np.isfinite(gap):
+        proximity, candidates = lep_proximity(eigenvalues)
+    else:
+        proximity, candidates = float("nan"), 0
+
     consistency = gap_rate_consistency(beta_D_linear, gap)
     sensitivity = initial_state_sensitivity(
         L_super, rho_steady_state, n_samples=n_haar, seed=seed, rng=rng
     )
     return LepResult(
-        lep_proximity=proximity if np.isfinite(proximity) else float("inf"),
+        lep_proximity=proximity,
         gap_rate_consistency=consistency,
         initial_state_sensitivity=sensitivity,
         lep_candidate_count=candidates,
