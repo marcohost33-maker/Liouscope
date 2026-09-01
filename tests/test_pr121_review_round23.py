@@ -21,9 +21,10 @@ certifies something it did not measure -- one layer further out each time:
 
 Every guard here is paired with a positive control: a guard that refuses
 everything discriminates nothing and must not be able to pass this file. Issue
-#130 extends finding 12 symmetrically: a mathematically representable large norm
-must be measured as finite, while the structural zero-mode certificate remains
-responsible for refusing evidence that does not discriminate.
+#130 extends finding 12 symmetrically: mathematically representable large norms
+must stay finite, while trace-preservation applicability also uses a separate
+componentwise backward-error check so unrelated huge entries cannot dilute a
+violated trace equation.
 """
 
 from __future__ import annotations
@@ -39,6 +40,7 @@ from liouscope.diagnostics.spectral import compute_spectral_layer
 from liouscope.numerics.linalg import (
     certified_eig,
     certified_eigvals,
+    trace_preservation_componentwise_error,
     trace_preservation_defect,
 )
 
@@ -111,15 +113,14 @@ def test_a_healthy_generator_in_the_same_rate_units_still_certifies() -> None:
 
 
 def test_representable_large_norm_is_measured_then_rejected_structurally() -> None:
-    """Measurement arithmetic must not carry the certificate's policy.
+    """Correct measurement must not create a fail-open applicability claim.
 
     The round-20 counterexample has two cancelling ``+-1e308`` entries. Its
     true Frobenius norm is about ``sqrt(2)*1e308`` and is therefore finite in
-    float64, even though a naive sum of squares overflows. Issue #130 requires
-    that finite measurement to stay finite. Safety is preserved one layer
-    later: the zero-mode band contains the whole measured spectrum, so
-    ``band_discriminates`` leaves the certificate unresolved instead of
-    treating arithmetic overflow as a surrogate refusal signal.
+    float64, even though a naive sum of squares overflows. That finite global
+    scale cannot prove trace preservation: several trace equations have no
+    cancellation at all, so their componentwise backward error is 1. The exact
+    zero-mode theorem must therefore be inapplicable before the band is used.
     """
     op = np.diag([1.0, 2.0, 3.0, 4.0]).astype(complex)
     op[0, 1] = 1.0e308
@@ -127,14 +128,16 @@ def test_representable_large_norm_is_measured_then_rejected_structurally() -> No
     assert np.all(np.isfinite(op)), "the input must be FINITE for this to be the case"
 
     defect, fro = trace_preservation_defect(op)
+    local_error = trace_preservation_componentwise_error(op)
     assert defect == pytest.approx(np.sqrt(17.0)), "a real, order-one trace defect"
     assert np.isfinite(fro), "a representable Frobenius norm must not overflow"
     assert fro == pytest.approx(np.sqrt(2.0) * 1.0e308, rel=2.0e-15)
+    assert local_error == pytest.approx(1.0)
 
     with np.errstate(over="ignore"), warnings.catch_warnings():
         warnings.simplefilter("ignore")
         cert = certified_eigvals(op)[-1]
-    assert cert.applicable
+    assert not cert.applicable
     assert not cert.certified
     assert not cert.resolved
 
