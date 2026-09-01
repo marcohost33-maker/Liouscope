@@ -27,6 +27,7 @@ from .._consts import (
     ZERO_MODE_APOSTERIORI_MARGIN,
     ZERO_MODE_EPS_FACTOR,
 )
+from .norms import scaled_cancellation_ratio, scaled_euclidean_norm
 
 
 @dataclass(frozen=True, slots=True)
@@ -252,23 +253,27 @@ def operator_zero_tolerance(
 
 
 def trace_preservation_defect(L_super: np.ndarray) -> tuple[float, float]:
-    """Return ``(||vec(I)^H L||_2, ||L||_F)`` for a vectorised generator.
+    """Return robust ``(||vec(I)^H L||_2, ||L||_F)`` for a generator.
 
     Every GKSL generator is trace preserving, which in column-stacking
     convention is the exact statement ``vec(I)^H L = 0``. The quotient of the
     two returned numbers is therefore a dimensionless, unit-invariant measure
     of how far ``L`` is from being a legal generator.
 
-    Both norms square their entries before summing, so a generator expressed
-    in small enough -- but still perfectly normal -- rate units loses its
-    reference scale to underflow: for ``diag([0, -1e-200, -2e-200, -3e-200])``
-    every square falls below ``5e-324`` and the pair comes back ``(0.0, 0.0)``.
-    The applicability gate then reads ``0 > tp_rtol * tiny``, which is False,
-    so a demonstrably non-trace-preserving operator becomes certificate-
-    applicable -- while the SAME operator at ``1e-150`` is correctly refused.
-    A pure change of rate unit must not decide whether an operator is a legal
-    generator, so the norms are recomputed on a scaled copy when the reference
-    scale has been lost (round-23 review, PR #121).
+    Issue #130: both quantities are evidence, so their arithmetic must be
+    correct independently of the policy that consumes them. Ordinary
+    ``np.linalg.norm`` squares before summing and can therefore return the
+    false sentinels ``0.0`` (underflow) or ``inf`` (overflow) even when the
+    mathematical norm of finite input is representable. Both norms now use
+    :func:`scaled_euclidean_norm`, an xLASSQ-style power-of-two scaled
+    sum-of-squares primitive. It returns a finite norm whenever the true
+    float64 result is representable and returns infinity only when the input or
+    the true norm is genuinely non-representable.
+
+    This deliberately separates measurement from certificate policy. A very
+    large but finite operator must not be rejected merely because a naive norm
+    overflowed; structural guards such as ``band_discriminates`` decide whether
+    the resulting zero-mode evidence actually discriminates.
     """
     L_super = np.asarray(L_super)
     n = L_super.shape[0]
@@ -276,56 +281,46 @@ def trace_preservation_defect(L_super: np.ndarray) -> tuple[float, float]:
     if d * d != n:
         return float("nan"), float("nan")
     vec_i = np.eye(d, dtype=complex).reshape(-1, order="F")
-    defect = float(np.linalg.norm(vec_i.conj() @ L_super))
-    fro = float(np.linalg.norm(L_super, ord="fro"))
-    # The rescue is deliberately ONE-DIRECTIONAL: it repairs underflow and
-    # leaves overflow alone. ``fro = inf`` is not an accident to be worked
-    # around but the input to the round-21 refusal of a non-finite reference
-    # scale -- the guard that closed the round-20 counterexample (cancelling
-    # +-1e308 entries, spectrum {1,2,3,4}, certified as entirely stationary).
-    # Computing that Frobenius norm by scaling would make it finite again at
-    # ~1.4e308, readmit the operator, and silently reopen a hole whose repair
-    # CI had to prove across five interpreter versions. Underflow and overflow
-    # look symmetric here and are not: only one of them has a documented
-    # decision behind it.
-    if fro == 0.0 and L_super.size:
-        # ``max(|Re|, |Im|)`` rather than ``max|.|``: the modulus of a finite
-        # complex entry can itself overflow, and this quantity cannot. It is
-        # within sqrt(2) of the true maximum magnitude, which is all that is
-        # needed -- it only selects the exponent to shift by.
-        m = float(np.max(np.maximum(np.abs(np.real(L_super)), np.abs(np.imag(L_super)))))
-        if m > 0.0:
-            # Scaled by a POWER OF TWO, not by ``m`` itself. Two reasons, the
-            # second of which cost a regression before it was measured:
-            #
-            # 1. ``ldexp`` shifts the exponent and leaves every mantissa bit
-            #    alone, so the round trip is EXACT -- dividing by ``m`` and
-            #    multiplying back introduces two roundings into a number whose
-            #    whole purpose is to be compared against a tolerance.
-            # 2. ``L / m`` is COMPLEX division, and for a subnormal divisor
-            #    NumPy's algorithm forms an intermediate reciprocal that
-            #    overflows: measured for ``diag([0, -1e-310, -2e-310,
-            #    -3e-310])``, ``L / m`` came back ``[nan, -inf, -inf, -inf]``
-            #    and both norms became NaN. The round-21 guard then refused the
-            #    operator -- fail-closed, but on a value nothing had measured,
-            #    and a healthy GKSL generator at that scale was refused with it
-            #    (``applicable`` went True -> False for valid input). Repairing
-            #    a fail-open must not install a fail-closed defect in its place.
-            #
-            # ``frexp`` returns ``m = mantissa * 2**exp`` with the mantissa in
-            # [0.5, 1), so shifting by ``-exp`` puts every entry in a range
-            # where neither the squares below nor the reconstruction can leave
-            # the normal range. A genuinely zero operator has ``m == 0`` and
-            # keeps ``(0.0, 0.0)``, which is the correct answer, not a lost one.
-            exp = int(np.frexp(m)[1])
-            scaled = np.ldexp(np.real(L_super), -exp) + 1j * np.ldexp(
-                np.imag(L_super), -exp
-            )
-            defect = float(
-                np.ldexp(float(np.linalg.norm(vec_i.conj() @ scaled)), exp)
-            )
-            fro = float(np.ldexp(float(np.linalg.norm(scaled, ord="fro")), exp))
-    return defect, fro
+    defect_vector = vec_i.conj() @ L_super
+    return scaled_euclidean_norm(defect_vector), scaled_euclidean_norm(L_super)
+
+
+def trace_preservation_componentwise_error(L_super: np.ndarray) -> float:
+    """Return the worst componentwise backward error of ``vec(I)^H L = 0``.
+
+    The global ratio ``||vec(I)^H L|| / ||L||`` is necessary but insufficient
+    as an applicability test: entries of ``L`` that do not participate in a
+    particular trace equation can make the global operator norm enormous and
+    thereby hide an order-one violation in another column. Trace preservation
+    is instead a family of scalar equations, one for every superoperator
+    column ``j``:
+
+    ``sum_i L[(i, i), j] = 0``.
+
+    For each equation we therefore compute
+    ``abs(sum terms) / sum(abs(terms))`` and return the largest ratio. This is
+    the componentwise relative backward-error reading: every equation is
+    normalised only by the represented coefficients that can actually cancel
+    in that equation. :func:`scaled_cancellation_ratio` evaluates the ratio in
+    a power-of-two scaled domain, so the verdict is stable for subnormal and
+    near-overflow rate units. An exact all-zero equation contributes zero.
+    """
+    arr = np.asarray(L_super)
+    if arr.ndim != 2 or arr.shape[0] != arr.shape[1] or arr.size == 0:
+        return float("nan")
+    if not np.all(np.isfinite(arr)):
+        return float("nan")
+    n = arr.shape[0]
+    d = int(round(np.sqrt(n)))
+    if d * d != n:
+        return float("nan")
+    trace_rows = np.arange(0, n, d + 1, dtype=int)
+    return float(
+        max(
+            (scaled_cancellation_ratio(arr[trace_rows, j]) for j in range(n)),
+            default=0.0,
+        )
+    )
 
 
 def band_discriminates(
@@ -602,6 +597,7 @@ def certified_eigvals(
     L_super = require_finite_square_2d(L_super, name="L_super")
     L_c = np.asarray(L_super, dtype=complex)
     tp_defect, fro = trace_preservation_defect(L_c)
+    tp_componentwise = trace_preservation_componentwise_error(L_c)
     norm2 = float(np.linalg.norm(L_c, 2)) if L_c.size else 0.0
     bound = rtol * float(np.finfo(float).eps) * norm2
 
@@ -630,6 +626,13 @@ def certified_eigvals(
         # RELATIVE to the operator's own scale is not a statement that
         # can be made about infinity, so it is refused here.
         or not np.isfinite(fro)
+        # ISSUE #130. The normwise ratio above can be diluted by enormous
+        # entries that do not participate in a violated trace equation. The
+        # componentwise gate normalises each column only by the diagonal-output
+        # terms that can cancel in that equation, then takes the worst column.
+        # Both views must pass before the exact zero-mode theorem is applicable.
+        or not np.isfinite(tp_componentwise)
+        or tp_componentwise > tp_rtol
         # ROUND-23 REVIEW (PR #121), same finding one line further down.
         # ``max(fro, tiny)`` floors the REFERENCE SCALE at a constant that
         # is larger than the operator whenever the operator is subnormal,
@@ -873,6 +876,7 @@ def certified_eig(
     L_super = require_finite_square_2d(L_super, name="L_super")
     L_c = np.asarray(L_super, dtype=complex)
     tp_defect, fro = trace_preservation_defect(L_c)
+    tp_componentwise = trace_preservation_componentwise_error(L_c)
     norm2 = float(np.linalg.norm(L_c, 2)) if L_c.size else 0.0
     bound = rtol * float(np.finfo(float).eps) * norm2
 
@@ -901,6 +905,10 @@ def certified_eig(
         # RELATIVE to the operator's own scale is not a statement that
         # can be made about infinity, so it is refused here.
         or not np.isfinite(fro)
+        # ISSUE #130. Keep the eigenvector ladder on the exact same
+        # applicability contract as the eigenvalue-only ladder above.
+        or not np.isfinite(tp_componentwise)
+        or tp_componentwise > tp_rtol
         # ROUND-23 REVIEW (PR #121), same finding one line further down.
         # ``max(fro, tiny)`` floors the REFERENCE SCALE at a constant that
         # is larger than the operator whenever the operator is subnormal,
