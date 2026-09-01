@@ -141,12 +141,25 @@ def fit_gls_ar1(
             degenerate=True,
         )
 
+    # Issue #124: the mathematical least-squares optimum is unchanged when an
+    # observable is multiplied by a positive constant, but SciPy's numerical
+    # termination is not. In particular, TRF declares success when its scaled
+    # gradient falls below ``gtol``; a curve such as ``1e-40*exp(-1.3*t)`` can
+    # therefore return the INITIAL RATE as a "converged" estimate after one
+    # evaluation. Divide only the residuals presented to the optimiser by the
+    # curve's own finite, non-zero scale. This multiplies the objective by one
+    # positive constant, so the minimiser is identical, while the numerical
+    # problem becomes amplitude-scale invariant. Raw residuals, AR(1) rho,
+    # sigma and likelihood below remain in the caller's original data units.
+    fit_scale = y_scale
+
     rho = 0.0
     success = True
     for _ in range(n_iters):
+
         def residual(params: np.ndarray, rho_local: float = rho) -> np.ndarray:
             y_hat = model(t, params)
-            r = y - y_hat
+            r = (y - y_hat) / fit_scale
             return _whiten(r, rho_local)
 
         ls_kwargs: dict[str, object] = {"max_nfev": max_nfev}
