@@ -13,7 +13,10 @@ def test_tiny_finite_values_do_not_underflow_to_zero() -> None:
     got = scaled_euclidean_norm(values)
 
     assert got > 0.0
-    assert got == pytest.approx(np.sqrt(14.0) * 1.0e-200, rel=2.0e-15)
+    # Compare after dividing by the known input scale: pytest.approx's default
+    # absolute tolerance would otherwise dwarf a 1e-200 expected value and let
+    # a wildly inaccurate non-zero result pass.
+    assert got / 1.0e-200 == pytest.approx(np.sqrt(14.0), rel=2.0e-15)
 
 
 def test_subnormal_values_keep_a_nonzero_norm() -> None:
@@ -21,7 +24,9 @@ def test_subnormal_values_keep_a_nonzero_norm() -> None:
     got = scaled_euclidean_norm(values)
 
     assert got > 0.0
-    assert got == pytest.approx(3.7416e-320, rel=2.0e-4)
+    # Subnormal quantisation limits the attainable relative accuracy here, so
+    # compare the dimensionless ratio rather than using an absolute tolerance.
+    assert got / 1.0e-320 == pytest.approx(np.sqrt(14.0), rel=2.0e-4)
 
 
 def test_large_finite_values_stay_finite_when_true_norm_is_representable() -> None:
