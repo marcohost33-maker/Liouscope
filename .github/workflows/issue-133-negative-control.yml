@@ -1,0 +1,16 @@
+name: issue-133-negative-control
+
+# Deliberately inert workflow used only to prove that the repository quality
+# contract rejects mutable third-party action refs. It has no automatic trigger.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  inert:
+    runs-on: ubuntu-latest
+    steps:
+      # INTENTIONAL POLICY VIOLATION for issue #133 negative-control evidence.
+      - uses: actions/checkout@main
