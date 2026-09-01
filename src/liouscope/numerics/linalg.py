@@ -27,7 +27,7 @@ from .._consts import (
     ZERO_MODE_APOSTERIORI_MARGIN,
     ZERO_MODE_EPS_FACTOR,
 )
-from .norms import scaled_euclidean_norm
+from .norms import scaled_cancellation_ratio, scaled_euclidean_norm
 
 
 @dataclass(frozen=True, slots=True)
@@ -283,6 +283,44 @@ def trace_preservation_defect(L_super: np.ndarray) -> tuple[float, float]:
     vec_i = np.eye(d, dtype=complex).reshape(-1, order="F")
     defect_vector = vec_i.conj() @ L_super
     return scaled_euclidean_norm(defect_vector), scaled_euclidean_norm(L_super)
+
+
+def trace_preservation_componentwise_error(L_super: np.ndarray) -> float:
+    """Return the worst componentwise backward error of ``vec(I)^H L = 0``.
+
+    The global ratio ``||vec(I)^H L|| / ||L||`` is necessary but insufficient
+    as an applicability test: entries of ``L`` that do not participate in a
+    particular trace equation can make the global operator norm enormous and
+    thereby hide an order-one violation in another column. Trace preservation
+    is instead a family of scalar equations, one for every superoperator
+    column ``j``:
+
+    ``sum_i L[(i, i), j] = 0``.
+
+    For each equation we therefore compute
+    ``abs(sum terms) / sum(abs(terms))`` and return the largest ratio. This is
+    the componentwise relative backward-error reading: every equation is
+    normalised only by the represented coefficients that can actually cancel
+    in that equation. :func:`scaled_cancellation_ratio` evaluates the ratio in
+    a power-of-two scaled domain, so the verdict is stable for subnormal and
+    near-overflow rate units. An exact all-zero equation contributes zero.
+    """
+    arr = np.asarray(L_super)
+    if arr.ndim != 2 or arr.shape[0] != arr.shape[1] or arr.size == 0:
+        return float("nan")
+    if not np.all(np.isfinite(arr)):
+        return float("nan")
+    n = arr.shape[0]
+    d = int(round(np.sqrt(n)))
+    if d * d != n:
+        return float("nan")
+    trace_rows = np.arange(0, n, d + 1, dtype=int)
+    return float(
+        max(
+            (scaled_cancellation_ratio(arr[trace_rows, j]) for j in range(n)),
+            default=0.0,
+        )
+    )
 
 
 def band_discriminates(
@@ -559,6 +597,7 @@ def certified_eigvals(
     L_super = require_finite_square_2d(L_super, name="L_super")
     L_c = np.asarray(L_super, dtype=complex)
     tp_defect, fro = trace_preservation_defect(L_c)
+    tp_componentwise = trace_preservation_componentwise_error(L_c)
     norm2 = float(np.linalg.norm(L_c, 2)) if L_c.size else 0.0
     bound = rtol * float(np.finfo(float).eps) * norm2
 
@@ -587,6 +626,13 @@ def certified_eigvals(
         # RELATIVE to the operator's own scale is not a statement that
         # can be made about infinity, so it is refused here.
         or not np.isfinite(fro)
+        # ISSUE #130. The normwise ratio above can be diluted by enormous
+        # entries that do not participate in a violated trace equation. The
+        # componentwise gate normalises each column only by the diagonal-output
+        # terms that can cancel in that equation, then takes the worst column.
+        # Both views must pass before the exact zero-mode theorem is applicable.
+        or not np.isfinite(tp_componentwise)
+        or tp_componentwise > tp_rtol
         # ROUND-23 REVIEW (PR #121), same finding one line further down.
         # ``max(fro, tiny)`` floors the REFERENCE SCALE at a constant that
         # is larger than the operator whenever the operator is subnormal,
@@ -830,6 +876,7 @@ def certified_eig(
     L_super = require_finite_square_2d(L_super, name="L_super")
     L_c = np.asarray(L_super, dtype=complex)
     tp_defect, fro = trace_preservation_defect(L_c)
+    tp_componentwise = trace_preservation_componentwise_error(L_c)
     norm2 = float(np.linalg.norm(L_c, 2)) if L_c.size else 0.0
     bound = rtol * float(np.finfo(float).eps) * norm2
 
@@ -858,6 +905,10 @@ def certified_eig(
         # RELATIVE to the operator's own scale is not a statement that
         # can be made about infinity, so it is refused here.
         or not np.isfinite(fro)
+        # ISSUE #130. Keep the eigenvector ladder on the exact same
+        # applicability contract as the eigenvalue-only ladder above.
+        or not np.isfinite(tp_componentwise)
+        or tp_componentwise > tp_rtol
         # ROUND-23 REVIEW (PR #121), same finding one line further down.
         # ``max(fro, tiny)`` floors the REFERENCE SCALE at a constant that
         # is larger than the operator whenever the operator is subnormal,
