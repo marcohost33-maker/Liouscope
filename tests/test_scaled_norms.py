@@ -54,8 +54,12 @@ def test_norm_is_scale_equivariant_over_representable_ranges(scale: float) -> No
     base = np.array([1.0, -2.0, 3.0, -4.0]) * 1.0e-10
     reference = scaled_euclidean_norm(base)
     got = scaled_euclidean_norm(scale * base)
+    expected = abs(scale) * reference
 
-    assert got == pytest.approx(abs(scale) * reference, rel=3.0e-15)
+    assert got > 0.0
+    # Compare the ratio to one so tiny expected values cannot pass through
+    # pytest.approx's default absolute tolerance.
+    assert got / expected == pytest.approx(1.0, rel=3.0e-15)
 
 
 def test_zero_nan_and_inf_semantics_are_explicit() -> None:
