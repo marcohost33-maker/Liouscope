@@ -37,7 +37,13 @@ abstract: >-
 # mechanism hypotheses are reported alongside the dominant label with their
 # priority-shadowing status (`ClassificationResult.triggered_hypotheses`,
 # issue #102), and the support score is a documented deterministic heuristic
-# rather than a calibrated probability.
+# rather than a calibrated probability. Also pending (issue #116, a labelling
+# CORRECTION, not an addition): the bootstrap interval on the fitted rate is
+# bias-corrected (BC) on the default time grid and BCa only when the grid is
+# short enough for the jackknife acceleration term; each run now reports which
+# estimator it computed (`RelaxationResult.interval_method`). The v0.5.0
+# release described the interval unconditionally as BCa; that description is
+# accurate only for grids of <= 60 points.
 keywords:
   - open quantum systems
   - Lindblad

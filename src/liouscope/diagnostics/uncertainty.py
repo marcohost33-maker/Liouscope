@@ -17,7 +17,10 @@ def compute_uncertainty_layer(
 ) -> UncertaintyResult:
     """Aggregate U0/U1/U2.
 
-    U0 (fit) is derived from the BCa half-width of beta_D.
+    U0 (fit) is derived from the half-width of the bootstrap interval on
+    beta_D (``relaxation.bca_ci_beta``). Which estimator produced that
+    interval -- BCa on short grids, BC on the default 80-point grid -- is
+    recorded in ``relaxation.interval_method`` (issue #116); U0 inherits it.
     U1 (solver) reports the nominal floor :data:`liouscope._consts.U1_NOMINAL_FLOOR`
     (a conservative placeholder, *not* a measured residual) unless the caller
     supplies ``solver_residual`` from an ODE-tolerance sweep. The sweep is a

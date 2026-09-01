@@ -52,8 +52,10 @@ report = lp.diagnose(L, rho_initial=rho_0, bootstrap_B=200, seed=42)
 Notes on the arguments:
 
 - `rho_initial` defaults to the maximally mixed state $I/d$ if omitted.
-- `bootstrap_B` controls the parametric bootstrap used for the BCa confidence
-  intervals (larger is slower and tighter; 200 is the default).
+- `bootstrap_B` controls the parametric bootstrap used for the confidence
+  interval on the fitted rate (larger is slower and tighter; 200 is the
+  default). Whether that interval is BCa or plain BC depends on the grid
+  length — see the note below.
 - `seed` pins every stochastic step. `rng` is the SPEC 7 alternative —
   see {doc}`reproducible-runs`. Passing both raises `ValueError`.
 - `solver_path="dense"` is the only implemented path today;
@@ -86,7 +88,12 @@ print(r.nonnorm.kreiss)        # D10: Kreiss constant (transient lower bound)
 # R — Relaxation layer (D5-D7) + fits: what the trajectory actually does
 print(r.relaxation.aicc_model) # AICc-selected model of the M-hierarchy
 print(r.relaxation.beta_D)     # fitted relaxation rate
-print(r.relaxation.bca_ci_beta)# 95% BCa confidence interval (lo, hi)
+print(r.relaxation.bca_ci_beta)# 95% bootstrap confidence interval (lo, hi)
+print(r.relaxation.interval_method) # "BCa" | "BC" | "none": the estimator
+                                    # that produced it. On the default 80-point
+                                    # grid this is "BC" — the jackknife feeding
+                                    # the BCa acceleration term only runs for
+                                    # grids of <= 60 points (issue #116).
 
 # C — Classification layer (D16-D20): the mechanism verdict
 print(r.classification.a_class)    # one of "A1".."A12"

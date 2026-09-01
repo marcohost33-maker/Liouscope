@@ -60,9 +60,13 @@ collapse them:
    `decay_rate` attribute, and the project treats adding one as an
    API-design regression ("Don't introduce a single-decay-rate surface").
 
-2. **Explicit uncertainty.** Fitted quantities carry BCa bootstrap intervals,
-   AICc model selection over a model hierarchy, and GLS with AR(1) residuals.
-   A rate without an interval and a model-selection trace is not reported.
+2. **Explicit uncertainty.** Fitted quantities carry bias-corrected bootstrap
+   intervals — BCa when the grid is short enough for the leave-one-out
+   jackknife that supplies the acceleration term, plain BC on the default
+   80-point grid; `relaxation.interval_method` records which one a run
+   actually computed (issue #116) — plus AICc model selection over a model
+   hierarchy, and GLS with AR(1) residuals. A rate without an interval and a
+   model-selection trace is not reported.
 
 3. **Evidence-graded claims.** The classifier outputs a verdict vocabulary
    (`CONFIRMED` / `CANDIDATE` / `NOT_EXCLUDED` / `UNDEFINED`) instead of a

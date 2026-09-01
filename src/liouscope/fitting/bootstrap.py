@@ -7,8 +7,9 @@ Anchor G: standard iid bootstrap on ODE trajectories violates independence
 2. Resimulate ``nu_t ~ N(0, sigma^2)`` and propagate through
    ``eps_t = rho eps_{t-1} + nu_t``.
 3. Re-fit the model on the resimulated trajectory.
-4. Aggregate fitted parameters and report BCa confidence intervals
-   (Efron 1987).
+4. Aggregate fitted parameters and report bias-corrected bootstrap confidence
+   intervals (Efron 1987): BCa when jackknife estimates supply the
+   acceleration term, plain BC otherwise (see :func:`bca_ci`, issue #116).
 """
 
 from __future__ import annotations
@@ -91,6 +92,15 @@ def bca_ci(
 
     Returns ``(p, 2)`` array of ``(lo, hi)`` per parameter at level
     ``1 - alpha``.
+
+    Without ``jackknife_estimates`` the acceleration term is ``a = 0`` and the
+    result is a bias-corrected (BC) percentile interval, **not** BCa -- the
+    "a" of BCa is exactly the acceleration. Callers reporting the interval
+    must label which estimator they got (see
+    ``RelaxationResult.interval_method``, issue #116); the direction of the
+    BC-vs-BCa difference is not conservative by construction, since ``a``
+    corrects for parameter-dependent variance and can skew both endpoints
+    either way.
     """
     samples = np.asarray(samples, dtype=float)
     theta_hat = np.asarray(theta_hat, dtype=float)

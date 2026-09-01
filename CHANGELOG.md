@@ -67,6 +67,33 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   only after this fix lands -- otherwise a blind gate becomes mandatory.
 
 ### Added
+- **Interval-estimator disclosure: `RelaxationResult.interval_method`
+  (issue #116 option 1, `claim_status: pending`).** The public surface said
+  "BCa" in at least six places, but the leave-one-out jackknife that supplies
+  the BCa *acceleration* term `a` runs only for time grids of <= 60 points —
+  a latency guard (one extra GLS refit per grid point on top of
+  `bootstrap_B`) — while the default grid has 80. `bca_ci` then takes its
+  documented `a = 0.0` fallback, and with `a = 0` the interval is
+  bias-corrected (BC), not BCa: the "a" of BCa is exactly the acceleration.
+  So the default pipeline never computed the advertised estimator, and
+  nothing in the code, field name, docstrings or docs said so. The error
+  direction is not conservative by construction: `a` corrects for
+  parameter-dependent variance and can skew both endpoints either way.
+  This is the **disclosure** fix only, deliberately without changing any
+  computed number: the new additive field reports `"BCa"` (jackknife ran),
+  `"BC"` (`a = 0` fallback) or `"none"` (bootstrap failed or the point
+  estimate was not finite), defaulting to `"unreported"` so deserialised
+  pre-#116 reports stay valid and honest — for them the estimator genuinely
+  was not recorded. `bca_ci` itself, the 60-point gate and its rationale are
+  now documented at the gate, and the README, tutorial and
+  `no-single-number.md` wording no longer promise BCa unconditionally. U0
+  (`fit_uncertainty`) is derived from this interval's half-width and
+  inherits the label via `relaxation.interval_method`.
+  **Not** included (each changes reported numbers and needs its own anchor
+  review, per the issue): raising/dropping the gate, or estimating `a` from
+  the bootstrap replicates (empirical-influence / infinitesimal jackknife).
+  The run-manifest contract is unchanged; the field is additive with a
+  default.
 - **Branch-shadowing report: `ClassificationResult.triggered_hypotheses`
   (issue #102 slice "assess branch shadowing", `claim_status: pending`).** The
   classifier resolves by PRIORITY and returns exactly one dominant `a_class`,

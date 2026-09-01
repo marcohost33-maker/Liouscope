@@ -168,7 +168,7 @@ class RelaxationResult:
     fits: dict[str, FitResult]
     aicc_model: str                       # winning model
     beta_D: float                         # fitted exponential rate of best model
-    bca_ci_beta: tuple[float, float]      # BCa 95% CI
+    bca_ci_beta: tuple[float, float]      # 95% bootstrap CI (estimator: interval_method)
     # F-018 (LIOU-F-018): half trace-norm distance to rho_ss along the
     # trajectory, the observable relaxation metric alongside D5/D6/D7. Optional
     # and defaulted so the field is purely additive (older callers/serialised
@@ -181,6 +181,18 @@ class RelaxationResult:
     # uses. Additive + defaulted so older callers / serialised reports stay valid.
     beta_D_linear: float = float("nan")
     linear_fit_model: str = "none"
+    # Issue #116: which interval estimator actually produced ``bca_ci_beta``.
+    # The jackknife feeding the BCa acceleration term runs only for grids of
+    # <= 60 points (a latency guard: one extra GLS fit per grid point), and the
+    # default grid has 80 -- so the default pipeline computes a bias-corrected
+    # (BC) interval, not BCa. This field says which one was computed instead of
+    # letting the field name imply it. Values: "BCa" (acceleration from the
+    # leave-one-out jackknife), "BC" (acceleration = 0 fallback), "none" (no
+    # interval: bootstrap failed or the point estimate was not finite;
+    # ``bca_ci_beta`` is then (nan, nan) or degenerate). Additive + defaulted
+    # ("unreported") so older callers / serialised reports stay valid -- for a
+    # deserialised pre-#116 report the estimator genuinely is not recorded.
+    interval_method: str = "unreported"
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
