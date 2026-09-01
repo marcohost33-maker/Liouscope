@@ -65,6 +65,8 @@ def parametric_bootstrap(
             + (f" (saturated: {', '.join(base.saturated)})" if base.saturated else "")
             + (" (the curve carries no resolvable variation, issue #123)"
                if base.degenerate else "")
+            + (" (the residual likelihood scale is degenerate, issue #135)"
+               if base.likelihood_degenerate else "")
             + "; a bootstrap around a non-estimate has no meaning"
         )
     theta_hat = base.params

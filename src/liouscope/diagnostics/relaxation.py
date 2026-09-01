@@ -215,6 +215,7 @@ def _fit_with_model(
         n_eff=n_eff,
         residual_ar1_rho=fit.rho_ar1,
         success=fit.success,
+        likelihood_degenerate=fit.likelihood_degenerate,
     )
     return fit_result, fit.params
 

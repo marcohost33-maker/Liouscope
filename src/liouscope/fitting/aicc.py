@@ -11,9 +11,12 @@ not support the model.
 
 from __future__ import annotations
 
+import math
 from collections.abc import Mapping
 
 import numpy as np
+
+from ..numerics.norms import scaled_log_sum_squares
 
 
 def aicc(log_likelihood: float, k: int, n_eff: float) -> float:
@@ -29,18 +32,48 @@ def gaussian_log_likelihood(
     *,
     sigma: float | None = None,
 ) -> float:
-    """Gaussian log-likelihood for ``y - y_hat``.
+    """Gaussian log-likelihood for ``y - y_hat`` without absolute RSS floors.
 
-    Uses MLE sigma if ``sigma`` is omitted.
+    When ``sigma`` is omitted, evaluate the profile likelihood at the Gaussian
+    MLE ``sigma_hat**2 = RSS / n`` directly in log-RSS space. Exact zero RSS has
+    no finite interior MLE for the positive scale parameter and therefore
+    returns NaN (model-selection likelihood unavailable) instead of inventing
+    an absolute epsilon variance. With an explicitly supplied finite positive
+    ``sigma``, zero residuals remain a valid finite likelihood.
     """
     residuals = np.asarray(residuals, dtype=float)
     n = residuals.size
-    rss = float(np.dot(residuals, residuals))
+    if n == 0:
+        return float("nan")
+
+    log_rss = scaled_log_sum_squares(residuals)
+    if math.isnan(log_rss):
+        return float("nan")
+
+    log_2pi = math.log(2.0 * math.pi)
     if sigma is None:
-        sigma_sq = max(rss / n, 1.0e-30)
+        if log_rss == float("-inf"):
+            return float("nan")
+        if log_rss == float("inf"):
+            return float("-inf")
+        return float(-0.5 * n * (log_2pi + 1.0 + log_rss - math.log(n)))
+
+    sigma = float(sigma)
+    if not math.isfinite(sigma) or sigma <= 0.0:
+        return float("nan")
+    log_sigma = math.log(sigma)
+    if log_rss == float("-inf"):
+        standardised_rss = 0.0
+    elif log_rss == float("inf"):
+        return float("-inf")
     else:
-        sigma_sq = sigma * sigma
-    return float(-0.5 * n * (np.log(2.0 * np.pi * sigma_sq) + rss / (n * sigma_sq)))
+        log_standardised_rss = log_rss - 2.0 * log_sigma
+        if log_standardised_rss > math.log(np.finfo(float).max):
+            return float("-inf")
+        standardised_rss = math.exp(log_standardised_rss)
+    return float(
+        -0.5 * n * log_2pi - n * log_sigma - 0.5 * standardised_rss
+    )
 
 
 def choose_model(aiccs: Mapping[str, float]) -> str:

@@ -12,6 +12,7 @@ rounds (Cochrane-Orcutt style).
 
 from __future__ import annotations
 
+import math
 import warnings
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -19,6 +20,7 @@ from dataclasses import dataclass
 import numpy as np
 from scipy.optimize import least_squares
 
+from ..numerics.norms import scaled_log_sum_squares
 from .aicc import gaussian_log_likelihood
 from .models import saturation_watch
 from .neff import _AR1_SMALL_N, ar1_correlation_corrected
@@ -41,6 +43,11 @@ class GLSFitOutput:
     #: reports a fit that ran and ended on a magnitude plateau; here there was
     #: nothing to fit. Implies ``success`` is False and ``params`` is NaN.
     degenerate: bool = False
+    #: True when the residual Gaussian scale has no finite usable MLE for model
+    #: selection (issue #135). Distinct from ``degenerate`` above: the curve
+    #: may carry variation and the optimiser may have run, but exact-zero RSS
+    #: (or an unrepresentable positive MLE scale) cannot support AICc/CI claims.
+    likelihood_degenerate: bool = False
 
 
 def _whiten(y: np.ndarray, rho: float) -> np.ndarray:
@@ -192,14 +199,55 @@ def fit_gls_ar1(
         )
     whitened = _whiten(residuals_raw, rho)
     n = whitened.size
-    sigma = float(np.sqrt(max(np.dot(whitened, whitened) / max(n, 1), 1.0e-30)))
+    log_rss = scaled_log_sum_squares(whitened)
+    if log_rss == float("-inf") or not math.isfinite(log_rss):
+        warnings.warn(
+            "fit_gls_ar1: residual Gaussian scale has no finite positive MLE "
+            "for model selection; likelihood/AICc/CI evidence is unavailable "
+            "(issue #135).",
+            RuntimeWarning,
+            stacklevel=2,
+        )
+        return GLSFitOutput(
+            params=p,
+            residuals=residuals_raw,
+            rho_ar1=rho,
+            sigma=float("nan"),
+            log_likelihood=float("nan"),
+            success=False,
+            saturated=tuple(sorted(fired)),
+            likelihood_degenerate=True,
+        )
+
+    log_sigma = 0.5 * (log_rss - math.log(n))
+    try:
+        sigma = float(math.exp(log_sigma))
+    except OverflowError:
+        sigma = float("inf")
+    if not math.isfinite(sigma) or sigma <= 0.0:
+        warnings.warn(
+            "fit_gls_ar1: positive residual MLE scale is not representable as "
+            "float64; likelihood/AICc/CI evidence is unavailable (issue #135).",
+            RuntimeWarning,
+            stacklevel=2,
+        )
+        return GLSFitOutput(
+            params=p,
+            residuals=residuals_raw,
+            rho_ar1=rho,
+            sigma=float("nan"),
+            log_likelihood=float("nan"),
+            success=False,
+            saturated=tuple(sorted(fired)),
+            likelihood_degenerate=True,
+        )
+
     # Prais-Winsten exact AR(1) likelihood: _whiten keeps observation 0
     # (scaled by sqrt(1-rho^2)), so the transform has log-Jacobian
-    # 0.5*log(1-rho^2). Omitting it makes the reported value a hybrid of the
-    # exact and conditional likelihoods and biases cross-model AICc (each
-    # model fits its own rho) toward under-fitting high-rho models.
+    # 0.5*log(1-rho^2). The profile likelihood is evaluated directly from
+    # log(RSS), not by squaring ``sigma`` or materialising RSS.
     jac = 0.5 * float(np.log(max(1.0 - rho * rho, 1.0e-12)))
-    log_lik = gaussian_log_likelihood(whitened, sigma=sigma) + jac
+    log_lik = gaussian_log_likelihood(whitened) + jac
     return GLSFitOutput(
         params=p,
         residuals=residuals_raw,

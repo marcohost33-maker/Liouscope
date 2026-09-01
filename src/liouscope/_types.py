@@ -187,6 +187,7 @@ class FitResult:
     n_eff: float
     residual_ar1_rho: float
     success: bool
+    likelihood_degenerate: bool = False
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
