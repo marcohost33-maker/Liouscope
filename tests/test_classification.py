@@ -136,6 +136,7 @@ def _spectral(**kw) -> SpectralResult:
         "eigenvalues": _ARR,
         "steady_state": np.zeros((1, 1), dtype=complex),
         "has_complex_pairs": False,
+        "zero_mode_certificate": {"applicable": True, "certified": True, "resolved": True},
     }
     base.update(kw)
     return SpectralResult(**base)
@@ -698,3 +699,46 @@ def test_pick_verdict_tier_a12_short_circuits():
 def test_confidence_default_midpoint():
     # An A-class with no matching confidence rule keeps the 0.5 prior.
     assert _confidence({}, "A8") == pytest.approx(0.5)
+
+# --- issue #126: missing evidence must never read as resolved -----------------
+
+@pytest.mark.parametrize(
+    ("certificate", "expect_floor", "expected_evidence"),
+    [
+        (None, True, 0.0),
+        ({"applicable": False, "resolved": False, "certified": False}, False, None),
+        ({"applicable": True, "resolved": False, "certified": True}, True, 0.0),
+        ({"applicable": True, "resolved": True, "certified": True}, False, 1.0),
+    ],
+    ids=["missing", "inapplicable", "unresolved", "resolved"],
+)
+def test_issue126_spectral_certificate_state_table(
+    certificate, expect_floor, expected_evidence
+):
+    """Missing, inapplicable, unresolved and resolved are four distinct states."""
+    from liouscope.diagnostics.classification import SPECTRAL_RESOLVED_EVIDENCE_KEY
+
+    # Override the helper's explicit positive certificate, including with None.
+    spectral = _spectral(zero_mode_certificate=certificate)
+    cls = _classify(spectral=spectral)
+    if expected_evidence is None:
+        assert SPECTRAL_RESOLVED_EVIDENCE_KEY not in cls.evidence
+    else:
+        assert cls.evidence[SPECTRAL_RESOLVED_EVIDENCE_KEY] == expected_evidence
+    if expect_floor:
+        assert cls.verdict == VERDICT_UNDEFINED
+        assert cls.tier == TIER_EXPLORATION
+    else:
+        # Positive/non-applicable controls: the gate itself must not change the
+        # ordinary A12 fallback classification.
+        assert cls.a_class == "A12"
+        assert cls.verdict == VERDICT_NOT_EXCLUDED
+
+
+def test_issue126_no_permissive_missing_certificate_default_remains():
+    """Mutation guard: missing certificates may not silently become resolved."""
+    from liouscope.diagnostics.classification import SPECTRAL_RESOLVED_EVIDENCE_KEY
+
+    cls = _classify(spectral=_spectral(zero_mode_certificate=None))
+    assert cls.evidence[SPECTRAL_RESOLVED_EVIDENCE_KEY] == 0.0
+    assert cls.verdict == VERDICT_UNDEFINED
