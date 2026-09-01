@@ -20,10 +20,10 @@ certifies something it did not measure -- one layer further out each time:
   sit below the eigensolver's backward error.
 
 Every guard here is paired with a positive control: a guard that refuses
-everything discriminates nothing and must not be able to pass this file. The
-overflow twin of finding 12 has its own test for the opposite reason -- it
-pins a refusal that must NOT be repaired, because the round-21 guard depends
-on it.
+everything discriminates nothing and must not be able to pass this file. Issue
+#130 extends finding 12 symmetrically: a mathematically representable large norm
+must be measured as finite, while the structural zero-mode certificate remains
+responsible for refusing evidence that does not discriminate.
 """
 
 from __future__ import annotations
@@ -57,7 +57,7 @@ def _non_tp_operator() -> np.ndarray:
 
 
 # ---------------------------------------------------------------------------
-# Finding 12: use underflow-safe norms for the TP gate.
+# Finding 12: use underflow/overflow-safe norms for the TP gate.
 # ---------------------------------------------------------------------------
 
 
@@ -110,35 +110,33 @@ def test_a_healthy_generator_in_the_same_rate_units_still_certifies() -> None:
         assert cert.certified, f"a GKSL generator at scale {scale:g} was not certified"
 
 
-def test_the_overflow_direction_is_deliberately_not_rescued() -> None:
-    """The round-21 refusal must SURVIVE the round-23 repair.
+def test_representable_large_norm_is_measured_then_rejected_structurally() -> None:
+    """Measurement arithmetic must not carry the certificate's policy.
 
-    The two directions look symmetric and are not. ``||L||_F = inf`` for the
-    round-20 counterexample (cancelling +-1e308 entries, spectrum {1,2,3,4}) is
-    the input to the round-21 guard, which refuses a non-finite reference
-    scale. Its true Frobenius norm is about 1.4e308 and therefore perfectly
-    representable, so a scaled computation would hand back a finite number,
-    readmit the operator and reopen a hole that took five interpreter versions
-    of CI to close. This test goes red the moment someone makes the rescue
-    symmetric.
+    The round-20 counterexample has two cancelling ``+-1e308`` entries. Its
+    true Frobenius norm is about ``sqrt(2)*1e308`` and is therefore finite in
+    float64, even though a naive sum of squares overflows. Issue #130 requires
+    that finite measurement to stay finite. Safety is preserved one layer
+    later: the zero-mode band contains the whole measured spectrum, so
+    ``band_discriminates`` leaves the certificate unresolved instead of
+    treating arithmetic overflow as a surrogate refusal signal.
     """
-    # The round-20 operator, entry for entry (see
-    # tests/test_pr121_review_round20.py::_overflowing_norm_operator).
     op = np.diag([1.0, 2.0, 3.0, 4.0]).astype(complex)
     op[0, 1] = 1.0e308
     op[3, 1] = -1.0e308
     assert np.all(np.isfinite(op)), "the input must be FINITE for this to be the case"
-    with np.errstate(over="ignore"):
-        defect, fro = trace_preservation_defect(op)
+
+    defect, fro = trace_preservation_defect(op)
     assert defect == pytest.approx(np.sqrt(17.0)), "a real, order-one trace defect"
-    assert not np.isfinite(fro), (
-        "the overflowing reference scale was made finite; the round-21 guard "
-        "that refuses a non-finite scale now has nothing to refuse"
-    )
+    assert np.isfinite(fro), "a representable Frobenius norm must not overflow"
+    assert fro == pytest.approx(np.sqrt(2.0) * 1.0e308, rel=2.0e-15)
+
     with np.errstate(over="ignore"), warnings.catch_warnings():
         warnings.simplefilter("ignore")
         cert = certified_eigvals(op)[-1]
-    assert not cert.applicable and not cert.certified
+    assert cert.applicable
+    assert not cert.certified
+    assert not cert.resolved
 
 
 def test_the_repair_reaches_into_the_subnormal_range() -> None:
