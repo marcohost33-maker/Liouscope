@@ -13,6 +13,7 @@ Anchor G: standard iid bootstrap on ODE trajectories violates independence
 
 from __future__ import annotations
 
+import warnings
 from collections.abc import Callable
 
 import numpy as np
@@ -168,6 +169,14 @@ def bca_ci(
 
     Returns ``(p, 2)`` array of ``(lo, hi)`` per parameter at level
     ``1 - alpha``.
+
+    A parameter whose bootstrap distribution is degenerate, or whose adjusted
+    quantiles collapse to an exactly zero-width interval, is reported as
+    ``(NaN, NaN)`` with a warning. This follows the fail-closed semantics used
+    by SciPy's BCa implementation for degenerate bootstrap distributions:
+    arithmetic concentration is not promoted to a claim of perfect certainty
+    when the resampling model contains no measurable spread (issue #125).
+    Other non-degenerate parameters in the same fit remain reportable.
     """
     samples = np.asarray(samples, dtype=float)
     theta_hat = np.asarray(theta_hat, dtype=float)
@@ -177,6 +186,16 @@ def bca_ci(
     z_alpha_hi = ndtri(1.0 - alpha / 2.0)
     for j in range(p):
         boot_j = np.sort(samples[:, j])
+        if boot_j.size == 0 or np.all(boot_j == boot_j[0]):
+            warnings.warn(
+                f"bca_ci: bootstrap distribution for parameter {j} is "
+                "degenerate; uncertainty is unavailable rather than a "
+                "zero-width confidence claim (issue #125)",
+                RuntimeWarning,
+                stacklevel=2,
+            )
+            cis[j] = (float("nan"), float("nan"))
+            continue
         # Bias-correction z0 with half-correction for ties (Efron 1987, S3
         # audit 2026-06-04). Using a strict ``<`` only would send the
         # proportion to 0 (hence z0 -> -inf, clamped) whenever many bootstrap
@@ -214,6 +233,16 @@ def bca_ci(
         # continuous-percentile estimator.
         lo = float(np.quantile(boot_j, q_lo, method="linear"))
         hi = float(np.quantile(boot_j, q_hi, method="linear"))
+        if lo == hi:
+            warnings.warn(
+                f"bca_ci: confidence interval for parameter {j} collapsed to "
+                "exactly zero width; uncertainty is unavailable rather than "
+                "perfectly known (issue #125)",
+                RuntimeWarning,
+                stacklevel=2,
+            )
+            cis[j] = (float("nan"), float("nan"))
+            continue
         cis[j] = (lo, hi)
     return cis
 
