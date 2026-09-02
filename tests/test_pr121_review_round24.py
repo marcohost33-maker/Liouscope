@@ -26,7 +26,13 @@ import warnings
 import numpy as np
 import pytest
 
-from liouscope.numerics.linalg import operator_zero_tolerance
+from liouscope import build_liouvillian
+from liouscope.numerics.linalg import (
+    certified_eig,
+    certified_eigvals,
+    operator_zero_tolerance,
+    trace_preservation_defect,
+)
 
 # ---------------------------------------------------------------------------
 # B1: keep the operator-derived tolerance finite.
@@ -115,3 +121,122 @@ def test_the_ordinary_operator_path_is_untouched() -> None:
     assert operator_zero_tolerance(L) == pytest.approx(expected, rel=1e-14)
     # The zero operator keeps its documented zero-scale semantics.
     assert operator_zero_tolerance(np.zeros((4, 4), dtype=complex)) == 0.0
+
+
+# ---------------------------------------------------------------------------
+# B2: rescale when the TP defect alone underflows.
+# ---------------------------------------------------------------------------
+
+_H = np.diag([0.0, 1.0]).astype(complex)
+_LOWER = np.array([[0.0, 1.0], [0.0, 0.0]], dtype=complex)
+
+
+def _healthy_generator() -> np.ndarray:
+    """A genuine GKSL generator: ``vec(I)^H L`` is identically zero."""
+    return build_liouvillian(_H, [_LOWER], [0.5])
+
+
+def _numerator_only_underflow() -> np.ndarray:
+    """O(1) generator carrying a representable ``1e-200`` TP violation.
+
+    ``vec(I)^H L`` is ``[1e-200, 0, 0, 0]``. Its entries are perfectly normal
+    numbers; only their SQUARES fall below ``5e-324``, so ``np.linalg.norm``
+    returns ``0.0`` while ``||L||_F`` stays at 1.62 and the whole-operator
+    rescue of round 23 never fires.
+    """
+    L = _healthy_generator().copy()
+    L[0, 0] += 1.0e-200
+    return L
+
+
+def test_the_numerator_can_lose_its_scale_while_the_operator_keeps_its_own() -> None:
+    """The finding: only the NUMERATOR underflows, so ``fro == 0`` never fires.
+
+    Measured before the fix: ``(0.0, 1.620185174601965)``. Two numbers of which
+    one is a measurement and the other is its absence -- and the gate below
+    cannot tell which is which.
+    """
+    L = _numerator_only_underflow()
+    row = np.eye(2, dtype=complex).reshape(-1, order="F").conj() @ L
+    # Pin the precondition, so a numpy change cannot hollow the test out.
+    assert np.all(np.isfinite(L)), "the input must be FINITE for this to be the bug"
+    assert float(np.max(np.abs(row))) == pytest.approx(1.0e-200), (
+        "the trace-preservation row must carry a representable violation"
+    )
+    defect, fro = trace_preservation_defect(L)
+    assert fro == pytest.approx(1.620185174601965, rel=1e-12), (
+        "the operator's own scale is ORDINARY -- that is what makes the "
+        "round-23 whole-operator rescue inapplicable here"
+    )
+    assert defect > 0.0, (
+        "the trace defect underflowed to zero; 0.0 is not a small violation, "
+        "it is the absence of a measurement"
+    )
+    assert defect == pytest.approx(1.0e-200, rel=1e-12)
+
+
+@pytest.mark.parametrize(
+    ("name", "fn"),
+    [("certified_eigvals", certified_eigvals), ("certified_eig", certified_eig)],
+)
+def test_neither_certificate_api_admits_the_operator_the_numerator_hid(
+    name: str, fn: object
+) -> None:
+    """The downstream consequence, on both ladders.
+
+    With ``tp_rtol = 0`` the applicability gate reads ``defect > 0.0``. An
+    underflowed numerator makes that ``0.0 > 0.0`` -- False -- so a
+    demonstrably non-trace-preserving operator came back
+    ``applicable=True, trace_defect=0.0``. Measured on both APIs before the fix.
+    """
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        _, cert = fn(_numerator_only_underflow(), tp_rtol=0.0)  # type: ignore[operator]
+    assert cert.trace_defect > 0.0, (
+        f"{name} reported a zero trace defect for a non-TP operator"
+    )
+    assert cert.applicable is False, (
+        f"{name} declared a non-trace-preserving operator certificate-applicable"
+    )
+
+
+def test_a_genuine_generator_still_reports_an_exactly_zero_defect() -> None:
+    """Over-correction control: the repair must not manufacture a violation.
+
+    A real GKSL generator has ``vec(I)^H L == 0`` exactly. ``0.0`` is then the
+    CORRECT answer, not a lost one, and the new branch must leave it alone --
+    otherwise every legal generator acquires a spurious trace defect and the
+    gate starts refusing the physics it exists to admit.
+    """
+    defect, fro = trace_preservation_defect(_healthy_generator())
+    assert defect == 0.0
+    assert fro > 0.0
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        _, cert = certified_eigvals(_healthy_generator(), tp_rtol=0.0)
+    assert cert.applicable is True
+
+
+def test_the_one_directional_overflow_policy_is_untouched() -> None:
+    """The round-21 decision must survive the round-24 repair.
+
+    ``fro = inf`` is the documented INPUT to the non-finite-reference-scale
+    refusal that closed the round-20 counterexample. The numerator repair is
+    reachable only from an exact zero, so it can neither observe nor undo an
+    overflow -- this pins that, so a later widening of the trigger cannot
+    quietly readmit the operator.
+    """
+    # The round-20 counterexample, entry for entry: cancelling +-1e308 in the
+    # ``vec(I)^H L`` combination, so the defect is sqrt(17) while ||L||_F
+    # overflows.
+    L = np.diag([1.0, 2.0, 3.0, 4.0]).astype(complex)
+    L[0, 1] = 1.0e308
+    L[3, 1] = -1.0e308
+    assert np.all(np.isfinite(L))
+    with np.errstate(over="ignore"):
+        defect, fro = trace_preservation_defect(L)
+    assert np.isfinite(defect), "the defect itself is finite -- that is the trap"
+    assert not np.isfinite(fro), (
+        "if the Frobenius norm stops overflowing, the round-21 refusal this "
+        "test guards no longer has an input and the test is hollow"
+    )

@@ -7,6 +7,21 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Fixed
+- **The trace-preservation defect underflowed while the operator around it did
+  not (PR #121, round-24 review, finding B2).** The round-23 underflow repair
+  in `trace_preservation_defect` was triggered by `fro == 0.0` alone, but the
+  two norms do not share a scale. Adding a representable `1e-200`
+  trace-preservation violation to an O(1) generator leaves `vec(I)^H L =
+  [1e-200, 0, 0, 0]`, whose SQUARES fall below `5e-324`, so the numerator came
+  back `0.0` while `||L||_F` stayed at 1.62 and the whole-operator rescue never
+  fired. With `tp_rtol = 0` the applicability gate then read `0.0 > 0.0` --
+  False -- and `certified_eigvals` and `certified_eig` both reported
+  `applicable=True, trace_defect=0.0` for an operator that is demonstrably not
+  trace preserving. Scaled recomputation is now triggered when EITHER nonzero
+  source expression collapses, the numerator by its OWN exponent rather than
+  the operator's. The repair remains reachable only from an exact zero, so the
+  one-directional policy of round 23 -- underflow repaired, overflow left to
+  the round-21 refusal -- is unchanged.
 - **The operator-derived zero-mode cutoff came back infinite for a finite
   operator (PR #121, round-24 review, finding B1).** `operator_zero_tolerance`
   formed `rtol * eps * ||L||_2` directly, and `||L||_2` overflows for an

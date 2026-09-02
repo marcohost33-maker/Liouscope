@@ -321,7 +321,8 @@ def trace_preservation_defect(L_super: np.ndarray) -> tuple[float, float]:
     if d * d != n:
         return float("nan"), float("nan")
     vec_i = np.eye(d, dtype=complex).reshape(-1, order="F")
-    defect = float(np.linalg.norm(vec_i.conj() @ L_super))
+    tp_row = vec_i.conj() @ L_super
+    defect = float(np.linalg.norm(tp_row))
     fro = float(np.linalg.norm(L_super, ord="fro"))
     # The rescue is deliberately ONE-DIRECTIONAL: it repairs underflow and
     # leaves overflow alone. ``fro = inf`` is not an accident to be worked
@@ -370,6 +371,44 @@ def trace_preservation_defect(L_super: np.ndarray) -> tuple[float, float]:
                 np.ldexp(float(np.linalg.norm(vec_i.conj() @ scaled)), exp)
             )
             fro = float(np.ldexp(float(np.linalg.norm(scaled, ord="fro")), exp))
+    # ROUND-24 REVIEW (PR #121), finding B2. The rescue above is triggered by
+    # the DENOMINATOR alone, and the two norms do not share a scale. The
+    # NUMERATOR can underflow on its own while the operator around it is
+    # perfectly ordinary: add a representable ``1e-200`` trace-preservation
+    # violation to an O(1) generator and ``vec(I)^H L`` is
+    # ``[1e-200, 0, 0, 0]``, whose squares fall below ``5e-324`` -- so
+    # ``np.linalg.norm`` returns ``0.0`` while ``fro`` stays at 1.62 and the
+    # branch above never fires. With ``tp_rtol = 0`` (or any tolerance small
+    # enough) the gate then reads ``0.0 > 0.0``, which is False, and BOTH
+    # certificate APIs report ``applicable=True, trace_defect=0.0`` for an
+    # operator that is demonstrably not trace preserving. Measured before this
+    # repair.
+    #
+    # The condition is deliberately not ``defect == 0.0`` alone: a genuine GKSL
+    # generator has ``vec(I)^H L`` identically zero, and ``0.0`` is then the
+    # CORRECT answer rather than a lost one. What distinguishes the two is
+    # whether the source expression is itself zero, so that is what is asked --
+    # "did a nonzero quantity collapse", not "is the result zero".
+    #
+    # The repair stays ONE-DIRECTIONAL in the same sense as the one above: it
+    # is reachable only from an exact zero, so no overflowing quantity is made
+    # finite and the round-21 refusal of a non-finite reference scale is
+    # untouched.
+    if defect == 0.0 and np.any(tp_row != 0.0):
+        m_row = float(
+            np.max(np.maximum(np.abs(np.real(tp_row)), np.abs(np.imag(tp_row))))
+        )
+        # ``m_row > 0`` follows from the ``np.any`` above: a vector with a
+        # nonzero entry has a nonzero largest component. Scaling by a power of
+        # two selected from that component -- not by the OPERATOR's scale,
+        # which is precisely the quantity this row does not share.
+        exp_row = int(np.frexp(m_row)[1])
+        row_scaled = np.ldexp(np.real(tp_row), -exp_row) + 1j * np.ldexp(
+            np.imag(tp_row), -exp_row
+        )
+        defect = float(
+            np.ldexp(float(np.linalg.norm(row_scaled)), exp_row)
+        )
     return defect, fro
 
 
