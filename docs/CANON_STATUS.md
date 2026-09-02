@@ -75,3 +75,49 @@ Any future PR that changes one of the following must include a canon-impact note
 - D24 claim wording,
 - branch protection / release workflow policy,
 - public/private visibility or publication channel.
+
+---
+
+## 7. Canon-impact note — D13 resolution semantics (2026-09-02)
+
+Section 6 requires a canon-impact note for any change to diagnostic semantics.
+This records one.
+
+**What changed.** `numerics.pseudospec.pseudospectral_radius` returned `0.0`
+when the eps-pseudospectrum grid resolved nothing. It now returns `nan` and
+emits a `RuntimeWarning` naming the smallest eps the grid could have resolved.
+`ResolventResult.pseudospectral_radius` (D13) therefore acquires `nan` as a
+reachable value on under-resolved sweeps, where it previously carried `0.0`.
+
+**Why it is a correction, not a redefinition.** The published D13 quantity is
+`max{|z| : z in sigma_eps(L)}`. When no sampled point belongs to
+`sigma_eps(L)`, that maximum is *unmeasured over the sampled set*, not zero.
+The old return value asserted a measurement that had not been made. The sibling
+estimator `pseudospectrum_extent`, added for issue #101, already used `nan` for
+this case, so the two returned `0.0` and `nan` for the same input.
+
+**Classifier impact: none.** `classification.py` gates F5 on
+`pseudospectral_radius / gap > 2 * gap_to_gns_ratio`. Both `0.0 / gap > x` and
+`nan / gap > x` evaluate to False, so no verdict on any input changes. The
+branch now records the unresolved state explicitly and warns, so an
+F5-negative on absent evidence is distinguishable from one on negative
+evidence. A run reporting F5-negative with a non-finite D13 must not be cited
+as an F5 exclusion.
+
+**Manifest / schema impact: none.** No manifest field, hash domain or schema
+version changes. `MANIFEST_SCHEMA_VERSION` stays `1.5.0`.
+
+**Reproduction.** `tests/test_pseudospec_resolution.py` pins the contract
+against an analytic oracle (for a normal operator the eps-pseudospectrum is
+exactly the union of eps-discs around the spectrum, so the true radius is
+`max|lambda| + eps`), together with a positive control that rejects a function
+returning `nan` unconditionally.
+
+**Open, not closed by this change.** The default 25x25 grid at `eps = 1e-3`
+resolves the eps-pseudospectrum only at nodes that coincide with eigenvalues,
+so on V2-V5 the reported D13 equals `max|lambda|` and carries little
+non-normality information. Replacing the grid-membership test with a level-set
+method (Burke-Lewis-Overton criss-cross for the abscissa, radial sweep for the
+radius -- the approach already used in the issue-#101 scale-relative line) is a
+separate, class-influencing change and needs its own PR with calibration
+coverage.

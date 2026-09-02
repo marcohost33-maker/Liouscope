@@ -37,7 +37,7 @@ jobs:
           python -m pip install --upgrade pip
           pip install -e .[dev,qutip]
       - name: Lint
-        run: ruff check src tests benchmarks
+        run: ruff check src tests benchmarks docs figures examples .github/scripts
       - name: Type check
         run: mypy src/liouscope
       - name: Run anchor regressions (must pass)

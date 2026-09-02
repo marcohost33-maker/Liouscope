@@ -77,7 +77,7 @@ jobs:
     with:
       python-version: ${{ needs.validate-matrix.outputs.python-version }}
       install-command: 'pip install -e ".[dev]" pytest-cov'
-      ruff-target: "src tests benchmarks"
+      ruff-target: "src tests benchmarks docs figures examples .github/scripts"
       mypy-target: "src/liouscope"
       pytest-args: "--cov=liouscope --cov-fail-under=80 -q"
     # No `secrets: inherit`: the called CI workflow only needs checkout/install/test

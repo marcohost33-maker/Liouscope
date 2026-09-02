@@ -39,6 +39,9 @@ in a dedicated PR with anchor coverage + FP tests, not a blind hook-up here.
 
 from __future__ import annotations
 
+import math
+import warnings
+
 import numpy as np
 
 from .._consts import (
@@ -372,10 +375,28 @@ def _hypothesis_ladder(
     # as c). A vanishing gap (no spectral gap) is treated as inf reach: a
     # gapless, strongly non-normal operator is the phantom/critical limit.
     _gap = ev.get("gap", 0.0)
-    if _gap > 0.0:
-        _psr_fires = (
-            ev["pseudospectral_radius"] / _gap > 2.0 * ev.get("gap_to_gns_ratio", 1.0)
+    _psr = ev["pseudospectral_radius"]
+    if not math.isfinite(_psr):
+        # UNRESOLVED, not negative (2026-09-02 hardening). D13 returns nan when
+        # the eps-pseudospectrum grid resolves nothing. Before the numerics fix
+        # that same case returned 0.0, and ``0.0 / gap > 2 * ratio`` is False --
+        # so an unmeasured D13 SILENTLY SUPPRESSED the F5 branch and the run
+        # reported "no pseudospectral intrusion" on evidence it never had. NaN
+        # yields the same False (comparisons against nan are False), so the
+        # VERDICT is unchanged by design -- what changes is that the gap is now
+        # visible in the evidence dict and in the log instead of being
+        # indistinguishable from a measured negative.
+        _psr_fires = False
+        warnings.warn(
+            "F5 pseudospectral reach is UNRESOLVED (D13 pseudospectral_radius "
+            "is not finite): the F5 branch is reported as not-fired on ABSENT "
+            "evidence, not on negative evidence. Refine the D13 grid or raise "
+            "pseudo_eps before citing an F5-negative result.",
+            RuntimeWarning,
+            stacklevel=2,
         )
+    elif _gap > 0.0:
+        _psr_fires = _psr / _gap > 2.0 * ev.get("gap_to_gns_ratio", 1.0)
     else:
         # Gapless limit: infinite reach dominates ANY ratio. The former
         # ``inf > 2*ratio`` comparison silently failed when the GNS gap was

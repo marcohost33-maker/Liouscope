@@ -15,7 +15,7 @@ import importlib.metadata
 
 project = "LiouScope"
 author = "Coworker Research"
-copyright = "2026, Coworker Research"  # noqa: A001  (Sphinx-mandated name)
+copyright = "2026, Coworker Research"  # Sphinx-mandated name (shadows the builtin)
 
 # Single source of truth: read the installed package version. Falls back to a
 # sentinel so an uninstalled checkout still builds (RTD installs the package).

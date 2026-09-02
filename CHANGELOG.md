@@ -7,6 +7,89 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Fixed
+- **D13 reported a plausible number where it had no measurement (2026-09-02
+  cross-check).** `numerics/pseudospec.pseudospectral_radius` initialised its
+  accumulator to `0.0` and returned it when no grid node satisfied
+  `sigma_min(zI - L) <= eps`. `0.0` is a *legitimate* pseudospectral radius, so
+  an unresolved sweep was indistinguishable from a measured one. It is the
+  inverse of the failure PR #129 found in the workflow gate: there a guard
+  produced no result, here it produced a wrong one.
+  - **Reach.** The value is on the live diagnostic path
+    (`resolvent.pseudospectral_radius_diag` -> `ResolventResult` ->
+    `classification.py` F5). The F5 phantom-relaxation branch gates on
+    `pseudospectral_radius / gap > 2 * gap_to_gns_ratio`; with `0.0` that
+    comparison is False, so an **unmeasured D13 silently suppressed F5** and the
+    run reported "no pseudospectral intrusion" on evidence it never had.
+  - **Evidence.** Analytic oracle (normal matrix, spectrum
+    `{0, -0.2, -1+-3i, -4}`, true radius exactly `max|lambda| + eps = 4.001`):
+    the function returned `0.0` on explicitly supplied 25x25, 51x51, 101x101 and
+    201x201 grids. Refinement does not help -- at `eps = 1e-3` the pseudospectrum
+    is a union of discs of radius ~1e-3 and no node lands inside one. The
+    default grid only worked by accident: `np.linspace` places nodes exactly on
+    `re_min`/`re_max`, i.e. on extremal eigenvalues where `sigma_min = 0`. On
+    V2/V3/V4/V5 the reported D13 therefore equalled `max|lambda|` exactly
+    (ratio 1.0000) and carried no non-normality information; on V1 it was 0.23
+    of it, so it was not even a consistent bound. Only 3-4 of 625 default-grid
+    nodes were ever inside the eps-pseudospectrum.
+  - **Sibling disagreement.** `pseudospectrum_extent` was fail-visible from the
+    start, so the two implementations of the same quantity returned `0.0` and
+    `nan` on byte-identical input.
+  - **Fix.** `pseudospectral_radius` now returns `nan` with a `RuntimeWarning`
+    naming the smallest `eps` the grid could resolve. New
+    `pseudospectrum_sigma_floor` reports `min sigma_min` over the grid, turning
+    "found nothing" into an actionable number. `classification.py` treats a
+    non-finite D13 as UNRESOLVED and warns, instead of letting it read as a
+    measured negative. Pinned by `tests/test_pseudospec_resolution.py`
+    (9 tests, analytic oracle + positive control).
+  - **Verdict impact: none by construction.** `nan > x` is False, as `0.0 > x`
+    was; the classification output is unchanged on every existing input. What
+    changes is that the evidence gap is now visible. See the canon-impact note
+    in `docs/CANON_STATUS.md` section 7.
+- **The claim-safety gate was blind in two ways, and had no test at all.**
+  `.github/scripts/check_claim_safety.py` was the only gate without a test file
+  (its sibling got one after PR #129). Negative controls found:
+  - the allow-list was matched as bare substrings against the WHOLE line, so any
+    unrelated negation disabled the check: a sentence asserting readiness for
+    production and, in a later clause, the absence of open gaps passed the gate,
+    because the bare substring for that second clause occurs in the line. The
+    literal wording is not repeated here -- it is held only in the parametrised
+    cases of `tests/test_claim_safety_gate.py`, which is out of the gate's
+    scanned scope by design;
+  - `paper/paper.md`, the JOSS submission and the most public-facing scientific
+    claim surface in the repository, was outside the scanned scope, as were
+    `AGENTS.md`, `CONTRIBUTING.md`, `SECURITY.md` and `CITATION.cff`.
+  Qualifiers are now matched on word boundaries within a 60-character window
+  around the risky phrase (bare negations only when they *precede* it); the
+  scope covers 27 files instead of 22. `tests/test_claim_safety_gate.py` adds
+  7 mutation-based negative controls, a positive control and 4 false-positive
+  guards.
+- **`relaxation.py` swallowed `except Exception` silently** twenty lines below
+  a comment arguing correctly against exactly that. Narrowed to
+  `(ValueError, RuntimeError, LinAlgError)` -- so programming errors in
+  `entanglement_asymmetry` raise instead of degrading to NaN -- and the
+  remaining failure now warns. The NaN result itself is unchanged.
+
+### Added
+- **The `CANON_STATUS.md` section 4 no-drift invariants are now enforced.** The
+  document declared six identifiers that "must remain synchronized"; nothing
+  read that list. No test and no CI step opened `CITATION.cff`,
+  `codemeta.json` or `CHANGELOG.md`, and the release workflow verified exactly
+  one of the six (`_version.py`, against the tag and the built wheel). Cutting
+  v0.6.0 with the citation files still naming 0.5.0 would have passed every
+  existing gate. `tests/test_canon_invariants.py` binds the schema identifiers
+  to the canon document and the citation surfaces to `_version.py`, with the
+  documented development-line lag expressed as a conditional rule (lag allowed,
+  but backwards only, and closed on a final release).
+
+### Changed
+- **The lint gate no longer stops at `src tests benchmarks`.** `docs/`,
+  `figures/`, `examples/` and -- notably -- `.github/scripts/`, which holds the
+  quality gates themselves, were unlinted, and carried a live `RUF100`. CI and
+  the reusable pilot workflow now lint all of them.
+
+<!-- earlier Unreleased entries (PR #129 and prior) -->
+
+### Fixed
 - **The workflow hardening gate was blind to the commonest way to write a step
   (PR #129).** `.github/scripts/check_workflow_hardening.py` enforces the
   SHA-pinning rule of AGENTS.md section 4 on every workflow, and nothing
