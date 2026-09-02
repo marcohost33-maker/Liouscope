@@ -106,7 +106,13 @@ def test_negative_control_gate_goes_red(sandbox: Path, target: str, claim: str) 
         f"gate stayed green on an injected risky claim in {target}: {claim!r}\n"
         f"stdout={result.stdout!r}"
     )
-    assert target in result.stderr
+    # The gate reports the path with the platform separator (on Windows
+    # `docs\index.md`); the parametrisation spells it portably with `/`.
+    # Without normalisation this assertion is always false on Windows -- and
+    # precisely for the cases WITH a directory, while the root-level files
+    # stay green. A negative control that only fires on one platform guards
+    # the guard only there.
+    assert target in result.stderr.replace("\\", "/")
 
 
 @pytest.mark.parametrize(
