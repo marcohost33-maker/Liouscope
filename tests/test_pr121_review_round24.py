@@ -27,6 +27,7 @@ import numpy as np
 import pytest
 
 from liouscope import build_liouvillian
+from liouscope.fitting.gls import fit_gls_ar1
 from liouscope.numerics.linalg import (
     certified_eig,
     certified_eigvals,
@@ -240,3 +241,81 @@ def test_the_one_directional_overflow_policy_is_untouched() -> None:
         "if the Frobenius norm stops overflowing, the round-21 refusal this "
         "test guards no longer has an input and the test is hollow"
     )
+
+
+# ---------------------------------------------------------------------------
+# B3: validate fit-array shapes before the flat-curve return.
+# ---------------------------------------------------------------------------
+
+
+def _decay(t: np.ndarray, p: np.ndarray) -> np.ndarray:
+    return p[0] * np.exp(-p[1] * t)
+
+
+def test_a_mismatched_pair_is_refused_not_reported_as_a_flat_curve() -> None:
+    """The finding: the degeneracy test reads ``y`` alone and never sees ``t``.
+
+    A 64-point grid against a one-point constant curve came back
+    ``degenerate=True`` -- "no resolvable variation" asserted about a curve
+    that was never supplied on that grid. The verdict does not mention the
+    grid, so nothing downstream can recover the mismatch from it.
+
+    Warnings are silenced INSIDE the block on purpose: without the guard this
+    call emits the degeneracy ``RuntimeWarning``, and under the session's
+    error filter the test would die of that warning instead of of the missing
+    refusal. A probe must die of the thing it is probing.
+    """
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        with pytest.raises(ValueError, match="same length"):
+            fit_gls_ar1(
+                _decay,
+                np.linspace(0.0, 5.0, 64),
+                np.array([1.0]),
+                np.array([1.0, 1.0]),
+            )
+
+
+def test_an_empty_curve_against_a_populated_grid_is_refused() -> None:
+    """``y.size == 0`` reaches the same early return with ``spread = 0.0``."""
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        with pytest.raises(ValueError, match="same length"):
+            fit_gls_ar1(
+                _decay,
+                np.linspace(0.0, 5.0, 64),
+                np.zeros(0),
+                np.array([1.0, 1.0]),
+            )
+
+
+def test_two_dimensional_observations_are_refused() -> None:
+    """Equal SIZE is not equal SHAPE, so the length test alone is not enough.
+
+    An 8x8 pair passes ``t.size == y.size`` and, being constant, short-circuits
+    to ``degenerate=True`` with a 2-D NaN residual array -- a structured answer
+    about observations that are not a time series at all.
+    """
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        with pytest.raises(ValueError, match="one-dimensional"):
+            fit_gls_ar1(
+                _decay,
+                np.ones((8, 8)),
+                np.ones((8, 8)),
+                np.array([1.0, 1.0]),
+            )
+
+
+def test_a_well_formed_flat_curve_is_still_degenerate_not_refused() -> None:
+    """Over-correction control: issue #123 must survive the shape gate.
+
+    A genuinely flat curve ON ITS OWN GRID is a legitimate measurement with
+    nothing to fit. It must keep returning ``degenerate=True`` -- turning it
+    into a ``ValueError`` would trade one silent failure for a loud one.
+    """
+    t = np.linspace(0.0, 5.0, 64)
+    with pytest.warns(RuntimeWarning, match="nothing to fit"):
+        out = fit_gls_ar1(_decay, t, np.zeros_like(t), np.array([1.0, 1.0]))
+    assert out.degenerate is True
+    assert out.success is False

@@ -7,6 +7,17 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Fixed
+- **Malformed observations were reported as a flat curve instead of refused
+  (PR #121, round-24 review, finding B3).** The issue-#123 degeneracy test in
+  `fit_gls_ar1` reads `y` alone and never touches `t`, and it ran before any
+  shape validation. A 64-point grid against a one-point constant curve
+  therefore returned `degenerate=True` -- "no resolvable variation" asserted
+  about a curve that was never supplied on that grid, and a verdict that does
+  not mention the grid is one nothing downstream can undo. An 8x8 pair slipped
+  through the same way with a 2-D NaN residual array. `t` and `y` are now
+  checked to be one-dimensional and equal in length before anything else
+  inspects them, raising `ValueError` like the finiteness gate beside it. A
+  well-formed flat curve still returns `degenerate=True`.
 - **The trace-preservation defect underflowed while the operator around it did
   not (PR #121, round-24 review, finding B2).** The round-23 underflow repair
   in `trace_preservation_defect` was triggered by `fro == 0.0` alone, but the

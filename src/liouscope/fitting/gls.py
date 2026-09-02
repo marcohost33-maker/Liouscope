@@ -83,6 +83,31 @@ def fit_gls_ar1(
     t = np.asarray(t, dtype=float)
     y = np.asarray(y, dtype=float)
     p = np.asarray(p0, dtype=float).copy()
+    # Fail closed on MALFORMED observations, BEFORE anything else inspects them
+    # (round-24 review, PR #121). The degeneracy test below reads ``y`` alone;
+    # it never touches ``t``, so a mismatched pair reaches it intact and a
+    # constant or single-point ``y`` short-circuits out with
+    # ``degenerate=True`` -- a plausible, structured answer that says "this
+    # curve has no resolvable variation" about a curve that was never supplied.
+    # Measured: a 64-point ``t`` against a one-point ``y`` was reported as a
+    # flat curve on that grid. Nothing downstream can recover the mismatch from
+    # that verdict, because the verdict does not mention the grid.
+    #
+    # Placed ahead of the finiteness gate deliberately: the index list that
+    # gate reports is meaningless for a pair that is not aligned in the first
+    # place, and shape is the more fundamental question. The rule is the same
+    # one -- data the caller hands in must be measurements.
+    if t.ndim != 1 or y.ndim != 1:
+        raise ValueError(
+            "fit_gls_ar1: t and y must be one-dimensional observation arrays; "
+            f"got t.ndim={t.ndim} (shape {t.shape}) and y.ndim={y.ndim} "
+            f"(shape {y.shape})"
+        )
+    if t.size != y.size:
+        raise ValueError(
+            "fit_gls_ar1: t and y must have the same length; got "
+            f"len(t)={t.size} and len(y)={y.size}"
+        )
     # Fail closed on corrupted input at the FIT boundary (eighth-round review):
     # the models saturate non-finite intermediates so that optimiser overflow
     # probes keep a finite, informative residual — but that same saturation
