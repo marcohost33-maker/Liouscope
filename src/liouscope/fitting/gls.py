@@ -48,6 +48,14 @@ class GLSFitOutput:
     #: may carry variation and the optimiser may have run, but exact-zero RSS
     #: (or an unrepresentable positive MLE scale) cannot support AICc/CI claims.
     likelihood_degenerate: bool = False
+    #: True when the profile likelihood IS computable in log space but the
+    #: positive MLE scale ``exp(log_sigma)`` is not representable as a float64
+    #: (round-1 review of PR #147). ``sigma`` is then NaN while
+    #: ``log_likelihood`` stays finite: the fit remains a valid AICc candidate,
+    #: and only the scale-dependent evidence -- the parametric bootstrap, hence
+    #: the CI -- is withheld. Distinct from ``likelihood_degenerate``, where the
+    #: likelihood itself has no finite value.
+    scale_unavailable: bool = False
 
 
 def _whiten(y: np.ndarray, rho: float) -> np.ndarray:
@@ -224,22 +232,43 @@ def fit_gls_ar1(
         sigma = float(math.exp(log_sigma))
     except OverflowError:
         sigma = float("inf")
-    if not math.isfinite(sigma) or sigma <= 0.0:
+    scale_unavailable = not math.isfinite(sigma) or sigma <= 0.0
+    if scale_unavailable:
+        # ROUND-1 REVIEW (PR #147). This branch used to return
+        # ``success=False, log_likelihood=nan, likelihood_degenerate=True``,
+        # which withheld the whole FIT because a number the likelihood never
+        # needs could not be materialised. ``log_rss`` is finite here -- the
+        # gate above already refused the case where it is not -- so the profile
+        # likelihood is computable directly in log space by
+        # ``gaussian_log_likelihood``, which never forms ``sigma``. Only
+        # ``exp(log_sigma)`` left the float64 range.
+        #
+        # Measured on the reviewer's construction: one minimum-subnormal
+        # residual (5e-324) in an otherwise-zero series of 64 points gives
+        # ``log_rss = -1488.88``, ``log_sigma = -746.52`` and a perfectly
+        # finite profile log-likelihood of ``+47686.44`` -- while
+        # ``exp(-746.52)`` underflows to ``0.0`` because the smallest
+        # subnormal is ``exp(-744.44)``. Marking the fit unsuccessful there
+        # makes ``aicc()`` return ``inf`` in ``_fit_one`` and the model drops
+        # out of selection, which reintroduces exactly the ABSOLUTE SCALE
+        # BOUNDARY into model selection that issue #135 removed: the same
+        # curve in different rate units is or is not a candidate.
+        #
+        # So the fit stays selectable and only the scale-dependent evidence is
+        # withheld. ``sigma`` is NaN, never 0.0 or inf: it is consumed by
+        # ``_ar1_resample`` as the standard deviation of the innovation, where
+        # 0.0 would silently generate a bootstrap of IDENTICAL replicates --
+        # a zero-width CI, which is the failure mode of an uncertainty
+        # pipeline, not a wide one. ``parametric_bootstrap`` refuses on the
+        # dedicated flag rather than on ``success``, so "no interval" and "no
+        # estimate" stay distinguishable.
         warnings.warn(
-            "fit_gls_ar1: positive residual MLE scale is not representable as "
-            "float64; likelihood/AICc/CI evidence is unavailable (issue #135).",
+            "fit_gls_ar1: the positive residual MLE scale is not representable "
+            f"as float64 (log sigma = {log_sigma:.6g}); the log-space "
+            "likelihood and AICc remain available, but bootstrap/CI evidence "
+            "is withheld (issue #135, PR #147 review).",
             RuntimeWarning,
             stacklevel=2,
-        )
-        return GLSFitOutput(
-            params=p,
-            residuals=residuals_raw,
-            rho_ar1=rho,
-            sigma=float("nan"),
-            log_likelihood=float("nan"),
-            success=False,
-            saturated=tuple(sorted(fired)),
-            likelihood_degenerate=True,
         )
 
     # Prais-Winsten exact AR(1) likelihood: _whiten keeps observation 0
@@ -252,8 +281,9 @@ def fit_gls_ar1(
         params=p,
         residuals=residuals_raw,
         rho_ar1=rho,
-        sigma=sigma,
+        sigma=float("nan") if scale_unavailable else sigma,
         log_likelihood=log_lik,
         success=success,
         saturated=tuple(sorted(fired)),
+        scale_unavailable=scale_unavailable,
     )

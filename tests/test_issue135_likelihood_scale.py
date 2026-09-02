@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+import warnings
 
 import numpy as np
 import pytest
@@ -111,3 +112,99 @@ def test_likelihood_degenerate_state_reaches_fitresult_and_is_nonselectable(monk
     assert not fit_result.success
     assert fit_result.likelihood_degenerate
     assert np.isinf(fit_result.aicc)
+
+
+# --------------------------------------------------------------------------
+# PR #147 round-1 review: an unrepresentable MLE scale withheld the whole FIT,
+# not just the scale-dependent evidence.
+# --------------------------------------------------------------------------
+
+#: Smallest positive float64. One such residual among an otherwise-zero series
+#: keeps ``log_rss`` finite while ``exp(0.5 * (log_rss - log n))`` underflows:
+#: the profile likelihood is computable, its scale is not.
+_MIN_SUBNORMAL = 5.0e-324
+
+
+def _constant_model(t: np.ndarray, p: np.ndarray) -> np.ndarray:
+    return np.full(t.shape, float(p[0]))
+
+
+def _underflowing_scale_case() -> tuple[np.ndarray, np.ndarray]:
+    n = 64
+    t = np.linspace(0.0, 5.0, n)
+    y = np.zeros(n)
+    y[7] = _MIN_SUBNORMAL
+    return t, y
+
+
+def test_the_underflowing_case_really_has_a_finite_log_likelihood() -> None:
+    """Positive control: the fixture must exercise the finding, not a NaN RSS.
+
+    Without this the two assertions below could pass on a case where nothing
+    was computable in the first place.
+    """
+    _, y = _underflowing_scale_case()
+    log_rss = scaled_log_sum_squares(y)
+    assert math.isfinite(log_rss), log_rss
+    log_sigma = 0.5 * (log_rss - math.log(y.size))
+    assert math.isfinite(log_sigma), log_sigma
+    assert math.exp(log_sigma) == 0.0, (
+        "the fixture no longer underflows; the finding cannot be reached"
+    )
+    assert math.isfinite(gaussian_log_likelihood(y))
+
+
+def test_unrepresentable_scale_keeps_the_fit_selectable() -> None:
+    """The fit stays an AICc candidate; only ``sigma`` is withheld.
+
+    Measured before the repair: ``success=False``, ``log_likelihood=nan`` and
+    ``likelihood_degenerate=True`` -- so ``_fit_with_model`` scored the model
+    ``inf`` and dropped it from selection. That reintroduces an ABSOLUTE scale
+    boundary into model selection, which is the boundary issue #135 removed:
+    the same curve in different rate units is or is not a candidate.
+    """
+    t, y = _underflowing_scale_case()
+    # Recorded rather than ``pytest.warns``: a missing warning must fail this
+    # test at an ASSERTION, so that removing the guard is attributable. With
+    # ``pytest.warns`` the test dies inside pytest's own context manager, which
+    # a mutation run cannot tell apart from an incidental crash.
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        fit = fit_gls_ar1(_constant_model, t, y, np.array([0.0]))
+    assert any(
+        issubclass(w.category, RuntimeWarning)
+        and "scale is not representable" in str(w.message)
+        for w in caught
+    ), [str(w.message) for w in caught]
+    assert fit.success, "the fit was withheld because its SCALE could not be built"
+    assert math.isfinite(fit.log_likelihood), fit.log_likelihood
+    assert not fit.likelihood_degenerate
+    assert fit.scale_unavailable
+    assert math.isnan(fit.sigma), (
+        f"sigma is {fit.sigma!r}; 0.0 would make _ar1_resample draw identical "
+        "replicates and produce a zero-width interval"
+    )
+
+
+def test_unrepresentable_scale_still_withholds_the_bootstrap() -> None:
+    """Fail-closed control: selectable must not mean an interval was invented."""
+    t, y = _underflowing_scale_case()
+    with pytest.warns(RuntimeWarning):
+        with pytest.raises(Exception) as excinfo:
+            parametric_bootstrap(
+                _constant_model, t, y, np.array([0.0]), B=4,
+                rng=np.random.default_rng(0),
+            )
+    assert excinfo.type is RuntimeError, excinfo.type
+    assert "no representable residual scale" in str(excinfo.value)
+
+
+def test_ordinary_fit_is_untouched_by_the_scale_repair() -> None:
+    """Over-correction control: a normal fit keeps a finite positive sigma."""
+    rng = np.random.default_rng(20260903)
+    t = np.linspace(0.0, 4.0, 64)
+    p = np.array([1.0, 0.8])
+    y = M0(t, p) + 1.0e-3 * rng.standard_normal(t.size)
+    fit = fit_gls_ar1(M0, t, y, p, n_iters=1)
+    assert not fit.scale_unavailable
+    assert np.isfinite(fit.sigma) and fit.sigma > 0.0
