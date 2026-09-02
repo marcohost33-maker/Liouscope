@@ -247,8 +247,53 @@ def operator_zero_tolerance(
     if not np.isfinite(rtol) or rtol < 0.0:
         raise ValueError(f"rtol must be finite and non-negative, got {rtol}")
     L_c = np.asarray(require_finite_square_2d(L_super, name=name), dtype=complex)
-    norm2 = float(np.linalg.norm(L_c, 2)) if L_c.size else 0.0
-    return float(rtol * float(np.finfo(float).eps) * norm2)
+    # ``require_finite_square_2d`` has already refused an empty operator, so
+    # ``L_c.size`` is non-zero from here on.
+    eps = float(np.finfo(float).eps)
+    norm2 = float(np.linalg.norm(L_c, 2))
+    if np.isfinite(norm2):
+        tol = float(rtol * eps * norm2)
+    else:
+        # ROUND-24 REVIEW (PR #121). The round-22 finding, one helper across.
+        # ``||L||_2`` can overflow for an operator every entry of which is
+        # finite -- a 2x2 filled with ``1e308`` has a spectral norm of
+        # ``2e308`` -- while the quantity this function returns,
+        # ``rtol * eps * ||L||_2 ~ 4.4e295``, is comfortably representable.
+        # Returning ``inf`` there is the same silent failure the spectrum-side
+        # helper closed in round 22: no mode satisfies ``|lambda| > inf``, so a
+        # consumer holding the OPERATOR discards its entire spectrum and reads
+        # a huge non-zero mode as stationary. The input was valid; only the
+        # intermediate was not.
+        #
+        # Scaling by the largest COMPONENT keeps every intermediate in range,
+        # exactly as in :func:`liouscope.numerics.scale.spectral_zero_tolerance`
+        # -- ``max(|Re|, |Im|)`` rather than ``max|.|`` because the modulus of
+        # a finite complex entry can itself overflow. ``frexp`` selects a POWER
+        # OF TWO, so the shift is exact in every mantissa bit and the round
+        # trip introduces no rounding into a number whose only purpose is to be
+        # compared against. ``m > 0`` holds here: a zero matrix has a finite
+        # (zero) 2-norm and never reaches this branch.
+        m = float(np.max(np.maximum(np.abs(np.real(L_c)), np.abs(np.imag(L_c)))))
+        exp = int(np.frexp(m)[1])
+        scaled = np.ldexp(np.real(L_c), -exp) + 1j * np.ldexp(np.imag(L_c), -exp)
+        with np.errstate(over="ignore"):
+            tol = float(
+                np.ldexp(rtol * eps * float(np.linalg.norm(scaled, 2)), exp)
+            )
+    if not np.isfinite(tol):
+        # Second line of defence, independent of the arithmetic above and the
+        # same rule ``spectral_zero_tolerance`` applies to its own derived
+        # value. A tolerance that is not finite cannot separate anything, so
+        # the operator is refused rather than filtered against an unusable
+        # threshold. Reached only when the tolerance ITSELF exceeds the double
+        # range (``rtol`` near the top of it), not merely the norm.
+        raise ValueError(
+            f"the zero-mode tolerance derived from {name} is not finite "
+            f"(rtol = {rtol}, ||L||_2 = {norm2}); no mode could exceed it, "
+            "so the operator is refused rather than filtered against an "
+            "unusable threshold"
+        )
+    return tol
 
 
 def trace_preservation_defect(L_super: np.ndarray) -> tuple[float, float]:

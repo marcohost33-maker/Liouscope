@@ -1,0 +1,117 @@
+"""PR #121 round-24 review findings.
+
+Three findings, each a quantity that collapsed to a value the layer above could
+not distinguish from a measurement:
+
+* **B1** ``operator_zero_tolerance`` returned an INFINITE cutoff for an operator
+  whose entries are all finite, because ``||L||_2`` overflowed on the way to a
+  perfectly representable answer. A consumer filtering ``|lambda| > tol`` then
+  discards every mode.
+* **B2** ``trace_preservation_defect`` repaired underflow only when the WHOLE
+  operator lost its scale. The numerator can lose its scale alone, and then a
+  non-trace-preserving operator is declared certificate-applicable.
+* **B3** ``fit_gls_ar1`` applied its degeneracy test before any shape
+  validation, so a mismatched ``(t, y)`` pair came back as a plausible
+  ``degenerate=True`` result instead of being refused.
+
+Each test below is paired with a mutation in the round-24 discrimination spec:
+taking the fix out must turn the test red at an ASSERTION or a missing raise,
+never at an incidental crash.
+"""
+
+from __future__ import annotations
+
+import warnings
+
+import numpy as np
+import pytest
+
+from liouscope.numerics.linalg import operator_zero_tolerance
+
+# ---------------------------------------------------------------------------
+# B1: keep the operator-derived tolerance finite.
+# ---------------------------------------------------------------------------
+
+#: The reviewer's operator: every entry finite, ``||L||_2 = 2e308`` is not.
+_OVERFLOWING_NORM = np.full((2, 2), 1e308, dtype=complex)
+
+#: ``rtol * eps * ||L||_2`` for that operator, computed by exact power-of-two
+#: scaling: ``1000 * 2.220446049250313e-16 * 2e308``.
+_REPRESENTABLE_TOLERANCE = 4.440892098500626e295
+
+
+def test_the_tolerance_survives_an_operator_norm_that_does_not() -> None:
+    """A finite operator must yield the finite tolerance it actually has.
+
+    Measured before the fix: ``inf``. That is not a large tolerance, it is a
+    filter no mode can pass -- ``|lambda| > inf`` is False for every mode, so a
+    consumer holding the operator reads a spectrum full of huge non-zero modes
+    as entirely stationary. The input was valid; only the intermediate was not.
+    """
+    try:
+        tol = operator_zero_tolerance(_OVERFLOWING_NORM)
+    except ValueError as exc:  # pragma: no cover - failure path of the finding
+        raise AssertionError(
+            "the tolerance was refused instead of being computed by scaling; "
+            f"it is representable at ~4.4e295: {exc}"
+        ) from None
+    assert np.isfinite(tol), (
+        "the operator-derived cutoff is not finite, so a direct consumer "
+        "would discard every mode"
+    )
+    assert tol == pytest.approx(_REPRESENTABLE_TOLERANCE, rel=1e-12)
+
+
+def test_a_complex_entry_whose_modulus_overflows_is_also_scaled() -> None:
+    """``|1.3e308 + 1.3e308j|`` overflows although both components are finite.
+
+    Same shape as the round-22 spectrum-side finding, on the operator side:
+    the component-wise scaling must be on ``max(|Re|, |Im|)``, never on the
+    modulus, or the repair overflows in the same place the defect did.
+    """
+    with warnings.catch_warnings(record=True) as caught:
+        # Deliberately NOT the session's error filter: an overflow inside the
+        # repair must be JUDGED by this test, not raised past it. A test that
+        # dies of the very warning it was written to forbid proves that the
+        # run crashed, not that the guard is load-bearing.
+        warnings.simplefilter("always")
+        try:
+            tol = operator_zero_tolerance(np.full((2, 2), 1.3e308 + 1.3e308j))
+        except Exception as exc:  # the exception TYPE is part of the finding
+            raise AssertionError(
+                "scaling on the modulus overflowed and the tolerance was "
+                f"refused: {type(exc).__name__}: {exc}"
+            ) from None
+    overflowed = [w for w in caught if issubclass(w.category, RuntimeWarning)]
+    assert not overflowed, (
+        "the repair overflowed in the same place the defect did: "
+        f"{[str(w.message) for w in overflowed]}"
+    )
+    assert np.isfinite(tol)
+    assert tol > 0.0
+
+
+def test_a_tolerance_that_is_itself_unrepresentable_is_refused() -> None:
+    """Scaling repairs the NORM; it cannot repair an out-of-range ANSWER.
+
+    With ``rtol = 1e300`` the returned quantity genuinely exceeds the double
+    range. Fail-closed is then the only honest direction -- the same rule
+    ``spectral_zero_tolerance`` applies to its own derived value -- because a
+    non-finite cutoff silently reports "no non-zero modes".
+    """
+    with pytest.raises(ValueError, match="not finite"):
+        operator_zero_tolerance(_OVERFLOWING_NORM, rtol=1e300)
+
+
+def test_the_ordinary_operator_path_is_untouched() -> None:
+    """Over-correction control: the finite-norm branch must not change.
+
+    ``diag([0, -1, -2, -3])`` has ``||L||_2 = 3`` and its tolerance is
+    ``1000 * eps * 3``. A repair that alters this value would move the cutoff
+    for every operator in the library to fix the one that overflows.
+    """
+    L = np.diag([0.0, -1.0, -2.0, -3.0]).astype(complex)
+    expected = 1000.0 * float(np.finfo(float).eps) * 3.0
+    assert operator_zero_tolerance(L) == pytest.approx(expected, rel=1e-14)
+    # The zero operator keeps its documented zero-scale semantics.
+    assert operator_zero_tolerance(np.zeros((4, 4), dtype=complex)) == 0.0

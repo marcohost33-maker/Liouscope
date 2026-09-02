@@ -7,6 +7,20 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Fixed
+- **The operator-derived zero-mode cutoff came back infinite for a finite
+  operator (PR #121, round-24 review, finding B1).** `operator_zero_tolerance`
+  formed `rtol * eps * ||L||_2` directly, and `||L||_2` overflows for an
+  operator every entry of which is representable -- a 2x2 filled with `1e308`
+  has a spectral norm of `2e308`. The returned cutoff was `inf` although the
+  quantity itself, `~4.4e295`, fits comfortably in a double. No mode satisfies
+  `|lambda| > inf`, so a consumer holding the operator discarded its entire
+  spectrum and read huge non-zero modes as stationary -- the same silent
+  acceptance the spectrum-side helper closed in round 22, one helper across.
+  The norm is now taken on a copy scaled by an exact power of two selected
+  from the largest COMPONENT (`max(|Re|, |Im|)`, because the modulus of a
+  finite complex entry can itself overflow), and a derived value that is still
+  not finite -- reachable only for an `rtol` near the top of the double range
+  -- is refused rather than returned, matching `spectral_zero_tolerance`.
 - **D16 was published from the spectrum for which D1/D3/D4 had just been
   withheld (PR #121, round-23 review, finding 13).** Where the zero-mode
   certificate is applicable but unresolved, the spectral layer reports D1, D3,
