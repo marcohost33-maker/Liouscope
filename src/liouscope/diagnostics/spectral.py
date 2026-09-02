@@ -289,13 +289,43 @@ def compute_spectral_layer(
     kms = kms_gap(L_super, rho_steady)
     osc = oscillating_mode_gap(eigenvalues, atol=zero_tol)
     spread = spectral_spread(eigenvalues, atol=zero_tol)
+    if certificate.applicable and not certificate.resolved:
+        # Seventeenth review round (external, PR #127), fifth finding. The
+        # repair above withheld D1 and stopped there. D3 (``oscillating_gap``),
+        # D4 (``spectral_spread``) and ``has_complex_pairs`` are read off the
+        # SAME candidate spectrum the warning calls unreliable -- the warning
+        # even names D1/D3/D4 -- and they were still published as finite
+        # numbers. A caller reading ``SpectralResult`` directly could treat
+        # them as measurements in exactly the scenario the layer had just
+        # declared unmeasurable. Measured on ``_stiff_with_fast_rate(1e8)``
+        # (8 ambiguous in-band modes, D1 already NaN): D3 = 0.0 and
+        # D4 = 5.0e7 were returned, and 0.0 is not a neutral number -- it is
+        # the strongest "no oscillatory separation" answer the diagnostic can
+        # emit, taken from a spectrum whose slow modes are below the solver's
+        # backward error.
+        #
+        # Withholding D1 alone was not a partial fix but an inconsistent one:
+        # it teaches consumers that the layer withholds what it cannot stand
+        # behind, which makes the surviving finite values MORE credible than
+        # before, not less.
+        #
+        # The predicate is ``applicable and not resolved``, the same one D1
+        # uses above, so the layer withholds on ONE condition rather than on
+        # two. It is deliberately not the narrower ``not certified``: a
+        # certificate can be ``certified=True`` and still ``resolved=False``
+        # when an in-band mode is ambiguous (#113), and that is precisely the
+        # case in which the unresolved mode may be a slow OSCILLATORY one that
+        # ``zero_tol`` discards -- D3 then reports the absence of the very
+        # oscillation that made the spectrum unresolved.
+        osc = float("nan")
+        spread = float("nan")
     # Same separation as D3: with an absolute floor a rescaled spectrum
     # flipped this flag, and ``has_complex_pairs`` gates the A8
     # oscillatory-transient rung. The threshold is the shared operator-derived
     # bound (round-13): an imaginary part below the eigensolve backward error
     # is round-off, not an oscillating pair. Radius fallback when the
     # certificate is inapplicable (round-14), same as D1/D3/D4 above.
-    has_complex = bool(
+    has_complex: bool | None = bool(
         np.any(
             np.abs(np.imag(eigenvalues))
             > (
@@ -305,6 +335,16 @@ def compute_spectral_layer(
             )
         )
     )
+    if certificate.applicable and not certificate.resolved:
+        # Same spectrum, same reason, same predicate as D1/D3/D4. ``False``
+        # here would ASSERT "no oscillating modes" -- the single most
+        # misleading answer available when the mode that cannot be resolved is
+        # an ambiguous in-band one with a nonzero imaginary part, because
+        # ``zero_tol`` excludes exactly that mode from the test. ``None`` says
+        # the question was not answered, and ``_gather_evidence`` maps it onto
+        # the evidence dict's NaN sentinel so the A8 rung reports UNEVALUABLE
+        # rather than NOT_SUPPORTED.
+        has_complex = None
     # Sort by real part descending so [0] is the steady state.
     order = np.argsort(-np.real(eigenvalues))
     return SpectralResult(

@@ -7,6 +7,31 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Fixed
+- **D3, D4 and `has_complex_pairs` were published from the spectrum for which
+  D1 had just been withheld (PR #127, round-17 review, fifth finding).** Where
+  the zero-mode certificate is applicable but not resolved, the spectral layer
+  warns that "D1/D3/D4 are NOT reliable for this system" and replaces D1 with
+  NaN — and then returned `oscillating_gap` (D3), `spectral_spread` (D4) and
+  `has_complex_pairs` as finite values read off that same candidate spectrum.
+  Measured on the issue-#113 stiff fixture (`fast = 1e8`, eight ambiguous
+  in-band modes): `D3 = 0.0`, `D4 = 5.0e7`, `has_complex_pairs = False`.
+  None of the three is a neutral answer. `0.0` is the strongest "no
+  oscillatory separation" verdict D3 can emit, and `False` asserts the
+  *absence* of the oscillation that may be the very reason the spectrum is
+  unresolved — `zero_tol` excludes exactly the ambiguous in-band mode from
+  that test. Withholding D1 alone was not a partial fix but an inconsistent
+  one: it taught consumers that the layer withholds what it cannot stand
+  behind, which made the surviving finite values *more* credible, not less.
+
+  D3 and D4 are now NaN and `has_complex_pairs` is `None` under the same
+  `applicable and not resolved` predicate D1 uses, so the layer withholds on
+  one condition rather than on two. `SpectralResult.has_complex_pairs` is
+  therefore `bool | None`; `_gather_evidence` maps `None` onto the evidence
+  dict's NaN sentinel, which `_strip_unavailable` removes, so the A8
+  oscillatory-transient rung reports UNEVALUABLE rather than NOT_SUPPORTED.
+  D2/D2b are untouched: they are computed from the operator and the steady
+  state, not from the candidate spectrum. Four mutations (one per guard line)
+  are proven to discriminate.
 - **The workflow hardening gate was blind to the commonest way to write a step
   (PR #129).** `.github/scripts/check_workflow_hardening.py` enforces the
   SHA-pinning rule of AGENTS.md section 4 on every workflow, and nothing

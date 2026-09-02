@@ -36,7 +36,12 @@ class SpectralResult:
     spectral_spread: float      # D4 max|Re| minus min|Re| (non-zero modes)
     eigenvalues: np.ndarray     # full sigma(L) sorted by real part
     steady_state: np.ndarray    # rho_ss matrix, d x d
-    has_complex_pairs: bool
+    #: D3-derived oscillation flag. ``None`` when the zero-mode certificate is
+    #: applicable but not resolved: the flag is read off the same candidate
+    #: spectrum for which D1/D3/D4 are already withheld, and ``False`` there
+    #: would assert the ABSENCE of the oscillation that may be the very reason
+    #: the spectrum is unresolved (PR #127, round-17 review, fifth finding).
+    has_complex_pairs: bool | None
     # Issue #112. Structural check that the computed spectrum contains the zero
     # mode that vec(I)^H L = 0 guarantees for a trace-preserving generator, plus
     # which LAPACK route produced the accepted spectrum. Report-only: it does

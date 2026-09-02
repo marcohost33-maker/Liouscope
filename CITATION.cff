@@ -119,6 +119,21 @@ abstract: >-
 # way of anchoring it to a single step of a multi-decade grid was measured to
 # destroy the estimator's discrimination, so it is disclosed rather than
 # applied.
+# Also pending for the next cut: where the zero-mode certificate is applicable
+# but NOT resolved, the spectral layer now withholds D3 (oscillating_gap) and
+# D4 (spectral_spread) as NaN and reports has_complex_pairs as None, under the
+# same predicate that already withheld D1 (round-17 review, PR #127). This
+# CHANGES REPORTED RESULTS for exactly those runs and is a correction, not an
+# addition: the three values were previously read off the candidate spectrum
+# that the layer's own warning declares unreliable (measured on the issue-#113
+# stiff fixture: D3 = 0.0 and has_complex_pairs = False, i.e. an assertion that
+# no oscillatory separation exists, taken from a spectrum whose slow modes lie
+# below the eigensolver's backward error). Consumers see the A8 oscillatory
+# rung become UNEVALUABLE instead of NOT_SUPPORTED for those runs. It must NOT
+# be described as making the spectral layer reliable on stiff generators: the
+# unresolved case is still unresolved, only no longer reported as measured.
+# D2/D2b are unaffected -- they are computed from the operator and the steady
+# state rather than from the candidate spectrum.
 keywords:
   - open quantum systems
   - Lindblad

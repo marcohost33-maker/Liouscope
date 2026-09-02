@@ -1090,3 +1090,137 @@ def test_healthy_generator_still_reports_a_finite_d1() -> None:
             result = compute_spectral_layer(system.L)
         assert np.isfinite(result.gap), system.name
         assert result.gap > 0.0, system.name
+
+
+# --------------------------------------------------------------------------
+# PR #127, round-17 external review, fifth finding: D3/D4 and the oscillation
+# flag were exported from the same spectrum for which D1 had just been
+# withheld.
+# --------------------------------------------------------------------------
+
+
+def test_unresolved_spectrum_withholds_d3_d4_and_the_oscillation_flag() -> None:
+    """D3, D4 and ``has_complex_pairs`` follow D1 into abstention.
+
+    Measured before the repair on this exact fixture (8 ambiguous in-band
+    modes, D1 already NaN): ``oscillating_gap = 0.0`` and
+    ``spectral_spread = 5.0e7`` came back as finite numbers, and
+    ``has_complex_pairs`` came back ``False``. None of the three is a neutral
+    answer -- ``0.0`` is the strongest "no oscillatory separation" verdict the
+    diagnostic can emit and ``False`` asserts the ABSENCE of the oscillation
+    that may be the very reason the spectrum is unresolved, because
+    ``zero_tol`` excludes the ambiguous in-band mode from the test.
+    """
+    fast = 1e8
+    lsup = _stiff_with_fast_rate(fast)
+    rates = [7.28e-6, 3.67e-5, 1.53e-5, fast, 1.42e-5]
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        result = compute_spectral_layer(lsup, _population_steady_state(rates))
+    cert = result.zero_mode_certificate
+    assert cert is not None
+    assert cert["applicable"] is True and cert["resolved"] is False, (
+        "fixture no longer produces an applicable-but-unresolved certificate; "
+        "the finding it pins cannot be reached from here"
+    )
+    assert np.isnan(result.gap), "precondition: D1 is already withheld"
+    assert np.isnan(result.oscillating_gap), (
+        f"D3 reported {result.oscillating_gap!r} from a spectrum the "
+        "certificate declared unresolved"
+    )
+    assert np.isnan(result.spectral_spread), (
+        f"D4 reported {result.spectral_spread!r} from a spectrum the "
+        "certificate declared unresolved"
+    )
+    assert result.has_complex_pairs is None, (
+        f"has_complex_pairs reported {result.has_complex_pairs!r}; False here "
+        "asserts the absence of oscillating modes from an unresolved spectrum"
+    )
+
+
+def test_resolved_spectrum_still_reports_finite_d3_d4() -> None:
+    """Over-correction control: no blanket withholding.
+
+    The repair must move ONLY the unresolved case. Every shipped example has a
+    resolved certificate, so D4 stays a finite measurement and the oscillation
+    flag stays a bool -- if this goes red the withholding predicate is too
+    wide. D3 is deliberately not asserted finite here: ``oscillating_mode_gap``
+    returns ``inf`` for a purely real spectrum by its own documented contract,
+    which is an answer, not an abstention.
+    """
+    from liouscope import examples
+
+    for system in examples.all_systems():
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            result = compute_spectral_layer(system.L)
+        assert isinstance(result.has_complex_pairs, bool), system.name
+        assert np.isfinite(result.spectral_spread), system.name
+        assert not np.isnan(result.oscillating_gap), system.name
+
+
+def test_withheld_oscillation_flag_reaches_the_evidence_dict_as_nan() -> None:
+    """``None`` must arrive at the classifier as its unavailable sentinel.
+
+    ``_strip_unavailable`` removes NaN entries, so the A8 rung reports
+    UNEVALUABLE instead of holding on an unanswered question. A ``float(None)``
+    would raise and a silent ``0.0`` would read as a measured "no oscillating
+    pairs" -- the two failure modes this assertion separates.
+    """
+    import math
+
+    from liouscope._types import (
+        LepResult,
+        MpembaResult,
+        NonNormalityResult,
+        RelaxationResult,
+        ResolventResult,
+        SpectralResult,
+        TransientResult,
+    )
+    from liouscope.diagnostics.classification import classify_mechanism
+
+    arr = np.zeros(1, dtype=complex)
+
+    def _classify(flag: bool | None):
+        # Local synthetic results (no cross-test import: the ``tests``
+        # directory is not an importable package on the CI runner).
+        return classify_mechanism(
+            SpectralResult(
+                gap=0.5, gns_gap=0.5, kms_gap=0.5, oscillating_gap=0.1,
+                spectral_spread=1.0, eigenvalues=arr,
+                steady_state=np.zeros((1, 1), dtype=complex),
+                has_complex_pairs=flag,
+                zero_mode_certificate={
+                    "applicable": True, "certified": True, "resolved": True
+                },
+            ),
+            NonNormalityResult(
+                henrici_eta=0.5, petermann_max=1.0, petermann_factors=arr,
+                kreiss=1.0, bohr_ap_length=1, bohr_ap_pauli_bound=0.0,
+            ),
+            RelaxationResult(
+                von_neumann_entropy=0.0, relative_entropy_curve=arr.real,
+                fidelity_curve=arr.real, entanglement_asymmetry=None, fits={},
+                aicc_model="M1", beta_D=0.5, bca_ci_beta=(0.4, 0.6),
+            ),
+            ResolventResult(
+                resolvent_peak=1.0, ridge_fwhm=1.0, pseudospectral_radius=0.5,
+                pseudospec_eps=1.0e-3,
+            ),
+            TransientResult(
+                trans_amplitude_ratio=1.0, kappa_trans=1.0,
+                numerical_abscissa=0.0,
+            ),
+            LepResult(
+                lep_proximity=1.0, gap_rate_consistency=0.01,
+                initial_state_sensitivity=0.0, lep_candidate_count=0,
+            ),
+            MpembaResult(
+                overlap_c1=0.5, expansion_alpha=1.0, is_mpemba_candidate=False,
+            ),
+        )
+
+    assert math.isnan(_classify(None).evidence["has_complex_pairs"])
+    assert _classify(False).evidence["has_complex_pairs"] == 0.0
+    assert _classify(True).evidence["has_complex_pairs"] == 1.0
