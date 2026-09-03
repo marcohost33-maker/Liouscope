@@ -85,11 +85,39 @@ def gaussian_log_likelihood(
         # was (``0.5 * exp(...)``), so no previously computed likelihood
         # changes by even one ulp -- widening a range must not perturb the
         # values already inside it.
+        # ROUND-3 REVIEW (PR #147). The round-2 bound was still a decision
+        # made in LOG SPACE, and at this magnitude log space cannot make it.
+        # Measured with ``sigma = 1`` and a single residual
+        # ``sqrt(float_max) * sqrt(2)``: ``log_rss`` comes out at
+        # 710.475860073944 while ``log_max + log(2)`` rounds to
+        # 710.4758600739439 -- ONE ulp lower -- so the guard returned
+        # ``-inf`` although the mathematically relevant half-RSS is
+        # 1.7976931348623155e+308, a perfectly finite 0.9999999999999999 of
+        # ``float_max``. Nor can the halved value be recovered by subtracting
+        # ``log(2)`` and exponentiating: one ulp of a logarithm near 710 is a
+        # factor of ~1e-16 in the value, which straddles the overflow edge
+        # exactly where this test is made, and ``math.exp`` raises
+        # ``OverflowError`` on the same input (measured).
+        #
+        # So the halved quantity is MATERIALISED from the residuals instead
+        # of inferred from their logarithm. Halving each term BEFORE
+        # accumulating keeps every partial sum inside float64 whenever the
+        # true half-RSS is inside it, and lets the float64 addition itself
+        # decide the boundary -- there is no rounded bound left to be one ulp
+        # wrong about. An overflow here is now a measurement rather than a
+        # prediction: ``inf`` means the half-RSS genuinely does not fit
+        # (verified for 4x, 1e3x float_max, and for 64 residuals whose halved
+        # sum overflows), and only then is the fit dropped.
+        #
+        # The lower octave is untouched, so no previously computed likelihood
+        # changes by even one ulp -- the same promise round 2 made.
         log_max = math.log(np.finfo(float).max)
-        if log_standardised_rss > log_max + math.log(2.0):
-            return float("-inf")
         if log_standardised_rss > log_max:
-            half_standardised_rss = math.exp(log_standardised_rss - math.log(2.0))
+            scaled = residuals / sigma
+            with np.errstate(over="ignore", invalid="ignore"):
+                half_standardised_rss = float(np.sum((0.5 * scaled) * scaled))
+            if not math.isfinite(half_standardised_rss):
+                return float("-inf")
         else:
             half_standardised_rss = 0.5 * math.exp(log_standardised_rss)
     return float(

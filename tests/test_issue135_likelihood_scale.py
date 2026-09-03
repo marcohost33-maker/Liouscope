@@ -317,3 +317,101 @@ def test_values_inside_the_old_range_are_bit_identical() -> None:
             -0.5 * n * math.log(2.0 * math.pi) - 0.5 * math.exp(log_standardised)
         )
         assert gaussian_log_likelihood(residuals, sigma=1.0) == expected
+
+
+# --------------------------------------------------------------------------
+# PR #147 round-3 review
+# --------------------------------------------------------------------------
+
+
+def test_the_halved_boundary_is_decided_on_the_materialised_value() -> None:
+    """Round 2 moved the bound; round 3 removes the bound.
+
+    The round-2 guard compared ``log_rss`` against ``log_max + log(2)``, two
+    separately rounded logarithms. On the reviewer's fixture -- ``sigma = 1``
+    with a single residual ``sqrt(float_max) * sqrt(2)`` -- ``log_rss`` lands
+    exactly ONE ulp above that bound and the fit was dropped, although the
+    quantity the formula actually forms is 0.9999999999999999 of
+    ``float_max`` and entirely representable.
+
+    The repair is not a wider bound. It is materialising the halved sum from
+    the residuals and letting float64 addition decide, so there is no rounded
+    threshold left to be one ulp wrong about.
+    """
+    residual = np.array([math.sqrt(np.finfo(float).max) * math.sqrt(2.0)])
+
+    # PREMISE, asserted rather than assumed: the fixture is in the octave the
+    # round-2 bound rejected, and it misses that bound by a single ulp.
+    log_rss = scaled_log_sum_squares(residual)
+    log_max = math.log(np.finfo(float).max)
+    round2_bound = log_max + math.log(2.0)
+    assert log_rss > round2_bound, "fixture no longer trips the round-2 bound"
+    assert (log_rss - round2_bound) == pytest.approx(
+        math.ulp(log_max), rel=1e-9
+    ), "the fixture no longer sits one ulp above the bound"
+
+    log_lik = gaussian_log_likelihood(residual, sigma=1.0)
+    assert math.isfinite(log_lik), log_lik
+
+    # The value is the one the formula defines, computed the direct way.
+    scaled = residual / 1.0
+    half = float(np.sum((0.5 * scaled) * scaled))
+    assert math.isfinite(half)
+    assert half == pytest.approx(0.9999999999999999 * np.finfo(float).max, rel=1e-15)
+    assert log_lik == pytest.approx(-0.5 * math.log(2.0 * math.pi) - half, rel=1e-15)
+
+
+def test_the_log_space_route_could_not_have_reached_it() -> None:
+    """Why the fix is not "subtract log(2) and exponentiate".
+
+    One ulp of a logarithm near 710 is a factor of ~1e-16 in the value, and
+    that is precisely the width of the decision being made here. Documented
+    as a live assertion because the obvious smaller repair looks correct and
+    is not: ``math.exp`` raises on the same input for which the direct
+    computation returns a finite number.
+    """
+    residual = np.array([math.sqrt(np.finfo(float).max) * math.sqrt(2.0)])
+    log_rss = scaled_log_sum_squares(residual)
+
+    raised: BaseException | None = None
+    try:
+        math.exp(log_rss - math.log(2.0))
+    except Exception as exc:
+        raised = exc
+    assert isinstance(raised, OverflowError), (
+        "the log-space route no longer overflows; the round-3 rationale "
+        f"needs rereading (got {raised!r})"
+    )
+    assert math.isfinite(gaussian_log_likelihood(residual, sigma=1.0))
+
+
+def test_a_half_rss_that_truly_overflows_is_still_dropped() -> None:
+    """Fail-closed control: removing the bound must not remove the refusal.
+
+    Three shapes of genuine overflow, including one that only overflows in
+    the SUM -- no single term does -- which a per-term bound would have
+    missed. Captured and asserted rather than crashed into, so a mutation run
+    can attribute the death to an assertion.
+    """
+    cases = {
+        "4x float_max, one residual": np.array(
+            [math.sqrt(np.finfo(float).max) * 2.0]
+        ),
+        "1e3x float_max, one residual": np.array(
+            [math.sqrt(np.finfo(float).max) * math.sqrt(1000.0)]
+        ),
+        "overflows only in the sum": np.full(
+            64, math.sqrt(np.finfo(float).max) * math.sqrt(2.0) / 4.0
+        ),
+    }
+    for label, residuals in cases.items():
+        outcome: object
+        try:
+            outcome = gaussian_log_likelihood(residuals, sigma=1.0)
+        except Exception as exc:
+            outcome = exc
+        assert not isinstance(outcome, BaseException), (
+            f"{label}: raised {type(outcome).__name__} ({outcome}) "
+            "instead of returning -inf"
+        )
+        assert outcome == float("-inf"), label
