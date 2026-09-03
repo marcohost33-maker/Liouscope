@@ -116,7 +116,19 @@ def gaussian_log_likelihood(
             scaled = residuals / sigma
             with np.errstate(over="ignore", invalid="ignore"):
                 half_standardised_rss = float(np.sum((0.5 * scaled) * scaled))
-            if not math.isfinite(half_standardised_rss):
+            # Tested for OVERFLOW specifically, not for non-finiteness.
+            # The mutation run reported a blanket isfinite() check BLIND, and
+            # measuring why exposed a latent state collapse: for an infinite
+            # half-RSS the check is provably equivalent (the subtraction
+            # below already yields -inf), and its only remaining effect would
+            # be to turn a NaN into -inf -- converting "model-selection
+            # likelihood unavailable", which this function returns NaN for by
+            # contract, into "definitively dropped". Those are different
+            # states. NaN is unreachable here (a NaN residual is caught by
+            # the isnan(log_rss) gate above, and every term 0.5*s*s is
+            # non-negative), so this is guarding an invariant rather than a
+            # path -- which is the reason to state it precisely.
+            if half_standardised_rss == float("inf"):
                 return float("-inf")
         else:
             half_standardised_rss = 0.5 * math.exp(log_standardised_rss)
