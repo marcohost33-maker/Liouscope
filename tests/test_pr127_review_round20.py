@@ -161,3 +161,95 @@ def test_the_gauge_shift_is_the_arithmetic_mean_where_it_is_representable() -> N
             np.trace(H).real
         ) / d
     assert overflow_safe_mean_real(np.zeros(0, dtype=complex)) == 0.0
+
+
+# ---------------------------------------------------------------------------
+# Finding 2 -- src/liouscope/diagnostics/relaxation.py
+#
+# ``1 / (r * blind_r)`` raised ZeroDivisionError whenever the PRODUCT of a
+# finite positive decay rate and a finite positive grid interval underflowed to
+# zero, which happens below ~5e-324 and is purely a choice of rate UNITS -- the
+# ratio it computes is dimensionless. The limit of the ratio is the honest
+# value: unbounded sampling resolution, which this function already encodes as
+# ``inf``. NaN would have been wrong, because NaN here means "no usable
+# interval", the opposite statement.
+#
+# The controls fix the two ends of the range: at unit scale the same generator
+# on a coarse and on a fine grid must return exactly what it returned before,
+# and a grid whose intervals are all zero-length must still be NaN, because
+# that is the case the ``inf`` sentinel must not swallow.
+# ---------------------------------------------------------------------------
+
+from liouscope.diagnostics.relaxation import (  # noqa: E402
+    decay_rates,
+    samples_per_fast_efolding,
+)
+
+_SIGMA_MINUS = np.array([[0.0, 1.0], [0.0, 0.0]], dtype=complex)
+
+
+def _damping(scale: float) -> np.ndarray:
+    return build_liouvillian(
+        np.zeros((2, 2), dtype=complex), [_SIGMA_MINUS * scale]
+    )
+
+
+def test_an_underflowed_resolution_ratio_is_unbounded_not_a_crash() -> None:
+    """The reviewer's case: rate 1e-200 on the grid ``[0, 1e-200, 2e-200]``."""
+    L = _damping(1.0e-100)
+    rates = decay_rates(L)
+    assert rates.size and float(rates[-1]) > 0.0, "fixture: something must decay"
+    assert float(rates[-1]) * 1.0e-200 == 0.0, "fixture: the product must underflow"
+
+    # Caught broadly and reported by TYPE. The defect IS an exception, so a
+    # test that simply calls the function dies of it -- and a red test that
+    # died of an exception cannot be attributed to a mutation, which is what
+    # the reverse-mutation run needs. Turning the crash into a value keeps the
+    # death cause an assertion in both directions.
+    outcome: object
+    try:
+        outcome = samples_per_fast_efolding(L, np.array([0.0, 1.0e-200, 2.0e-200]))
+    except Exception as exc:  # the TYPE is the finding, so catch broadly
+        outcome = exc
+    assert not isinstance(outcome, BaseException), (
+        f"the resolution ratio raised {type(outcome).__name__}: {outcome}"
+    )
+    assert outcome == float("inf")
+    assert not np.isnan(float(outcome)), (
+        "NaN means 'no usable interval', which is the opposite claim"
+    )
+
+
+@pytest.mark.parametrize(
+    ("grid", "expected"),
+    [
+        (np.array([0.0, 1.0, 2.0]), 1.0),
+        (np.linspace(0.0, 1.0, 101), 100.0),
+    ],
+)
+def test_unit_scale_resolution_is_untouched(
+    grid: np.ndarray, expected: float
+) -> None:
+    """No-over-reach control at the other end of the range."""
+    assert samples_per_fast_efolding(_damping(1.0), grid) == pytest.approx(
+        expected, rel=1.0e-9
+    )
+
+
+def test_a_grid_with_no_usable_interval_is_still_nan() -> None:
+    """The sentinel this repair must NOT swallow.
+
+    ``inf`` now has two producers -- nothing decays, and every mode is resolved
+    without bound -- so the case that genuinely has no interval to measure must
+    keep reporting NaN rather than being folded into either.
+
+    Stated precisely, because the reachable path matters: this grid is refused
+    by the EARLIER non-positive-interval guard, not by the fallback at the end
+    of the loop. That fallback is unreachable from any public entry point --
+    once the guards pass, ``t[0] == 0`` forces a positive step into the window
+    and ``t[0] > 0`` supplies a positive lead-in, so ``blind`` is never zero --
+    and it was unreachable before this change too. It is kept as a defensive
+    statement and is deliberately NOT claimed to be covered here.
+    """
+    value = samples_per_fast_efolding(_damping(1.0), np.array([0.0, 0.0]))
+    assert np.isnan(value)

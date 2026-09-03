@@ -7,6 +7,22 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Fixed
+- **An underflowed resolution ratio crashed the relaxation layer (PR #127,
+  round-20 external review).** `_resolution_detail` formed
+  `1 / (r * blind_r)` from a finite positive decay rate and a finite positive
+  grid interval whose PRODUCT underflows to zero below ~5e-324, raising
+  `ZeroDivisionError`. Measured: an amplitude-damping generator scaled by
+  `1e-200` on the valid increasing grid `[0, 1e-200, 2e-200]` killed both
+  `samples_per_fast_efolding()` and `compute_relaxation_layer()` before any fit
+  ran — a crash decided by the choice of rate UNITS, on a quantity that is
+  dimensionless. The limit of the ratio is now returned instead: `inf`, i.e.
+  unbounded sampling resolution, which this function already uses to mean
+  "nothing decays over this grid" and which the warning gate in
+  `compute_relaxation_layer` correctly passes over. NaN would have been wrong —
+  it means "no usable interval", the opposite statement — so the final
+  `not np.isfinite(worst)` test was replaced by an explicit "was anything
+  measured" flag that cannot conflate the two. Unit-scale grids are unchanged
+  (coarse 1.0, fine 100.0, both re-measured).
 - **The Hermiticity gate failed open when the gauge shift overflowed (PR #127,
   round-20 external review).** `build_liouvillian` removed the identity
   component with `np.trace(H).real / d`, forming the total before dividing.

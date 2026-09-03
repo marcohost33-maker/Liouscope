@@ -348,8 +348,11 @@ def _resolution_detail(
     coarse samples. That case is created, not hypothetical: it is exactly the
     intermediate scale a two-scale grid does not resolve.
 
-    Returns ``inf`` when nothing decays (no finite positive rate) and NaN when
-    the grid has no usable interval.
+    Returns ``inf`` when nothing decays (no finite positive rate), and also
+    when every mode is resolved so finely that ``r * blind_r`` underflows to
+    zero -- the limit of the ratio, i.e. unbounded sampling resolution. NaN
+    is reserved for the grid having no usable interval at all, which is a
+    different statement and must not be conflated with the first.
     """
     t = np.asarray(t_grid, dtype=float)
     if t.size < 2 or not np.all(np.isfinite(t)):
@@ -390,6 +393,16 @@ def _resolution_detail(
     worst_rate = float("nan")
     worst_blind = float("nan")
     worst_start = float("nan")
+    # ROUND-19 REVIEW (external, PR #127). ``measured`` replaces the old
+    # ``np.isfinite(worst)`` test at the end, and the two are NOT the same
+    # question. "No usable interval" and "every interval resolves the mode
+    # perfectly" both left ``worst`` at ``inf``, so the second was reported as
+    # the first -- a grid that resolves everything was described as a grid with
+    # no usable step. Which of the two happened is exactly what this flag
+    # records, and nothing else about the loop changes: for any rate that was
+    # already reachable, ``not measured or value < worst`` selects the same
+    # mode as ``value < worst`` did.
+    measured = False
     for r in rates:
         horizon_r = 1.0 / float(r)
         idx = int(np.searchsorted(starts, horizon_r, side="left"))
@@ -399,13 +412,32 @@ def _resolution_detail(
         blind = float(running_max[j])
         if blind <= 0.0:
             continue
-        value = 1.0 / (float(r) * blind)
-        if value < worst:
+        # Same review, the reported line. ``r`` and ``blind`` are both finite
+        # and strictly positive here, yet their PRODUCT can be zero: below
+        # ~5e-324 it underflows, and ``1.0 / 0.0`` raises ZeroDivisionError.
+        # Measured: an amplitude-damping generator scaled by 1e-200 on the
+        # valid increasing grid ``[0, 1e-200, 2e-200]`` killed both
+        # ``samples_per_fast_efolding`` and ``compute_relaxation_layer``
+        # before any fit ran -- a crash caused by the choice of rate UNITS, on
+        # a quantity that is dimensionless and therefore unit-free.
+        #
+        # The mathematical limit is the honest value: ``1 / (r * blind)``
+        # grows without bound as the product goes to zero, i.e. the mode is
+        # sampled arbitrarily often per e-folding. ``inf`` is already this
+        # function's documented encoding for "nothing decays over this grid",
+        # and the consumer in ``compute_relaxation_layer`` gates its warning on
+        # ``np.isfinite``, so an infinitely well resolved mode correctly warns
+        # about nothing. Returning NaN instead -- the "invalid" encoding --
+        # would report an unmeasurable grid where the grid is in fact perfect.
+        product = float(r) * blind
+        value = float("inf") if product <= 0.0 else 1.0 / product
+        if not measured or value < worst:
+            measured = True
             worst = value
             worst_rate = float(r)
             worst_blind = blind
             worst_start = float(starts[running_argmax[j]])
-    if not np.isfinite(worst):
+    if not measured:
         # Every interval was zero-length: no usable step.
         return float("nan"), float("nan"), float("nan"), float("nan")
     return worst, worst_rate, worst_blind, worst_start
