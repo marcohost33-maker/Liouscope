@@ -557,6 +557,7 @@ def certified_nonzero_modes(
     idx = idx[idx != idx[int(np.argmin(np.abs(eigenvalues[idx])))]]
 
     vr, vl, ref = right_vectors, left_vectors, eigenvalues
+    borrowed = vr is None or vl is None
     if vr is None or vl is None:
         # Own decomposition: the certificate is a property of the OPERATOR, so
         # it is legitimate to certify a candidate ladder's spectrum from the
@@ -566,10 +567,74 @@ def certified_nonzero_modes(
         except (ValueError, sla.LinAlgError):
             return out
 
+    # ROUND-26 REVIEW (PR #121). Which eigenPAIR belongs to candidate ``i`` was
+    # decided by ``argmin(|ref - lam|)``, a lookup BY VALUE. On a degenerate
+    # spectrum that is not a bijection: ``argmin`` returns the FIRST index
+    # attaining the minimum, so two equal in-band eigenvalues both borrow the
+    # first one's vectors and the second mode is certified on evidence that
+    # was never measured for it. Measured on a trace-preserving 4x4 with
+    # spectrum ``{0, -1e-14, -1e-14, -1}`` whose SECOND slow right vector was
+    # replaced by the fast mode's vector (residual 1.0 rather than 6e-18):
+    # both modes came back certified, ``certified=True, resolved=True``, and
+    # ``certified_eig`` handed the invalid pair to D9/D19. The later
+    # ``_vector_residual`` gate does not catch it -- it tests only modes above
+    # the RAW ``bound``, and a rescued mode is by construction below it.
+    #
+    # Two cases, and they need different repairs:
+    #
+    # * vectors SUPPLIED -> ``ref is eigenvalues``, so the pair index for
+    #   candidate ``i`` IS ``i``. No search is needed or wanted. For a
+    #   non-degenerate spectrum this is bit for bit the old ``argmin``
+    #   (``|ref[i] - lam| == 0`` is the unique minimum); it differs only where
+    #   the old lookup was ambiguous, which is exactly the defect.
+    # * vectors BORROWED -> ``ref`` really is a different decomposition and a
+    #   search is unavoidable. The one-to-one rule is then applied to EQUAL
+    #   eigenvalues only: the ``r``-th mode of a group sharing one eigenvalue
+    #   takes the ``r``-th nearest ``ref`` entry. Modes with DISTINCT
+    #   eigenvalues keep their independent nearest-value lookup.
+    #
+    #   Narrowing it to equal values is not a convenience -- a blanket
+    #   bijection is WRONG here, and measured so. The two spectra come from
+    #   different solvers and genuinely differ; forcing a global one-to-one
+    #   assignment lets a mode that is merely CLOSE consume the partner a
+    #   later mode needs exactly. On the stiff four-level network of
+    #   ``tests/test_pr121_review_round17.py`` the ``dgeev-real`` route offers
+    #   ``{-3.3216e-06, -3.345505e-06, -3.345505e-06}`` against a ``zgeev``
+    #   reference of ``{-4.239e-06, -3.345505e-06, -3.345505e-06}``: a global
+    #   bijection hands the first mode the exact partner of the second, the
+    #   third is left with ``-4.239e-06`` at a relative distance of 0.21, the
+    #   agreement guard refuses it, and a mode that WAS correctly rescued
+    #   before is lost -- the refinement then fails its inversion guard and is
+    #   abandoned wholesale. Equal-value ranking leaves that route unchanged
+    #   and still splits the degenerate pair, which is the reported defect.
+    #
+    #   Rank 0 is spelled ``argmin`` rather than ``argsort(...)[0]`` so the
+    #   bit-for-bit claim needs no argument about tie-breaking: every mode
+    #   whose eigenvalue is unique among the in-band modes takes exactly the
+    #   old code path.
+    pair_of: dict[int, int] = {}
+    if borrowed:
+        ref_arr = np.asarray(ref)
+        rank_of: dict[complex, int] = {}
+        for raw in np.flatnonzero(in_band):
+            k = int(raw)
+            key = complex(eigenvalues[k])
+            rank = rank_of.get(key, 0)
+            rank_of[key] = rank + 1
+            dist = np.abs(ref_arr - eigenvalues[k])
+            if rank == 0:
+                pair_of[k] = int(np.argmin(dist))
+            elif rank < dist.size:
+                pair_of[k] = int(np.argsort(dist, kind="stable")[rank])
+    else:
+        pair_of = {int(raw): int(raw) for raw in np.flatnonzero(in_band)}
+
     tiny = np.finfo(float).tiny
     for i in idx:
         lam = eigenvalues[i]
-        j = int(np.argmin(np.abs(ref - lam)))
+        if int(i) not in pair_of:
+            continue  # no eigenpair left to match: nothing measured, nothing certified
+        j = pair_of[int(i)]
         mag = float(abs(ref[j]))
         # Fail closed when the borrowed decomposition disagrees about this mode:
         # a bound computed for a different eigenvalue certifies nothing.

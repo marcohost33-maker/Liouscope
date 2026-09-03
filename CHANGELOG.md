@@ -7,6 +7,31 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Fixed
+- **A degenerate spectrum let one eigenvector certify two modes (PR #121,
+  round-26 external review, P1).** `certified_nonzero_modes` picked the
+  eigenpair for an in-band candidate with `argmin(|ref - lambda|)`, a lookup by
+  VALUE. `np.argmin` returns the FIRST index attaining the minimum, so equal
+  eigenvalues all borrowed the first pair's vectors and the a-posteriori bound
+  for the second mode was computed from a residual never measured for it.
+  `certified_eig`'s eigenvector gate does not catch this: it tests only modes
+  above the raw `bound`, and a rescued mode is by construction below it.
+  Measured on a trace-preserving 4x4 with spectrum `{0, -1e-14, -1e-14, -1}`
+  whose second slow right vector was replaced by the fast mode's vector
+  (residual 1.0 instead of 6e-18): `certified=True, resolved=True`, and the
+  invalid pair reached D9/D19. Both directions were defective — a corrupt mode
+  certified on a healthy neighbour's residual, and a healthy mode refused on a
+  corrupt one's. When the vectors are SUPPLIED the pair index is now the
+  candidate's own index (no search); when they are borrowed from the operator's
+  own decomposition, EQUAL eigenvalues are ranked so the r-th of them takes the
+  r-th nearest reference entry, while distinct eigenvalues keep their
+  independent lookup. A blanket bijection was tried first and is wrong: across
+  two genuinely different decompositions a merely-close mode consumes the
+  partner an equal one needs, which on the stiff four-level network of
+  `test_pr121_review_round17.py` lost a correctly rescued mode and abandoned
+  the whole refinement. Non-degenerate spectra are unchanged: of nine measured
+  multiplicity/corruption combinations, the five that disagreed with ground
+  truth before the fix are all degenerate and all four non-degenerate ones
+  already agreed.
 - **The a-posteriori zero-mode certificate stopped being a test below ~1e-162
   (PR #121, round-24 external review, B4).** `certified_nonzero_modes`
   computes the eigenpair residual with `np.linalg.norm`, which squares before
