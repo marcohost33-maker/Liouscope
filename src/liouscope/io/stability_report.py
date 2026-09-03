@@ -23,11 +23,12 @@ independent re-derivation rather than trusting upstream flags:
 from __future__ import annotations
 
 import json
+import math
 from dataclasses import dataclass
 from functools import lru_cache
 from importlib import resources
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Final, Literal
 
 import numpy as np
 
@@ -56,6 +57,48 @@ _DIRECTIONS = (
 _CP_LEVELS = ("choi_psd_proof", "construction_only", "proxy_sampling", "none")
 
 
+#: ``claim_status`` for a diagnostic the run could not measure. Distinct from
+#: ``"pending"``, which grades a diagnostic that WAS measured but whose
+#: anchors have not confirmed it yet.
+UNAVAILABLE_CLAIM_STATUS: Final[str] = "unavailable"
+
+
+def _diagnostic_entry(value: float, *, claim_status: str | None = None) -> Any:
+    """Encode one diagnostic so a fail-closed run stays writable as JSON.
+
+    ROUND-18 REVIEW (external, PR #127). The zero-mode certificate withholds
+    D1/D3 as NaN and the eigenvector gate withholds D9 the same way -- exactly
+    the reports an audit most needs. Those NaNs reached ``json.dumps(...,
+    allow_nan=False)`` in :func:`dump_stability_report` as bare floats, so the
+    honest report was the one that could NOT be persisted while every
+    confident report could. Withholding a number must not also withhold the
+    artefact that records the withholding.
+
+    A finite value with no ``claim_status`` stays a bare float, so every
+    existing consumer of ``payload["diagnostics"]["D1_gap"]`` is unaffected. A
+    non-finite one becomes the module's existing tagged shape (``value`` /
+    ``claim_status``, as used for the ``pending`` D8b/D10b entries) with
+    ``value = None`` plus the ``__nonfinite__`` token that
+    :mod:`liouscope.io.export` already uses -- so an infinity, which IS a
+    measurement with documented per-diagnostic semantics, stays
+    distinguishable from a NaN, which is the unavailable sentinel.
+    """
+    finite = math.isfinite(value)
+    if finite and claim_status is None:
+        return float(value)
+    entry: dict[str, Any] = {
+        "value": float(value) if finite else None,
+        "claim_status": (
+            claim_status if claim_status is not None else UNAVAILABLE_CLAIM_STATUS
+        ),
+    }
+    if not finite:
+        entry["__nonfinite__"] = (
+            "nan" if math.isnan(value) else ("inf" if value > 0 else "-inf")
+        )
+    return entry
+
+
 @dataclass(frozen=True, slots=True)
 class EvidenceBundle:
     """Benchmarks, oracles and external references backing a claim."""
@@ -82,19 +125,6 @@ def invariant_residuals(
         "hermiticity_residual": herm,
         "stationarity_residual": stat,
     }
-
-
-def _json_number(value: float) -> float | None:
-    """RFC 8259 view of a diagnostic value: ``None`` when it is not finite.
-
-    The diagnostic layers use NaN as the library-wide "unavailable" sentinel
-    (an unresolved zero-mode certificate withholds D1/D3, the eigenvector
-    certificate withholds D9), and ``dump_stability_report`` writes with
-    ``allow_nan=False``. Without this projection the serialiser raised on
-    precisely the runs whose report is most worth keeping.
-    """
-    v = float(value)
-    return v if np.isfinite(v) else None
 
 
 def build_stability_report(
@@ -165,41 +195,24 @@ def build_stability_report(
     inv["cp_choi_min_eig"] = None if cp_choi_min_eig is None else float(cp_choi_min_eig)
 
     spectral = report.spectral
-    # ROUND-22 REVIEW (PR #121). These values were copied through as raw
-    # floats, and the layers above deliberately publish NaN when a certificate
-    # is unresolved (D1/D3 in the spectral layer, D9 with the eigenvector
-    # certificate). ``dump_stability_report`` writes with
-    # ``allow_nan=False``, so the report that FAILED to serialise was exactly
-    # the unresolved run -- the one whose audit record matters most. Measured
-    # before this change: ``ValueError: Out of range float values are not JSON
-    # compliant: nan``.
-    #
-    # ``None`` is the schema-supported placeholder already used for
-    # D8b/D10b and by ``ZeroModeCertificate.as_dict``; the ``diagnostics``
-    # block is ``additionalProperties: true``, so it validates. ``isfinite``
-    # rather than ``isnan`` because +-inf is equally non-conforming under
-    # RFC 8259 and would raise in the same place.
     diagnostics: dict[str, Any] = {
-        "D1_gap": _json_number(spectral.gap),
-        "D2_gns_gap": _json_number(spectral.gns_gap),
-        "D2b_kms_gap": _json_number(spectral.kms_gap),
-        "D3_oscillating_gap": _json_number(spectral.oscillating_gap),
-        "D8_henrici": _json_number(report.nonnorm.henrici_eta),
-        "D9_petermann_max": _json_number(report.nonnorm.petermann_max),
-        "D10_kreiss": _json_number(report.nonnorm.kreiss),
+        "D1_gap": _diagnostic_entry(float(spectral.gap)),
+        "D2_gns_gap": _diagnostic_entry(float(spectral.gns_gap)),
+        "D2b_kms_gap": _diagnostic_entry(float(spectral.kms_gap)),
+        "D3_oscillating_gap": _diagnostic_entry(float(spectral.oscillating_gap)),
+        "D8_henrici": _diagnostic_entry(float(report.nonnorm.henrici_eta)),
+        "D9_petermann_max": _diagnostic_entry(float(report.nonnorm.petermann_max)),
+        "D10_kreiss": _diagnostic_entry(float(report.nonnorm.kreiss)),
     }
     # Issue #101 slice A: scale-relative variants are surfaced with an explicit
     # pending claim status (not yet anchor-confirmed) and their value attached,
-    # so audits see both the number and its evidentiary standing. NaN (e.g. the
-    # zero-operator case) is serialised as None -- dump uses allow_nan=False.
+    # so audits see both the number and its evidentiary standing. Non-finite
+    # values are encoded rather than emitted raw -- dump uses allow_nan=False.
     for did, val in (
         ("D8b_henrici_relative", float(report.nonnorm.henrici_relative)),
         ("D10b_kreiss_scaled", float(report.nonnorm.kreiss_scaled)),
     ):
-        diagnostics[did] = {
-            "value": _json_number(val),
-            "claim_status": "pending",
-        }
+        diagnostics[did] = _diagnostic_entry(val, claim_status="pending")
     for did in pending_diagnostics:
         diagnostics[did] = {"claim_status": "pending"}
 
@@ -339,6 +352,7 @@ def dump_stability_report(payload: dict[str, Any], path: str | Path) -> None:
 
 __all__ = [
     "SCHEMA_VERSION",
+    "UNAVAILABLE_CLAIM_STATUS",
     "EvidenceBundle",
     "build_stability_report",
     "dump_stability_report",
