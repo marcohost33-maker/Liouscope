@@ -442,6 +442,38 @@ def underflow_safe_norm(v: np.ndarray) -> float:
     return float(np.ldexp(float(np.linalg.norm(scaled)), exp))
 
 
+def underflow_safe_column_norms(M: np.ndarray) -> np.ndarray:
+    """Column-wise 2-norms of ``M``, none of which underflows to a false zero.
+
+    ROUND-25 REVIEW (PR #121). :func:`underflow_safe_norm` repaired the
+    residual pair inside ``certify_nonstationary``; the SEPARATE eigenvector
+    gate in :func:`certified_eig` still formed its column norms with a raw
+    ``np.linalg.norm(..., axis=0)``, so the same 1e-162 cliff produced a
+    residual of ``0.0`` -- an exact-eigenpair claim -- for a demonstrably
+    wrong eigenvector, and D9/D19 consumed a pair the gate exists to reject.
+
+    Repairing one call site rather than the CLASS is what let the defect
+    survive a round; this helper is the one place the rescue now lives for
+    every column-wise residual.
+
+    The healthy path is unchanged BIT FOR BIT: the vectorised NumPy result is
+    returned unless a column came back exactly ``0.0`` while containing a
+    nonzero entry, and only those columns are recomputed. A genuinely zero
+    column keeps its correct ``0.0`` rather than a rescued value.
+    """
+    M = np.asarray(M)
+    nrm = np.asarray(np.linalg.norm(M, axis=0), dtype=float)
+    if not M.size:
+        return nrm
+    lost = (nrm == 0.0) & np.any(M != 0.0, axis=0)
+    if not bool(np.any(lost)):
+        return nrm
+    out = np.array(nrm, dtype=float)
+    for k in np.flatnonzero(lost):
+        out[int(k)] = underflow_safe_norm(M[:, int(k)])
+    return out
+
+
 def band_discriminates(
     magnitudes: np.ndarray, zero_count: int, bound: float
 ) -> bool:
@@ -1121,12 +1153,23 @@ def certified_eig(
         vl = decomp.left_vectors
         assert vl is not None  # every ladder route computes left vectors
         tiny = np.finfo(float).tiny
-        res_r = np.linalg.norm(L_c @ vr - vr * ev[None, :], axis=0) / np.maximum(
-            np.linalg.norm(vr, axis=0), tiny
-        )
-        res_l = np.linalg.norm(
-            L_c.conj().T @ vl - vl * np.conj(ev)[None, :], axis=0
-        ) / np.maximum(np.linalg.norm(vl, axis=0), tiny)
+        # ROUND-25 REVIEW (PR #121). Both residuals and both normalisations go
+        # through :func:`underflow_safe_column_norms`. Round 24 made the
+        # residual pair inside ``certify_nonstationary`` underflow-safe and
+        # left THIS gate on the raw norms, so the identical failure survived:
+        # for a generator in rate units below ~1e-162 the squares underflow,
+        # ``res_r`` reads ``0.0`` for a wrong eigenvector, nothing is
+        # "offending", and ``certified=True`` hands D9/D19 the pair this gate
+        # was built to withhold. The denominators are included for the same
+        # reason as in round 24: a vector whose own norm underflows would be
+        # divided by ``tiny`` and leave the unit sphere, so the per-mode
+        # relative residual would no longer be the quantity being compared.
+        res_r = underflow_safe_column_norms(
+            L_c @ vr - vr * ev[None, :]
+        ) / np.maximum(underflow_safe_column_norms(vr), tiny)
+        res_l = underflow_safe_column_norms(
+            L_c.conj().T @ vl - vl * np.conj(ev)[None, :]
+        ) / np.maximum(underflow_safe_column_norms(vl), tiny)
         res = np.maximum(res_r, res_l)
         magnitudes = np.abs(ev)
         consumed = magnitudes > bound
