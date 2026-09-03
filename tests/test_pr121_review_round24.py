@@ -1,6 +1,6 @@
 """PR #121 round-24 review findings.
 
-Three findings, each a quantity that collapsed to a value the layer above could
+Five findings, each a quantity that collapsed to a value the layer above could
 not distinguish from a measurement:
 
 * **B1** ``operator_zero_tolerance`` returned an INFINITE cutoff for an operator
@@ -13,6 +13,14 @@ not distinguish from a measurement:
 * **B3** ``fit_gls_ar1`` applied its degeneracy test before any shape
   validation, so a mismatched ``(t, y)`` pair came back as a plausible
   ``degenerate=True`` result instead of being refused.
+* **B4** ``certified_nonzero_modes`` computed its eigenpair residual with
+  ``np.linalg.norm``, which squares before summing. Below ~1e-162 per component
+  a nonzero residual came back as ``0.0``, and ``mag > margin * (0 / sep)``
+  certifies EVERY nonzero in-band candidate -- the certificate stops being a
+  test, and D1 reports a spurious gap because the rate units changed.
+* **B5** ``is_hermitian`` accepted ``rtol = inf``, under which every finite
+  square matrix passes. Pinned in ``tests/test_hermiticity_scale.py``, where
+  the rest of the issue-#109 tolerance contract lives.
 
 Each test below is paired with a mutation in the round-24 discrimination spec:
 taking the fix out must turn the test red at an ASSERTION or a missing raise,
@@ -31,8 +39,10 @@ from liouscope.fitting.gls import fit_gls_ar1
 from liouscope.numerics.linalg import (
     certified_eig,
     certified_eigvals,
+    certified_nonzero_modes,
     operator_zero_tolerance,
     trace_preservation_defect,
+    underflow_safe_norm,
 )
 
 # ---------------------------------------------------------------------------
@@ -319,3 +329,108 @@ def test_a_well_formed_flat_curve_is_still_degenerate_not_refused() -> None:
         out = fit_gls_ar1(_decay, t, np.zeros_like(t), np.array([1.0, 1.0]))
     assert out.degenerate is True
     assert out.success is False
+
+
+# ---------------------------------------------------------------------------
+# B4: the a-posteriori certificate is scale-free; its residual norm was not.
+# ---------------------------------------------------------------------------
+
+#: The in-band candidate's magnitude, as a fraction of the operator scale.
+_CANDIDATE_REL = 1.0e-3
+#: How far the supplied eigenvector misses the true one. Chosen so the eigenpair
+#: residual is ~100x ABOVE the candidate's own magnitude: the a-posteriori bound
+#: then does NOT certify the mode, at any scale, because every quantity in
+#: ``mag > margin * (res / sep)`` is degree-one homogeneous in the rate unit.
+_EIGENVECTOR_MISS = 0.1
+
+
+def _inexact_eigenpair(c: float):
+    """Operator, spectrum and a deliberately inexact eigenpair at rate scale ``c``."""
+    diag = np.array([0.0, _CANDIDATE_REL, 1.0, 2.0], dtype=complex)
+    L = c * np.diag(diag)
+    eigenvalues = c * diag
+    x = np.zeros(4, dtype=complex)
+    x[1] = 1.0
+    x[2] = _EIGENVECTOR_MISS
+    x /= np.linalg.norm(x)
+    vr = np.eye(4, dtype=complex)
+    vr[:, 1] = x
+    vl = np.eye(4, dtype=complex)
+    vl[:, 1] = x
+    in_band = np.array([True, True, False, False])
+    return L, eigenvalues, in_band, vr, vl
+
+
+def test_the_certificate_verdict_does_not_depend_on_the_rate_unit() -> None:
+    """B4: ``np.linalg.norm`` squared a nonzero residual down to zero.
+
+    Below roughly ``1e-162`` per component every square falls under the
+    smallest subnormal, so the residual of a demonstrably inexact eigenpair
+    came back as ``0.0``. ``mag > margin * (0 / sep)`` then holds for EVERY
+    nonzero in-band candidate -- the certificate stops being a test. That
+    promotes a numerically perturbed member of a degenerate stationary
+    manifold into the physical spectrum, so D1 reports a spurious gap purely
+    because the rate units changed.
+
+    Measured before the repair: NOT certified at ``c = 1``, ``1e-80`` and
+    ``1e-160``; certified at ``c = 1e-170`` and ``1e-200``.
+    """
+    verdicts = {}
+    for c in (1.0, 1.0e-80, 1.0e-160, 1.0e-170, 1.0e-200):
+        L, ev, band, vr, vl = _inexact_eigenpair(c)
+        out = certified_nonzero_modes(
+            L, ev, band, right_vectors=vr, left_vectors=vl
+        )
+        verdicts[c] = bool(out[1])
+    assert set(verdicts.values()) == {False}, verdicts
+
+    # POSITIVE CONTROL on the same fixture and the same scales: an eigenpair
+    # that IS exact must still be certified everywhere, or the assertion above
+    # could be passed by a certificate that has stopped certifying anything.
+    for c in (1.0, 1.0e-170, 1.0e-200):
+        diag = np.array([0.0, _CANDIDATE_REL, 1.0, 2.0], dtype=complex)
+        L = c * np.diag(diag)
+        out = certified_nonzero_modes(
+            L,
+            c * diag,
+            np.array([True, True, False, False]),
+            right_vectors=np.eye(4, dtype=complex),
+            left_vectors=np.eye(4, dtype=complex),
+        )
+        assert bool(out[1]) is True, c
+
+
+def test_underflow_safe_norm_keeps_a_nonzero_vector_nonzero() -> None:
+    """The helper itself, against an independent oracle.
+
+    ``||v||`` is degree-one homogeneous, so scaling the vector by a power of
+    two must scale the norm by exactly the same power -- an identity that is
+    exact in binary floating point and therefore checkable without tolerance.
+    """
+    base = np.array([3.0, -4.0, 0.0, 0.0], dtype=complex)
+    assert underflow_safe_norm(base) == 5.0
+    for exp in (-100, -540, -600, -700, 100, 500):
+        scaled = np.ldexp(base.real, exp) + 1j * np.ldexp(base.imag, exp)
+        assert underflow_safe_norm(scaled) == np.ldexp(5.0, exp), exp
+
+    # The regime the repair exists for: numpy's own norm has already collapsed.
+    tiny = np.ldexp(base.real, -600) + 0j
+    assert float(np.linalg.norm(tiny)) == 0.0, "fixture no longer underflows"
+    assert underflow_safe_norm(tiny) > 0.0
+
+    # NEGATIVE CONTROL: a genuinely zero vector keeps the correct answer, and
+    # an overflowing one is left alone (the rescue is one-directional, exactly
+    # as in ``trace_preservation_defect``).
+    assert underflow_safe_norm(np.zeros(4, dtype=complex)) == 0.0
+    assert underflow_safe_norm(np.array([], dtype=complex)) == 0.0
+    large = np.array([1.0e150, 1.0e150], dtype=complex)
+    assert underflow_safe_norm(large) == float(np.linalg.norm(large))
+    # An OVERFLOWING norm is deliberately not rescued: ``inf`` there is the
+    # input to the round-21 refusal of a non-finite reference scale, and
+    # making it finite again would reopen a hole whose repair had to be proven
+    # across five interpreter versions (same argument as
+    # ``trace_preservation_defect``).
+    with warnings.catch_warnings(), np.errstate(over="ignore"):
+        warnings.simplefilter("ignore", RuntimeWarning)
+        huge = np.array([1.0e308, 1.0e308], dtype=complex)
+        assert underflow_safe_norm(huge) == float("inf")

@@ -7,6 +7,37 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Fixed
+- **The a-posteriori zero-mode certificate stopped being a test below ~1e-162
+  (PR #121, round-24 external review, B4).** `certified_nonzero_modes`
+  computes the eigenpair residual with `np.linalg.norm`, which squares before
+  summing: when the generator and its residuals are uniformly scaled so every
+  component falls below ~`1.5e-162`, a demonstrably nonzero residual comes back
+  as `0.0`. `mag > margin * (0 / sep)` then holds for EVERY nonzero in-band
+  candidate, so a numerically perturbed member of a degenerate stationary
+  manifold is promoted into the physical spectrum and D1 reports a spurious gap
+  — purely because the rate units changed, on a certificate whose every term is
+  degree-one homogeneous. Measured on a deliberately inexact eigenpair whose
+  residual is 100x above the candidate's own magnitude (correct verdict: not
+  certified): NOT certified at `c = 1`, `1e-80`, `1e-160`; certified at
+  `1e-170` and `1e-200`. Round 22 made the refined MIDPOINT underflow-safe; the
+  residual that establishes the refinement was not. A new
+  `numerics.linalg.underflow_safe_norm` follows the same one-directional
+  discipline as `trace_preservation_defect` (power-of-two `frexp`/`ldexp`
+  scaling, reachable only from an exact `0.0` on a nonzero vector, overflow
+  deliberately left alone) and is used for both residual norms and both
+  eigenvector normalisations.
+- **`is_hermitian` accepted an infinite relative tolerance (PR #121, round-24
+  external review, B5).** `is_hermitian([[0, 1], [0, 0]], rtol=float("inf"))`
+  returned `True`, because any finite defect is `<= inf`. `rtol` is a newly
+  exposed validation threshold (issue #109), so an invalid one could turn the
+  gate into a fail-open pass-through — the exact failure the scale-relative
+  reading exists to close. `rtol` and `atol` must now be finite and
+  non-negative, and the DERIVED tolerance `rtol * max|A|` must be finite too,
+  the same two-stage rule `numerics.scale.spectral_zero_tolerance` applies. An
+  unusable tolerance raises `ValueError` rather than returning `False`: `False`
+  is a statement about the matrix, an invalid threshold is a statement about
+  the call, and reporting them identically is the conflation this round is
+  about.
 - **Malformed observations were reported as a flat curve instead of refused
   (PR #121, round-24 review, finding B3).** The issue-#123 degeneracy test in
   `fit_gls_ar1` reads `y` alone and never touches `t`, and it ran before any

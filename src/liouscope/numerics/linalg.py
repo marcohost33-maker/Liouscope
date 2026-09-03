@@ -412,6 +412,36 @@ def trace_preservation_defect(L_super: np.ndarray) -> tuple[float, float]:
     return defect, fro
 
 
+def underflow_safe_norm(v: np.ndarray) -> float:
+    """2-norm of ``v`` that does not lose a nonzero vector to underflow.
+
+    ROUND-24 REVIEW (PR #121), finding B4. ``np.linalg.norm`` squares before
+    summing, so every component below ``sqrt(5e-324) ~ 1.5e-162`` contributes
+    exactly zero and a demonstrably nonzero vector comes back with norm
+    ``0.0``. That is not an accuracy loss but a change of KIND: a residual of
+    zero certifies an exact eigenpair, which is the strongest statement the
+    a-posteriori bound can make.
+
+    Same discipline as :func:`trace_preservation_defect` above: the rescue is
+    reachable ONLY from an exact ``0.0`` on a vector that is not itself zero,
+    so no overflowing quantity is made finite and a genuinely zero vector
+    keeps the correct answer rather than a rescued one. Scaling is by a POWER
+    OF TWO via ``frexp``/``ldexp``, so the mantissa bits survive the round trip
+    exactly and complex division by a subnormal -- which overflows inside
+    NumPy's algorithm -- is never formed.
+    """
+    v = np.asarray(v)
+    nrm = float(np.linalg.norm(v))
+    if nrm != 0.0 or not v.size or not bool(np.any(v != 0.0)):
+        return nrm
+    m = float(np.max(np.maximum(np.abs(np.real(v)), np.abs(np.imag(v)))))
+    if not np.isfinite(m) or m <= 0.0:  # pragma: no cover - unreachable via any(v != 0)
+        return nrm
+    exp = int(np.frexp(m)[1])
+    scaled = np.ldexp(np.real(v), -exp) + 1j * np.ldexp(np.imag(v), -exp)
+    return float(np.ldexp(float(np.linalg.norm(scaled)), exp))
+
+
 def band_discriminates(
     magnitudes: np.ndarray, zero_count: int, bound: float
 ) -> bool:
@@ -513,14 +543,34 @@ def certified_nonzero_modes(
         # a bound computed for a different eigenvalue certifies nothing.
         if abs(ref[j] - lam) > 0.1 * max(abs(lam), mag) or mag == 0.0:
             continue
-        x = vr[:, j] / max(float(np.linalg.norm(vr[:, j])), tiny)
-        y = vl[:, j] / max(float(np.linalg.norm(vl[:, j])), tiny)
+        # ROUND-24 REVIEW (PR #121), finding B4. Every norm in this block is
+        # underflow-safe. The residual pair is the one the reviewer named: for
+        # a generator whose nonzero eigenpair residuals are uniformly scaled
+        # below roughly 1e-162, ``np.linalg.norm`` squares the components to
+        # zero and returns ``0.0`` for a nonzero vector. ``mag > margin *
+        # (0 / sep)`` is then true for EVERY nonzero in-band candidate, so a
+        # numerically perturbed member of a degenerate stationary manifold is
+        # promoted into the physical spectrum and D1 reports a spurious gap --
+        # solely because the rate units changed. Measured on a deliberately
+        # inexact eigenpair (candidate magnitude 1e-3 of the operator scale, a
+        # residual 100x ABOVE it, so the correct verdict is "not certified"):
+        # NOT certified at c = 1, 1e-80 and 1e-160; certified at c = 1e-170
+        # and 1e-200. The refined midpoint below was already made
+        # underflow-safe in round 22; the residual that ESTABLISHES the
+        # refinement was not.
+        #
+        # The two normalisations are included for the same reason and in the
+        # same direction: a right/left vector whose own norm underflows would
+        # be divided by ``tiny`` and leave the unit sphere entirely, so ``x``
+        # and ``y`` would no longer be the unit vectors the bound assumes.
+        x = vr[:, j] / max(underflow_safe_norm(vr[:, j]), tiny)
+        y = vl[:, j] / max(underflow_safe_norm(vl[:, j]), tiny)
         sep = float(abs(np.vdot(y, x)))
         if sep <= 0.0:
             continue  # defective pair: the first-order bound does not apply
         res = max(
-            float(np.linalg.norm(L_c @ x - ref[j] * x)),
-            float(np.linalg.norm(L_c.conj().T @ y - np.conj(ref[j]) * y)),
+            underflow_safe_norm(L_c @ x - ref[j] * x),
+            underflow_safe_norm(L_c.conj().T @ y - np.conj(ref[j]) * y),
         )
         if mag > margin * (res / sep):
             out[i] = True
@@ -1287,17 +1337,48 @@ def is_hermitian(
     rtol
         Relative tolerance on ``max|A|``; ignored when ``atol`` is given.
 
+    Raises
+    ------
+    ValueError
+        If ``rtol`` or ``atol`` is not finite and non-negative, or if the
+        DERIVED tolerance ``rtol * max|A|`` is not finite. Round-24 review
+        (PR #121): with ``rtol = inf`` every finite square matrix passed --
+        ``is_hermitian([[0, 1], [0, 0]], rtol=float("inf"))`` returned ``True``
+        -- because any finite defect is ``<= inf``. ``rtol`` is a newly exposed
+        validation threshold, and an invalid threshold must not be able to turn
+        a validation gate into a fail-open pass-through. The same rule the
+        zero-mode tolerance helpers apply (:func:`liouscope.numerics.scale.
+        spectral_zero_tolerance`) applies here, including their second line of
+        defence on the derived value: a non-finite ``max|A|`` would reproduce
+        the hole through the scale instead of through ``rtol``.
+
+        Refusing rather than returning ``False`` is deliberate. ``False`` is a
+        statement about the MATRIX ("not Hermitian"); an unusable tolerance is
+        a statement about the CALL, and the two must not be reported as the
+        same thing -- the non-square early return above is the former, this is
+        the latter.
+
     Notes
     -----
     Zero-operator semantics: ``max|A| == 0`` gives ``tol = 0``, so the all-zero
     matrix (exactly Hermitian) passes and nothing else does. This mirrors the
     documented zero-operator behaviour of :func:`liouscope.numerics.scale.rate_scale`.
     """
+    if not np.isfinite(rtol) or rtol < 0.0:
+        raise ValueError(f"rtol must be finite and non-negative, got {rtol}")
+    if atol is not None and (not np.isfinite(atol) or atol < 0.0):
+        raise ValueError(f"atol must be finite and non-negative, got {atol}")
     A = np.asarray(A)
     if A.ndim != 2 or A.shape[0] != A.shape[1]:
         return False
     defect, scale = hermiticity_defect(A)
     tol = float(atol) if atol is not None else rtol * scale
+    if not np.isfinite(tol):
+        raise ValueError(
+            "the Hermiticity tolerance is not finite "
+            f"(rtol={rtol}, max|A|={scale}); a tolerance that accepts every "
+            "defect cannot validate anything"
+        )
     return bool(defect <= tol)
 
 

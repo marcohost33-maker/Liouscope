@@ -167,3 +167,55 @@ def test_hermiticity_defect_is_homogeneous() -> None:
         dc, sc = hermiticity_defect(c * h)
         assert dc == pytest.approx(c * d0, rel=1e-12)
         assert sc == pytest.approx(c * s0, rel=1e-12)
+
+
+# ---------------------------------------------------------------------------
+# Round-24 review (external, PR #121): an invalid tolerance must not pass
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("bad", [float("inf"), float("-inf"), float("nan"), -1.0])
+def test_invalid_relative_tolerance_is_rejected(bad: float) -> None:
+    """An unusable threshold is a statement about the CALL, not the matrix.
+
+    With ``rtol = inf`` every finite square matrix passed, because any finite
+    defect is ``<= inf``: ``is_hermitian([[0, 1], [0, 0]], rtol=inf)`` returned
+    True. ``rtol`` is a newly exposed validation threshold, so an invalid one
+    could turn the gate into a fail-open pass-through — the exact failure the
+    scale-relative reading exists to close.
+    """
+    not_hermitian = np.array([[0.0, 1.0], [0.0, 0.0]])
+    with pytest.raises(ValueError, match="rtol must be finite and non-negative"):
+        is_hermitian(not_hermitian, rtol=bad)
+
+
+@pytest.mark.parametrize("bad", [float("inf"), float("nan"), -1.0])
+def test_invalid_absolute_tolerance_is_rejected(bad: float) -> None:
+    """The legacy ``atol`` opt-in carries the same rule (fail-open otherwise)."""
+    not_hermitian = np.array([[0.0, 1.0], [0.0, 0.0]])
+    with pytest.raises(ValueError, match="atol must be finite and non-negative"):
+        is_hermitian(not_hermitian, atol=bad)
+
+
+def test_a_nonfinite_operator_scale_cannot_open_the_gate_either() -> None:
+    """Second line of defence: the DERIVED tolerance must be finite too.
+
+    Refusing only on ``rtol`` would leave the same hole reachable through
+    ``max|A|``: an operator carrying ``inf`` gives ``tol = inf`` from a
+    perfectly ordinary ``rtol``.
+    """
+    with pytest.raises(ValueError, match="tolerance is not finite"):
+        is_hermitian(np.array([[0.0, np.inf], [0.0, 0.0]]))
+
+
+def test_valid_tolerances_are_untouched_by_the_validation() -> None:
+    """Over-correction control: the accepted range still decides normally."""
+    exact = _hermitian_base()
+    broken = _broken(1.0, 1e-6)
+    assert is_hermitian(exact)
+    assert not is_hermitian(broken)
+    assert is_hermitian(broken, rtol=1e-3)        # loose but legal
+    assert not is_hermitian(broken, rtol=0.0)     # zero is legal and strictest
+    assert is_hermitian(exact, rtol=0.0)          # exact defect is 0 <= 0
+    assert is_hermitian(broken, atol=1.0)
+    assert not is_hermitian(broken, atol=0.0)
