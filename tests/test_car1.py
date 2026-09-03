@@ -27,7 +27,8 @@ import warnings
 import numpy as np
 import pytest
 
-from liouscope.fitting.aicc import gaussian_log_likelihood
+from liouscope.diagnostics.relaxation import _fit_with_model
+from liouscope.fitting.aicc import aicc, gaussian_log_likelihood
 from liouscope.fitting.bootstrap import parametric_bootstrap
 from liouscope.fitting.car1 import (
     car1_resample,
@@ -389,3 +390,67 @@ def test_bootstrap_spread_matches_an_independent_monte_carlo_on_a_two_scale_grid
         )
     ratio = float(np.std(np.abs(samples[:, 3]))) / sd_gold
     assert 0.6 < ratio < 1.6, ratio
+
+
+# ---------------------------------------------------------------------------
+# Round-18 review (external, PR #127): the fitted CAR(1) rate is a parameter
+# ---------------------------------------------------------------------------
+
+
+def _decaying_series(t: np.ndarray) -> np.ndarray:
+    rng = np.random.default_rng(20260903)
+    return np.exp(-1.0 * t) + 1.0e-3 * rng.standard_normal(t.size)
+
+
+def test_aicc_counts_the_fitted_car1_rate_on_a_non_uniform_grid():
+    """``theta`` is estimated from THIS data set, so it belongs in ``k``.
+
+    It is re-fitted for every candidate model and enters that model's maximised
+    likelihood through the whitening. Because the small-sample correction
+    ``2k(k+1)/(N_eff-k-1)`` is nonlinear in ``k``, leaving it out is not a
+    constant offset: it under-penalises the higher-dimensional candidates
+    exactly when ``N_eff`` is small, which can move the selected relaxation
+    model and with it the reported A-class.
+    """
+    t = np.concatenate(
+        [np.linspace(0.0, 0.1, 40, endpoint=False), np.linspace(0.1, 8.0, 40)]
+    )
+    assert not is_uniform_grid(t), "fixture must exercise the CAR(1) path"
+    y = _decaying_series(t)
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        fit, _ = _fit_with_model("M1", t, y)
+
+    assert np.isfinite(fit.residual_theta_car1), "fixture must fit a CAR(1) rate"
+    p = int(np.asarray(fit.params).size)
+    assert fit.aicc == pytest.approx(
+        aicc(fit.log_likelihood, p + 1, fit.n_eff), rel=0.0, abs=0.0
+    )
+    # DISCRIMINATION: the pre-fix count must be a DIFFERENT number here, or the
+    # assertion above would pass without the repair.
+    assert aicc(fit.log_likelihood, p, fit.n_eff) != aicc(
+        fit.log_likelihood, p + 1, fit.n_eff
+    )
+
+
+def test_aicc_parameter_count_is_unchanged_on_a_uniform_grid():
+    """Negative control: the historical discrete-AR(1) path must not move.
+
+    ``rho`` is estimated there too, but counting it would re-rank every
+    existing uniform-grid result; that convention change is deliberately NOT
+    part of this repair (see the comment in ``_fit_with_model``).
+    """
+    t = np.linspace(0.0, 8.0, 80)
+    assert is_uniform_grid(t)
+    y = _decaying_series(t)
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        fit, _ = _fit_with_model("M1", t, y)
+
+    assert not np.isfinite(fit.residual_theta_car1), "uniform grid fits no theta"
+    p = int(np.asarray(fit.params).size)
+    assert fit.aicc == pytest.approx(
+        aicc(fit.log_likelihood, p, fit.n_eff), rel=0.0, abs=0.0
+    )

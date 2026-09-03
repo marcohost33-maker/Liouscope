@@ -155,10 +155,40 @@ def default_relaxation_grid(
     resolved; the historical absolute window is returned in that case. A
     missing, non-finite or non-positive ``fast_rate`` likewise falls back to
     the uniform grid rather than guessing a fast scale.
+
+    A gap that is finite and positive but smaller than ``horizon /
+    float64.max`` has no REPRESENTABLE relaxation window: ``horizon / gap``
+    overflows. That case joins the "no usable decay scale" branch above
+    (round-18 review, external, PR #127) -- see the guard below.
     """
     if not np.isfinite(gap) or gap <= 0.0:
         return np.linspace(0.0, _LEGACY_T_MAX, n_points)
     t_max = horizon / float(gap)
+    # ROUND-18 REVIEW (external, PR #127). ``gap`` can pass the finiteness
+    # gate above and still leave the window unrepresentable: for a positive
+    # ``gap < horizon / float64.max`` (measured: 5.56e-309 with the default
+    # horizon) this division overflows to ``inf`` and ``np.linspace(0, inf,
+    # n)`` produces ``[nan, inf, inf, ...]``. That grid was returned verbatim
+    # whenever ``fast_rate`` was absent or unusable, and the two-scale
+    # post-condition below degrades to the SAME invalid ``uniform``, so
+    # ``compute_relaxation_layer`` fed ``inf``/``nan`` times into ``expm`` and
+    # the fits. The condition is on the DERIVED quantity, not on ``gap``: what
+    # is unrepresentable is the window, and no threshold on the rate alone
+    # expresses that (it depends on ``horizon``). Failing into the documented
+    # legacy window is the same fail-closed answer the non-finite-gap branch
+    # already gives -- "no usable decay scale was resolved" -- rather than a
+    # fabricated one, and it is reached only from an overflow, so every
+    # representable window is untouched.
+    if not np.isfinite(t_max) or t_max <= 0.0:
+        warnings.warn(
+            "default_relaxation_grid: the relaxation window "
+            f"horizon/gap = {horizon}/{gap} is not representable as float64, "
+            "so no gap-scaled grid exists for this rate unit; falling back to "
+            "the documented absolute window (PR #127 round-18 review).",
+            RuntimeWarning,
+            stacklevel=2,
+        )
+        return np.linspace(0.0, _LEGACY_T_MAX, n_points)
     uniform = np.linspace(0.0, t_max, n_points)
 
     # --- fail-closed guards: any doubt keeps the historical uniform grid ---
@@ -512,7 +542,30 @@ def _fit_with_model(
     model = fns[model_name]
     p0 = seeds[model_name](t, y)
     fit = fit_gls_ar1(model, t, y, p0)
-    k = p0.size
+    # ROUND-18 REVIEW (external, PR #127). ``k`` is the number of parameters
+    # ESTIMATED from this data set, and on a non-uniform grid the CAR(1) rate
+    # ``theta`` is one of them: it is re-fitted for every candidate model and
+    # enters that model's maximised likelihood through the whitening. Counting
+    # only ``p0.size`` there is not a harmless constant offset, because the
+    # small-sample correction ``2k(k+1)/(N_eff-k-1)`` is NONLINEAR in ``k`` --
+    # omitting the nuisance parameter therefore under-penalises the
+    # higher-dimensional candidates (M2/M3b) relative to M0/M1 exactly when
+    # ``N_eff`` is small, which can move the selected relaxation model and with
+    # it the reported A-class.
+    #
+    # The predicate is ``isfinite(theta_car1)``, i.e. "was theta actually
+    # fitted", not "is the grid non-uniform": ``fit_gls_ar1`` falls back to the
+    # discrete AR(1) treatment when the CAR(1) estimate is degenerate, and no
+    # parameter is estimated in that case that was not estimated before.
+    #
+    # The discrete ``rho`` of the uniform path is deliberately NOT counted
+    # here. That is the historical convention (``k`` = mean-function
+    # parameters) and it is self-consistent within one selection, because
+    # uniformity is a property of the GRID and therefore fixed across all
+    # candidates of a single comparison. Changing it would re-rank every
+    # existing uniform-grid result and belongs in its own PR with its own
+    # anchor evidence.
+    k = int(p0.size) + (1 if np.isfinite(fit.theta_car1) else 0)
     # N_eff must be computed under the SAME residual model the fit whitened
     # with, or the AICc it feeds compares likelihoods from one model against a
     # sample size from another. The Geyer IPS estimator sums autocorrelations

@@ -396,9 +396,16 @@ class _Condition:
     Keeping the two apart is what preserves the matrix/ladder equivalence: if a
     defaulted key were declared required, the matrix would report UNEVALUABLE
     for evidence on which the ladder happily fires (the F5 reach leg reads
-    ``ev.get("gap", 0.0)`` and treats a missing gap as the gapless limit), and
-    the two would disagree exactly on the partially collected evidence the
-    matrix exists to describe.
+    ``ev.get("gap_to_gns_ratio", 1.0)`` and decides without it), and the two
+    would disagree exactly on the partially collected evidence the matrix
+    exists to describe.
+
+    The converse error is the one the round-18 review of PR #127 found, and it
+    is the more expensive: declaring a key optional when its DEFAULT is not a
+    neutral reading of "not measured" but the strongest available evidence.
+    ``gap`` defaulted to ``0.0``, which the reach leg reads as the gapless
+    limit, so a withheld D1 was converted into positive F5 support. A key whose
+    absence would be silently answered in the affirmative belongs in ``keys``.
 
     ``relaxation_fields`` names any :class:`RelaxationResult` attributes read,
     for the same audit purpose. ``fn`` MUST reproduce the decision predicate
@@ -438,7 +445,21 @@ def _f5_reach(ev: dict[str, float], relaxation: RelaxationResult) -> bool:
     # leading order (both radius and gap scale as c). A vanishing gap (no
     # spectral gap) is treated as inf reach: a gapless, strongly non-normal
     # operator is the phantom/critical limit.
-    _gap = ev.get("gap", 0.0)
+    #
+    # ROUND-18 REVIEW (external, PR #127). ``gap`` is indexed, not defaulted.
+    # A MEASURED zero and an UNAVAILABLE gap are different states, and the
+    # former default ``ev.get("gap", 0.0)`` collapsed them into the stronger
+    # one: when the zero-mode certificate withholds D1 as NaN,
+    # ``_strip_unavailable`` removes the key, the default supplied the gapless
+    # limit, and this leg returned True unconditionally -- so every unresolved
+    # spectrum with ``henrici_eta > 1`` was labelled A10/F5 with F5 reported
+    # SUPPORTED, on a radius-to-gap ratio that was never measurable. The key
+    # is REQUIRED in the rung spec below, so both consumers refuse in step:
+    # the ladder cannot fire the rung (``all(k in ev ...)``) and the matrix
+    # reports UNEVALUABLE with ``gap`` in ``missing``. A gap that really was
+    # measured as 0.0 is present in ``ev`` and still takes the gapless branch,
+    # so the documented #101 blind spot is unchanged.
+    _gap = ev["gap"]
     if _gap > 0.0:
         return bool(
             ev["pseudospectral_radius"] / _gap > 2.0 * ev.get("gap_to_gns_ratio", 1.0)
@@ -503,9 +524,11 @@ def _ladder_spec() -> tuple[_Rung, ...]:
         conditions=(
             _Condition(
                 description="pseudospectral reach: radius/gap > 2 * gap_to_gns_ratio "
-                "(gapless => infinite reach; see #101 gapless blind spot)",
-                keys=("pseudospectral_radius",),
-                optional_keys=("gap", "gap_to_gns_ratio"),
+                "(measured gap 0.0 => infinite reach; see #101 gapless blind "
+                "spot. An UNAVAILABLE gap makes this rung unevaluable -- "
+                "round-18 review, PR #127)",
+                keys=("pseudospectral_radius", "gap"),
+                optional_keys=("gap_to_gns_ratio",),
                 fn=_f5_reach,
             ),
             _Condition(

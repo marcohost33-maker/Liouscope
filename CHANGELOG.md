@@ -7,6 +7,55 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Fixed
+- **An unavailable D1 was converted into the strongest gapless evidence (PR
+  #127, round-18 external review).** When the zero-mode certificate withholds
+  D1 as NaN, `_strip_unavailable` removes both `gap` and `gap_to_gns_ratio`
+  from the evidence dict. `gap` was declared OPTIONAL on the F5 reach leg, so
+  `_f5_reach` substituted its documented gapless default `0.0` and returned
+  true unconditionally: any such run with `henrici_eta > 1` was labelled
+  A10/F5 and the hypothesis matrix reported F5 as `SUPPORTED`, on a
+  radius-to-gap ratio that was never measurable — only the closing verdict was
+  floored. `gap` is now a REQUIRED key of that condition and `_f5_reach`
+  indexes it, so the ladder cannot fire the rung and the matrix reports
+  UNEVALUABLE with `gap` in `missing`. A gap that really was MEASURED as `0.0`
+  is present in the evidence and still takes the gapless branch, so the
+  documented #101 blind spot is unchanged rather than quietly closed.
+- **The fail-closed stability reports were the only ones that could not be
+  written (PR #127, round-18 external review).** `build_stability_report`
+  emitted `D1_gap`, `D3_oscillating_gap` and `D9_petermann_max` as bare floats,
+  and `dump_stability_report` calls `json.dumps(..., allow_nan=False)` — so
+  exactly the runs where the certificate withholds D1/D3 or the eigenvector
+  gate withholds D9 raised `ValueError` instead of producing the audit
+  artefact that records the withholding. Non-finite diagnostics are now
+  encoded as `{"value": null, "claim_status": "unavailable", "__nonfinite__":
+  "nan"|"inf"|"-inf"}` — the module's own tagged shape plus the token
+  `liouscope.io.export` already uses, so an infinity (a measurement) stays
+  distinguishable from a NaN (the absence of one). Finite values remain bare
+  floats, so existing consumers are unaffected.
+- **A finite positive gap can still have no representable relaxation window
+  (PR #127, round-18 external review).** `default_relaxation_grid` computed
+  `t_max = horizon / gap` after its finiteness gate; for any positive `gap <
+  horizon / float64.max` (measured: `5.56e-309` at the default horizon) that
+  division overflows and `np.linspace(0.0, inf, n)` yields `[nan, inf, inf,
+  ...]`. The grid was returned verbatim when `fast_rate` was absent or
+  unusable, and the two-scale post-condition degrades to the same invalid
+  `uniform`, so `compute_relaxation_layer` fed `inf`/`nan` times into `expm`
+  and the fits. The derived window is now guarded and the case joins the
+  documented absolute-window fallback with a `RuntimeWarning`; a representable
+  window is untouched.
+- **The fitted CAR(1) rate was missing from the AICc parameter count (PR #127,
+  round-18 external review).** On a non-uniform grid `theta` is estimated
+  separately for every candidate model and enters that model's maximised
+  likelihood through the whitening, but `_fit_with_model` passed only
+  `p0.size` to `aicc`. The small-sample correction `2k(k+1)/(N_eff-k-1)` is
+  nonlinear in `k`, so the omission is not a constant offset: it
+  under-penalises M2/M3b relative to M0/M1 when `N_eff` is small and can move
+  the selected relaxation model and the reported A-class. `k` now includes the
+  nuisance parameter whenever a finite `theta` was actually fitted. The
+  discrete `rho` of the uniform path is deliberately left uncounted — that is
+  the historical convention, it is self-consistent within one comparison
+  (uniformity is a property of the grid), and changing it would re-rank every
+  existing result.
 - **D3, D4 and `has_complex_pairs` were published from the spectrum for which
   D1 had just been withheld (PR #127, round-17 review, fifth finding).** Where
   the zero-mode certificate is applicable but not resolved, the spectral layer

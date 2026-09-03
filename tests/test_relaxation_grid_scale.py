@@ -825,3 +825,54 @@ def test_residual_model_still_reports_car1_when_every_fit_whitened_that_way():
         rep = compute_relaxation_layer(L, rho_initial=rho0, bootstrap_B=5, seed=1)
     assert all(np.isfinite(f.residual_theta_car1) for f in rep.fits.values())
     assert rep.residual_model == "car1"
+
+
+# ---------------------------------------------------------------------------
+# Round-18 review (external, PR #127): the window itself can be unrepresentable
+# ---------------------------------------------------------------------------
+
+
+def test_unrepresentable_relaxation_window_falls_back_instead_of_corrupting():
+    """A finite positive gap can still have no float64 relaxation window.
+
+    ``t_max = horizon / gap`` overflows for any positive
+    ``gap < horizon / float64.max``. ``np.linspace(0.0, inf, n)`` then yields
+    ``[nan, inf, inf, ...]``, and that grid was returned verbatim whenever
+    ``fast_rate`` was absent or unusable -- the two-scale post-condition
+    degrades to the SAME ``uniform``, so there was no second line of defence.
+    ``compute_relaxation_layer`` fed those times into ``expm`` and the fits.
+
+    A rate unit must not be able to corrupt the pipeline: the case joins the
+    documented "no usable decay scale" fallback and says so in a warning.
+    """
+    gap = float(RELAXATION_HORIZON / float(np.finfo(float).max) / 10.0)
+    assert np.isfinite(gap) and gap > 0.0, "fixture must pass the finiteness gate"
+    assert not np.isfinite(RELAXATION_HORIZON / gap), "fixture must overflow"
+
+    for fast_rate in (None, 1.0, 1.0e-320):
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            grid = default_relaxation_grid(gap, fast_rate=fast_rate)
+        assert np.all(np.isfinite(grid)), (fast_rate, grid[:4], grid[-1])
+        assert grid.size == RELAXATION_N_POINTS
+        assert grid[0] == 0.0
+        assert np.all(np.diff(grid) > 0.0)
+        assert any(
+            "not representable" in str(w.message) for w in caught
+        ), [str(w.message) for w in caught]
+
+
+def test_representable_window_is_untouched_by_the_overflow_guard():
+    """Negative control: the guard must fire ONLY on the overflow.
+
+    The smallest gap whose window is still representable keeps the gap-scaled
+    grid, bit for bit, and raises no warning -- otherwise the repair would
+    have replaced a fail-open with a fail-closed defect.
+    """
+    gap = float(RELAXATION_HORIZON / float(np.finfo(float).max) * 4.0)
+    assert np.isfinite(RELAXATION_HORIZON / gap), "fixture must NOT overflow"
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        grid = default_relaxation_grid(gap)
+    assert not any("not representable" in str(w.message) for w in caught)
+    assert grid[-1] == pytest.approx(RELAXATION_HORIZON / gap)
