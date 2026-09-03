@@ -277,11 +277,27 @@ def test_explicit_sigma_likelihood_uses_the_full_representable_rss_range() -> No
 
 
 def test_a_genuinely_unrepresentable_half_rss_still_returns_minus_inf() -> None:
-    """Fail-closed control: the bound moved by one octave, it did not vanish."""
+    """Fail-closed control: the bound moved by one octave, it did not vanish.
+
+    The outcome is captured rather than asserted inline. Without the guard the
+    call raises ``OverflowError`` from ``math.exp``, and a test that dies of an
+    exception is indistinguishable from an incidental crash in a mutation run --
+    the death must be attributable to an ASSERTION for the proof to count.
+    """
     residual = np.array([1.4e308])
     log_rss = scaled_log_sum_squares(residual)
     assert log_rss > math.log(np.finfo(float).max) + math.log(2.0)
-    assert gaussian_log_likelihood(residual, sigma=1.0) == float("-inf")
+
+    outcome: object
+    try:
+        outcome = gaussian_log_likelihood(residual, sigma=1.0)
+    except Exception as exc:
+        outcome = exc
+    assert not isinstance(outcome, BaseException), (
+        f"the likelihood raised {type(outcome).__name__} "
+        f"({outcome}) instead of returning -inf"
+    )
+    assert outcome == float("-inf")
 
 
 def test_values_inside_the_old_range_are_bit_identical() -> None:
