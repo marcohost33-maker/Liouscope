@@ -63,16 +63,37 @@ def gaussian_log_likelihood(
         return float("nan")
     log_sigma = math.log(sigma)
     if log_rss == float("-inf"):
-        standardised_rss = 0.0
+        half_standardised_rss = 0.0
     elif log_rss == float("inf"):
         return float("-inf")
     else:
         log_standardised_rss = log_rss - 2.0 * log_sigma
-        if log_standardised_rss > math.log(np.finfo(float).max):
+        # ROUND-2 REVIEW (PR #147). The standardised RSS never appears on its
+        # own: it enters the result as ``-0.5 * RSS``. Its representable range
+        # therefore reaches ``2 * float64.max``, and comparing against
+        # ``log(float64.max)`` refused an entire octave of perfectly finite
+        # likelihoods. Measured: ``sigma = 1`` with a single residual near
+        # 1.4e154 has RSS ~1.96e308 and a log-likelihood of ~-9.8e307, and
+        # this guard returned ``-inf`` -- which drops the model from AICc
+        # selection on an arithmetic accident rather than on the data, the
+        # same absolute-scale boundary issue #135 exists to remove.
+        #
+        # The one-half factor is now applied BEFORE the decision: the bound
+        # carries ``+ log(2)`` and, in the octave that only the halved value
+        # can represent, the exponential is taken after subtracting
+        # ``log(2)``. Below that octave the arithmetic is left exactly as it
+        # was (``0.5 * exp(...)``), so no previously computed likelihood
+        # changes by even one ulp -- widening a range must not perturb the
+        # values already inside it.
+        log_max = math.log(np.finfo(float).max)
+        if log_standardised_rss > log_max + math.log(2.0):
             return float("-inf")
-        standardised_rss = math.exp(log_standardised_rss)
+        if log_standardised_rss > log_max:
+            half_standardised_rss = math.exp(log_standardised_rss - math.log(2.0))
+        else:
+            half_standardised_rss = 0.5 * math.exp(log_standardised_rss)
     return float(
-        -0.5 * n * log_2pi - n * log_sigma - 0.5 * standardised_rss
+        -0.5 * n * log_2pi - n * log_sigma - half_standardised_rss
     )
 
 

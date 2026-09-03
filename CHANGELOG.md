@@ -35,6 +35,28 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     the change is not visible in `input_hash`.
 
 ### Fixed
+- **The reason a confidence interval was withheld did not reach the report (PR
+  #147, round-2 external review).** When the residual MLE scale is not
+  representable as float64 the fit stays a valid AICc candidate and only its
+  interval is withheld — but `_fit_with_model` copied `likelihood_degenerate`
+  and dropped `scale_unavailable`, so the persisted report showed only
+  `bca_ci_beta = (nan, nan)`. That is the value ANY bootstrap or jackknife
+  failure produces, and the distinguishing information lived in a
+  `RuntimeWarning` an artefact does not keep. `FitResult` carries
+  `scale_unavailable` now and `_fit_with_model` copies it; `io.export`
+  serialises `FitResult` field-wise, so the reason travels into dumped
+  reports.
+- **The one-half factor was applied after the overflow guard (PR #147, round-2
+  external review).** For the explicit-`sigma` path the standardised RSS never
+  appears on its own: it enters the log-likelihood as `-0.5 * RSS`, so the
+  representable range reaches `2 * float64.max`. The guard compared against
+  `log(float64.max)` and returned `-inf` for the octave above it — measured:
+  `sigma = 1` with a single residual near `1.4e154` has RSS ~`1.96e308` and a
+  finite log-likelihood of ~`-9.8e307`, and the model was dropped from
+  selection on that arithmetic boundary rather than on the data. The bound now
+  carries `+ log(2)` and the exponential is taken after subtracting `log(2)`
+  in the octave that needs it; below that octave the arithmetic is unchanged,
+  so no previously computable likelihood moves by even one ulp.
 - **A fit was withheld entirely because a number its likelihood never uses
   could not be materialised (PR #147, round-1 review).** When the whitened
   residuals have a finite, non-zero RMS below the smallest positive float64,

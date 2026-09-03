@@ -13,6 +13,7 @@ from liouscope.fitting.aicc import aicc, choose_model, gaussian_log_likelihood
 from liouscope.fitting.bootstrap import parametric_bootstrap
 from liouscope.fitting.gls import GLSFitOutput, fit_gls_ar1
 from liouscope.fitting.models import M0
+from liouscope.io.export import _to_jsonable
 from liouscope.numerics.norms import scaled_log_sum_squares
 
 
@@ -208,3 +209,95 @@ def test_ordinary_fit_is_untouched_by_the_scale_repair() -> None:
     fit = fit_gls_ar1(M0, t, y, p, n_iters=1)
     assert not fit.scale_unavailable
     assert np.isfinite(fit.sigma) and fit.sigma > 0.0
+
+
+# --------------------------------------------------------------------------
+# PR #147 round-2 review
+# --------------------------------------------------------------------------
+
+
+def test_scale_unavailable_reaches_fitresult() -> None:
+    """The reason a CI was withheld must survive into the persisted report.
+
+    ``bca_ci_beta = (nan, nan)`` is what EVERY bootstrap or jackknife failure
+    produces. Without this flag on ``FitResult`` an unrepresentable residual
+    scale -- a fit that is otherwise successful and selectable -- was
+    indistinguishable from a non-converged resample once the warning stream
+    was gone.
+    """
+    t, y = _underflowing_scale_case()
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        fit_result, _ = relaxation_mod._fit_with_model("M0", t, y)
+    assert any(
+        "scale is not representable" in str(w.message) for w in caught
+    ), [str(w.message) for w in caught]
+    assert fit_result.scale_unavailable
+    # The fit stays a candidate: the flag records why the INTERVAL is missing,
+    # it does not withhold the estimate (round-1 review contract).
+    assert fit_result.success
+    assert math.isfinite(fit_result.log_likelihood)
+    # The field is serialised, so an audit artefact carries the reason.
+    assert _to_jsonable(fit_result)["scale_unavailable"] is True
+
+
+def test_ordinary_fit_reaches_fitresult_without_the_flag() -> None:
+    """Over-correction control: a normal fit must not be labelled scaleless."""
+    rng = np.random.default_rng(20260903)
+    t = np.linspace(0.0, 4.0, 64)
+    y = M0(t, np.array([1.0, 0.8])) + 1.0e-3 * rng.standard_normal(t.size)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        fit_result, _ = relaxation_mod._fit_with_model("M0", t, y)
+    assert not fit_result.scale_unavailable
+
+
+def test_explicit_sigma_likelihood_uses_the_full_representable_rss_range() -> None:
+    """``-0.5 * RSS`` is representable up to an RSS of ``2 * float64.max``.
+
+    The guard compared the standardised RSS against ``float64.max`` and
+    returned ``-inf`` for the octave above it, although the value the formula
+    actually forms -- the HALVED RSS -- is perfectly finite there. Dropping a
+    model from selection on that boundary is the absolute-scale dependence
+    issue #135 exists to remove.
+    """
+    residual = np.array([1.4e154])
+    log_lik = gaussian_log_likelihood(residual, sigma=1.0)
+    assert math.isfinite(log_lik), log_lik
+    expected = -0.5 * math.log(2.0 * math.pi) - math.exp(
+        2.0 * math.log(1.4e154) - math.log(2.0)
+    )
+    assert log_lik == pytest.approx(expected, rel=1e-12)
+
+    # POSITIVE CONTROL that the fixture really sits in the disputed octave:
+    # the raw standardised RSS is NOT representable, only its half is.
+    log_rss = scaled_log_sum_squares(residual)
+    log_max = math.log(np.finfo(float).max)
+    assert log_max < log_rss <= log_max + math.log(2.0), log_rss
+
+
+def test_a_genuinely_unrepresentable_half_rss_still_returns_minus_inf() -> None:
+    """Fail-closed control: the bound moved by one octave, it did not vanish."""
+    residual = np.array([1.4e308])
+    log_rss = scaled_log_sum_squares(residual)
+    assert log_rss > math.log(np.finfo(float).max) + math.log(2.0)
+    assert gaussian_log_likelihood(residual, sigma=1.0) == float("-inf")
+
+
+def test_values_inside_the_old_range_are_bit_identical() -> None:
+    """Widening a range must not perturb the values already inside it.
+
+    The halving stays ``0.5 * exp(...)`` below the disputed octave, so every
+    likelihood the previous implementation could compute is reproduced exactly
+    rather than to within an ulp.
+    """
+    for scale in (1.0e-30, 1.0, 3.7, 1.0e30, 1.0e120):
+        residuals = scale * np.array([0.3, -1.1, 2.0, 0.0])
+        log_rss = scaled_log_sum_squares(residuals)
+        log_standardised = log_rss  # sigma = 1
+        assert log_standardised <= math.log(np.finfo(float).max)
+        n = residuals.size
+        expected = (
+            -0.5 * n * math.log(2.0 * math.pi) - 0.5 * math.exp(log_standardised)
+        )
+        assert gaussian_log_likelihood(residuals, sigma=1.0) == expected
