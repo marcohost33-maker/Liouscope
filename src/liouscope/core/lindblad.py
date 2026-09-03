@@ -115,13 +115,48 @@ def build_liouvillian(
     # diagonal shift cannot change H - H^dag), while the SCALE comes from the
     # gauge-fixed traceless part.
     d_h = H.shape[0]
-    H_gauge = H - (np.trace(H).real / d_h) * np.eye(d_h, dtype=complex)
+    gauge_shift = float(np.trace(H).real) / d_h
+    H_gauge = H - gauge_shift * np.eye(d_h, dtype=complex)
     defect, _ = hermiticity_defect(H)
     _, scale = hermiticity_defect(H_gauge)
-    if defect > EPS_HERMITICITY * scale:
+    # ROUND-18 REVIEW (external, PR #127). Gauge-fixing removes the physical
+    # scale entirely when H is (numerically) a pure gauge term, and then the
+    # relative test has nothing left to be relative TO. For a numerical 2x2
+    # unitary Q, ``H = Q @ I @ Q^H`` is the exact Hamiltonian I -- its
+    # commutator vanishes, so it is as valid as a Hamiltonian gets -- yet
+    # ``H_gauge`` is pure round-off (measured 1.99e-16 max entry) and the
+    # Hermiticity defect is round-off of the same size (4.98e-17), so
+    # ``build_liouvillian`` raised on it.
+    #
+    # The allowance is the REPRESENTATION error of the component that was
+    # removed: forming a d x d similarity in floating point costs about
+    # ``d * eps`` relative, so ``d * eps * |trace(H).real / d|`` is the size
+    # below which no statement about H can be made from the stored matrix at
+    # all. Same backward-error idiom the repo already uses for the Schur
+    # split (``n * eps * ||L||_F``, see diagnostics/transient.py), not a new
+    # tolerance.
+    #
+    # ADDITIVE, not multiplied by EPS_HERMITICITY: the defect being excused
+    # is machine round-off, which does not scale with the relative gate.
+    #
+    # It does not reopen the twelfth-round gauge hole. Measured on that very
+    # fixture (traceless part of scale 1, non-Hermitian defect 1e-6, plus
+    # ``1e9 * I``): allowance 4.44e-7, defect 1e-6, still rejected. For a
+    # TRACELESS H the allowance is exactly 0.0, so every Hamiltonian without
+    # an identity component keeps a bit-for-bit identical verdict.
+    #
+    # What it does concede, and knowingly: with a gauge shift of 1e9 a defect
+    # of 2e-7 is now accepted, because 1e9 * eps = 2.2e-7 is the resolution
+    # of the stored matrix -- no test on those bytes can tell that defect
+    # from storage round-off, and refusing it would mean refusing exactly
+    # Hermitian matrices for having been written down.
+    roundoff_allowance = d_h * float(np.finfo(float).eps) * abs(gauge_shift)
+    if defect > EPS_HERMITICITY * scale + roundoff_allowance:
         raise ValueError(
             f"H must be Hermitian within a relative {EPS_HERMITICITY:g} "
             f"(max|H - H^dag| = {defect:.3e}, max|H| = {scale:.3e}, "
+            f"machine-round-off allowance for the removed identity "
+            f"component = {roundoff_allowance:.3e}, "
             f"relative defect = {defect / scale if scale else float('inf'):.3e})"
         )
 

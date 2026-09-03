@@ -101,7 +101,21 @@ def prony_seed(t: np.ndarray, y: np.ndarray) -> tuple[float, float, float, float
         rate = _fallback_rate(t)
         return float(y[0] if y.size else 1.0), rate, rate, 0.0
     dt = float(t[1] - t[0])
-    if not np.allclose(np.diff(t), dt, rtol=1e-4):
+    # EIGHTEENTH REVIEW ROUND (external, PR #127). ``atol=0.0`` is the whole
+    # point of this line. NumPy's default ``atol=1e-8`` is an ABSOLUTE time,
+    # so on a grid expressed in small time units (the reviewer's case:
+    # ``gap=1e8, fast_rate=1e12``, nanosecond-scale steps) it declares wildly
+    # varying steps uniform, the two-scale prefix path below never runs, and
+    # Prony is applied straight across the discontinuity. Measured effect on
+    # an exact M3b curve with dimensionless ``(beta, omega) = (0.0387,
+    # 0.0295)``: unscaled recovers both parameters, the 1e12 rate-unit
+    # rescaling converges to ``omega/c ~ 5e-11`` -- the M3b/A8 verdict
+    # changing on the choice of units alone.
+    #
+    # No new constant: ``_uniform_prefix_length`` above already spells the
+    # same convention ``rtol=1.0e-4, atol=0.0``, and the two tests are
+    # documented as sharing it. They now actually do.
+    if not np.allclose(np.diff(t), dt, rtol=1e-4, atol=0.0):
         # Seventeenth review round (external, PR #127). Bailing out to a
         # seed derived from the total SPAN is a regression on exactly the
         # grid this branch now sees most often: the two-scale grid of

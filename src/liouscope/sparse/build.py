@@ -50,13 +50,23 @@ def build_sparse_liouvillian(
     # review): a real identity offset is physically inert but inflates the
     # scale, loosening the gate. Subtracting the real trace part touches only
     # the diagonal, so sparsity is preserved.
+    gauge_shift = float(H_sp.diagonal().sum().real) / d
     H_gauge = (H_sp - sp.identity(d, dtype=complex, format="csr")
-               * (H_sp.diagonal().sum().real / d)).tocsr()
+               * gauge_shift).tocsr()
     scale = float(np.max(np.abs(H_gauge.data))) if H_gauge.nnz else 0.0
-    if defect > EPS_HERMITICITY * scale:
+    # ROUND-18 REVIEW (external, PR #127), the mirrored calculation the
+    # finding names explicitly. Same machine-round-off allowance as the dense
+    # builder in core/lindblad.py, and it has to be here too or the two
+    # builders disagree about whether the same Hamiltonian is valid --
+    # which is the failure mode "in parity with the dense builder" above
+    # exists to prevent. See that function for the full derivation.
+    roundoff_allowance = d * float(np.finfo(float).eps) * abs(gauge_shift)
+    if defect > EPS_HERMITICITY * scale + roundoff_allowance:
         raise ValueError(
             f"H must be Hermitian within a relative {EPS_HERMITICITY:g} "
             f"(max|H - H^dag| = {defect:.3e}, max|H| = {scale:.3e}, "
+            f"machine-round-off allowance for the removed identity "
+            f"component = {roundoff_allowance:.3e}, "
             f"relative defect = {defect / scale if scale else float('inf'):.3e})"
         )
     if jump_ops is None:

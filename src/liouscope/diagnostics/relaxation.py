@@ -113,6 +113,19 @@ def fastest_decay_rate(L_super: np.ndarray) -> float:
     return float(rates[-1]) if rates.size else float("nan")
 
 
+class UnrepresentableRelaxationWindowError(ValueError):
+    """The decay scale IS resolved, but its window overflows float64.
+
+    Deliberately its own type rather than a bare ``ValueError``: a caller has
+    to be able to tell this apart from a malformed argument, because the
+    remedy is different (rescale the generator, or supply ``t_grid``) and
+    because it is NOT the "no usable decay scale" case, which keeps its
+    documented absolute-window fallback. Modelled on
+    :class:`liouscope.core.lindblad.DegenerateSteadyStateError`, the repo's
+    existing fail-closed domain error.
+    """
+
+
 def default_relaxation_grid(
     gap: float,
     *,
@@ -158,8 +171,10 @@ def default_relaxation_grid(
 
     A gap that is finite and positive but smaller than ``horizon /
     float64.max`` has no REPRESENTABLE relaxation window: ``horizon / gap``
-    overflows. That case joins the "no usable decay scale" branch above
-    (round-18 review, external, PR #127) -- see the guard below.
+    overflows. That case does NOT join the "no usable decay scale" branch
+    above -- round 18 sent it there and round 19 measured what that costs --
+    but raises :class:`UnrepresentableRelaxationWindowError` (round-19 review,
+    external, PR #127); see the guard below.
     """
     if not np.isfinite(gap) or gap <= 0.0:
         return np.linspace(0.0, _LEGACY_T_MAX, n_points)
@@ -180,15 +195,37 @@ def default_relaxation_grid(
     # fabricated one, and it is reached only from an overflow, so every
     # representable window is untouched.
     if not np.isfinite(t_max) or t_max <= 0.0:
-        warnings.warn(
-            "default_relaxation_grid: the relaxation window "
-            f"horizon/gap = {horizon}/{gap} is not representable as float64, "
-            "so no gap-scaled grid exists for this rate unit; falling back to "
-            "the documented absolute window (PR #127 round-18 review).",
-            RuntimeWarning,
-            stacklevel=2,
+        # ROUND-19 REVIEW (external, PR #127). Round 18 stopped the invalid
+        # ``[nan, inf, inf, ...]`` grid and then handed back the absolute
+        # legacy window, which is a DIFFERENT wrong answer: the fits still
+        # ran, on a trajectory that says nothing about this system.
+        #
+        # Measured on an amplitude-damping generator rescaled by 1e-307
+        # (certified gap 5e-308): ``diagnose()`` reported ``beta_D ~
+        # -1.9e-18``, ``beta_D_linear ~ 84``, class A12 and -- the label that
+        # makes it undetectable downstream -- ``t_grid_source="gap_scaled"``,
+        # while the identical unscaled physics reports rates near 1 and class
+        # A5. Numbers were produced, they were wrong, and nothing in the
+        # report said so.
+        #
+        # These are two different states and the layer must not merge them:
+        # ``gap <= 0`` or non-finite is NOT DETERMINABLE (no decay scale was
+        # resolved), and the documented legacy window is the honest answer
+        # there. A finite positive gap whose window overflows is DETERMINED
+        # BUT NOT REPRESENTABLE in the caller's rate unit -- the scale exists,
+        # float64 cannot hold the window it implies. Withholding is the only
+        # answer that does not fabricate one; the caller can rescale the
+        # generator or pass an explicit ``t_grid``.
+        raise UnrepresentableRelaxationWindowError(
+            "default_relaxation_grid: the relaxation window horizon/gap = "
+            f"{horizon}/{gap} overflows float64, so no gap-scaled grid exists "
+            "in these rate units. The gap IS resolved, so this is not the "
+            "'no usable decay scale' case and the absolute legacy window "
+            "would describe a different system: on the reviewer's fixture it "
+            "produced a full set of finite rates and an A12 class label for a "
+            "generator whose unscaled twin is A5. Rescale the generator to "
+            "rate units of order one, or pass an explicit t_grid."
         )
-        return np.linspace(0.0, _LEGACY_T_MAX, n_points)
     uniform = np.linspace(0.0, t_max, n_points)
 
     # --- fail-closed guards: any doubt keeps the historical uniform grid ---

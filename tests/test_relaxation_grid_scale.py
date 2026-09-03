@@ -45,6 +45,7 @@ from liouscope.diagnostics.relaxation import (
     RELAXATION_HORIZON,
     RELAXATION_N_POINTS,
     UnderResolvedTransientWarning,
+    UnrepresentableRelaxationWindowError,
     compute_relaxation_layer,
     default_relaxation_grid,
     fastest_decay_rate,
@@ -832,7 +833,7 @@ def test_residual_model_still_reports_car1_when_every_fit_whitened_that_way():
 # ---------------------------------------------------------------------------
 
 
-def test_unrepresentable_relaxation_window_falls_back_instead_of_corrupting():
+def test_unrepresentable_relaxation_window_is_withheld():
     """A finite positive gap can still have no float64 relaxation window.
 
     ``t_max = horizon / gap`` overflows for any positive
@@ -842,24 +843,34 @@ def test_unrepresentable_relaxation_window_falls_back_instead_of_corrupting():
     degrades to the SAME ``uniform``, so there was no second line of defence.
     ``compute_relaxation_layer`` fed those times into ``expm`` and the fits.
 
-    A rate unit must not be able to corrupt the pipeline: the case joins the
-    documented "no usable decay scale" fallback and says so in a warning.
+    ROUND-19 REVIEW (external, PR #127) OVERTURNS THE ROUND-18 ANSWER, and
+    this test is the round-18 assertion rewritten rather than removed. Round
+    18 sent the case to the documented "no usable decay scale" fallback and
+    was satisfied by a warning. Round 19 measured the cost: on an
+    amplitude-damping generator rescaled by 1e-307 the pipeline then reported
+    ``beta_D ~ -1.9e-18``, ``beta_D_linear ~ 84``, class A12 and the
+    provenance tag ``t_grid_source="gap_scaled"`` -- for a grid that was the
+    absolute ``[0, 10]`` window -- while the identical unscaled physics
+    reports rates near 1 and class A5. A warning that the caller may not be
+    reading does not make a fabricated answer honest.
+
+    The distinction the layer now keeps: ``gap <= 0`` or non-finite is NOT
+    DETERMINABLE and keeps its fallback (pinned in
+    ``test_no_usable_decay_scale_keeps_its_documented_fallback``); a resolved
+    gap whose window overflows is DETERMINED BUT NOT REPRESENTABLE, and there
+    is no substitute for it that describes this system.
     """
     gap = float(RELAXATION_HORIZON / float(np.finfo(float).max) / 10.0)
     assert np.isfinite(gap) and gap > 0.0, "fixture must pass the finiteness gate"
     assert not np.isfinite(RELAXATION_HORIZON / gap), "fixture must overflow"
 
     for fast_rate in (None, 1.0, 1.0e-320):
-        with warnings.catch_warnings(record=True) as caught:
-            warnings.simplefilter("always")
-            grid = default_relaxation_grid(gap, fast_rate=fast_rate)
-        assert np.all(np.isfinite(grid)), (fast_rate, grid[:4], grid[-1])
-        assert grid.size == RELAXATION_N_POINTS
-        assert grid[0] == 0.0
-        assert np.all(np.diff(grid) > 0.0)
-        assert any(
-            "not representable" in str(w.message) for w in caught
-        ), [str(w.message) for w in caught]
+        with pytest.raises(UnrepresentableRelaxationWindowError) as excinfo:
+            default_relaxation_grid(gap, fast_rate=fast_rate)
+        # The message still has to name the condition, for the same reason
+        # round 18 asserted on the warning text: a caller reading the
+        # traceback must be able to tell this from a malformed argument.
+        assert "overflows float64" in str(excinfo.value)
 
 
 def test_representable_window_is_untouched_by_the_overflow_guard():
