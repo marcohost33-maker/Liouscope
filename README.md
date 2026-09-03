@@ -115,6 +115,21 @@ Letting it drive decisions is deferred to the preregistered calibration study
 in issue #102. The field is additive and defaults to `()`, so results
 serialised by older versions stay valid.
 
+`hypothesis_matrix` (issue #102) goes one step further and reports **every**
+hypothesis of the taxonomy — including the ones that did *not* fire and the
+schema-reserved A6/A7/A9 — each with its supporting measurements,
+counterevidence, missing required evidence, an explicit fail-closed
+`claim_floor` (`RESERVED`/`UNEVALUABLE` → `UNDEFINED`, `NOT_SUPPORTED` →
+`NOT_EXCLUDED`, `SUPPORTED` → the verdict it would receive as winner) and its
+ordinal `support_score` — which is a number **only for `SUPPORTED` entries**
+and `None` otherwise: the score answers "what grade would this class get as
+the winner", so attaching it to a failed or unevaluable rung would print a
+confirmation-grade number beside that rung's own counterevidence. Decision
+ladder and matrix are derived from the same
+declarative rung spec, so the audit surface cannot drift from the decision;
+the matrix is report-only. See
+`docs/explanation/layers-and-taxonomy.md` for the full vocabulary.
+
 The same example with a 1D lattice geometry:
 
 ```python
@@ -271,7 +286,8 @@ require physics-domain interpretation; no claim of universality is made beyond t
 covered by the V1-V5 validation systems.
 
 Two honesty notes on the classifier surface (tracked in issues #101/#102):
-`classification.confidence` is a deterministic **heuristic support score**,
+`classification.support_score` (and its legacy alias `confidence`) is a
+deterministic **ordinal heuristic**,
 not a calibrated probability; and the A10/F5 (phantom-relaxation) verdict
 path is **not yet invariant under a change of rate units** — the
 scale-relative successor diagnostics (`henrici_relative`, `kreiss_scaled`,

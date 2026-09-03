@@ -71,10 +71,10 @@ from __future__ import annotations
 from typing import Final
 
 import numpy as np
-import scipy.linalg as sla
 
-from ._consts import EPS_DIV, EPS_GAP
+from ._consts import EPS_DIV
 from ._types import ZhouPredictorResult
+from .numerics.linalg import certified_eig, certified_eigvals
 
 # S6 re-audit 2026-06-04: the cited reference is independently verified to
 # exist (arXiv PDF v3). Our implemented bound is the same family as Zhou's
@@ -123,10 +123,60 @@ def compute_zhou_predictor(
     -------
     ZhouPredictorResult
     """
-    L_super = np.asarray(L_super)
+    L_super = np.asarray(L_super, dtype=complex)  # complex128: scipy dispatches by dtype; the double-solve contract (#108) must hold
     if gap is None or petermann_factor is None:
-        eigvals, vl, vr = sla.eig(L_super, left=True, right=True)
-        nonzero = np.abs(eigvals) > EPS_GAP
+        # Round-13 review: D24's recomputation must not retain a solver
+        # failure that the spectral and Mpemba paths repair. On the stiff
+        # #112 fixture the raw ``zgeev`` spectrum made D24 report
+        # ``gap = 7.28e-6`` where the certified solve recovers the physical
+        # ``1.074e-5`` -- a ~30% shift of the whole mixing-time window.
+        #
+        # The certificate matches what is CONSUMED (round-16 review): the
+        # Petermann recomputation reads eigenvectors and needs the stricter
+        # ``certified_eig``, but when the caller supplied ``petermann_factor``
+        # and only the gap is missing, no eigenvectors are consumed and the
+        # (wider-ladder) eigenvalue certificate decides -- measured: a stiff
+        # network whose eigenvalue certificate resolves a usable gap of
+        # ``3.32e-6`` while only the eigenvector gate fails returned an
+        # unnecessary unconverged record here.
+        need_vectors = petermann_factor is None
+        if need_vectors:
+            decomp, certificate = certified_eig(L_super)
+            eigvals = decomp.eigenvalues
+        else:
+            eigvals, certificate = certified_eigvals(L_super)
+        if certificate.applicable and not certificate.resolved:
+            # The eigendecomposition is demonstrably unreliable (failed
+            # certification, or ambiguous in-band modes, issues #112/#113).
+            # A predictor built on it would be a claim the arithmetic cannot
+            # support: return an unconverged record, honouring any
+            # caller-supplied values exactly like the no-nonzero-modes branch.
+            return ZhouPredictorResult(
+                mixing_time_lower=float("inf"),
+                mixing_time_upper=float("inf"),
+                epsilon=epsilon,
+                converged=False,
+                gap=float(gap) if gap is not None else float("nan"),
+                petermann_factor=(
+                    float(petermann_factor)
+                    if petermann_factor is not None
+                    else float("nan")
+                ),
+            )
+        # Zero-mode separation from the certificate's single filter entry
+        # point (round-17 review, PR #121). It resolves the applicable /
+        # inapplicable branch and the a posteriori refinement in ONE place;
+        # see ``ZeroModeCertificate.zero_set_tolerance``. This site used the
+        # raw ``bound``, which after a refinement is LARGER than the tolerance
+        # actually applied: a genuine slow mode the certificate had just
+        # rescued from the zero band was filtered out again here, and D24 then
+        # read the next, faster eigenvalue -- understating the mixing-time
+        # window by orders of magnitude. Scale-relative in either branch
+        # (issue #108): D24 consumes the gap, so an absolute floor made the
+        # predicted window depend on the choice of rate unit.
+        nonzero = np.abs(eigvals) > certificate.zero_set_tolerance(
+            eigvals, name="eigenvalues of L_super"
+        )
         if not nonzero.any():
             # Honour caller-supplied values in the unconverged record:
             # hard-coding gap=0.0 here silently overwrote an explicitly
@@ -148,6 +198,10 @@ def compute_zhou_predictor(
         if gap is None:
             gap = float(-np.max(np.real(eigvals_nz)))
         if petermann_factor is None:
+            # ``decomp`` is bound: this branch is exactly ``need_vectors``.
+            vl, vr = decomp.left_vectors, decomp.right_vectors
+            if vl is None:  # pragma: no cover - certified_eig sets left vectors
+                raise RuntimeError("certified_eig did not return left eigenvectors")
             K_vals = []
             for j in range(eigvals.size):
                 if not nonzero[j]:

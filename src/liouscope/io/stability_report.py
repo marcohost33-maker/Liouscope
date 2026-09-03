@@ -84,6 +84,19 @@ def invariant_residuals(
     }
 
 
+def _json_number(value: float) -> float | None:
+    """RFC 8259 view of a diagnostic value: ``None`` when it is not finite.
+
+    The diagnostic layers use NaN as the library-wide "unavailable" sentinel
+    (an unresolved zero-mode certificate withholds D1/D3, the eigenvector
+    certificate withholds D9), and ``dump_stability_report`` writes with
+    ``allow_nan=False``. Without this projection the serialiser raised on
+    precisely the runs whose report is most worth keeping.
+    """
+    v = float(value)
+    return v if np.isfinite(v) else None
+
+
 def build_stability_report(
     report: DiagnosticReport,
     *,
@@ -152,14 +165,28 @@ def build_stability_report(
     inv["cp_choi_min_eig"] = None if cp_choi_min_eig is None else float(cp_choi_min_eig)
 
     spectral = report.spectral
+    # ROUND-22 REVIEW (PR #121). These values were copied through as raw
+    # floats, and the layers above deliberately publish NaN when a certificate
+    # is unresolved (D1/D3 in the spectral layer, D9 with the eigenvector
+    # certificate). ``dump_stability_report`` writes with
+    # ``allow_nan=False``, so the report that FAILED to serialise was exactly
+    # the unresolved run -- the one whose audit record matters most. Measured
+    # before this change: ``ValueError: Out of range float values are not JSON
+    # compliant: nan``.
+    #
+    # ``None`` is the schema-supported placeholder already used for
+    # D8b/D10b and by ``ZeroModeCertificate.as_dict``; the ``diagnostics``
+    # block is ``additionalProperties: true``, so it validates. ``isfinite``
+    # rather than ``isnan`` because +-inf is equally non-conforming under
+    # RFC 8259 and would raise in the same place.
     diagnostics: dict[str, Any] = {
-        "D1_gap": float(spectral.gap),
-        "D2_gns_gap": float(spectral.gns_gap),
-        "D2b_kms_gap": float(spectral.kms_gap),
-        "D3_oscillating_gap": float(spectral.oscillating_gap),
-        "D8_henrici": float(report.nonnorm.henrici_eta),
-        "D9_petermann_max": float(report.nonnorm.petermann_max),
-        "D10_kreiss": float(report.nonnorm.kreiss),
+        "D1_gap": _json_number(spectral.gap),
+        "D2_gns_gap": _json_number(spectral.gns_gap),
+        "D2b_kms_gap": _json_number(spectral.kms_gap),
+        "D3_oscillating_gap": _json_number(spectral.oscillating_gap),
+        "D8_henrici": _json_number(report.nonnorm.henrici_eta),
+        "D9_petermann_max": _json_number(report.nonnorm.petermann_max),
+        "D10_kreiss": _json_number(report.nonnorm.kreiss),
     }
     # Issue #101 slice A: scale-relative variants are surfaced with an explicit
     # pending claim status (not yet anchor-confirmed) and their value attached,
@@ -170,7 +197,7 @@ def build_stability_report(
         ("D10b_kreiss_scaled", float(report.nonnorm.kreiss_scaled)),
     ):
         diagnostics[did] = {
-            "value": None if np.isnan(val) else val,
+            "value": _json_number(val),
             "claim_status": "pending",
         }
     for did in pending_diagnostics:

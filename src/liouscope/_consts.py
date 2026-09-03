@@ -6,6 +6,8 @@ packaged schemas and public documentation.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+from types import MappingProxyType
 from typing import Final
 
 TAXONOMY_VERSION: Final[str] = "A1-A12-v3.1"
@@ -23,7 +25,66 @@ RELEASE_STATE: Final[str] = "engineering release-ready"
 PAPER_STATE: Final[str] = "arXiv v5 submitted; peer-review pending"
 
 EPS_SUPP: Final[float] = 1.0e-12
+# LEGACY ABSOLUTE zero-mode floor. Retained as an explicit opt-in only (issue
+# #108): a Liouvillian carries rate dimension, so an absolute floor is not
+# invariant under a change of rate units L -> cL. Scale-relative separation is
+# the default -- see ZERO_MODE_EPS_FACTOR and
+# numerics.scale.spectral_zero_tolerance.
 EPS_GAP: Final[float] = 1.0e-10
+# Issue #108: zero-mode tolerance as a multiple of the EIGENSOLVER BACKWARD
+# ERROR, ``eps * max|lambda|``, not a fixed fraction of the spectral radius.
+#
+# The distinction matters for metastable systems (A5), whose whole point is a
+# wide separation of physical rates. A tolerance of ``1e-10 * max|lambda|``
+# would impose a fixed dynamic-range ceiling of 1e10 and discard a genuine slow
+# mode below it -- e.g. two damping channels at rates 1.0 and 1e-12 have a true
+# gap of 5e-13 and would be reported as 5e-1, wrong by ten orders of magnitude.
+#
+# A computed eigenvalue carries an uncertainty of order ``eps * ||L||``, so that
+# -- not a fixed ratio -- is the scale on which "indistinguishable from zero"
+# is decided. Measured across amplitude damping, Rabi-driven damping,
+# dephasing, a strongly non-normal near-defective generator and a 64-dim
+# 3-qubit chain, each at c in {1, 1e6, 1e12}, the numerical zero mode never
+# exceeded ``1.94 * eps * max|lambda|``. The factor below therefore keeps ~500x
+# headroom above the observed round-off while resolving genuine modes down to
+# ~2e-13 relative -- a wider dynamic range than the pre-#108 absolute floor
+# afforded at unit scale.
+#
+# A mode below this threshold is not merely filtered by choice: it is not
+# reliably separable from round-off by a dense eigensolver at all. Callers who
+# need a different trade-off can pass ``rtol`` explicitly.
+#
+# NOTE: this does NOT reproduce the pre-#108 absolute floor at unit scale. At
+# max|lambda| = 1 the threshold is ~2.2e-13, not 1e-10, so a mode between those
+# two values is now classified as GENUINE where it was previously discarded --
+# a change that applies without any rescaling. That direction is the intended
+# improvement (it is what rescues metastable slow modes); it is recorded here
+# because "only rescaled generators change" would be false.
+ZERO_MODE_EPS_FACTOR: Final[float] = 1.0e3
+# Issue #113. Splits the zero-mode tolerance band into "machine-zero" and
+# "inside the safety factor, hence undecidable". Measured across 83 healthy
+# generators the largest genuine in-band |lambda| reaches 2.38 * eps*||L||
+# (median 0.39); unresolved slow modes were measured at 4.87 and 4.87e2. The
+# populations overlap within ~2x, so this sits an order of magnitude above the
+# healthy maximum rather than midway: a false "unresolved" verdict destroys a
+# correct analysis, whereas a missed marginal case only leaves the pre-#113
+# behaviour. Consequence, stated rather than hidden: above a spectral spread of
+# ~1e14 the defect is not detectable by any magnitude test.
+ZERO_MODE_AMBIGUITY_FACTOR: Final[float] = 3.0e1
+# Round-15 review: per-mode eigenVECTOR acceptance for certified_eig. A mode
+# with normalised residual r = max(||L v - lambda v||, ||L^H l - conj(lambda) l||)
+# (unit vectors) is consumable only when r <= max(REL_MAX * |lambda|, bound):
+# r/|lambda| is the first-order RELATIVE error scale of anything computed from
+# the pair, so beyond ~10% the "eigenvector" carries no measurement. Measured
+# populations (r/|lambda|, worst consumable mode): healthy zgeev across 301
+# generators <= 2.1e-10; legitimate dgeev-real repairs of the stiff #112
+# family 1.2e-2 .. 6.5e-2 (an extreme 7.9e-1 at spectral spread ~4e11, which
+# this gate deliberately fails closed -- a 79% slow-mode error is not a
+# measurement); corrupt zgeev decompositions that the eigenvalue certificate
+# alone would accept: 2.2e-1 .. 2.9e1. The boundary sits between the
+# marginal-but-usable and the clearly broken; the failure direction is
+# fail-closed (withhold), never a wrong value.
+VECTOR_RESIDUAL_REL_MAX: Final[float] = 1.0e-1
 EPS_HERMITICITY: Final[float] = 1.0e-9
 EPS_TRACE: Final[float] = 1.0e-10
 # Tight numerical detector for the exact maximally mixed state I/d. It is not a
@@ -54,14 +115,30 @@ A_CLASSES: Final[tuple[str, ...]] = (
     "A7", "A8", "A9", "A10", "A11", "A12",
 )
 
-RESERVED_A_CLASSES: Final[dict[str, str]] = {
+# Immutable BY DESIGN (ninth-round review, both directions weighed): the
+# import-time reachability guard and REACHABLE_A_CLASSES derive from this
+# mapping, so a consumer-side ``pop("A6")`` would silently desynchronise the
+# taxonomy from the guard that certifies it. The three catalogs above stay
+# plain dicts -- they are long-established public exports whose consumers
+# legitimately ``json.dumps``/``deepcopy`` them, and mutating them desyncs no
+# decision logic. This mapping is NEW public API in the same release that
+# freezes it, so nothing established loses serialisability.
+RESERVED_A_CLASSES: Final[Mapping[str, str]] = MappingProxyType({
     "A6": "reserved (taxonomy A1-A12-v3.1; no classifier branch yet -- needs an "
     "accelerated-decay / operator-spreading detector distinct from A5)",
     "A7": "reserved (taxonomy A1-A12-v3.1; no classifier branch yet -- needs a "
     "weak-dissipation singular-perturbation probe, Mori 2024)",
     "A9": "reserved (taxonomy A1-A12-v3.1; no classifier branch yet -- needs "
     "ETH / level-statistics signals for the prethermalization regime)",
-}
+})
+
+# Issue #102 reachability/ontology gate: the coverage DENOMINATOR for any
+# "n of N classes" statement. Reserved classes have no code-backed decision
+# rule, are excluded from claims (their hypothesis-matrix claim floor is
+# permanently UNDEFINED) and must not inflate coverage denominators.
+REACHABLE_A_CLASSES: Final[tuple[str, ...]] = tuple(
+    a for a in A_CLASSES if a not in RESERVED_A_CLASSES
+)
 
 F_FAMILIES: Final[tuple[str, ...]] = ("F1", "F2", "F3", "F4", "F5", "none")
 
@@ -88,3 +165,36 @@ F_FAMILY_DESCRIPTIONS: Final[dict[str, str]] = {
     "F5": "Phantom relaxation (arXiv:2306.07876, 2023)",
     "none": "No gap-failure mechanism flagged",
 }
+# Issue #113 follow-up, second axis. The magnitude test above cannot separate a
+# genuine slow mode from round-off once the two populations overlap: measured,
+# healthy zero modes reach 2.38 * eps*||L|| while unresolved slow modes were
+# seen at 4.87 -- a factor of 2, so no threshold on |lambda| alone can split
+# them, and the split above sits at 30 precisely to avoid false NaN rather than
+# because it separates anything.
+#
+# The a posteriori backward-error bound is a SECOND, independent axis, and it
+# is a certificate rather than a threshold. For a computed eigenpair
+# ``(lambda_hat, x)`` with left vector ``y``, ``||x|| = ||y|| = 1``,
+#
+#     |lambda - lambda_hat| <~ max(||L x - lambda_hat x||, ||L^H y - conj(lambda_hat) y||)
+#                              / |y^H x|
+#
+# to first order in the residuals (Dongarra et al., *Templates for the Solution
+# of Algebraic Eigenvalue Problems*, section on error bounds for computed
+# eigenvalues; the 1/|y^H x| factor is the individual eigenvalue condition
+# number). If ``lambda`` were exactly zero the bound would force
+# ``|lambda_hat| <= bound``, so ``q = |lambda_hat| / bound > 1`` PROVES the mode
+# is not the stationary one -- no calibration required for the claim itself.
+#
+# The margin below only covers the "to first order" caveat. Measured over the
+# same corpus that calibrated the factor above (96 healthy generators, 132
+# in-band modes; 6 stiff generators with analytically known gaps): healthy
+# ``q`` never exceeded 0.472 and never once reached 1, while the three stiff
+# members carrying a genuine in-band mode were certified with ``q = inf`` (an
+# exactly representable residual). A margin of 10 therefore keeps ~21x headroom
+# above the healthy maximum and still rescues every genuine case in the corpus.
+#
+# Direction matters: this constant can only move a mode OUT of the zero set, so
+# a mis-set value cannot manufacture the false NaN the split above guards
+# against.
+ZERO_MODE_APOSTERIORI_MARGIN: Final[float] = 1.0e1

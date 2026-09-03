@@ -402,10 +402,31 @@ def test_diagnose_accepts_valid_custom_t_grid(pauli):
 
     # >= 41 points: the GLS AR(1) small-n advisory warning fires at n <= 40
     # and the suite runs with warnings-as-errors.
+    #
+    # ROUND 21: rho_initial is now given explicitly. Left to the default the
+    # chosen state can BE the steady state, in which case the relaxation curve
+    # is identically zero and there is nothing to fit -- and whether it lands
+    # there varies with the numpy/scipy build (exactly zero on the 3.10/3.11
+    # runners, non-zero elsewhere). The old code returned the optimiser's seed
+    # for such a curve, so ``isfinite`` passed on a meaningless number and the
+    # test looked green; issue #123 made that refusal explicit and the test
+    # started failing on the two runners where the curve really was flat.
+    # ``|0><0|`` genuinely relaxes towards the maximally mixed steady state, so
+    # this now exercises what the test claims: that a valid custom grid is
+    # accepted, not that a degenerate fit returns a number.
+    rho_initial = np.array([[1.0, 0.0], [0.0, 0.0]], dtype=complex)
     report = diagnose(
-        _small_l(pauli), t_grid=np.linspace(0.0, 6.0, 60), bootstrap_B=20, seed=42
+        _small_l(pauli),
+        rho_initial=rho_initial,
+        t_grid=np.linspace(0.0, 6.0, 60),
+        bootstrap_B=20,
+        seed=42,
     )
     assert np.isfinite(report.relaxation.beta_D)
+    assert report.relaxation.beta_D > 0.0, (
+        "a state relaxing towards the steady state must yield a positive "
+        "decay rate; a non-positive one would mean the curve carried no decay"
+    )
 
 
 # ---------------------------------------------------------------------------
