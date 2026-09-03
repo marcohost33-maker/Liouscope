@@ -7,6 +7,29 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Fixed
+- **The Hermiticity gate failed open when the gauge shift overflowed (PR #127,
+  round-20 external review).** `build_liouvillian` removed the identity
+  component with `np.trace(H).real / d`, forming the total before dividing.
+  Finite entries can have a non-representable sum, and an infinite shift makes
+  both the gauge-fixed operator and the round-off allowance derived from it
+  non-finite, after which `defect > EPS * scale + allowance` is False for every
+  defect there is. `build_sparse_liouvillian` carried the identical
+  calculation. The shift now divides before summing
+  (`numerics.linalg.overflow_safe_mean_real`), which cannot overflow for finite
+  input and is bit-for-bit the old value wherever the direct sum was finite —
+  measured over 2000 random complex matrices with zero differing bits.
+  A second route to the same fail-open, which no comment reported, was found by
+  reading the neighbourhood: the shift lies between the smallest and the
+  largest diagonal entry, so `H_ii - shift` can overflow even for a finite
+  shift. Measured on `diag(1.7e308, -1.7e308, 1.7e308)` with an off-diagonal
+  defect: gauge-fixed scale `inf`, accepted. The comparison is now restated at
+  half scale when the direct scale is not finite — exact in binary floating
+  point, hence the same predicate rather than a looser one, and specifically
+  NOT a refusal, so an exactly Hermitian operator of that shape is still
+  accepted. The round-18 concession (`1e9 * I` plus a traceless defect of
+  `1e-6`, still rejected) is unmoved. Known residual: `[[1e308, 1], [0, 1e308]]`
+  remains accepted, because its defect of 1 falls below the round-18 allowance
+  `d * eps * |shift| = 4.4e292` — a different mechanism, raised separately.
 - **An unavailable D1 was converted into the strongest gapless evidence (PR
   #127, round-18 external review).** When the zero-mode certificate withholds
   D1 as NaN, `_strip_unavailable` removes both `gap` and `gap_to_gns_ratio`

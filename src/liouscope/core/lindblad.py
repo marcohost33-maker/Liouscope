@@ -26,7 +26,7 @@ import numpy as np
 
 from .._consts import EPS_HERMITICITY
 from ..numerics.kronecker import unvec, vec
-from ..numerics.linalg import hermiticity_defect
+from ..numerics.linalg import hermiticity_defect, overflow_safe_mean_real
 
 # Near-zero-trace threshold for the unit-2-norm null-vector candidate in
 # steady_state(). The candidate's trace is dimensionless (bounded by sqrt(d)),
@@ -115,8 +115,14 @@ def build_liouvillian(
     # diagonal shift cannot change H - H^dag), while the SCALE comes from the
     # gauge-fixed traceless part.
     d_h = H.shape[0]
-    gauge_shift = float(np.trace(H).real) / d_h
-    H_gauge = H - gauge_shift * np.eye(d_h, dtype=complex)
+    # ROUND-19 REVIEW (external, PR #127). The shift divides before summing:
+    # ``np.trace(H).real`` overflows for finite entries whose total is not
+    # representable, and an infinite shift makes the round-off allowance below
+    # infinite too, so the comparison fails OPEN for every defect. See
+    # :func:`overflow_safe_mean_real` for the measured case.
+    gauge_shift = overflow_safe_mean_real(np.diagonal(H))
+    eye_h = np.eye(d_h, dtype=complex)
+    H_gauge = H - gauge_shift * eye_h
     defect, _ = hermiticity_defect(H)
     _, scale = hermiticity_defect(H_gauge)
     # ROUND-18 REVIEW (external, PR #127). Gauge-fixing removes the physical
@@ -151,7 +157,32 @@ def build_liouvillian(
     # from storage round-off, and refusing it would mean refusing exactly
     # Hermitian matrices for having been written down.
     roundoff_allowance = d_h * float(np.finfo(float).eps) * abs(gauge_shift)
-    if defect > EPS_HERMITICITY * scale + roundoff_allowance:
+    # Same review, one line further out, and a SECOND route to the same
+    # fail-open. The shift lies between the smallest and the largest diagonal
+    # entry, so ``H_ii - gauge_shift`` can reach twice the largest entry and
+    # overflow even when the shift itself is finite. Measured on
+    # ``diag(1.7e308, -1.7e308, 1.7e308)`` with an off-diagonal defect of 1:
+    # shift 5.67e307, gauge-fixed diagonal -inf, ``scale = inf``, and
+    # ``defect > EPS * inf`` is False -- accepted.
+    #
+    # Refusing such an operator would be a false rejection of exactly
+    # Hermitian input, so the comparison is RESTATED at half scale instead.
+    # ``0.5 * H - 0.5 * shift * I`` cannot overflow (both terms are at most
+    # half the largest float), and halving every term of an inequality is
+    # exact in binary floating point, so the restated test is the same
+    # predicate -- not a loosened one. It is entered only when the direct
+    # ``scale`` is non-finite, so the healthy path keeps the original
+    # expression literally, down to the subnormal corner where halving would
+    # not be exact.
+    if np.isfinite(scale):
+        excessive = defect > EPS_HERMITICITY * scale + roundoff_allowance
+    else:
+        _, half_scale = hermiticity_defect(0.5 * H - (0.5 * gauge_shift) * eye_h)
+        scale = 2.0 * half_scale
+        excessive = (
+            0.5 * defect > EPS_HERMITICITY * half_scale + 0.5 * roundoff_allowance
+        )
+    if excessive:
         raise ValueError(
             f"H must be Hermitian within a relative {EPS_HERMITICITY:g} "
             f"(max|H - H^dag| = {defect:.3e}, max|H| = {scale:.3e}, "

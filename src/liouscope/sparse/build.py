@@ -14,6 +14,7 @@ import numpy as np
 import scipy.sparse as sp
 
 from .._consts import EPS_HERMITICITY
+from ..numerics.linalg import overflow_safe_mean_real
 
 
 def build_sparse_liouvillian(
@@ -50,9 +51,14 @@ def build_sparse_liouvillian(
     # review): a real identity offset is physically inert but inflates the
     # scale, loosening the gate. Subtracting the real trace part touches only
     # the diagonal, so sparsity is preserved.
-    gauge_shift = float(H_sp.diagonal().sum().real) / d
-    H_gauge = (H_sp - sp.identity(d, dtype=complex, format="csr")
-               * gauge_shift).tocsr()
+    # ROUND-19 REVIEW (external, PR #127), the mirrored calculation the finding
+    # names explicitly. Identical overflow, identical fail-open, and it has to
+    # be repaired here too or the two builders disagree about whether the same
+    # Hamiltonian is valid. See
+    # :func:`liouscope.numerics.linalg.overflow_safe_mean_real`.
+    gauge_shift = overflow_safe_mean_real(H_sp.diagonal())
+    eye_d = sp.identity(d, dtype=complex, format="csr")
+    H_gauge = (H_sp - eye_d * gauge_shift).tocsr()
     scale = float(np.max(np.abs(H_gauge.data))) if H_gauge.nnz else 0.0
     # ROUND-18 REVIEW (external, PR #127), the mirrored calculation the
     # finding names explicitly. Same machine-round-off allowance as the dense
@@ -61,7 +67,20 @@ def build_sparse_liouvillian(
     # which is the failure mode "in parity with the dense builder" above
     # exists to prevent. See that function for the full derivation.
     roundoff_allowance = d * float(np.finfo(float).eps) * abs(gauge_shift)
-    if defect > EPS_HERMITICITY * scale + roundoff_allowance:
+    # Half-scale restatement in parity with the dense builder: the gauge-fixed
+    # DIAGONAL can overflow even for a finite shift, which makes ``scale``
+    # infinite and the relative test vacuous. See core/lindblad.py for the
+    # measured case and for why halving keeps the predicate identical.
+    if np.isfinite(scale):
+        excessive = defect > EPS_HERMITICITY * scale + roundoff_allowance
+    else:
+        H_half = (H_sp * 0.5 - eye_d * (0.5 * gauge_shift)).tocsr()
+        half_scale = float(np.max(np.abs(H_half.data))) if H_half.nnz else 0.0
+        scale = 2.0 * half_scale
+        excessive = (
+            0.5 * defect > EPS_HERMITICITY * half_scale + 0.5 * roundoff_allowance
+        )
+    if excessive:
         raise ValueError(
             f"H must be Hermitian within a relative {EPS_HERMITICITY:g} "
             f"(max|H - H^dag| = {defect:.3e}, max|H| = {scale:.3e}, "

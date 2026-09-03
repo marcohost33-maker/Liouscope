@@ -695,6 +695,40 @@ def require_finite_square_2d(A: np.ndarray, *, name: str = "matrix") -> np.ndarr
     return arr
 
 
+def overflow_safe_mean_real(values: np.ndarray) -> float:
+    """Mean of ``Re(values)``, formed so that the SUM cannot overflow.
+
+    ROUND-19 REVIEW (external, PR #127). The gauge shift of a Hamiltonian was
+    ``np.trace(H).real / d``, which forms the total FIRST. Every entry can be
+    finite while their sum is not: for ``H = [[1e308, 1], [0, 1e308]]`` the
+    trace overflows to ``inf``, the shift and the round-off allowance derived
+    from it become ``inf``, and ``defect > EPS * scale + allowance`` is then
+    False for EVERY defect. That matrix has an off-diagonal defect of exactly
+    1 and was accepted, so ``build_liouvillian`` returned a generator that does
+    not preserve Hermiticity -- a fail-open on the gate whose entire purpose is
+    to refuse non-GKSL input.
+
+    Dividing before summing removes the failure by construction rather than by
+    threshold: each term is bounded by ``max|v| / n``, so no partial sum of the
+    pairwise tree can exceed ``max|v|`` and a finite input has a finite mean.
+    The scaled form is used ONLY when the direct sum is not finite, so every
+    healthy call keeps its old value bit for bit; measured over 2000 random
+    complex matrices, ``np.trace(H).real`` and ``np.sum(np.diagonal(H)).real``
+    agree in all bits in every case.
+
+    Returns 0.0 for an empty input, matching :func:`hermiticity_defect` on an
+    empty operator.
+    """
+    v = np.asarray(values)
+    if v.size == 0:
+        return 0.0
+    n = float(v.size)
+    total = float(np.asarray(np.sum(v)).real)
+    if np.isfinite(total):
+        return total / n
+    return float(np.sum(np.real(v) / n))
+
+
 def hermiticity_defect(A: np.ndarray) -> tuple[float, float]:
     """Return ``(max|A - A^H|, max|A|)`` -- the absolute defect and its scale.
 
