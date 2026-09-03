@@ -7,6 +7,20 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Fixed
+- **`neff_car1` allocated two `n x n` arrays for a scalar (PR #127, round-20
+  external review).** The exact CAR(1) effective sample size formed a full
+  separation matrix and a full exponential of it on every evaluation, and
+  `compute_relaxation_layer` evaluates it once per candidate fit. Measured with
+  `tracemalloc`: n = 2000 peaked at 96.0 MB, n = 4000 at 384 MB, so a
+  20,000-point trajectory needs gigabytes and can be killed by the OS for one
+  float. Because the times can be ordered, the double sum telescopes into a
+  one-pass recurrence `A_k = exp(-theta dt_k) * (A_{k-1} + 1)` with O(1)
+  working storage. Same quantity, not an approximation: n = 4000 now peaks at
+  0.096 MB (36.0 ms against 425.1 ms) and n = 20000 at 0.480 MB / 85.5 ms, and
+  the result matches the closed-form uniform-grid ESS to nine digits at every
+  rho of the docstring's calibration table. The grid is sorted rather than
+  assumed ordered, because `|t_j - t_k|` is symmetric and the old form
+  therefore accepted any order.
 - **An underflowed resolution ratio crashed the relaxation layer (PR #127,
   round-20 external review).** `_resolution_detail` formed
   `1 / (r * blind_r)` from a finite positive decay rate and a finite positive

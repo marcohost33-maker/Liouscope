@@ -253,3 +253,116 @@ def test_a_grid_with_no_usable_interval_is_still_nan() -> None:
     """
     value = samples_per_fast_efolding(_damping(1.0), np.array([0.0, 0.0]))
     assert np.isnan(value)
+
+
+# ---------------------------------------------------------------------------
+# Finding 3 -- src/liouscope/fitting/car1.py
+#
+# ``neff_car1`` materialised a full ``n x n`` separation matrix and a second
+# ``n x n`` exponential for a SCALAR, once per candidate fit. Sorting makes the
+# double sum telescope into a one-pass recurrence, so the test that matters is
+# not "is it faster" but "is it the SAME NUMBER".
+#
+# Two independent oracles, because agreeing with the code it replaces would
+# only prove the transcription:
+#
+# * on a uniform grid the exact ESS ``n^2 / sum rho^|j-k|`` is available in
+#   closed form and is what the docstring's calibration table is quoted
+#   against, and
+# * on a non-uniform grid the quadratic form is recomputed here, inside the
+#   test, from the definition.
+#
+# The parameter range is chosen to CONTAIN the boundaries rather than to sit
+# safely inside them: n runs from 0 and 1 (the early-return sizes) through 2
+# (the shortest grid the recurrence actually iterates on) to 3000; theta covers
+# 0 (perfect correlation, where every exponential is exactly 1 and the sum is
+# n^2), 1e-300 and 1e300 (both far outside the fitted range, where the
+# exponentials saturate at 1 and underflow to 0); and the grids include a
+# two-scale one whose steps span six decades, which is the case the whole
+# CAR(1) route exists for.
+# ---------------------------------------------------------------------------
+
+from liouscope.fitting.car1 import neff_car1  # noqa: E402
+
+
+def _quadratic_form(t: np.ndarray, theta: float) -> float:
+    """The definition, recomputed independently of the implementation."""
+    sep = np.abs(t[:, None] - t[None, :])
+    total = float(np.sum(np.exp(-abs(float(theta)) * sep)))
+    n = t.size
+    if not np.isfinite(total) or total <= 0.0:
+        return float("nan")
+    return float(np.clip(n * n / total, 1.0, float(n)))
+
+
+@pytest.mark.parametrize("rho", [0.0, 0.3, 0.6, 0.85, 0.95, 0.99])
+def test_uniform_grid_matches_the_closed_form_ess(rho: float) -> None:
+    """Independent oracle: ``n^2 / sum_{j,k} rho^|j-k|`` computed from scratch."""
+    n = 80
+    t = np.arange(n, dtype=float)
+    theta = -float(np.log(rho)) if rho > 0.0 else 1.0e12
+    exact = n * n / sum(rho ** abs(j - k) for j in range(n) for k in range(n))
+    assert neff_car1(t, theta) == pytest.approx(exact, rel=1.0e-9)
+
+
+@pytest.mark.parametrize("n", [0, 1, 2, 3, 17, 300])
+@pytest.mark.parametrize("theta", [0.0, 1.0e-300, 0.7, 1.0e300])
+def test_the_recurrence_reproduces_the_quadratic_form(n: int, theta: float) -> None:
+    """Same number as the definition, across the boundary sizes and rates."""
+    rng = np.random.default_rng(20260904 + n)
+    t = np.sort(rng.random(n)) * 10.0
+    got, want = neff_car1(t, theta), _quadratic_form(t, theta)
+    if np.isnan(want):
+        assert np.isnan(got)
+    else:
+        assert got == pytest.approx(want, rel=1.0e-12, abs=1.0e-12)
+
+
+def test_a_two_scale_grid_spanning_six_decades_agrees() -> None:
+    """The case the CAR(1) route exists for, and the worst one for a recurrence.
+
+    Each step multiplies the accumulator, so error accumulates along the grid;
+    a grid whose steps jump six decades is where that would show first.
+    """
+    rng = np.random.default_rng(4)
+    t = np.sort(
+        np.concatenate([rng.random(150) * 1.0e-3, rng.random(150) * 1.0e3])
+    )
+    assert neff_car1(t, 0.05) == pytest.approx(
+        _quadratic_form(t, 0.05), rel=1.0e-11
+    )
+
+
+def test_an_unordered_grid_gives_the_same_answer_as_its_sorted_copy() -> None:
+    """``|t_j - t_k|`` is symmetric, so the old form accepted any order.
+
+    Returning a different number for the same multiset would be a worse defect
+    than the allocation this change removes, so the sort is asserted, not
+    assumed.
+    """
+    rng = np.random.default_rng(9)
+    t = rng.random(300) * 5.0
+    assert neff_car1(t, 0.7) == neff_car1(np.sort(t), 0.7)
+    assert neff_car1(t, 0.7) == pytest.approx(_quadratic_form(t, 0.7), rel=1.0e-12)
+
+
+def test_the_effective_sample_size_no_longer_scales_quadratically() -> None:
+    """Peak allocation, measured -- the finding is about memory, not speed.
+
+    Pinned as a hard ceiling rather than a ratio: before the change n = 4000
+    peaked at 384 MB and n = 20000 would need about 6.4 GB for two ``n x n``
+    float arrays, which is what "can be killed by OOM for a scalar" means.
+    """
+    import tracemalloc
+
+    n = 4000
+    t = np.sort(np.random.default_rng(3).random(n)) * 100.0
+    tracemalloc.start()
+    try:
+        neff_car1(t, 0.5)
+        peak = tracemalloc.get_traced_memory()[1]
+    finally:
+        tracemalloc.stop()
+    # n^2 float64 alone is 128 MB at this size; 4 MB leaves room for the sorted
+    # copy and the n-1 decay array and nothing that scales with n^2.
+    assert peak < 4.0e6, f"peak {peak / 1e6:.1f} MB scales with n^2"
