@@ -31,7 +31,7 @@ from liouscope.diagnostics.relaxation import (
     UnrepresentableRelaxationWindowError,
     default_relaxation_grid,
 )
-from liouscope.fitting.prony import _uniform_prefix_length
+from liouscope.fitting.prony import _uniform_prefix_length, prony_seed
 from liouscope.sparse.build import build_sparse_liouvillian
 
 _SIGMA_MINUS = np.array([[0.0, 1.0], [0.0, 0.0]], dtype=complex)
@@ -57,19 +57,25 @@ def test_nanosecond_two_scale_grid_is_not_called_uniform() -> None:
     assert steps.max() / steps.min() > 1.0e3
     assert steps.max() < 1.0e-8, "fixture no longer sits under the default atol"
 
-    # This is the comparison the code performs.
-    assert not np.allclose(steps, steps[0], rtol=1e-4, atol=0.0)
-    # ... and this is what it used to perform. Kept as a live assertion so the
-    # test states WHY atol=0.0 is load-bearing rather than merely asserting
-    # the fixed behaviour.
+    # What the OLD comparison said about this grid. Kept as a live assertion
+    # so the test states WHY atol=0.0 is load-bearing rather than merely
+    # asserting the fixed behaviour.
     assert np.allclose(steps, steps[0], rtol=1e-4), (
         "NumPy's default atol no longer masks this grid; the finding's "
         "premise has changed and this test needs rereading"
     )
 
-    # The consequence the finding is actually about: the prefix path runs.
+    # THE ASSERTION THAT MEASURES THE PRODUCTION PATH. An earlier draft of
+    # this test asserted np.allclose(..., atol=0.0) directly and was reported
+    # BLIND by the mutation run: it exercised the comparison operator in the
+    # test file, not the branch in prony.py, so reverting the fix changed
+    # nothing it could see. Taking the prefix path has an observable
+    # signature -- prony_seed then IS prony_seed of the uniform head, bit for
+    # bit, because that is literally what the branch returns.
     head = _uniform_prefix_length(grid)
     assert 6 <= head < grid.size
+    y = np.exp(-1.0e8 * grid)
+    assert prony_seed(grid, y) == prony_seed(grid[:head], y[:head])
 
 
 def test_a_genuinely_uniform_grid_is_still_uniform() -> None:
@@ -152,8 +158,25 @@ def test_pure_gauge_hamiltonian_is_accepted_by_both_builders() -> None:
         "has changed"
     )
 
-    assert build_liouvillian(h, [_SIGMA_MINUS]).shape == (4, 4)
-    assert build_sparse_liouvillian(h, [_SIGMA_MINUS]).shape == (4, 4)
+    # Caught broadly and asserted, not crashed into. The mutation run first
+    # reported this test as "ROT DURCH ABSTURZ:ValueError -- kein Beleg":
+    # taking the fix out makes the builder raise, the test dies at the
+    # exception rather than at an assertion, and a red that comes from an
+    # uncaught throw is not evidence about WHICH condition failed.
+    for label, builder in (
+        ("dense", build_liouvillian),
+        ("sparse", build_sparse_liouvillian),
+    ):
+        outcome: object
+        try:
+            outcome = builder(h, [_SIGMA_MINUS])
+        except Exception as exc:  # the TYPE is the measurement, so catch wide
+            outcome = exc
+        assert not isinstance(outcome, BaseException), (
+            f"{label} builder rejected the exact Hamiltonian I: "
+            f"{type(outcome).__name__}: {outcome}"
+        )
+        assert outcome.shape == (4, 4)  # type: ignore[union-attr]
 
 
 def test_a_real_hermiticity_defect_is_still_rejected() -> None:
