@@ -208,14 +208,44 @@ def test_a_nonfinite_operator_scale_cannot_open_the_gate_either() -> None:
         is_hermitian(np.array([[0.0, np.inf], [0.0, 0.0]]))
 
 
+def _verdict(A: np.ndarray, **kw: float) -> object:
+    """``is_hermitian`` outcome, with a raise captured rather than propagated.
+
+    A refusal is a legitimate answer for an INVALID tolerance and a defect for
+    a valid one, so the control below has to judge which happened. Letting the
+    exception escape would kill the test at a crash, which a mutation run
+    cannot tell apart from an incidental failure -- the death must be
+    attributable to an ASSERTION.
+    """
+    try:
+        return is_hermitian(A, **kw)
+    except Exception as exc:
+        return exc
+
+
 def test_valid_tolerances_are_untouched_by_the_validation() -> None:
-    """Over-correction control: the accepted range still decides normally."""
+    """Over-correction control: the accepted range still decides normally.
+
+    Zero is a LEGAL tolerance -- the strictest one -- and must keep deciding
+    from the defect. A guard written as ``rtol <= 0`` would refuse it and turn
+    a fail-open repair into a fail-closed defect.
+    """
     exact = _hermitian_base()
     broken = _broken(1.0, 1e-6)
-    assert is_hermitian(exact)
-    assert not is_hermitian(broken)
-    assert is_hermitian(broken, rtol=1e-3)        # loose but legal
-    assert not is_hermitian(broken, rtol=0.0)     # zero is legal and strictest
-    assert is_hermitian(exact, rtol=0.0)          # exact defect is 0 <= 0
-    assert is_hermitian(broken, atol=1.0)
-    assert not is_hermitian(broken, atol=0.0)
+    cases: list[tuple[dict[str, float], bool]] = [
+        ({}, True),
+        ({"rtol": 1e-3}, True),          # loose but legal
+        ({"rtol": 0.0}, True),           # exact defect is 0 <= 0
+    ]
+    for kw, expected in cases:
+        got = _verdict(exact, **kw)
+        assert got is expected, f"is_hermitian(exact, {kw}) -> {got!r}"
+    for kw, expected in [
+        ({}, False),
+        ({"rtol": 1e-3}, True),
+        ({"rtol": 0.0}, False),          # zero is legal and strictest
+        ({"atol": 1.0}, True),
+        ({"atol": 0.0}, False),
+    ]:
+        got = _verdict(broken, **kw)
+        assert got is expected, f"is_hermitian(broken, {kw}) -> {got!r}"
