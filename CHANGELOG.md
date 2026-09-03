@@ -6,7 +6,82 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+- **The Gaussian likelihood behind AICc is evaluated in log-RSS space, and an
+  exact-zero RSS is now an explicit abstention (issue #135).** This is a
+  METHODOLOGY change with user-visible consequences: it can reorder AICc,
+  change which of M0..M3b is selected, and therefore change the reported decay
+  rate for a given run. Three parts:
+  - `gaussian_log_likelihood` evaluates the profile likelihood at the Gaussian
+    MLE directly from `log(RSS)` via the new
+    `numerics.norms.scaled_log_sum_squares`, instead of forming RSS in ordinary
+    units. Residual series whose true sum of squares lies outside the float64
+    range — a rescaled curve is enough — previously produced `0` or `inf` RSS
+    and an unusable likelihood. The value is now scale-covariant, and
+    likelihood *differences* between models are invariant under a common
+    rescaling of the residuals, which is the quantity AICc actually consumes.
+  - An exact-zero RSS has no finite interior MLE for the positive scale
+    parameter, so the profile likelihood is `NaN` rather than an invented
+    absolute epsilon variance. `fit_gls_ar1` reports this as
+    `likelihood_degenerate=True` with `success=False`, `aicc()` then scores the
+    model `inf`, and `parametric_bootstrap` refuses: a perfect fit yields no
+    interval rather than a zero-width one. Passing an explicit positive `sigma`
+    still gives a finite likelihood for zero residuals, which is the
+    well-posed case.
+  - Runs whose reported model or rate changes are those where the previous
+    absolute-RSS path had over- or underflowed, or where the winner was chosen
+    against a floored likelihood. Re-run any archived analysis whose selected
+    model matters; the run manifest does not record per-model likelihoods, so
+    the change is not visible in `input_hash`.
+
 ### Fixed
+- **The reason a confidence interval was withheld did not reach the report (PR
+  #147, round-2 external review).** When the residual MLE scale is not
+  representable as float64 the fit stays a valid AICc candidate and only its
+  interval is withheld — but `_fit_with_model` copied `likelihood_degenerate`
+  and dropped `scale_unavailable`, so the persisted report showed only
+  `bca_ci_beta = (nan, nan)`. That is the value ANY bootstrap or jackknife
+  failure produces, and the distinguishing information lived in a
+  `RuntimeWarning` an artefact does not keep. `FitResult` carries
+  `scale_unavailable` now and `_fit_with_model` copies it; `io.export`
+  serialises `FitResult` field-wise, so the reason travels into dumped
+  reports.
+- **The one-half factor was applied after the overflow guard (PR #147, round-2
+  external review).** For the explicit-`sigma` path the standardised RSS never
+  appears on its own: it enters the log-likelihood as `-0.5 * RSS`, so the
+  representable range reaches `2 * float64.max`. The guard compared against
+  `log(float64.max)` and returned `-inf` for the octave above it — measured:
+  `sigma = 1` with a single residual near `1.4e154` has RSS ~`1.96e308` and a
+  finite log-likelihood of ~`-9.8e307`, and the model was dropped from
+  selection on that arithmetic boundary rather than on the data. The bound now
+  carries `+ log(2)` and the exponential is taken after subtracting `log(2)`
+  in the octave that needs it; below that octave the arithmetic is unchanged,
+  so no previously computable likelihood moves by even one ulp.
+- **A fit was withheld entirely because a number its likelihood never uses
+  could not be materialised (PR #147, round-1 review).** When the whitened
+  residuals have a finite, non-zero RMS below the smallest positive float64,
+  `log_rss` and `log_sigma` are both finite and the profile likelihood is
+  computable — but `exp(log_sigma)` underflows to `0.0`, and `fit_gls_ar1`
+  then returned `success=False`, `log_likelihood=NaN` and
+  `likelihood_degenerate=True`. `_fit_with_model` scored that model `inf` and
+  dropped it from selection, which reintroduces exactly the ABSOLUTE SCALE
+  BOUNDARY into model selection that the change above removed: the same curve
+  in different rate units either is or is not a candidate. Measured on one
+  minimum-subnormal residual (`5e-324`) among 64 otherwise-zero points:
+  `log_rss = -1488.88`, `log_sigma = -746.52`, profile log-likelihood
+  `+47686.44`, `exp(log_sigma) = 0.0`.
+
+  The fit now stays selectable with its finite log-space likelihood, and only
+  the scale-dependent evidence is withheld. `GLSFitOutput` gains
+  `scale_unavailable` (additive, default `False`); `sigma` is `NaN` there,
+  deliberately not `0.0`, because `_ar1_resample` consumes it as the
+  innovation standard deviation and `0.0` would generate identical replicates
+  — a zero-width confidence interval, which is the failure mode of an
+  uncertainty pipeline, not a conservative one. `parametric_bootstrap` refuses
+  on the new flag rather than on `success`, so "no interval" and "no estimate"
+  stay distinguishable, and `compute_relaxation_layer` reports the CI as `NaN`
+  through its existing handler. Three mutations, one per guard line, are
+  proven to discriminate.
 - **D16 was published from the spectrum for which D1/D3/D4 had just been
   withheld (PR #121, round-23 review, finding 13).** Where the zero-mode
   certificate is applicable but unresolved, the spectral layer reports D1, D3,
