@@ -156,6 +156,34 @@ def build_liouvillian(
     # of the stored matrix -- no test on those bytes can tell that defect
     # from storage round-off, and refusing it would mean refusing exactly
     # Hermitian matrices for having been written down.
+    # OPEN, MEASURED 2026-09-04, and larger than the concession stated above.
+    # The defect is shift-INDEPENDENT (a real diagonal shift cannot change
+    # H - H^dag, as noted at the top of this block) and so is ``scale``, which
+    # is taken from the gauge-fixed part. This allowance is the only term that
+    # tracks ``gauge_shift``, so the verdict on ONE PHYSICAL Hamiltonian moves
+    # when a multiple of the identity is added -- the very gauge hole the
+    # twelfth round closed, reopened at a higher threshold. Fixed traceless
+    # part of scale 1 with a non-Hermitian defect, only ``c`` in ``H + c*I``
+    # varying:
+    #
+    #     defect    rejected below c ~     accepted above
+    #     1e-9      1                      yes
+    #     1e-6      2.25e+09               yes
+    #     1e-3      2.25e+12               yes
+    #     1         2.25e+15               yes
+    #
+    # The external PR #127 example ``[[1e308, 1], [0, 1e308]]`` is the last
+    # row: its unit defect is excused because 2*eps*1e308 = 4.4e292. Round 19
+    # removed the OVERFLOW that finding named -- the shift is finite now --
+    # but not the OUTCOME it asserted. Checked end to end: the accepted
+    # generator gives ||drho - drho^dag||_F = 0.632456 on a Hermitian rho,
+    # i.e. it really does not preserve Hermiticity.
+    #
+    # Not repaired here on purpose. Capping the allowance (at the gauge-fixed
+    # scale, or making it relative like every other term in this gate) is a
+    # threshold decision that moves round-18 behaviour, which was itself a
+    # review response, and it carries anchor risk. It needs its own PR with a
+    # physics justification, not a quiet change here.
     roundoff_allowance = d_h * float(np.finfo(float).eps) * abs(gauge_shift)
     # Same review, one line further out, and a SECOND route to the same
     # fail-open. The shift lies between the smallest and the largest diagonal
