@@ -24,7 +24,6 @@ from __future__ import annotations
 
 import numpy as np
 import pytest
-import scipy.linalg as sla
 
 from liouscope.core.lindblad import build_liouvillian
 from liouscope.diagnostics.relaxation import (
@@ -129,14 +128,41 @@ def test_a_representable_window_is_untouched() -> None:
 
 
 def _numerically_pure_gauge_hamiltonian() -> np.ndarray:
-    """``Q @ I @ Q^H`` for a numerical unitary ``Q``: exactly ``I``, in theory.
+    """``I`` plus one ulp of non-Hermitian round-off -- written down, not hoped for.
 
-    In floating point it is ``I`` plus round-off, and the round-off is all
-    that survives gauge fixing.
+    The regime under repair is a Hamiltonian that is numerically a pure gauge
+    term: ``I`` plus round-off, with the round-off all that survives gauge
+    fixing. An earlier draft OBTAINED that round-off by forming ``Q @ I @ Q^H``
+    for a numerical unitary ``Q`` and trusting the product to come out
+    asymmetric. It does not have to. Each entry of ``Q @ Q^H`` is a sum of
+    products whose mirror entry is the same sum conjugated, so whether the two
+    differ in the last bit depends on the order the BLAS accumulates them --
+    a property of the installed wheel, not of the mathematics.
+
+    Measured on ONE commit (df0a3e5), same OS image (ubuntu-latest), same
+    source, only the interpreter differing:
+
+        py3.10  defect 0.0   ->  red      py3.13  defect > 0  ->  green
+        py3.11  defect 0.0   ->  red      py3.14  defect 0.0  ->  red
+        py3.12  defect 0.0   ->  red      win/py3.14  defect 4.98e-17 -> green
+
+    Four red legs, one green, and the difference was round-off. Worse than the
+    red: on every leg with defect 0.0 the fixture had silently left the regime
+    it exists to exercise, and the guard in the test below is the only reason
+    that showed up as a failure rather than as a test that passed without
+    measuring anything.
+
+    The defect is therefore CONSTRUCTED. ``0.5 * eps`` is ``2**-53``, exactly
+    representable, so the stored bytes are identical on every platform, and one
+    ulp on one side of the diagonal is the same magnitude the similarity
+    transform was being asked to supply -- with none of the dependence on how
+    it is summed.
     """
-    rng = np.random.default_rng(0)
-    q = sla.qr(rng.normal(size=(2, 2)) + 1j * rng.normal(size=(2, 2)))[0]
-    return q @ np.eye(2, dtype=complex) @ q.conj().T
+    h = np.eye(2, dtype=complex)
+    # One ulp on ONE side of the diagonal. That asymmetry IS the defect, and
+    # it is a written-down constant rather than an accumulation artefact.
+    h[0, 1] = 0.5 * float(np.finfo(float).eps)
+    return h
 
 
 def test_pure_gauge_hamiltonian_is_accepted_by_both_builders() -> None:
@@ -152,6 +178,12 @@ def test_pure_gauge_hamiltonian_is_accepted_by_both_builders() -> None:
     defect = float(np.max(np.abs(h - h.conj().T)))
     gauge = h - (np.trace(h).real / 2.0) * np.eye(2, dtype=complex)
     gauge_scale = float(np.max(np.abs(gauge)))
+    # Not merely non-zero: the SAME non-zero everywhere. A defect that varies
+    # by platform is what made this test red on four of five CI legs while
+    # the code under test was identical -- see the fixture docstring.
+    assert defect == 0.5 * float(np.finfo(float).eps), (
+        f"fixture defect is platform-dependent again: {defect!r}"
+    )
     assert defect > 0.0
     assert defect > 1.0e-9 * gauge_scale, (
         "fixture no longer trips the relative gate; the finding's premise "
