@@ -629,10 +629,34 @@ def certified_nonzero_modes(
     #   ``test_d11_fallback_scans_the_refined_zero_set`` on that same
     #   fixture. The certificate drops to ``resolved=False`` with
     #   ``zero_mode_count=2, ambiguous_count=1``, i.e. the refinement is
-    #   abandoned wholesale and a mode that WAS correctly rescued is lost --
+    #   abandoned wholesale and the mode that was being rescued is lost --
     #   the identical regression the blanket bijection produces, reached by a
-    #   narrower route. Which of the two failure modes is preferable (borrowed
-    #   evidence on a near neighbour vs. losing the refinement) is a
+    #   narrower route.
+    #
+    #   RE-MEASURED 2026-09-04, independently, and it moves one word of the
+    #   paragraph above: an earlier draft called that mode "correctly
+    #   rescued", and the spectra do not support "correctly". On this fixture
+    #   the operator's own spectrum carries ``-3.345505e-06`` EXACTLY TWICE
+    #   (ref indices 8 and 11) and the candidate ladder carries it exactly
+    #   twice as well (ev 8 and 11), so both copies are claimed by candidates
+    #   that match them to the last bit. The third candidate,
+    #   ``ev[3] = -3.3216107e-06``, has no counterpart left: the nearest FREE
+    #   reference entry is ``ref[3] = -4.239e-06`` at a relative distance of
+    #   0.216, which the 10 per cent agreement guard refuses. Its certification
+    #   today therefore rests entirely on ``ref[8]``'s residual -- a residual
+    #   already spoken for by ``ev[8]``, and measured for a different
+    #   eigenvalue. Whether ``ev[3]`` is a mode of this operator at all is
+    #   precisely what the borrowed decomposition cannot say.
+    #
+    #   That sharpens the open decision rather than settling it. Refusing
+    #   ``ev[3]`` is the fail-CLOSED answer and is defensible on the spectra;
+    #   it also makes the precondition of
+    #   ``test_d11_fallback_scans_the_refined_zero_set`` -- ``cert.resolved``
+    #   -- unreachable on this network, because ambiguity then survives the
+    #   refinement. The test and the defect are coupled: the certificate
+    #   resolves here ONLY by way of the borrowed residual. So the choice is
+    #   not "borrowed evidence vs. losing a good mode" but "borrowed evidence
+    #   vs. conceding that this network does not resolve", which is a
     #   modelling decision with anchor consequences, not a repair, and is
     #   therefore recorded here instead of being made quietly.
     pair_of: dict[int, int] = {}
