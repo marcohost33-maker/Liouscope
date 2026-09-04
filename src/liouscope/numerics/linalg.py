@@ -612,6 +612,29 @@ def certified_nonzero_modes(
     #   bit-for-bit claim needs no argument about tie-breaking: every mode
     #   whose eigenvalue is unique among the in-band modes takes exactly the
     #   old code path.
+    #   KNOWN LIMIT, measured rather than assumed (2026-09-04). The ranking
+    #   keys on EXACT float equality, so two merely CLOSE candidate
+    #   eigenvalues still both take ``argmin`` and can land on the same
+    #   reference eigenpair -- the reported defect one step away from exact
+    #   degeneracy. It is reachable on a fixture this suite already carries:
+    #   on the D11 network of ``tests/test_pr121_review_round17.py`` the
+    #   in-band candidates ``-3.3216107e-06`` and ``-3.345505e-06`` (relative
+    #   separation 7.1e-03) both pair with reference index 8, and both clear
+    #   the 10 per cent agreement guard below, so the first is certified from the
+    #   second's residual.
+    #
+    #   It is left open deliberately, because the obvious fail-closed repair
+    #   -- on a collision keep the nearer candidate and certify neither of
+    #   the others -- was applied and MEASURED: it costs
+    #   ``test_d11_fallback_scans_the_refined_zero_set`` on that same
+    #   fixture. The certificate drops to ``resolved=False`` with
+    #   ``zero_mode_count=2, ambiguous_count=1``, i.e. the refinement is
+    #   abandoned wholesale and a mode that WAS correctly rescued is lost --
+    #   the identical regression the blanket bijection produces, reached by a
+    #   narrower route. Which of the two failure modes is preferable (borrowed
+    #   evidence on a near neighbour vs. losing the refinement) is a
+    #   modelling decision with anchor consequences, not a repair, and is
+    #   therefore recorded here instead of being made quietly.
     pair_of: dict[int, int] = {}
     if borrowed:
         ref_arr = np.asarray(ref)
