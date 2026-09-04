@@ -366,3 +366,79 @@ def test_the_effective_sample_size_no_longer_scales_quadratically() -> None:
     # n^2 float64 alone is 128 MB at this size; 4 MB leaves room for the sorted
     # copy and the n-1 decay array and nothing that scales with n^2.
     assert peak < 4.0e6, f"peak {peak / 1e6:.1f} MB scales with n^2"
+
+
+# ---------------------------------------------------------------------------
+# Finding 4 -- the bootstrap drew its innovations from a different model than
+# the fitter had used.
+#
+# ``whiten_car1`` divides by ``sqrt(max(1 - a^2, _VAR_FLOOR))``; ``car1_resample``
+# multiplied by ``sqrt(max(1 - a^2, 0.0))``. Wherever ``1 - a^2`` fell below the
+# floor -- the fine segment of a widely separated two-scale grid -- ``base.sigma``
+# and the resampled transition variance described different covariance models,
+# the replicates carried less noise than the fit assumed, and the ``beta_D``
+# intervals came out too narrow.
+# ---------------------------------------------------------------------------
+
+from liouscope.fitting.car1 import (  # noqa: E402
+    _VAR_FLOOR,
+    car1_resample,
+    car1_rho,
+    whiten_car1,
+)
+
+
+def _floored_fine_grid() -> np.ndarray:
+    """Steps small enough against ``theta = 1`` that ``1 - a^2`` hits the floor."""
+    return np.arange(4000, dtype=float) * 1.0e-13
+
+
+def test_resampled_innovations_carry_the_variance_the_fitter_assumes() -> None:
+    """THE regression, asserted at the seam where the two conventions meet.
+
+    Whitening a drawn path with the same ``theta`` that drew it must return
+    innovations of the stationary scale, because that is the definition the
+    fit works to. Measured before the repair: 0.447 -- the generator used
+    ``sqrt(2.0e-13) = 4.47e-07`` where the fitter divided by
+    ``sqrt(1e-12) = 1.0e-06``.
+
+    The ratio is asserted rather than the two ``sd`` arrays compared, because
+    a comparison of the internals would still pass if BOTH paths moved to a
+    third convention.
+    """
+    theta, sigma = 1.0, 1.0
+    t = _floored_fine_grid()
+    a = car1_rho(t, theta)
+
+    # The fixture has to sit in the regime under repair, or it proves nothing.
+    assert np.all(1.0 - a * a < _VAR_FLOOR), "fixture no longer reaches the floor"
+
+    eps = car1_resample(np.random.default_rng(7), t, theta, sigma)
+    whitened = whiten_car1(eps, t, theta)
+    assert float(np.std(whitened[1:])) == pytest.approx(sigma, rel=0.05)
+
+
+def test_an_ordinary_grid_draws_a_bit_for_bit_identical_path() -> None:
+    """No-over-reject control, and it is exact rather than statistical.
+
+    The floor may only touch the regime it was introduced for. On a grid whose
+    ``1 - a^2`` clears it, ``maximum`` returns what it always returned, so the
+    drawn path must agree with the unfloored recurrence in every bit -- not
+    merely in distribution.
+    """
+    theta, sigma = 1.0, 1.0
+    t = np.arange(500, dtype=float) * 0.05
+    a = car1_rho(t, theta)
+    assert np.all(1.0 - a * a > _VAR_FLOOR), "control grid must NOT reach the floor"
+
+    drawn = car1_resample(np.random.default_rng(3), t, theta, sigma)
+
+    sd = sigma * np.sqrt(np.maximum(1.0 - a * a, 0.0))
+    rng = np.random.default_rng(3)
+    expected = np.empty(t.size)
+    expected[0] = rng.normal(0.0, sigma)
+    z = rng.normal(size=a.size)
+    for k in range(a.size):
+        expected[k + 1] = a[k] * expected[k] + sd[k] * z[k]
+
+    assert np.array_equal(drawn, expected)

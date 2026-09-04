@@ -361,7 +361,25 @@ def car1_resample(
     if n == 1:
         return eps
     a = car1_rho(t, theta)
-    sd = s * np.sqrt(np.maximum(1.0 - a * a, 0.0))
+    # ROUND-20 REVIEW (external, PR #127). The floor is ``_VAR_FLOOR``, not
+    # ``0.0``, because the number this path must reproduce is the covariance
+    # the FITTER used -- and ``whiten_car1`` divides by
+    # ``sqrt(max(1 - a^2, _VAR_FLOOR))``. Where the two disagreed, they
+    # described different models: ``base.sigma`` was estimated under the
+    # floored one while the replicates were drawn under the unfloored one, so
+    # the bootstrap understated its own transition noise and the ``beta_D``
+    # intervals came out too narrow.
+    #
+    # It bites on the fine segment of a widely separated two-scale grid, where
+    # ``1 - a^2`` falls below ``1e-12``. Measured at ``theta = 1`` on steps of
+    # ``1e-13`` (``1 - a^2 = 2.0e-13``): the fitter's ``sqrt`` is ``1.0e-6``,
+    # the generator's was ``4.47e-07``, so every innovation on those steps was
+    # drawn at 0.447 of the scale the fit assumed.
+    #
+    # Only that regime moves. Wherever ``1 - a^2`` clears the floor -- every
+    # ordinary grid -- ``maximum`` returns the same value it returned before
+    # and the drawn path is bit-for-bit unchanged.
+    sd = s * np.sqrt(np.maximum(1.0 - a * a, _VAR_FLOOR))
     z = rng.normal(size=a.size)
     for k in range(a.size):
         eps[k + 1] = a[k] * eps[k] + sd[k] * z[k]
