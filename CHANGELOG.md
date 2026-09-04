@@ -7,6 +7,133 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Fixed
+- **`neff_car1` allocated two `n x n` arrays for a scalar (PR #127, round-20
+  external review).** The exact CAR(1) effective sample size formed a full
+  separation matrix and a full exponential of it on every evaluation, and
+  `compute_relaxation_layer` evaluates it once per candidate fit. Measured with
+  `tracemalloc`: n = 2000 peaked at 96.0 MB, n = 4000 at 384 MB, so a
+  20,000-point trajectory needs gigabytes and can be killed by the OS for one
+  float. Because the times can be ordered, the double sum telescopes into a
+  one-pass recurrence `A_k = exp(-theta dt_k) * (A_{k-1} + 1)` with O(1)
+  working storage. Same quantity, not an approximation: n = 4000 now peaks at
+  0.096 MB (36.0 ms against 425.1 ms) and n = 20000 at 0.480 MB / 85.5 ms, and
+  the result matches the closed-form uniform-grid ESS to nine digits at every
+  rho of the docstring's calibration table. The grid is sorted rather than
+  assumed ordered, because `|t_j - t_k|` is symmetric and the old form
+  therefore accepted any order.
+- **An underflowed resolution ratio crashed the relaxation layer (PR #127,
+  round-20 external review).** `_resolution_detail` formed
+  `1 / (r * blind_r)` from a finite positive decay rate and a finite positive
+  grid interval whose PRODUCT underflows to zero below ~5e-324, raising
+  `ZeroDivisionError`. Measured: an amplitude-damping generator scaled by
+  `1e-200` on the valid increasing grid `[0, 1e-200, 2e-200]` killed both
+  `samples_per_fast_efolding()` and `compute_relaxation_layer()` before any fit
+  ran — a crash decided by the choice of rate UNITS, on a quantity that is
+  dimensionless. The limit of the ratio is now returned instead: `inf`, i.e.
+  unbounded sampling resolution, which this function already uses to mean
+  "nothing decays over this grid" and which the warning gate in
+  `compute_relaxation_layer` correctly passes over. NaN would have been wrong —
+  it means "no usable interval", the opposite statement — so the final
+  `not np.isfinite(worst)` test was replaced by an explicit "was anything
+  measured" flag that cannot conflate the two. Unit-scale grids are unchanged
+  (coarse 1.0, fine 100.0, both re-measured).
+- **The Hermiticity gate failed open when the gauge shift overflowed (PR #127,
+  round-20 external review).** `build_liouvillian` removed the identity
+  component with `np.trace(H).real / d`, forming the total before dividing.
+  Finite entries can have a non-representable sum, and an infinite shift makes
+  both the gauge-fixed operator and the round-off allowance derived from it
+  non-finite, after which `defect > EPS * scale + allowance` is False for every
+  defect there is. `build_sparse_liouvillian` carried the identical
+  calculation. The shift now divides before summing
+  (`numerics.linalg.overflow_safe_mean_real`), which cannot overflow for finite
+  input and is bit-for-bit the old value wherever the direct sum was finite —
+  measured over 2000 random complex matrices with zero differing bits.
+  A second route to the same fail-open, which no comment reported, was found by
+  reading the neighbourhood: the shift lies between the smallest and the
+  largest diagonal entry, so `H_ii - shift` can overflow even for a finite
+  shift. Measured on `diag(1.7e308, -1.7e308, 1.7e308)` with an off-diagonal
+  defect: gauge-fixed scale `inf`, accepted. The comparison is now restated at
+  half scale when the direct scale is not finite — exact in binary floating
+  point, hence the same predicate rather than a looser one, and specifically
+  NOT a refusal, so an exactly Hermitian operator of that shape is still
+  accepted. The round-18 concession (`1e9 * I` plus a traceless defect of
+  `1e-6`, still rejected) is unmoved. Known residual: `[[1e308, 1], [0, 1e308]]`
+  remains accepted, because its defect of 1 falls below the round-18 allowance
+  `d * eps * |shift| = 4.4e292` — a different mechanism, raised separately.
+- **An unavailable D1 was converted into the strongest gapless evidence (PR
+  #127, round-18 external review).** When the zero-mode certificate withholds
+  D1 as NaN, `_strip_unavailable` removes both `gap` and `gap_to_gns_ratio`
+  from the evidence dict. `gap` was declared OPTIONAL on the F5 reach leg, so
+  `_f5_reach` substituted its documented gapless default `0.0` and returned
+  true unconditionally: any such run with `henrici_eta > 1` was labelled
+  A10/F5 and the hypothesis matrix reported F5 as `SUPPORTED`, on a
+  radius-to-gap ratio that was never measurable — only the closing verdict was
+  floored. `gap` is now a REQUIRED key of that condition and `_f5_reach`
+  indexes it, so the ladder cannot fire the rung and the matrix reports
+  UNEVALUABLE with `gap` in `missing`. A gap that really was MEASURED as `0.0`
+  is present in the evidence and still takes the gapless branch, so the
+  documented #101 blind spot is unchanged rather than quietly closed.
+- **The fail-closed stability reports were the only ones that could not be
+  written (PR #127, round-18 external review).** `build_stability_report`
+  emitted `D1_gap`, `D3_oscillating_gap` and `D9_petermann_max` as bare floats,
+  and `dump_stability_report` calls `json.dumps(..., allow_nan=False)` — so
+  exactly the runs where the certificate withholds D1/D3 or the eigenvector
+  gate withholds D9 raised `ValueError` instead of producing the audit
+  artefact that records the withholding. Non-finite diagnostics are now
+  encoded as `{"value": null, "claim_status": "unavailable", "__nonfinite__":
+  "nan"|"inf"|"-inf"}` — the module's own tagged shape plus the token
+  `liouscope.io.export` already uses, so an infinity (a measurement) stays
+  distinguishable from a NaN (the absence of one). Finite values remain bare
+  floats, so existing consumers are unaffected.
+- **A finite positive gap can still have no representable relaxation window
+  (PR #127, round-18 external review).** `default_relaxation_grid` computed
+  `t_max = horizon / gap` after its finiteness gate; for any positive `gap <
+  horizon / float64.max` (measured: `5.56e-309` at the default horizon) that
+  division overflows and `np.linspace(0.0, inf, n)` yields `[nan, inf, inf,
+  ...]`. The grid was returned verbatim when `fast_rate` was absent or
+  unusable, and the two-scale post-condition degrades to the same invalid
+  `uniform`, so `compute_relaxation_layer` fed `inf`/`nan` times into `expm`
+  and the fits. The derived window is now guarded and the case joins the
+  documented absolute-window fallback with a `RuntimeWarning`; a representable
+  window is untouched.
+- **The fitted CAR(1) rate was missing from the AICc parameter count (PR #127,
+  round-18 external review).** On a non-uniform grid `theta` is estimated
+  separately for every candidate model and enters that model's maximised
+  likelihood through the whitening, but `_fit_with_model` passed only
+  `p0.size` to `aicc`. The small-sample correction `2k(k+1)/(N_eff-k-1)` is
+  nonlinear in `k`, so the omission is not a constant offset: it
+  under-penalises M2/M3b relative to M0/M1 when `N_eff` is small and can move
+  the selected relaxation model and the reported A-class. `k` now includes the
+  nuisance parameter whenever a finite `theta` was actually fitted. The
+  discrete `rho` of the uniform path is deliberately left uncounted — that is
+  the historical convention, it is self-consistent within one comparison
+  (uniformity is a property of the grid), and changing it would re-rank every
+  existing result.
+- **D3, D4 and `has_complex_pairs` were published from the spectrum for which
+  D1 had just been withheld (PR #127, round-17 review, fifth finding).** Where
+  the zero-mode certificate is applicable but not resolved, the spectral layer
+  warns that "D1/D3/D4 are NOT reliable for this system" and replaces D1 with
+  NaN — and then returned `oscillating_gap` (D3), `spectral_spread` (D4) and
+  `has_complex_pairs` as finite values read off that same candidate spectrum.
+  Measured on the issue-#113 stiff fixture (`fast = 1e8`, eight ambiguous
+  in-band modes): `D3 = 0.0`, `D4 = 5.0e7`, `has_complex_pairs = False`.
+  None of the three is a neutral answer. `0.0` is the strongest "no
+  oscillatory separation" verdict D3 can emit, and `False` asserts the
+  *absence* of the oscillation that may be the very reason the spectrum is
+  unresolved — `zero_tol` excludes exactly the ambiguous in-band mode from
+  that test. Withholding D1 alone was not a partial fix but an inconsistent
+  one: it taught consumers that the layer withholds what it cannot stand
+  behind, which made the surviving finite values *more* credible, not less.
+
+  D3 and D4 are now NaN and `has_complex_pairs` is `None` under the same
+  `applicable and not resolved` predicate D1 uses, so the layer withholds on
+  one condition rather than on two. `SpectralResult.has_complex_pairs` is
+  therefore `bool | None`; `_gather_evidence` maps `None` onto the evidence
+  dict's NaN sentinel, which `_strip_unavailable` removes, so the A8
+  oscillatory-transient rung reports UNEVALUABLE rather than NOT_SUPPORTED.
+  D2/D2b are untouched: they are computed from the operator and the steady
+  state, not from the candidate spectrum. Four mutations (one per guard line)
+  are proven to discriminate.
 - **The workflow hardening gate was blind to the commonest way to write a step
   (PR #129).** `.github/scripts/check_workflow_hardening.py` enforces the
   SHA-pinning rule of AGENTS.md section 4 on every workflow, and nothing
@@ -50,6 +177,70 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   not for want of findings. (`annotations` is set to `false` alongside it; the
   action refuses to start with both enabled.)
 
+- **The zero-mode certificate accepted its premise on a coarser scale than its
+  conclusion (PR #127 review).** `certified_eigvals` / `certified_eig` assert
+  that `0` is an *exact* eigenvalue, which follows from exact trace
+  preservation -- but applicability was granted whenever the trace defect
+  stayed below `1e-10 * ||L||_F`, six orders of magnitude above the backward
+  error the conclusion is stated on. A generator whose defect fell in that
+  band (measured: an amplitude-damped qubit plus `1e-11 * I`, defect `1.4e-11`
+  against the old cutoff `7.9e-11`) has its smallest eigenvalue at exactly
+  `1e-11` against a certificate bound of `1.6e-13`: every repair route
+  "failed", the spectral layer warned about an eigensolve that was in fact
+  correct, and the classifier was floored to `UNDEFINED`. The cutoff is now
+  derived rather than tuned -- with `u = vec(I)/sqrt(d)` and `r^H = u^H L` the
+  matrix `L - u r^H` has an exact zero mode and lies at spectral distance
+  `tp_defect / sqrt(d)` from `L`, so `tp_defect <= sqrt(d) * bound` is what the
+  claim can carry. Headroom measured, not assumed: across 205 healthy GKSL
+  generators (the five canonical systems, 160 random ones spanning 16 orders of
+  rate magnitude at `d = 2..5`, 40 stiff four-level jump networks) the largest
+  defect is `0.44 * eps * ||L||_F`. The rule now lives in one helper used by
+  both entry points; it was duplicated, and one-sided repairs of that pair are
+  a defect this repository has shipped twice.
+
+- **D1 was reported from a spectrum the certificate had just declared unusable
+  (PR #127 review).** When `applicable and not certified`, `compute_spectral_layer`
+  warned that D1/D3/D4 are unreliable and then computed D1 anyway. That number
+  did not stay in the report: `diagnose` forwards D1 to
+  `default_relaxation_grid`, so an eigenvalue of a failed solve set the
+  relaxation window and therefore every fitted rate, while only the closing
+  verdict was floored. D1 is now NaN there, for the same reasons as in the
+  ambiguous case -- not `0.0`, which means "gapless" and fires the F5 reach
+  leg, and not the surviving mode, which is a fast one. The other five
+  certificate consumers (`mpemba`, the Petermann factors, D11, and both
+  `_zhou` paths) already withheld on `applicable and not resolved`; the
+  spectral layer was the only site that warned and measured anyway.
+
+- **`residual_model` reported the whitening that should have happened
+  (PR #127 review).** The field was derived from the grid geometry alone, so a
+  non-uniform grid always exported `"car1"`. `fit_gls_ar1` falls back to the
+  discrete AR(1) treatment whenever `estimate_car1_theta` returns NaN --
+  degenerate residuals, e.g. an exactly stationary trajectory with
+  `rho_initial == rho_steady_state` -- and individual fits of one hierarchy can
+  differ from one another, which a single geometry-derived label cannot express
+  at all. It is now read off the fits, with `car1_fallback_ar1`, `car1_mixed`
+  and `car1_unavailable` for the states that were previously reported as plain
+  `"car1"`.
+
+- **The grid-relative Prony fallback seed was a regression on the two-scale
+  grid (PR #127 review).** `prony_seed` derived both `beta` and `omega` from
+  the total time span on any non-uniform grid, i.e. from the slow gap scale --
+  although `default_relaxation_grid` carries a uniform fine head for exactly
+  the purpose of resolving the fast dynamics. Measured on
+  `default_relaxation_grid(1e-4, fast_rate=1)` (80 points, uniform head of 41
+  at `dt = 0.25`, span `1e5`): over 60 random exact curves with `beta` in
+  `[0.05, 2]` and `omega` in `[0.1, 10]` the span seed drove the M3b fit onto a
+  spurious solution twice (true `omega = 1.68` reported as `0.037`) where the
+  historical absolute `(1, 1)` seed recovered all 60; on a slower family
+  (`beta`, `omega` in `[1e-4, 1e-1]`) the span seed failed 41 of 60. The seed
+  is now estimated by Prony on the longest uniform *prefix*, where the method
+  is valid by construction: 0 of 60 in both families. The grid-relative
+  fallback stands where no prefix is long enough for the Hankel system, so the
+  short non-uniform grids keep their documented behaviour. This corrects an
+  earlier report of mine on PR #127 which stated that both seeds were unusable
+  on this grid and that the change was therefore not a regression; the external
+  reviewer's counter-example holds as a class, and the claim was too broad.
+
 ### Added
 - **Tests for the hardening gate itself (PR #129).** It had none. Each unsafe
   workflow is asserted next to a positive control that must still pass --
@@ -65,8 +256,574 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `.github/workflows/zizmor.yml` claiming the step "GATET die CI (rot = blockt
   merge)" is factually wrong. Making it required is the right follow-up, but
   only after this fix lands -- otherwise a blind gate becomes mandatory.
+- **The multiscale disclosure is now a repair (PR #115, follow-up).** The
+  disclosure below rested on a stated impossibility: that a non-uniform grid
+  cannot be used because the GLS layer "whitens with a single AR(1)
+  coefficient, which presumes a constant sample interval". That premise is
+  false. It describes the *discrete* parametrisation, not the noise process:
+  the stationary continuous-time analogue (Ornstein–Uhlenbeck, equivalently
+  CAR(1)) has `Corr(t, t+d) = exp(−θ·d)`, so on an arbitrary grid one whitens
+  with the per-step `a_k = exp(−θ·dt_k)` and rescales by `sqrt(1 − a_k²)` to
+  keep the result homoskedastic. Measured on a two-scale grid with exact OU
+  noise, the median `|lag-1 autocorrelation|` of the whitened residuals is
+  `0.374` under one constant `ρ` against `0.073` under the per-step coefficient;
+  on a uniform grid both give `0.073`.
+
+  Consequences, carried through the whole chain rather than only the grid call:
+
+  - **New module `liouscope.fitting.car1`** — grid classification, the CAR(1)
+    θ estimator (profiled conditional MLE), the whitening and its log-Jacobian,
+    the exact effective sample size `n² / Σ_jk exp(−θ|t_j − t_k|)`, and an
+    exact-transition resampler.
+  - **`default_relaxation_grid(gap, *, fast_rate=...)`** builds a two-scale
+    window — half the points across `[0, horizon/fast_rate]`, the rest out to
+    `horizon/gap` — but **only** when the uniform grid cannot resolve the fast
+    mode. Below that threshold the uniform grid is returned bit-for-bit, so no
+    system that was already well sampled changes at all. `fast_rate` comes from
+    the spectrum (`fastest_decay_rate`, `max(−Re λ)`) and is fail-closed: no
+    usable rate means the uniform window plus its warning, never a guess.
+  - **`fit_gls_ar1` switches on the grid**, not on the data. `GLSFitOutput`
+    gains `theta_car1`, which also disambiguates `sigma` (innovation sd on the
+    AR(1) path, stationary sd on the CAR(1) one). The parametric bootstrap
+    resamples under whichever model the fit used; feeding CAR(1) parameters to
+    the AR(1) resampler was measured to shrink the interval to `0.46` of an
+    independent Monte-Carlo spread, against `0.80` for the correct one.
+  - **`N_eff` on a non-uniform grid** comes from the CAR(1) form rather than
+    Geyer's lag-indexed IPS estimator, which has no fixed time separation to
+    sum over there. Against the closed-form ESS on a uniform grid, where both
+    are valid, the CAR(1) route sits within `0.97–1.19` across `ρ ∈ [0, 0.99]`
+    while Geyer runs to `3.93×` optimistic at `ρ = 0.99`. The uniform path
+    nevertheless keeps Geyer: switching it would move every existing anchor and
+    is a separate decision.
+  - **`samples_per_fast_efolding` is now the minimum over ALL decay modes**,
+    and counts only intervals that begin while the mode still has amplitude.
+    The old form read `t[1] − t[0]`, which on a fine-then-coarse grid reports
+    the fine step and would wave through a mode lost in the coarse tail — a case
+    the new default grid creates rather than merely permits. On uniform and
+    late-starting grids the value is unchanged.
+  - `RelaxationResult` gains `residual_model` (`"ar1"` / `"car1"`) and
+    `FitResult` gains `residual_theta_car1`; `t_grid_source` gains
+    `"gap_scaled_multiscale"`. All additive and defaulted.
+
+  Measured end to end on two independent damped qubits with rates `1e-6` and
+  `1`: the AICc winner M2 now recovers the fast rate as `1.10` (true `1.0`)
+  where the uniform window reported `2.17e-05` for it — a confident-looking fit
+  of a component that was never sampled — and `beta_D_linear` lands `0.021`
+  relative from the certified gap against `0.58` before (and `3.5e4` for the
+  legacy absolute window).
+
+  **What is NOT fixed.** The two segments resolve the fastest and the slowest
+  mode; an intermediate timescale can still fall between the coarse late
+  samples, so `UnderResolvedTransientWarning` remains — measured `0.0019`
+  samples per e-folding for the middle mode of a `1e-6 / 1e-3 / 1` system,
+  where it correctly fires and names that mode. The AR(1) small-sample bias
+  correction is also not carried over to the CAR(1) path: anchoring it at any
+  single step of a multi-decade grid was measured to pin the estimate at a
+  constant (`1.7158e-05` for every input tested, including true θ of `1e-4`,
+  `1e-2`, `1` and `10`), so it is disclosed rather than applied.
+
+- **Multiscale disclosure + stored time grid (PR #115 review round).** Two
+  findings on the relaxation-window change below.
+
+  *Unsampled fast modes are now disclosed, not silently fitted.* A uniform
+  window scaled to `1/Δ` cannot also resolve a much faster mode: the window must
+  reach `~1/Δ` to see the slowest mode relax, while the step must stay under
+  `~1/r_max` to see the fastest at all, and 80 uniform samples span only about
+  an eightfold separation between them. Verified on two independent damped
+  qubits with rates `1e-6` and `1`: the fast mode decays to exactly `0.0` within
+  one step. This is **not** a regression introduced by the new window — on that
+  same system the previous absolute window put `beta_D_linear` `3.5e4` relative
+  away from the true gap, against `0.58` for the gap-scaled one — but fitting a
+  component that was never sampled is exactly what the project's fail-loud
+  convention exists to prevent. `compute_relaxation_layer` now measures
+  `samples_per_fast_efolding = 1 / (r_max · blind)` and emits an
+  `UnderResolvedTransientWarning` below `MIN_SAMPLES_PER_FAST_EFOLD = 1`,
+  recording the value on the result. `blind = max(dt, t[0])` is the largest
+  interval the grid leaves unsampled, not merely the step: `diagnose` permits
+  any non-negative start, and a late-starting grid leaves a lead-in that no
+  step size compensates for. On `linspace(100, 101, 101)` a rate-1 mode was
+  reported at "100 samples per fast e-folding" with no warning, while its
+  amplitude at the first sample is `e^-100`, the entire relative-entropy curve
+  measures identically zero, and the fit still returned `beta_D = 1.0`. The
+  term is exactly `dt` for any grid starting at zero, so the default path is
+  unchanged. It is a disclosure, not a repair: widening
+  the window is strictly worse for the reported quantity, and a log-spaced grid
+  would invalidate the AR(1) whitening. The measure is itself rate-unit
+  invariant (pinned by test), so it cannot fire on one choice of time unit and
+  not another. V5 (Jaynes-Cummings near the EP, measured `r_max/Δ = 396`)
+  legitimately trips it; those tests acknowledge the disclosure by message
+  filter with the reason stated inline.
+
+  *The report stores the time grid itself, not only its span.* `t_grid_span`
+  alone does not identify the sampling — `[0, 1, 10]` and `[0, 9, 10]` share a
+  span of 10 while describing materially different trajectories — and the
+  report already serialised three 80-point curves whose abscissa was missing, so
+  a consumer could not re-fit, re-plot or audit the rates it reports.
+  `RelaxationResult.t_grid` now carries a snapshot (a copy, so later mutation of
+  the caller's array cannot rewrite the record). Additive and defaulted; no
+  manifest-schema change.
+- **The DEFAULT relaxation time grid is scaled to the system's own relaxation
+  time. CHANGES NUMERICAL RESULTS** for every `diagnose()` call that does not
+  pass an explicit `t_grid` and whose spectral gap is not `Δ = 1`. The
+  relaxation layer fits every rate it reports on a time grid, and a decay rate
+  carries dimension `1/time`, so the absolute default `linspace(0.0, 10.0, 80)`
+  was implicitly a claim about the caller's unit of time. Under the pure
+  rescale `L → cL` (identical physics, different unit of time) on an
+  amplitude-damped qubit this was measured as:
+
+  | `c` | `beta_D / c` | `beta_D_linear / c` | AICc winner | A-class |
+  |---|---|---|---|---|
+  | 1e+02 | 1.025 | 0.254 | M0 | A10 |
+  | 1e+00 | 1.029 | 0.482 | M2 | A5 |
+  | 1e-02 | 1.085 | 0.403 | M0 | A1 |
+  | 1e-04 | 1.167 | 0.965 | M0 | A12 |
+  | 1e-06 | 1.251 | **109.99** | M0 | A12 |
+
+  — a 22 % drift in `beta_D`, a factor ~430 error in the D17 linear rate at
+  `c = 1e-6`, a model-selection flip between M0 and M2, and four different
+  mechanism classes for one system. Since physical rates are MHz or GHz rather
+  than `O(1)`, this was the common regime, not a corner case.
+
+  The default window is now `[0, RELAXATION_HORIZON / Δ]` at
+  `RELAXATION_N_POINTS = 80` uniform samples (`liouscope.diagnostics.relaxation
+  .default_relaxation_grid`), i.e. a fixed number of e-foldings of the slowest
+  mode — the only choice carried along by the rescaling. Measured after the
+  fix: `beta_D / c` and `beta_D_linear / c` invariant to ≤1.2e-3 relative over
+  `c ∈ [1e-6, 1e6]` (twelve decades) on both an amplitude-damped and a driven
+  dephasing qubit, with a stable AICc winner; the A-class is stable over
+  `c ∈ [1e-6, 1]`. The grid is deliberately uniform: the GLS layer whitens with
+  a single AR(1) coefficient, which presumes a constant sample interval, so the
+  transient layer's two-scale grid must not be reused here.
+
+  *Backward compatibility:* `RELAXATION_HORIZON = 10.0` is chosen so the grid is
+  **bit-identical** to the legacy `linspace(0.0, 10.0, 80)` at `Δ = 1`, and
+  `Δ ≤ 0` (no resolved decay scale) still returns the historical absolute
+  window. `compute_relaxation_layer` gains an optional `gap=` argument;
+  `diagnose()` forwards the D1 gap it has already computed, and a direct caller
+  who omits it gets the same value recomputed through the same `liouvillian_gap`
+  routine, so the two entry points cannot drift apart. An explicit `t_grid`
+  remains authoritative.
+
+  *Audit trail:* `RelaxationResult` gains two additive, defaulted fields —
+  `t_grid_source` (`"caller"` / `"gap_scaled"` / `"legacy_fixed"`) and
+  `t_grid_span` — so which window produced a given set of rates is recorded on
+  the report rather than inferred. No manifest-schema change (the run-manifest
+  contract is untouched); older serialised reports remain valid.
+
+  *Scope:* this closes the time-grid unit dependence only. Two independent ones
+  remain open and are neither fixed nor asserted away here — the least-squares
+  solver's own convergence controls (#111) and the rate-dimensioned
+  `henrici_eta` / `resolvent_peak` that the classifier still consumes (#101).
+  The latter is now pinned as a measured boundary: `henrici_eta` equals `c`
+  exactly on the test system and flips A5 → A10 between `c = 1` and `c = 3`
+  independently of the grid.
+- **Prony fallback seeds are grid-relative (round-16 review; the #108 class
+  of defect). CHANGES NUMERICAL RESULTS** on grids far from unit span where
+  the Prony estimate falls back (non-uniform sampling, short signals,
+  degenerate data). The fallback seeded `(beta, omega) = (1, 1)` in absolute
+  rate units, so on a valid non-uniform grid spanning `t = 1e7` the M3b fit
+  started seven orders of magnitude off and least-squares "converged"
+  (`success=True`) onto the seed itself — measured `[A, beta, omega] ≈
+  [0.006, 1, 1]` for true values `5e-8` / `2e-6` — corrupting the fitted
+  rate and suppressing the M3b/A8 hypothesis purely because of the rate
+  unit. Fallback rates are now `5.0 / t_span` and the success-path
+  positivity floors `5e-6 / t_span`, both reproducing the historical values
+  exactly at the canonical `t_span = 5` (the same convention as
+  `ALPHA_SEED_FLOOR_FRAC` / `M3A_SLOPE_SEED_FRAC`); the M3b fit on the
+  measured non-uniform scenario is now unit-invariant across
+  `c ∈ [1e-6, 1e6]`.
+- **D24 uses the eigenvalue certificate when only the gap is missing
+  (round-16 review).** The recomputation branch required `certified_eig`
+  even when the caller supplied `petermann_factor` — but that partial path
+  consumes no eigenvectors, so a stiff network whose eigenvalue certificate
+  resolves a usable gap (measured `3.32e-6`) while only the round-15
+  eigenvector gate fails returned an unnecessary unconverged record. The
+  certificate now matches what is consumed: `certified_eigvals` when only
+  the gap is recomputed, the stricter `certified_eig` when the Petermann
+  factor is.
+- **D11 is decoupled from the D9 vector gate (round-16 review).** When D9
+  is withheld (round-15), the NaN sentinel array flowed into
+  `bohr_arithmetic_progression`, which silently filtered it and reported
+  the default length `1` as a measured D11 value. D11 consumes only
+  eigenvalues, and the eigenvalue certificate frequently still resolves in
+  exactly that situation, so its input is now recomputed from the certified
+  spectrum; only when the eigenvalues themselves are unresolved does
+  `bohr_ap_length` become NaN (the field is now float-typed with NaN as the
+  documented unavailable sentinel).
+- **Release-note correction (round-16 review, documentation only):** the
+  `atol=` opt-in for the legacy absolute Hermiticity gate exists on the
+  standalone `is_hermitian` predicate only; the builders never accepted it
+  and their relative gate cannot be bypassed. The #109 entry below now says
+  so explicitly instead of advertising an unavailable builder argument.
+- **certified_eig validates eigenVECTOR residuals before certifying
+  (round-15 review). CHANGES NUMERICAL RESULTS** on stiff generators.
+  The certificate accepted a decomposition solely because one eigenvalue was
+  close to zero — but D19 and the Petermann factors consume the
+  eigen*vectors*, and a small `|lambda|` does not vouch for them. Measured
+  on a valid stiff classical network: `certified=True, resolved=True` while
+  the slow mode's LEFT eigenvector had residual three orders of magnitude
+  beyond the certificate bound, i.e. not an eigenvector in any usable sense
+  (the right vectors were fine). Acceptance is now per mode and relative —
+  `r_j <= max(VECTOR_RESIDUAL_REL_MAX * |lambda_j|, bound)` with the larger
+  of the unit-normalised left/right residuals — because `r/|lambda|` is the
+  first-order relative error scale of anything computed from the pair, and
+  a single operator-scale cutoff does not separate the measured populations
+  (healthy `<= 2.1e-10`, legitimate `dgeev-real` repairs a few percent,
+  corrupt decompositions 22%–2900%; the calibration is documented at the
+  constant). A candidate failing the gate does not end the ladder; when no
+  route passes, the certificate reports `certified=False` with the
+  offending vector residual, and every vector consumer (D19, D9, D24)
+  withholds. `certified_eigvals` is deliberately untouched by this gate:
+  the eigenvalues of such a decomposition remain usable for D1/D3/D4.
+- **The repair ladder continues past ambiguous candidates (round-15
+  review). CHANGES NUMERICAL RESULTS** on stiff generators, in the
+  fail-open-to-correct direction. A candidate whose in-band spectrum
+  contained an ambiguous mode (#113) previously ended the ladder
+  immediately with `resolved=False` — withholding D1 and flooring the
+  verdict — even when the very next route resolves the generator cleanly
+  (measured: zgeev certified with one ambiguous mode at `6.3e-7` while
+  dgeev-real returns a `2.1e-15` stationary mode with none). Both ladders
+  now accept only ambiguity-free candidates and fall back to the best
+  ambiguous candidate (fewest ambiguous modes) only when every route stays
+  ambiguous. The healthy path is unchanged and still lazy.
+- **Petermann factors (D9) consume the certified eigendecomposition
+  (round-14 review). CHANGES NUMERICAL RESULTS** on stiff generators.
+  `petermann_factors` recomputed its own raw `zgeev` decomposition, so on a
+  stiff trace-preserving generator it consumed exactly the solver failure
+  the spectral and Mpemba layers repair (#112) — and no zero-mode cutoff can
+  restore an eigenvalue that is *absent* from the raw spectrum. Measured on
+  the stiff four-level fixture: 16 "non-zero" modes with
+  `petermann_max ≈ 622.7` against the certified 15 modes with `≈ 2.0`,
+  corrupting D9 and the D11 input while the spectral certificate looked
+  resolved — a possible false F1 signal no verdict floor would catch. The
+  function now uses `certified_eig`; when the certificate is applicable but
+  unresolved (#112/#113) both returned arrays are the NaN unavailable
+  sentinel, so `petermann_max` becomes NaN and the F1 rung reads UNEVALUABLE
+  instead of the empty-array default `K_max = 1.0`, which would assert
+  perfect normality.
+- **Radius fallback when the zero-mode certificate is inapplicable
+  (round-14 review).** Without established trace preservation no zero
+  eigenvalue is guaranteed, so the operator-norm certificate bound is not a
+  valid zero-mode cutoff: on a non-trace-preserving, strongly non-normal
+  input the bound (measured `2.2e3`) exceeded the whole spectrum
+  `{-1,-2,-3,-4}` and the round-13 filters discarded every eigenvalue —
+  D1 = `0.0` (gapless, firing the F5 reach leg) and an unconverged D24 for a
+  well-separated spectrum with true gap `1`. All round-13 call sites
+  (spectral layer, Mpemba layer, D9, D24) now use the certificate bound only
+  when `certificate.applicable`, and fall back to the radius-based #108
+  tolerance otherwise.
+- **One zero-mode scale for certification and filtering (round-13 review of
+  the #112 machinery). CHANGES NUMERICAL RESULTS** on strongly non-normal
+  generators. The `ZeroModeCertificate` accepts a stationary residual up to
+  the true eigensolver backward error `rtol * eps * ||L||_2`, but the
+  downstream zero-mode filters (`spectral_zero_tolerance`, #108) only see the
+  spectrum and used the spectral radius `max|lambda|` as a proxy. For a
+  strongly non-normal trace-preserving operator `||L||_2` exceeds the radius
+  by orders of magnitude (measured: `3.9e3` on a 4x4 example), so a
+  certified-*resolved* zero mode with residual between the two thresholds
+  survived the radius filter as a spurious "genuine" mode: D1 reported
+  `~1e-12` — occasionally **negative**, impossible for a GKSL generator —
+  instead of the true gap `1`, and D9 reported four eigenmodes where three
+  exist. Every consumer that holds the operator now filters with the
+  certificate's own bound (new shared helper
+  `liouscope.numerics.linalg.operator_zero_tolerance`): the spectral layer
+  (D1/D3/D4, `has_complex_pairs`), the Mpemba layer (slowest mode, mode
+  expansion), `petermann_factors` (D9) and the D24 predictor. Genuine slow
+  modes inside the coarser band are not silently swallowed — the #113
+  ambiguity split reports them as `resolved=False` and floors the verdict.
+  The radius-based default of `spectral_zero_tolerance` is unchanged for
+  spectrum-only call sites, and a caller-supplied `atol` still wins.
+- **D24 recomputation is routed through the certified eigensolve (round-13
+  review). CHANGES NUMERICAL RESULTS** on stiff generators. When
+  `compute_zhou_predictor` recomputes an omitted `gap`/`petermann_factor` it
+  filtered the raw `zgeev` spectrum, retaining exactly the solver failure the
+  spectral and Mpemba layers repair (#112): on the stiff four-level fixture
+  D24 reported `gap = 7.28e-6` where the certified solve recovers the
+  physical `1.074e-5`, shifting the whole predicted mixing-time window by
+  ~30%. The recomputation now uses `certified_eig` and the certificate's
+  zero-mode bound; when the certificate is applicable but unresolved
+  (#112/#113) the predictor returns an honest unconverged record (infinite
+  bounds, NaN gap/K) instead of bounds built on a demonstrably wrong
+  spectrum. Caller-supplied values keep bypassing the eigensolve entirely.
+- **Hypothesis matrix: a conclusively refuted partial rung is NOT_SUPPORTED,
+  not UNEVALUABLE (round-13 review; #102 machinery).** The rungs are
+  conjunctions, so one evaluated-false condition refutes a rung no matter
+  what a missing sibling measurement would have said (`kreiss = 1` refutes F1
+  with or without `petermann_max`). Previously any missing required key
+  forced UNEVALUABLE, which also propagated into an UNEVALUABLE A12 fallback
+  while the decision ladder deterministically returned A12 — the matrix
+  contradicting the decision it documents. `UNEVALUABLE` is now reserved for
+  the genuinely open case: no evaluated condition is false and the missing
+  evidence could still flip the rung to supported. Absent keys stay listed in
+  `missing` for the audit trail either way; claim floors follow the status as
+  before (refuted → `NOT_EXCLUDED`, open → `UNDEFINED`).
+- **D1 refuses to report a gap it cannot resolve, instead of reporting a fast
+  mode (issue #113, PARTIAL). CHANGES NUMERICAL RESULTS** on very stiff
+  generators, where the previous value was wrong by orders of magnitude.
+  The #108 tolerance carries a safety factor of `ZERO_MODE_EPS_FACTOR = 1e3`
+  above the bare backward error `eps * ||L||`. Once the spectral spread grows
+  large enough, genuine slow modes fall *inside* that safety factor; the filter
+  discards them as "zero" and D1 reads off the next surviving mode — a **fast**
+  one. Measured on a four-level classical jump network: `5.0e7` reported for a
+  true gap of `1.07e-5`, i.e. wrong by twelve orders of magnitude and in the
+  fail-open direction.
+  `ZeroModeCertificate` now separates the two readings of an in-band mode: a
+  degenerate stationary manifold (conserved quantity / symmetry sector) puts
+  its extra zero modes at *machine zero* and is perfectly legal, whereas a
+  swallowed slow mode sits above `eps * ||L||`, inside the safety factor.
+  Only the latter (`ambiguous_count > 0`) marks the layer unresolved, and D1 is
+  then reported as **NaN** — deliberately not `0.0`, which asserts gaplessness
+  and fires the F5 reach leg, and deliberately not the fast mode.
+  `ZERO_MODE_AMBIGUITY_FACTOR = 30` is calibrated against a **measured**
+  distribution rather than chosen: across 83 healthy generators the largest
+  genuine in-band `|lambda| / (eps*||L||)` reaches `2.38` (median `0.39`),
+  while unresolved slow modes were measured at `4.87` and `4.87e2`. The two
+  populations overlap within about `2x`, so the split sits an order of
+  magnitude above the healthy maximum rather than between them: a false NaN
+  destroys a correct analysis, a missed marginal case only leaves the previous
+  behaviour. **Bounded reach, stated explicitly:** roughly one further decade
+  of spread is now fail-closed; beyond that the slow modes sink below the
+  backward error and the defect is undetectable by any magnitude test. Issue
+  #113 stays open for the extended-precision / Krylov route.
+- **Spectral layer: the computed spectrum is now checked against an exact
+  structural fact before D1/D3/D4 are read off it (issue #112). CHANGES
+  NUMERICAL RESULTS** on stiff generators.
+  Every trace-preserving generator satisfies `vec(I)^H L = 0` *exactly*, so `0`
+  is an exact eigenvalue and a correct eigensolve must return some
+  `|lambda| <= ZERO_MODE_EPS_FACTOR * eps * ||L||`. A spectrum without one is
+  proof that the solve failed — a theorem, not a tuned threshold.
+  This is a **different defect from #108**: #108 fixed the zero-mode *filter*,
+  while here the *spectrum being filtered* is wrong, so no separation tolerance
+  can repair it (asserted in `tests/test_spectral_certificate.py`: the relative
+  and the legacy absolute filter return byte-identical wrong gaps).
+  Mechanism: LAPACK `zgeev` deflates a subdiagonal when the Ahues-Tisseur test
+  `|h[i,i-1] h[i-1,i]| <= eps |h[i,i]| |h[i-1,i-1] - h[i,i]|` passes. On a stiff
+  generator the *large* diagonal entries inflate that bound, so the entire slow
+  block deflates to its own diagonal. Measured on a four-level classical jump
+  network (rate spread ~1e10, exactly trace preserving): the exact zero mode
+  vanished from the returned spectrum, a spurious mode appeared in its place,
+  and D1 reported `7.28e-6` for a generator whose true gap is `1.074e-5`
+  (independently confirmed against the analytically decoupled population and
+  coherence blocks, and against a matrix-exponential decay oracle).
+  Note this failure is **invisible to conditioning**: the per-eigenvalue
+  condition numbers of the wrong spectrum are 1–25, i.e. the solver reports the
+  wrong answer as well conditioned, and explicit balancing does not fix it
+  (both measured). It is also **not** repairable by deflating `vec(I)` with a
+  dense similarity: that destroys the block structure which made the slow modes
+  computable in the first place, and was measured to make 12% of stiff systems
+  *worse*. What works is re-solving the same matrix by a route whose deflation
+  is not driven by the stiff diagonal.
+  `numerics.linalg.certified_eigvals()` therefore tries `zgeev`, then (when `L`
+  is real-valued) `dgeev`, then the complex Schur form, then a balanced
+  `zgeev`, and returns the **first spectrum satisfying the certificate**. The
+  incumbent result is kept byte-identically whenever it is already correct —
+  measured across 400 random four-level networks, stiff and well-conditioned
+  alike, `zgeev` was retained in 400/400 and no system's gap got worse.
+  If no route is certified, `compute_spectral_layer` emits a `RuntimeWarning`
+  and marks the layer unresolved rather than reporting a gap it cannot stand
+  behind. `SpectralResult.zero_mode_certificate` records the outcome
+  (report-only, additive field with a default — the run-manifest contract is
+  unchanged).
+- **Hermiticity validation is scale-relative: `H` is no longer accepted or
+  rejected on the basis of its units (issue #109).**
+  `is_hermitian` and both Liouvillian builders applied an **absolute**
+  `1e-9` tolerance to the Hamiltonian, which carries energy/rate dimension —
+  the same defect class as #108, in input validation rather than in a
+  diagnostic. Measured in both directions:
+  - **fail-open (the serious direction)** — a genuinely non-Hermitian `H` with
+    a *relative* defect of `1e-6` passed validation once `||H|| <~ 1e-3`,
+    producing a generator that is not GKSL at all, after which every downstream
+    diagnostic describes dynamics that are not a quantum channel. The sparse
+    builder shared the defect, so both paths accepted it.
+  - **false rejection** — an exactly Hermitian `H` reconstructed by a unitary
+    similarity carries round-off `~eps*||H||`, which exceeds `1e-9` once
+    `||H|| >~ 1e8`, so valid input was refused.
+  `EPS_HERMITICITY` is now read as a **relative** tolerance on `max|H|`, so at
+  unit scale — the regime of every existing fixture — the gate is unchanged;
+  only operators far from unit scale move. The legacy absolute gate remains
+  available as an explicit `atol=` opt-in **on the standalone `is_hermitian`
+  predicate only** (mirroring how #99 and #108 preserved their predecessors);
+  the builders `build_liouvillian` / `build_sparse_liouvillian` deliberately
+  expose no such override — their gate is always relative, and pre-validating
+  with the predicate does not bypass it. `is_density_matrix` keeps its
+  absolute reading: a density matrix is trace-normalised, so that reading is
+  already relative to a fixed scale and the rate-dimension argument does not
+  apply.
+- **Zero-mode separation is scale-relative: D1/D3/D4/D9/D16/D19/D20/D24 no
+  longer depend on the choice of rate unit, removing the ZERO-MODE-INDUCED
+  verdict flips (issue #108). CHANGES NUMERICAL RESULTS** for generators whose
+  spectral radius is far from unity.
+  This does **not** make the mechanism verdict unit-invariant in general: the
+  A10/F5 branch still gates on the rate-dimensioned `henrici_eta > 1.0`, so
+  rescaling can still cross that threshold. That remaining limitation is
+  tracked in #101 (slice C) and stated in the README; #108 removes a different,
+  independent source of unit dependence.
+  The filter deciding which modes are the steady state used an **absolute**
+  floor `|lambda| > 1e-10`, duplicated across five modules. A Liouvillian
+  carries rate dimension, so this broke in *both* directions under `L -> cL`:
+  - **small `c`** — every genuine mode fell below the floor, so D1 collapsed to
+    `0.0` (unconditionally firing the gapless F5 reach leg) and the D19
+    slowest-mode overlap collapsed to `0.0`, raising a **false A11/F4 Mpemba
+    candidate** on the highest-priority rung of the classifier. Measured
+    end-to-end on an amplitude-damped qubit with `rho_0 = |+><+|`: the verdict
+    moved from `A12/none NOT_EXCLUDED EXPLORATION` at `c = 1` to
+    `A11/F4 CANDIDATE CONFIRMATION` at `c = 1e-10` — a textbook system promoted
+    to a quantum-Mpemba candidate by a change of units alone. The issue-#68
+    non-triviality guard could not correct it, since it depends on the same
+    `_slowest_mode` helper.
+  - **large `c`** — the round-off zero mode (`~eps * ||L||`) rose *above* the
+    floor and was counted as genuine, yielding a **negative spectral gap**
+    (`-1.4e-6` at `c = 1e10` for a Rabi-driven damped qubit), which is
+    impossible for a GKSL generator by definition.
+  The correction is canonical and carries no free parameter: the new
+  `numerics.scale.spectral_zero_tolerance()` derives the threshold from the
+  spectrum itself as `ZERO_MODE_EPS_FACTOR * eps * max|lambda|` (spectral
+  radius — homogeneous of degree one and unitary-similarity invariant, like
+  `rate_scale`), with `eps` fixed at DOUBLE-precision machine epsilon: the
+  library's own dense solves are guaranteed double (below), so the storage
+  dtype of a spectrum says nothing about the precision it was computed in. A
+  spectrum from a genuinely single-precision external/GPU solver is the one
+  case needing a coarser threshold, is indistinguishable from a downcast
+  double result by inspection, and therefore belongs to the caller: the
+  eigenvalue-based diagnostics (D1/D3/D4/D16) expose the `rtol` multiplier
+  for exactly that, so such callers can widen the filter without reverting to
+  an absolute floor.
+  **All 21 anchor regressions and the full suite stay green**, but the change
+  is *not* confined to rescaled generators: at unit scale the threshold is
+  ~2.2e-13 rather than the historical 1e-10, so a mode between those two values
+  is now classified as genuine where it was previously discarded. That
+  direction is the intended improvement — it is what rescues metastable slow
+  modes — and no anchor system carries a mode in that band, which is why the
+  reference behaviour is unchanged.
+  Non-finite spectra now fail closed rather
+  than silently reporting "no non-zero modes" — including on the legacy path,
+  since a compatibility switch may restore the old *threshold* but must not
+  restore silent acceptance of corrupted solver output. The legacy absolute
+  floor remains available as an explicit `atol=` opt-in on every affected
+  function, mirroring how #99 preserved the pre-#97 steady-state tolerance.
+  **The double-precision solver contract is now enforced, not assumed:**
+  `eig_nonhermitian` documents "always LAPACK `zgeev`", but `scipy.linalg.eig`
+  dispatches by dtype and genuinely ran single-precision `cgeev` on a
+  `complex64` input (measured: ~30x the eigenvalue error of the double solve
+  on the same stored matrix; `numpy.linalg` by contrast always computes in
+  double and only casts the result back). Since every backward-error tolerance
+  above is calibrated against the double solve, all dense eigen/Schur
+  boundaries (`eig_nonhermitian`, the Mpemba layer, Petermann/Henrici, D24)
+  now promote to `complex128` before solving. Representation error already
+  present in caller-supplied single-precision data is the caller's data
+  quality and is neither masked nor "corrected". This supersedes the
+  storage-dtype-derived epsilon briefly present during review (it discarded
+  resolved metastable modes: a `complex64` two-channel generator with rates
+  `1.0`/`1e-4`, true gap `5e-5`, reported `5e-1`).
+  D1 deliberately does **not** clamp the gap at zero: after the scale-relative
+  filter a positive `Re(lambda)` is no longer round-off but a genuinely
+  unstable (non-GKSL) mode, and masking it would trade one silent failure for
+  another.
+  The threshold is a multiple of the eigensolver BACKWARD ERROR
+  (`ZERO_MODE_EPS_FACTOR * eps * max|lambda|`), not a fixed fraction of the
+  spectral radius. A fixed fraction would impose a dynamic-range ceiling and
+  discard the genuine slow modes of a METASTABLE generator (A5): with
+  `1e-10 * max|lambda|`, two damping channels at rates `1.0` and `1e-12` (true
+  gap `5e-13`) reported a gap of `5e-1`. Calibration measured across amplitude
+  damping, Rabi-driven damping, dephasing, a strongly non-normal near-defective
+  generator and a 64-dim 3-qubit chain, each at `c in {1, 1e6, 1e12}`: the
+  numerical zero mode never exceeded `1.94 * eps * max|lambda|`, so the default
+  factor keeps ~500x headroom while resolving genuine modes further down than
+  the pre-#108 absolute floor did at unit scale.
+  Pinned by `tests/test_zero_mode_scale.py` (tests over
+  `c in {1e-10 ... 1e12}`: dimensionless quantities invariant, rate-valued ones
+  scaling by `c`, genuine metastable slow modes preserved, no false Mpemba
+  candidate, no negative gap, and a discrimination test proving the `atol`
+  opt-in really restores the old defect). The suite also pins the **known
+  non-invariance** of the mechanism class (A10/F5 still gates on
+  rate-dimensioned `henrici_eta`, issue #101), so the limitation stays visible
+  instead of being mistaken for a passing invariance claim.
+- **Fit seed rate is grid-relative, not an absolute floor (issue #108 class,
+  fitting path). CHANGES NUMERICAL RESULTS** for fits on time grids far from
+  unit span.
+  `initial_guess_m0` floored the seeded decay rate at an absolute `1e-3`. A rate
+  is `1/time`, so on a grid spanning `t = 5e10` — exactly what a slow generator
+  in small rate units produces — the seed sat `1e7` above the true rate, in a
+  region where `exp(-alpha t)` has underflowed flat and the optimiser has no
+  gradient. The fit then returned **the floor itself** as the measured rate:
+  `beta_D == beta_D_linear == 1e-3` on a system whose true rate was `5e-11`,
+  silently corrupting D5/D17 while every spectral quantity looked healthy.
+  The floor is now a dimensionless decay depth over the fitted window
+  (`ALPHA_SEED_FLOOR_FRAC / t_span`, the rate that decays ~0.5 % across the
+  grid), which reproduces `1e-3` exactly at the `t_span = 5` used throughout
+  the suite — so seeds there, and the anchors, are unchanged. The
+  too-few-positive-samples fallback rate is likewise grid-relative
+  (~one e-folding across the window) instead of an absolute `1.0`.
+  Model evaluations are additionally bounded in magnitude: capping the exponent
+  bounds `exp`, but M3a multiplies it by `(A + B t)`, whose magnitude is
+  unbounded in the parameters, and least-squares then squares the product
+  inside its own normal equations — overflowing in SciPy's `trf` rather than in
+  this module.
+  Residual limitation, deliberately **not** claimed as fixed: at `c = 1e-10`
+  the least-squares convergence criteria stop tracking the rescaling, so fitted
+  rates are asserted invariant only over `c in [1e-6, 1e10]`. Tracked in its own
+  issue; non-dimensionalising the fit is the proper resolution.
+
+### Changed
+- **Import convention in `AGENTS.md` corrected to the codebase (issue #110,
+  documentation only, no code change).** The rule demanded absolute
+  intra-package imports; the package has never followed it — measured at 135
+  relative import statements across 39 of 53 modules and **0** absolute ones.
+  Relative intra-package imports are standard for a `src/` layout, so the
+  convention was corrected rather than ~30 modules rewritten. The divergence's
+  only effect was that automated reviewers kept flagging conforming code as a
+  violation (which is how it surfaced, during the PR #107 review).
 
 ### Added
+- **Hypothesis-wise evidence matrix + `support_score` + reachability gate
+  (issue #102, additive, `claim_status: pending`, no verdict change).**
+  - `ClassificationResult.hypothesis_matrix` reports one entry for **every**
+    hypothesis of the A1-A12 taxonomy: each decision rung, the A12 fallback,
+    and the schema-reserved A6/A7/A9. Each entry records `status`
+    (`SUPPORTED`/`NOT_SUPPORTED`/`UNEVALUABLE`/`RESERVED`), the `supporting`
+    conditions with the evidence values they read, the failing conditions as
+    `counterevidence`, `missing` required evidence keys, an explicit
+    fail-closed `claim_floor` and the per-class ordinal `support_score`.
+    Claim-floor rules: `RESERVED`/`UNEVALUABLE` → `UNDEFINED` (no rule / no
+    evidence — no claim); `NOT_SUPPORTED` → `NOT_EXCLUDED` (a threshold that
+    did not fire is absence of support, not proof of absence, issue #70 A5);
+    `SUPPORTED` → the verdict the hypothesis would receive were it the winner
+    (via the unchanged `_confidence` → `_pick_verdict_tier` → A11
+    maximally-mixed-floor pipeline), so the winner's floor equals the
+    reported verdict exactly (pinned by test).
+  - To keep the matrix from drifting away from the decision, the priority
+    chain is now defined **declaratively**: `_ladder_spec()` returns rungs of
+    atomic `_Condition` predicates (each naming the evidence keys it reads),
+    and `_hypothesis_ladder` (winner + shadow report) and
+    `hypothesis_evidence_matrix` are both derived from that one spec.
+    Behaviour-preserving: conditions, order, short-circuit evaluation and all
+    (class, family, verdict, tier, confidence) outputs are unchanged
+    (669-test baseline green, anchors untouched).
+  - **`ClassificationResult.support_score` (issue #102 "rename" option 1):**
+    the honestly-named twin of `confidence`, with documented, explicitly
+    NON-probabilistic ordinal semantics (`0.20 < 0.50 < 0.70 < 0.85 < 0.95`
+    ranks rule strength; no calibration evidence exists). `confidence` stays
+    as the legacy alias carrying the identical value (pinned equal by test);
+    a *calibrated* replacement remains gated on the preregistered validation
+    design in issue #102. Additive + defaulted (`NaN`) so serialised older
+    results stay valid.
+  - **Reachability/ontology gate:** new `liouscope.REACHABLE_A_CLASSES`
+    (taxonomy minus `RESERVED_A_CLASSES`, 9 classes) is the coverage
+    denominator for any "n of N classes" statement; reserved classes appear
+    in the matrix as `RESERVED` with a permanent `UNDEFINED` floor and are
+    excluded from claims. `RESERVED_A_CLASSES` is now exported too.
+  - The per-hypothesis numerical-uncertainty and perturbation-robustness
+    columns from the issue-#102 wishlist are deliberately **not faked**; they
+    remain open in the issue. No `MANIFEST_SCHEMA` bump: the run-manifest
+    contract is untouched (report fields are additive with defaults).
+  - Docs: `docs/explanation/layers-and-taxonomy.md` gains the matrix
+    vocabulary and the reachable-denominator rule; README documents
+    `hypothesis_matrix`; the tutorial prints `support_score`.
+  - Tests: `tests/test_hypothesis_matrix.py` (57 tests: taxonomy coverage,
+    SUPPORTED ⟺ ladder-fires metamorphic equivalence, claim-floor truth
+    table incl. non-finite `beta_D` and the A11 ensemble override, RFC-8259
+    serialisation with `inf` evidence, report-only non-influence, legacy
+    default contract).
 - **Branch-shadowing report: `ClassificationResult.triggered_hypotheses`
   (issue #102 slice "assess branch shadowing", `claim_status: pending`).** The
   classifier resolves by PRIORITY and returns exactly one dominant `a_class`,

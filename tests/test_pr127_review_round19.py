@@ -1,0 +1,250 @@
+"""PR #127 round-19 review findings (external).
+
+Three findings, all of the same family that PR #121 has been working through:
+a quantity whose verdict changes when nothing but the UNITS change, or a
+substitute value returned where a refusal was owed.
+
+* **prony.py** the whole-grid uniformity test used NumPy's default
+  ``atol=1e-8``, an ABSOLUTE time. On a nanosecond-scale two-scale grid it
+  called steps that differ by four orders of magnitude uniform, so the
+  two-scale prefix path never ran.
+* **relaxation.py** an unrepresentable gap-scaled window fell back to the
+  absolute legacy window and the fits ran on it anyway -- producing a full
+  set of finite rates, a class label and, worst of all, the provenance tag
+  ``gap_scaled`` for a grid that was nothing of the kind.
+* **lindblad.py / sparse/build.py** a Hamiltonian that is numerically a pure
+  gauge term has no traceless scale left after gauge fixing, so the relative
+  Hermiticity gate compared round-off against round-off and rejected the
+  exact Hamiltonian ``I``.
+
+Each test is paired with a mutation in the round-19 discrimination spec.
+"""
+
+from __future__ import annotations
+
+import numpy as np
+import pytest
+
+from liouscope.core.lindblad import build_liouvillian
+from liouscope.diagnostics.relaxation import (
+    UnrepresentableRelaxationWindowError,
+    default_relaxation_grid,
+)
+from liouscope.fitting.prony import _uniform_prefix_length, prony_seed
+from liouscope.sparse.build import build_sparse_liouvillian
+
+_SIGMA_MINUS = np.array([[0.0, 1.0], [0.0, 0.0]], dtype=complex)
+
+
+# ---------------------------------------------------------------------------
+# Finding 1 -- the Prony uniformity gate must be scale-relative.
+# ---------------------------------------------------------------------------
+
+
+def test_nanosecond_two_scale_grid_is_not_called_uniform() -> None:
+    """The reviewer's units: ``gap=1e8``, ``fast_rate=1e12``.
+
+    Measured on this grid the steps span a factor of 1.03e4 -- as
+    non-uniform as a grid gets -- and every one of them is below NumPy's
+    default absolute ``atol=1e-8``, which is why the default declared them
+    all equal.
+    """
+    grid = default_relaxation_grid(1.0e8, fast_rate=1.0e12)
+    steps = np.diff(grid)
+
+    # The fixture has to be a genuinely two-scale grid, or it proves nothing.
+    assert steps.max() / steps.min() > 1.0e3
+    assert steps.max() < 1.0e-8, "fixture no longer sits under the default atol"
+
+    # What the OLD comparison said about this grid. Kept as a live assertion
+    # so the test states WHY atol=0.0 is load-bearing rather than merely
+    # asserting the fixed behaviour.
+    assert np.allclose(steps, steps[0], rtol=1e-4), (
+        "NumPy's default atol no longer masks this grid; the finding's "
+        "premise has changed and this test needs rereading"
+    )
+
+    # THE ASSERTION THAT MEASURES THE PRODUCTION PATH. An earlier draft of
+    # this test asserted np.allclose(..., atol=0.0) directly and was reported
+    # BLIND by the mutation run: it exercised the comparison operator in the
+    # test file, not the branch in prony.py, so reverting the fix changed
+    # nothing it could see. Taking the prefix path has an observable
+    # signature -- prony_seed then IS prony_seed of the uniform head, bit for
+    # bit, because that is literally what the branch returns.
+    head = _uniform_prefix_length(grid)
+    assert 6 <= head < grid.size
+    y = np.exp(-1.0e8 * grid)
+    assert prony_seed(grid, y) == prony_seed(grid[:head], y[:head])
+
+
+def test_a_genuinely_uniform_grid_is_still_uniform() -> None:
+    """Negative control: ``atol=0.0`` must not reclassify honest grids.
+
+    A linspace carries ulp-level variation in its diffs; ``rtol=1e-4`` covers
+    that with eleven orders of magnitude to spare. If this ever turns red the
+    tightening has become a regression rather than a repair.
+    """
+    for span in (5.0, 1.0e-9, 1.0e9):
+        steps = np.diff(np.linspace(0.0, span, 80))
+        assert np.allclose(steps, steps[0], rtol=1e-4, atol=0.0)
+
+
+# ---------------------------------------------------------------------------
+# Finding 2 -- an unrepresentable window is withheld, not substituted.
+# ---------------------------------------------------------------------------
+
+
+def test_unrepresentable_window_is_withheld() -> None:
+    """``horizon/gap`` overflows: refuse rather than answer about [0, 10]."""
+    with pytest.raises(UnrepresentableRelaxationWindowError):
+        default_relaxation_grid(5.0e-308)
+
+
+def test_no_usable_decay_scale_keeps_its_documented_fallback() -> None:
+    """The other state, and it must stay distinguishable from the first.
+
+    "Not determinable" (no gap was resolved) and "determined but not
+    representable" are different answers to different questions. Collapsing
+    them is what round 18 did; this control pins that round 19 did not
+    collapse them the other way.
+    """
+    for gap in (0.0, -1.0, float("nan"), float("inf")):
+        grid = default_relaxation_grid(gap)
+        assert grid.size == 80
+        assert np.all(np.isfinite(grid))
+        assert grid.max() == pytest.approx(10.0)
+
+
+def test_a_representable_window_is_untouched() -> None:
+    """Positive control: ordinary rate units keep the gap-scaled window."""
+    grid = default_relaxation_grid(0.5)
+    assert np.all(np.isfinite(grid))
+    assert grid.max() == pytest.approx(20.0)
+
+
+# ---------------------------------------------------------------------------
+# Finding 3 -- round-off allowance near a pure-gauge Hamiltonian.
+# ---------------------------------------------------------------------------
+
+
+def _numerically_pure_gauge_hamiltonian() -> np.ndarray:
+    """``I`` plus one ulp of non-Hermitian round-off -- written down, not hoped for.
+
+    The regime under repair is a Hamiltonian that is numerically a pure gauge
+    term: ``I`` plus round-off, with the round-off all that survives gauge
+    fixing. An earlier draft OBTAINED that round-off by forming ``Q @ I @ Q^H``
+    for a numerical unitary ``Q`` and trusting the product to come out
+    asymmetric. It does not have to. Each entry of ``Q @ Q^H`` is a sum of
+    products whose mirror entry is the same sum conjugated, so whether the two
+    differ in the last bit depends on the order the BLAS accumulates them --
+    a property of the installed wheel, not of the mathematics.
+
+    Measured on ONE commit (df0a3e5), same OS image (ubuntu-latest), same
+    source, only the interpreter differing:
+
+        py3.10  defect 0.0   ->  red      py3.13  defect > 0  ->  green
+        py3.11  defect 0.0   ->  red      py3.14  defect 0.0  ->  red
+        py3.12  defect 0.0   ->  red      win/py3.14  defect 4.98e-17 -> green
+
+    Four red legs, one green, and the difference was round-off. Worse than the
+    red: on every leg with defect 0.0 the fixture had silently left the regime
+    it exists to exercise, and the guard in the test below is the only reason
+    that showed up as a failure rather than as a test that passed without
+    measuring anything.
+
+    The defect is therefore CONSTRUCTED. ``0.5 * eps`` is ``2**-53``, exactly
+    representable, so the stored bytes are identical on every platform, and one
+    ulp on one side of the diagonal is the same magnitude the similarity
+    transform was being asked to supply -- with none of the dependence on how
+    it is summed.
+    """
+    h = np.eye(2, dtype=complex)
+    # One ulp on ONE side of the diagonal. That asymmetry IS the defect, and
+    # it is a written-down constant rather than an accumulation artefact.
+    h[0, 1] = 0.5 * float(np.finfo(float).eps)
+    return h
+
+
+def test_pure_gauge_hamiltonian_is_accepted_by_both_builders() -> None:
+    """THE regression, and it must hold for the sparse twin as well.
+
+    The finding names the mirrored sparse calculation explicitly. Two
+    builders that disagree about whether the same Hamiltonian is valid is a
+    worse defect than either verdict on its own.
+    """
+    h = _numerically_pure_gauge_hamiltonian()
+
+    # The fixture must actually sit in the regime under repair.
+    defect = float(np.max(np.abs(h - h.conj().T)))
+    gauge = h - (np.trace(h).real / 2.0) * np.eye(2, dtype=complex)
+    gauge_scale = float(np.max(np.abs(gauge)))
+    # Not merely non-zero: the SAME non-zero everywhere. A defect that varies
+    # by platform is what made this test red on four of five CI legs while
+    # the code under test was identical -- see the fixture docstring.
+    assert defect == 0.5 * float(np.finfo(float).eps), (
+        f"fixture defect is platform-dependent again: {defect!r}"
+    )
+    assert defect > 0.0
+    assert defect > 1.0e-9 * gauge_scale, (
+        "fixture no longer trips the relative gate; the finding's premise "
+        "has changed"
+    )
+
+    # Caught broadly and asserted, not crashed into. The mutation run first
+    # reported this test as "ROT DURCH ABSTURZ:ValueError -- kein Beleg":
+    # taking the fix out makes the builder raise, the test dies at the
+    # exception rather than at an assertion, and a red that comes from an
+    # uncaught throw is not evidence about WHICH condition failed.
+    for label, builder in (
+        ("dense", build_liouvillian),
+        ("sparse", build_sparse_liouvillian),
+    ):
+        outcome: object
+        try:
+            outcome = builder(h, [_SIGMA_MINUS])
+        except Exception as exc:  # the TYPE is the measurement, so catch wide
+            outcome = exc
+        assert not isinstance(outcome, BaseException), (
+            f"{label} builder rejected the exact Hamiltonian I: "
+            f"{type(outcome).__name__}: {outcome}"
+        )
+        assert outcome.shape == (4, 4)  # type: ignore[union-attr]
+
+
+def test_a_real_hermiticity_defect_is_still_rejected() -> None:
+    """Negative control: the allowance must not become a blanket pass."""
+    h_bad = np.array([[1.0, 1.0e-3], [0.0, -1.0]], dtype=complex)
+    with pytest.raises(ValueError, match="Hermitian"):
+        build_liouvillian(h_bad, [_SIGMA_MINUS])
+    with pytest.raises(ValueError, match="Hermitian"):
+        build_sparse_liouvillian(h_bad, [_SIGMA_MINUS])
+
+
+def test_the_twelfth_round_gauge_hole_stays_closed() -> None:
+    """The allowance must not undo the reason gauge fixing exists.
+
+    Twelfth-round review: ``H + 1e9*I`` passed with the same non-Hermitian
+    part that ``H`` alone rejected. Measured here, the new allowance is
+    4.44e-7 and the defect is 1e-6, so the rejection survives -- but the
+    margin is a factor of two, which is exactly why this control is pinned
+    rather than argued.
+    """
+    h_hole = np.array([[1.0, 1.0e-6], [0.0, -1.0]], dtype=complex) + 1.0e9 * np.eye(2)
+    with pytest.raises(ValueError, match="Hermitian"):
+        build_liouvillian(h_hole, [_SIGMA_MINUS])
+    with pytest.raises(ValueError, match="Hermitian"):
+        build_sparse_liouvillian(h_hole, [_SIGMA_MINUS])
+
+
+def test_a_traceless_hamiltonian_keeps_a_bit_identical_verdict() -> None:
+    """For traceless ``H`` the allowance is exactly zero, by construction.
+
+    This is the statement that bounds the blast radius of the change: every
+    Hamiltonian without an identity component is gated exactly as before.
+    """
+    h = np.array([[1.0, 1.0e-8], [0.0, -1.0]], dtype=complex)
+    gauge_shift = float(np.trace(h).real) / 2.0
+    assert gauge_shift == 0.0
+    assert 2 * float(np.finfo(float).eps) * abs(gauge_shift) == 0.0
+    with pytest.raises(ValueError, match="Hermitian"):
+        build_liouvillian(h, [_SIGMA_MINUS])

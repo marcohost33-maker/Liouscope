@@ -24,7 +24,9 @@ from typing import Literal
 
 import numpy as np
 
+from .._consts import EPS_HERMITICITY
 from ..numerics.kronecker import unvec, vec
+from ..numerics.linalg import hermiticity_defect, overflow_safe_mean_real
 
 # Near-zero-trace threshold for the unit-2-norm null-vector candidate in
 # steady_state(). The candidate's trace is dimensionless (bounded by sqrt(d)),
@@ -98,12 +100,124 @@ def build_liouvillian(
     if not np.all(np.isfinite(H)):
         raise ValueError("H contains non-finite entries")
     d = H.shape[0]
-    # rtol=0 explicit: np.allclose's default rtol=1e-5 would let an H that is
-    # non-Hermitian at ~1e-5*|entry| pass a gate the message advertises as
-    # 1e-9 absolute (physical Hamiltonians are Hermitian to machine precision,
-    # so a true 1e-9 gate rejects only genuinely malformed input).
-    if not np.allclose(H, H.conj().T, rtol=0.0, atol=1.0e-9):
-        raise ValueError("H must be Hermitian within 1e-9 atol")
+    # Scale-relative Hermiticity gate (issue #109). H carries energy/rate
+    # dimension, so an ABSOLUTE 1e-9 made the verdict depend on the caller's
+    # units: it accepted a genuinely non-Hermitian H once ||H|| fell below
+    # ~1e-3 (fail-open into a non-GKSL generator) and rejected an exactly
+    # Hermitian H once ||H|| rose above ~1e8, where similarity round-off alone
+    # exceeds 1e-9. EPS_HERMITICITY is now read as a RELATIVE tolerance, so at
+    # unit scale the gate is unchanged.
+    # Gauge invariance (twelfth-round review): the dynamics depend on H only
+    # through the commutator, so adding a REAL multiple of the identity changes
+    # nothing physical -- but it inflates max|H| and thereby loosens a
+    # scale-relative gate (H + 1e9*I passed with the same non-Hermitian part
+    # that H alone rejected). The defect is measured on H itself (a real
+    # diagonal shift cannot change H - H^dag), while the SCALE comes from the
+    # gauge-fixed traceless part.
+    d_h = H.shape[0]
+    # ROUND-19 REVIEW (external, PR #127). The shift divides before summing:
+    # ``np.trace(H).real`` overflows for finite entries whose total is not
+    # representable, and an infinite shift makes the round-off allowance below
+    # infinite too, so the comparison fails OPEN for every defect. See
+    # :func:`overflow_safe_mean_real` for the measured case.
+    gauge_shift = overflow_safe_mean_real(np.diagonal(H))
+    eye_h = np.eye(d_h, dtype=complex)
+    H_gauge = H - gauge_shift * eye_h
+    defect, _ = hermiticity_defect(H)
+    _, scale = hermiticity_defect(H_gauge)
+    # ROUND-18 REVIEW (external, PR #127). Gauge-fixing removes the physical
+    # scale entirely when H is (numerically) a pure gauge term, and then the
+    # relative test has nothing left to be relative TO. For a numerical 2x2
+    # unitary Q, ``H = Q @ I @ Q^H`` is the exact Hamiltonian I -- its
+    # commutator vanishes, so it is as valid as a Hamiltonian gets -- yet
+    # ``H_gauge`` is pure round-off (measured 1.99e-16 max entry) and the
+    # Hermiticity defect is round-off of the same size (4.98e-17), so
+    # ``build_liouvillian`` raised on it.
+    #
+    # The allowance is the REPRESENTATION error of the component that was
+    # removed: forming a d x d similarity in floating point costs about
+    # ``d * eps`` relative, so ``d * eps * |trace(H).real / d|`` is the size
+    # below which no statement about H can be made from the stored matrix at
+    # all. Same backward-error idiom the repo already uses for the Schur
+    # split (``n * eps * ||L||_F``, see diagnostics/transient.py), not a new
+    # tolerance.
+    #
+    # ADDITIVE, not multiplied by EPS_HERMITICITY: the defect being excused
+    # is machine round-off, which does not scale with the relative gate.
+    #
+    # It does not reopen the twelfth-round gauge hole. Measured on that very
+    # fixture (traceless part of scale 1, non-Hermitian defect 1e-6, plus
+    # ``1e9 * I``): allowance 4.44e-7, defect 1e-6, still rejected. For a
+    # TRACELESS H the allowance is exactly 0.0, so every Hamiltonian without
+    # an identity component keeps a bit-for-bit identical verdict.
+    #
+    # What it does concede, and knowingly: with a gauge shift of 1e9 a defect
+    # of 2e-7 is now accepted, because 1e9 * eps = 2.2e-7 is the resolution
+    # of the stored matrix -- no test on those bytes can tell that defect
+    # from storage round-off, and refusing it would mean refusing exactly
+    # Hermitian matrices for having been written down.
+    # OPEN, MEASURED 2026-09-04, and larger than the concession stated above.
+    # The defect is shift-INDEPENDENT (a real diagonal shift cannot change
+    # H - H^dag, as noted at the top of this block) and so is ``scale``, which
+    # is taken from the gauge-fixed part. This allowance is the only term that
+    # tracks ``gauge_shift``, so the verdict on ONE PHYSICAL Hamiltonian moves
+    # when a multiple of the identity is added -- the very gauge hole the
+    # twelfth round closed, reopened at a higher threshold. Fixed traceless
+    # part of scale 1 with a non-Hermitian defect, only ``c`` in ``H + c*I``
+    # varying:
+    #
+    #     defect    rejected below c ~     accepted above
+    #     1e-9      1                      yes
+    #     1e-6      2.25e+09               yes
+    #     1e-3      2.25e+12               yes
+    #     1         2.25e+15               yes
+    #
+    # The external PR #127 example ``[[1e308, 1], [0, 1e308]]`` is the last
+    # row: its unit defect is excused because 2*eps*1e308 = 4.4e292. Round 19
+    # removed the OVERFLOW that finding named -- the shift is finite now --
+    # but not the OUTCOME it asserted. Checked end to end: the accepted
+    # generator gives ||drho - drho^dag||_F = 0.632456 on a Hermitian rho,
+    # i.e. it really does not preserve Hermiticity.
+    #
+    # Not repaired here on purpose. Capping the allowance (at the gauge-fixed
+    # scale, or making it relative like every other term in this gate) is a
+    # threshold decision that moves round-18 behaviour, which was itself a
+    # review response, and it carries anchor risk. It needs its own PR with a
+    # physics justification, not a quiet change here.
+    roundoff_allowance = d_h * float(np.finfo(float).eps) * abs(gauge_shift)
+    # Same review, one line further out, and a SECOND route to the same
+    # fail-open. The shift lies between the smallest and the largest diagonal
+    # entry, so ``H_ii - gauge_shift`` can reach twice the largest entry and
+    # overflow even when the shift itself is finite. Measured on
+    # ``diag(1.7e308, -1.7e308, 1.7e308)`` with an off-diagonal defect of 1:
+    # shift 5.67e307, gauge-fixed diagonal -inf, ``scale = inf``, and
+    # ``defect > EPS * inf`` is False -- accepted.
+    #
+    # Refusing such an operator would be a false rejection of exactly
+    # Hermitian input, so the comparison is RESTATED at half scale instead.
+    # ``0.5 * H - 0.5 * shift * I`` cannot overflow (both terms are at most
+    # half the largest float), and halving every term of an inequality is
+    # exact in binary floating point, so the restated test is the same
+    # predicate -- not a loosened one. It is entered only when the direct
+    # ``scale`` is non-finite, so the healthy path keeps the original
+    # expression literally, down to the subnormal corner where halving would
+    # not be exact.
+    if np.isfinite(scale):
+        excessive = defect > EPS_HERMITICITY * scale + roundoff_allowance
+    else:
+        _, half_scale = hermiticity_defect(0.5 * H - (0.5 * gauge_shift) * eye_h)
+        scale = 2.0 * half_scale
+        excessive = (
+            0.5 * defect > EPS_HERMITICITY * half_scale + 0.5 * roundoff_allowance
+        )
+    if excessive:
+        raise ValueError(
+            f"H must be Hermitian within a relative {EPS_HERMITICITY:g} "
+            f"(max|H - H^dag| = {defect:.3e}, max|H| = {scale:.3e}, "
+            f"machine-round-off allowance for the removed identity "
+            f"component = {roundoff_allowance:.3e}, "
+            f"relative defect = {defect / scale if scale else float('inf'):.3e})"
+        )
 
     if jump_ops is None:
         jump_ops = []

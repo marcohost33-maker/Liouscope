@@ -18,6 +18,7 @@ from collections.abc import Callable
 import numpy as np
 from scipy.special import ndtr, ndtri
 
+from .car1 import car1_resample
 from .gls import fit_gls_ar1
 
 
@@ -54,8 +55,19 @@ def parametric_bootstrap(
     base = fit_gls_ar1(model, t, y, p0, bounds=bounds)
     theta_hat = base.params
     samples = np.empty((B, theta_hat.size))
+    # The resampler must match the residual model the fit actually used. On a
+    # non-uniform grid ``base.sigma`` is the STATIONARY sd of a CAR(1) process
+    # (see :class:`liouscope.fitting.gls.GLSFitOutput`), not an innovation sd,
+    # and feeding it to the constant-rho AR(1) resampler would generate
+    # surrogate noise with the wrong correlation AND the wrong amplitude --
+    # i.e. confidence intervals for a different experiment than the one fitted.
+    car1_theta = float(base.theta_car1)
+    use_car1 = bool(np.isfinite(car1_theta))
     for b in range(B):
-        eps_b = _ar1_resample(rng, t.size, base.rho_ar1, base.sigma)
+        if use_car1:
+            eps_b = car1_resample(rng, t, car1_theta, base.sigma)
+        else:
+            eps_b = _ar1_resample(rng, t.size, base.rho_ar1, base.sigma)
         y_b = model(t, theta_hat) + eps_b
         fit_b = fit_gls_ar1(model, t, y_b, theta_hat, bounds=bounds)
         samples[b] = fit_b.params
