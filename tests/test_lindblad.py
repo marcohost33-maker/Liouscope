@@ -228,3 +228,23 @@ def test_build_liouvillian_matches_qutip_on_three_jumps(pauli):
     c_ops = [np.sqrt(g) * qutip.Qobj(j) for g, j in zip(rates, jumps)]
     L_qt = qutip.liouvillian(qutip.Qobj(H), c_ops).full()
     np.testing.assert_allclose(L, L_qt, atol=1e-10)
+
+
+def test_hermiticity_gate_is_invariant_to_real_energy_offsets():
+    """H and H + c*I generate the same dynamics; the gate must agree on them.
+
+    Twelfth-round review: the scale-relative gate used max|H|, which a real
+    identity offset inflates while the defect stays fixed -- so the same
+    non-Hermitian perturbation was rejected at H and accepted at H + 1e9*I.
+    """
+    bad = np.array([[0.0, 1.0e-3], [0.0, 0.0]], dtype=complex)  # non-Hermitian
+    sm = np.array([[0, 1], [0, 0]], dtype=complex)
+
+    with pytest.raises(ValueError, match=r"[Hh]ermitian"):
+        build_liouvillian(bad, [sm], [1.0])
+    with pytest.raises(ValueError, match=r"[Hh]ermitian"):
+        build_liouvillian(bad + 1.0e9 * np.eye(2), [sm], [1.0])
+
+    # A genuinely Hermitian H keeps passing at any offset.
+    good = np.array([[0.0, 1.0e-3], [1.0e-3, 0.0]], dtype=complex)
+    build_liouvillian(good + 1.0e9 * np.eye(2), [sm], [1.0])

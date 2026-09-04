@@ -20,6 +20,7 @@ import numpy as np
 from scipy.optimize import least_squares
 
 from .aicc import gaussian_log_likelihood
+from .models import saturation_watch
 from .neff import _AR1_SMALL_N, ar1_correlation_corrected
 
 
@@ -31,6 +32,15 @@ class GLSFitOutput:
     sigma: float
     log_likelihood: float
     success: bool
+    #: Magnitude guards that fired on the FINAL model evaluation, if any
+    #: (``"exponent"`` / ``"magnitude"``). Non-empty implies ``success`` is
+    #: False -- see the note at the final evaluation below.
+    saturated: tuple[str, ...] = ()
+    #: True when the CURVE carried no resolvable variation, so no fit was
+    #: attempted at all (issue #123). Distinct from ``saturated``, which
+    #: reports a fit that ran and ended on a magnitude plateau; here there was
+    #: nothing to fit. Implies ``success`` is False and ``params`` is NaN.
+    degenerate: bool = False
 
 
 def _whiten(y: np.ndarray, rho: float) -> np.ndarray:
@@ -73,6 +83,89 @@ def fit_gls_ar1(
     t = np.asarray(t, dtype=float)
     y = np.asarray(y, dtype=float)
     p = np.asarray(p0, dtype=float).copy()
+    # Fail closed on MALFORMED observations, BEFORE anything else inspects them
+    # (round-24 review, PR #121). The degeneracy test below reads ``y`` alone;
+    # it never touches ``t``, so a mismatched pair reaches it intact and a
+    # constant or single-point ``y`` short-circuits out with
+    # ``degenerate=True`` -- a plausible, structured answer that says "this
+    # curve has no resolvable variation" about a curve that was never supplied.
+    # Measured: a 64-point ``t`` against a one-point ``y`` was reported as a
+    # flat curve on that grid. Nothing downstream can recover the mismatch from
+    # that verdict, because the verdict does not mention the grid.
+    #
+    # Placed ahead of the finiteness gate deliberately: the index list that
+    # gate reports is meaningless for a pair that is not aligned in the first
+    # place, and shape is the more fundamental question. The rule is the same
+    # one -- data the caller hands in must be measurements.
+    if t.ndim != 1 or y.ndim != 1:
+        raise ValueError(
+            "fit_gls_ar1: t and y must be one-dimensional observation arrays; "
+            f"got t.ndim={t.ndim} (shape {t.shape}) and y.ndim={y.ndim} "
+            f"(shape {y.shape})"
+        )
+    if t.size != y.size:
+        raise ValueError(
+            "fit_gls_ar1: t and y must have the same length; got "
+            f"len(t)={t.size} and len(y)={y.size}"
+        )
+    # Fail closed on corrupted input at the FIT boundary (eighth-round review):
+    # the models saturate non-finite intermediates so that optimiser overflow
+    # probes keep a finite, informative residual — but that same saturation
+    # would otherwise launder a NaN in caller-supplied data into a "successful"
+    # fit with a finite likelihood. Overflow recovery is for probes the
+    # optimiser generates itself; data the caller hands in must be measurements.
+    for name, arr in (("t", t), ("y", y), ("p0", p)):
+        if not np.all(np.isfinite(arr)):
+            bad = np.flatnonzero(~np.isfinite(arr)).tolist()
+            raise ValueError(
+                f"fit_gls_ar1: {name} must be finite; non-finite entries at "
+                f"indices {bad}"
+            )
+    # Fail closed on a curve with NO RESOLVABLE VARIATION (issue #123,
+    # round-20 review). Measured on ``t = linspace(0, 5, 64)`` against an
+    # identically-zero relative-entropy curve: the fit returned
+    # ``success=True`` with the rate parameter equal to its own seed, and the
+    # parametric bootstrap around that point produced a BCa interval of width
+    # EXACTLY 0.0 -- perfect confidence as the failure mode of an uncertainty
+    # pipeline. The optimiser is not at fault: with zero data variation every
+    # direction is equally optimal, so "gradient is small" is satisfied at the
+    # starting point and the seed comes back wearing the shape of a
+    # measurement.
+    #
+    # The criterion is relative to the curve's OWN scale, never absolute: an
+    # absolute floor would reintroduce exactly the rate-unit dependence that
+    # #108/#111 removed from the spectral layer. ``ptp(y) <= eps * max|y|``
+    # says the variation is at or below the representation resolution of the
+    # values it varies between -- for the identically-zero curve, ``0 <= 0``.
+    # It is scale-invariant by construction: multiplying ``y`` by any constant
+    # multiplies both sides.
+    #
+    # This is deliberately a statement about the CURVE, not about the grid.
+    # The resolution guard of PR #115 asks "was the mode sampled?"; a curve
+    # can be flat for reasons no grid can see -- a stationary initial state, a
+    # fully decayed one, an observable with no support on the dynamics.
+    spread = float(np.ptp(y)) if y.size else 0.0
+    y_scale = float(np.max(np.abs(y))) if y.size else 0.0
+    if spread <= float(np.finfo(float).eps) * y_scale:
+        warnings.warn(
+            f"fit_gls_ar1: the curve varies by {spread:.3e} over a scale of "
+            f"{y_scale:.3e}, at or below double-precision resolution -- there "
+            "is nothing to fit. Returning NaN parameters with success=False "
+            "rather than the seed, which is what the optimiser would hand "
+            "back unchanged (issue #123).",
+            RuntimeWarning,
+            stacklevel=2,
+        )
+        return GLSFitOutput(
+            params=np.full(p.shape, float("nan")),
+            residuals=np.full(y.shape, float("nan")),
+            rho_ar1=0.0,
+            sigma=float("nan"),
+            log_likelihood=float("nan"),
+            success=False,
+            degenerate=True,
+        )
+
     rho = 0.0
     success = True
     for _ in range(n_iters):
@@ -100,7 +193,18 @@ def fit_gls_ar1(
         # B-fold bootstrap does not raise B identical warnings.
         rho = ar1_correlation_corrected(residuals_raw, warn_small_n=False)
 
-    y_hat_final = model(t, p)
+    # Fail closed on a fit that ENDED inside the model's magnitude guards. The
+    # guards keep an out-of-range probe finite so the optimiser can step away
+    # from it, but the finite value they return is constant, so its derivatives
+    # vanish and ``least_squares`` reports "gradient is small" -- convergence
+    # for the wrong reason. Measured (issue #118 finding 9): M0 on
+    # ``t in [0, 1e10]`` from ``p0 = [1, -1]`` returned ``success=True`` with p0
+    # unchanged and a residual norm of 7.9e100. Probes that merely PASS through
+    # the plateau stay untouched; only the reported optimum is judged.
+    with saturation_watch() as fired:
+        y_hat_final = model(t, p)
+    if fired:
+        success = False
     residuals_raw = y - y_hat_final
     n_resid = residuals_raw.size
     if n_resid <= _AR1_SMALL_N:
@@ -128,4 +232,5 @@ def fit_gls_ar1(
         sigma=sigma,
         log_likelihood=log_lik,
         success=success,
+        saturated=tuple(sorted(fired)),
     )
