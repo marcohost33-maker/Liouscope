@@ -12,11 +12,13 @@ Includes:
 from __future__ import annotations
 
 import contextlib
+import itertools
 from collections.abc import Iterator
 from dataclasses import dataclass
 
 import numpy as np
 import scipy.linalg as sla
+from scipy.optimize import linear_sum_assignment
 
 from .._consts import (
     EPS_HERMITICITY,
@@ -505,6 +507,213 @@ def band_discriminates(
     return zero_count < int(magnitudes.size)
 
 
+#: Relative distance at which a borrowed decomposition still counts as talking
+#: about the SAME mode. It is the pre-existing agreement guard of
+#: :func:`certified_nonzero_modes`, lifted to a name because the cluster and
+#: subspace paths must apply exactly the same criterion -- a second, silently
+#: different tolerance is how the two halves of a fail-closed rule drift apart.
+PAIR_AGREEMENT_RTOL: float = 0.1
+
+#: How much farther the nearest NON-member reference eigenvalue must sit than
+#: the farthest member before a cluster counts as separable. Below this the
+#: ball that defines the invariant subspace cannot be placed unambiguously and
+#: the verdict is ``unresolved`` rather than an optimistic guess.
+SUBSPACE_SEPARATION_FACTOR: float = 4.0
+
+
+def _frobenius_underflow_safe(M: np.ndarray) -> float:
+    """Frobenius norm that does not collapse to a false ``0.0``.
+
+    Round-24 finding B4 applies verbatim to the block residuals below: a
+    uniformly tiny residual matrix squares to zero under ``np.linalg.norm`` and
+    would certify an arbitrarily bad subspace. Built from the column norms so
+    the rescue lives in exactly one place (:func:`underflow_safe_column_norms`).
+    """
+    return underflow_safe_norm(underflow_safe_column_norms(np.asarray(M)))
+
+
+def _injective_pairing(
+    eigenvalues: np.ndarray, ref: np.ndarray, rows: np.ndarray
+) -> dict[int, int]:
+    """Globally injective candidate -> reference-index map, or ``{}``.
+
+    ROUND-28 REVIEW (PR #121), the adjudicated repair. Which reference eigenPAIR
+    may serve as evidence for candidate ``i`` used to be decided by an
+    independent nearest-value lookup per candidate. A lookup is not a map: two
+    candidates that are merely CLOSE both take the same reference index, and the
+    second is then certified from a residual measured for the first. For a
+    certification layer that is not a convention but a violation of evidence
+    identity, so the assignment is made injective BY CONSTRUCTION.
+
+    ``scipy.optimize.linear_sum_assignment`` minimises the TOTAL distance rather
+    than resolving collisions in candidate order. That distinction is
+    load-bearing and was measured: on the D11 network the greedy order hands
+    ``ev[3] = -3.3216107e-06`` the exact partner of ``ev[8] = -3.345505e-06``
+    and pushes ``ev[8]`` onto a stranger, while the global optimum leaves both
+    exact matches intact and strands ``ev[3]`` on ``ref[3] = -4.239e-06`` --
+    where the agreement guard refuses it, which is the correct fail-closed
+    verdict for a candidate the reference spectrum has no room for.
+
+    ``rows`` deliberately spans the whole zero band including the stationary
+    mode: it must reserve its own near-zero reference entry, or a slow candidate
+    could be handed the zero eigenvalue's eigenpair.
+
+    Returns ``{}`` -- certify nothing -- if any distance is non-finite, because
+    the assignment is then undefined and guessing would be fail-open.
+    """
+    if rows.size == 0:
+        return {}
+    ref_arr = np.asarray(ref)
+    cost = np.abs(ref_arr[np.newaxis, :] - np.asarray(eigenvalues)[rows][:, np.newaxis])
+    cost = np.asarray(cost, dtype=float)
+    if not bool(np.all(np.isfinite(cost))) or cost.shape[1] < cost.shape[0]:
+        return {}
+    r_idx, c_idx = linear_sum_assignment(cost)
+    return {int(rows[a]): int(j) for a, j in zip(r_idx, c_idx, strict=True)}
+
+
+def _relative_clusters(values: np.ndarray, indices: np.ndarray) -> list[list[int]]:
+    """Group ``indices`` whose ``values`` are within ``PAIR_AGREEMENT_RTOL``.
+
+    Transitive closure over the relative-distance relation, computed on the
+    magnitude-sorted order so a chain of near neighbours forms one group. A
+    group of size one is a separated, non-degenerate candidate and takes the
+    individual path; a group of size two or more is the near-degenerate cluster
+    the invariant-subspace argument is about.
+    """
+    if indices.size == 0:
+        return []
+    vals = np.asarray(values)[indices]
+    order = np.argsort(np.abs(vals), kind="stable")
+    groups: list[list[int]] = []
+    current: list[int] = [int(indices[order[0]])]
+    for prev, cur in itertools.pairwise(order):
+        a, b = complex(vals[prev]), complex(vals[cur])
+        scale = max(abs(a), abs(b))
+        if scale > 0.0 and abs(a - b) <= PAIR_AGREEMENT_RTOL * scale:
+            current.append(int(indices[cur]))
+        else:
+            groups.append(current)
+            current = [int(indices[cur])]
+    groups.append(current)
+    return groups
+
+
+def _certify_invariant_subspace(
+    L_c: np.ndarray, ref: np.ndarray, cluster_values: np.ndarray, margin: float
+) -> bool:
+    """Is the whole near-degenerate cluster provably away from the zero mode?
+
+    ROUND-28 REVIEW (PR #121). LAPACK states the case this exists for: when
+    eigenvalues cluster, the INVARIANT SUBSPACE can be well conditioned while
+    the individual eigenvectors are not determined at all. The per-mode bound
+    then divides by a ``|y^H x|`` that has collapsed and abstains on a cluster
+    whose position in the spectrum is in fact known to full accuracy. Forcing
+    individual eigenvectors there is the wrong object; the subspace is the right
+    one, and it is certified from the OPERATOR's own Schur basis, never from a
+    neighbour's eigenpair.
+
+    The bound is the exact block analogue of the scalar one already used above,
+
+        dist(spec, spec(T11)) <~ max(||L Q - Q T11||, ||L^H P - P S11||)
+                                 / sigma_min(P^H Q)
+
+    with ``Q``/``P`` orthonormal bases of the right/left invariant subspaces.
+    ``sigma_min(P^H Q)`` is the cosine of the LARGEST PRINCIPAL ANGLE between
+    them -- for ``k = 1`` it is ``|y^H x|`` and the whole expression reduces to
+    the scalar bound, so the two paths cannot disagree about a lone mode. The
+    same first-order caveat therefore applies and is covered by the same
+    ``margin``; the residual is measured in the Frobenius norm, which dominates
+    the spectral norm, so the bound errs towards refusing.
+
+    Certification is ALL-OR-NOTHING over the cluster. The block bound places the
+    ``k`` eigenvalues of ``T11`` in bijection with ``k`` eigenvalues of ``L``, so
+    the statement "none of these is the stationary mode" is a statement about the
+    group; splitting it would hand one member evidence gathered for the group.
+
+    Every separability failure returns ``False`` -- ``unresolved``, nothing
+    certified -- and never a fallback to a neighbouring eigenpair:
+
+    * fewer than two members: a one-dimensional subspace is the scalar case,
+      which the caller has already tried and which failed on its own evidence;
+    * no reference cluster of the SAME multiplicity within the agreement guard;
+    * the nearest non-member closer than ``SUBSPACE_SEPARATION_FACTOR`` times
+      the cluster radius, so no ball selects the cluster unambiguously;
+    * a Schur reordering that does not return exactly ``k`` selected modes;
+    * a singular or non-finite ``P^H Q``, or a cluster containing an exact zero.
+    """
+    vals = np.asarray(cluster_values, dtype=complex)
+    k = int(vals.size)
+    if k < 2 or not bool(np.all(np.isfinite(vals))):
+        return False
+    centre = complex(np.mean(vals))
+    ref_arr = np.asarray(ref, dtype=complex)
+    if ref_arr.size <= k or not bool(np.all(np.isfinite(ref_arr))):
+        return False
+
+    dist = np.sort(np.abs(ref_arr - centre))
+    inner, outer = float(dist[k - 1]), float(dist[k])
+    # The reference spectrum must carry a cluster of the SAME multiplicity that
+    # agrees with this one; otherwise the candidate ladder is claiming more
+    # modes at this position than the operator has, which is precisely the D11
+    # situation and must stay unresolved.
+    if not (inner <= PAIR_AGREEMENT_RTOL * abs(centre)):
+        return False
+    if inner > 0.0:
+        if not (outer > SUBSPACE_SEPARATION_FACTOR * inner):
+            return False
+    elif not (outer > 0.0):
+        return False
+    radius = 0.5 * (inner + outer)
+    if not np.isfinite(radius) or radius <= 0.0:
+        return False
+
+    A = np.asarray(L_c, dtype=complex)
+    try:
+        T_r, Z_r, sdim_r = sla.schur(
+            A, output="complex", sort=lambda x: bool(abs(x - centre) <= radius)
+        )
+        T_l, Z_l, sdim_l = sla.schur(
+            A.conj().T,
+            output="complex",
+            sort=lambda x: bool(abs(x - np.conj(centre)) <= radius),
+        )
+    except (ValueError, sla.LinAlgError):
+        return False
+    if int(sdim_r) != k or int(sdim_l) != k:
+        return False
+
+    Q, P = Z_r[:, :k], Z_l[:, :k]
+    T11, S11 = T_r[:k, :k], T_l[:k, :k]
+    mu = np.asarray(np.diag(T11), dtype=complex)
+    if not bool(np.all(np.isfinite(mu))) or bool(np.any(mu == 0.0)):
+        return False
+
+    # The cluster the Schur basis selected must be the cluster the candidates
+    # describe -- checked injectively, for the same reason the outer pairing is.
+    agree = np.abs(mu[np.newaxis, :] - vals[:, np.newaxis])
+    scale = np.maximum(np.abs(vals)[:, np.newaxis], np.abs(mu)[np.newaxis, :])
+    a_idx, b_idx = linear_sum_assignment(np.asarray(agree, dtype=float))
+    if bool(np.any(agree[a_idx, b_idx] > PAIR_AGREEMENT_RTOL * scale[a_idx, b_idx])):
+        return False
+
+    overlap = P.conj().T @ Q
+    if not bool(np.all(np.isfinite(overlap))):
+        return False
+    sep = float(np.min(np.linalg.svd(overlap, compute_uv=False)))
+    if not np.isfinite(sep) or sep <= 0.0:
+        return False
+    res = max(
+        _frobenius_underflow_safe(A @ Q - Q @ T11),
+        _frobenius_underflow_safe(A.conj().T @ P - P @ S11),
+    )
+    bound = res / sep
+    if not np.isfinite(bound):
+        return False
+    smallest = min(float(np.min(np.abs(vals))), float(np.min(np.abs(mu))))
+    return smallest > margin * bound
+
+
 def certified_nonzero_modes(
     L_c: np.ndarray,
     eigenvalues: np.ndarray,
@@ -588,104 +797,102 @@ def certified_nonzero_modes(
     #   (``|ref[i] - lam| == 0`` is the unique minimum); it differs only where
     #   the old lookup was ambiguous, which is exactly the defect.
     # * vectors BORROWED -> ``ref`` really is a different decomposition and a
-    #   search is unavoidable. The one-to-one rule is then applied to EQUAL
-    #   eigenvalues only: the ``r``-th mode of a group sharing one eigenvalue
-    #   takes the ``r``-th nearest ``ref`` entry. Modes with DISTINCT
-    #   eigenvalues keep their independent nearest-value lookup.
+    #   search is unavoidable. It is then a GLOBAL INJECTIVE ASSIGNMENT
+    #   (``_injective_pairing``), not a nearest-neighbour lookup per candidate.
     #
-    #   Narrowing it to equal values is not a convenience -- a blanket
-    #   bijection is WRONG here, and measured so. The two spectra come from
-    #   different solvers and genuinely differ; forcing a global one-to-one
-    #   assignment lets a mode that is merely CLOSE consume the partner a
-    #   later mode needs exactly. On the stiff four-level network of
-    #   ``tests/test_pr121_review_round17.py`` the ``dgeev-real`` route offers
-    #   ``{-3.3216e-06, -3.345505e-06, -3.345505e-06}`` against a ``zgeev``
-    #   reference of ``{-4.239e-06, -3.345505e-06, -3.345505e-06}``: a global
-    #   bijection hands the first mode the exact partner of the second, the
-    #   third is left with ``-4.239e-06`` at a relative distance of 0.21, the
-    #   agreement guard refuses it, and a mode that WAS correctly rescued
-    #   before is lost -- the refinement then fails its inversion guard and is
-    #   abandoned wholesale. Equal-value ranking leaves that route unchanged
-    #   and still splits the degenerate pair, which is the reported defect.
+    # ROUND-28 REVIEW (PR #121): the adjudicated resolution of the collision an
+    # earlier round recorded as "left open deliberately". The equal-value
+    # ranking that stood here keyed on EXACT float equality, so two merely
+    # CLOSE candidates both took ``argmin`` and landed on the same reference
+    # eigenpair -- the same defect one step away from exact degeneracy, and
+    # reachable on a fixture this suite carries. Measured on the D11 network of
+    # ``tests/test_pr121_review_round17.py``: candidates
+    # ``{-3.3216107e-06, -3.345505e-06, -3.345505e-06}`` against a reference
+    # spectrum carrying ``-3.345505e-06`` EXACTLY TWICE (``ref[8]``,
+    # ``ref[11]``). Both copies are claimed to the last bit by the two exact
+    # candidates; ``ev[3]`` has no counterpart left, and its certification
+    # rested entirely on ``ref[8]``'s residual -- a residual already spoken for,
+    # and measured for a different eigenvalue.
     #
-    #   Rank 0 is spelled ``argmin`` rather than ``argsort(...)[0]`` so the
-    #   bit-for-bit claim needs no argument about tie-breaking: every mode
-    #   whose eigenvalue is unique among the in-band modes takes exactly the
-    #   old code path.
-    #   KNOWN LIMIT, measured rather than assumed (2026-09-04). The ranking
-    #   keys on EXACT float equality, so two merely CLOSE candidate
-    #   eigenvalues still both take ``argmin`` and can land on the same
-    #   reference eigenpair -- the reported defect one step away from exact
-    #   degeneracy. It is reachable on a fixture this suite already carries:
-    #   on the D11 network of ``tests/test_pr121_review_round17.py`` the
-    #   in-band candidates ``-3.3216107e-06`` and ``-3.345505e-06`` (relative
-    #   separation 7.1e-03) both pair with reference index 8, and both clear
-    #   the 10 per cent agreement guard below, so the first is certified from the
-    #   second's residual.
+    # That is not a choosable convention. A residual is evidence for ONE
+    # eigenpair, so a many-to-one assignment cannot certify a second candidate;
+    # it must abstain. The three-way rule now reads:
     #
-    #   It is left open deliberately, because the obvious fail-closed repair
-    #   -- on a collision keep the nearer candidate and certify neither of
-    #   the others -- was applied and MEASURED: it costs
-    #   ``test_d11_fallback_scans_the_refined_zero_set`` on that same
-    #   fixture. The certificate drops to ``resolved=False`` with
-    #   ``zero_mode_count=2, ambiguous_count=1``, i.e. the refinement is
-    #   abandoned wholesale and the mode that was being rescued is lost --
-    #   the identical regression the blanket bijection produces, reached by a
-    #   narrower route.
+    #   separated, non-degenerate  -> index identity (same decomposition) or a
+    #                                 globally injective assignment (borrowed),
+    #                                 never greedy nearest-neighbour;
+    #   near-degenerate cluster    -> certify the INVARIANT SUBSPACE from the
+    #                                 operator's own Schur basis, because
+    #                                 LAPACK's own caveat applies: a clustered
+    #                                 subspace can be well conditioned while its
+    #                                 individual eigenvectors are not determined;
+    #   not separable              -> ``unresolved``: nothing certified, no
+    #                                 borrowed residual.
     #
-    #   RE-MEASURED 2026-09-04, independently, and it moves one word of the
-    #   paragraph above: an earlier draft called that mode "correctly
-    #   rescued", and the spectra do not support "correctly". On this fixture
-    #   the operator's own spectrum carries ``-3.345505e-06`` EXACTLY TWICE
-    #   (ref indices 8 and 11) and the candidate ladder carries it exactly
-    #   twice as well (ev 8 and 11), so both copies are claimed by candidates
-    #   that match them to the last bit. The third candidate,
-    #   ``ev[3] = -3.3216107e-06``, has no counterpart left: the nearest FREE
-    #   reference entry is ``ref[3] = -4.239e-06`` at a relative distance of
-    #   0.216, which the 10 per cent agreement guard refuses. Its certification
-    #   today therefore rests entirely on ``ref[8]``'s residual -- a residual
-    #   already spoken for by ``ev[8]``, and measured for a different
-    #   eigenvalue. Whether ``ev[3]`` is a mode of this operator at all is
-    #   precisely what the borrowed decomposition cannot say.
+    # The global optimum is what makes the injective rule safe here. An earlier
+    # round measured a BIJECTION as harmful, but that measurement was of a
+    # greedy one -- resolving collisions in candidate order hands ``ev[3]`` the
+    # exact partner of ``ev[8]``. Minimising the TOTAL distance instead leaves
+    # both exact matches intact and strands ``ev[3]`` on ``ref[3] =
+    # -4.239e-06`` at a relative distance of 0.216, where the agreement guard
+    # below refuses it. ``ev[8]`` and ``ev[11]`` keep their own evidence and
+    # stay certified; only the mode with no evidence of its own is lost, which
+    # is the point.
     #
-    #   That sharpens the open decision rather than settling it. Refusing
-    #   ``ev[3]`` is the fail-CLOSED answer and is defensible on the spectra;
-    #   it also makes the precondition of
-    #   ``test_d11_fallback_scans_the_refined_zero_set`` -- ``cert.resolved``
-    #   -- unreachable on this network, because ambiguity then survives the
-    #   refinement. The test and the defect are coupled: the certificate
-    #   resolves here ONLY by way of the borrowed residual. So the choice is
-    #   not "borrowed evidence vs. losing a good mode" but "borrowed evidence
-    #   vs. conceding that this network does not resolve", which is a
-    #   modelling decision with anchor consequences, not a repair, and is
-    #   therefore recorded here instead of being made quietly.
+    # The cost for the D11 fixture is stated rather than hidden: the certificate
+    # there goes ``resolved=True -> False`` and that network becomes a NEGATIVE
+    # control. Conceding that a network does not resolve is the honest verdict
+    # when the alternative is a borrowed residual; the positive path is carried
+    # by a separable fixture instead.
+    #
+    # Bit-for-bit on the healthy path: where every candidate has a unique
+    # nearest reference entry and no two compete for it, the minimum-cost
+    # assignment IS that set of nearest pairs, so a non-degenerate,
+    # well-separated spectrum takes exactly the old code path.
     pair_of: dict[int, int] = {}
+    clusters: list[list[int]] = []
+    cluster_of: dict[int, int] = {}
+    ref_arr = np.asarray(ref)
     if borrowed:
-        ref_arr = np.asarray(ref)
-        rank_of: dict[complex, int] = {}
-        for raw in np.flatnonzero(in_band):
-            k = int(raw)
-            key = complex(eigenvalues[k])
-            rank = rank_of.get(key, 0)
-            rank_of[key] = rank + 1
-            dist = np.abs(ref_arr - eigenvalues[k])
-            if rank == 0:
-                pair_of[k] = int(np.argmin(dist))
-            elif rank < dist.size:
-                pair_of[k] = int(np.argsort(dist, kind="stable")[rank])
+        pair_of = _injective_pairing(eigenvalues, ref, np.flatnonzero(in_band))
+        clusters = _relative_clusters(eigenvalues, idx)
+        for pos, group in enumerate(clusters):
+            for member in group:
+                cluster_of[member] = pos
     else:
         pair_of = {int(raw): int(raw) for raw in np.flatnonzero(in_band)}
 
     tiny = np.finfo(float).tiny
     for i in idx:
         lam = eigenvalues[i]
+        if borrowed:
+            if len(clusters[cluster_of[int(i)]]) > 1:
+                # Near-degenerate: no individual eigenpair is the right evidence
+                # object here. Handled below, as a subspace, or not at all.
+                continue
+            # A SEPARATED candidate may be certified only when the reference
+            # spectrum offers exactly ONE eigenpair that agrees with it. Two
+            # admissible partners mean the assignment is a coin toss between
+            # two different residuals -- minimising total distance would still
+            # return one of them, and on a tie it returns an arbitrary one.
+            # Measured on the D11 network before this gate: the minimum-cost
+            # assignment there is EXACTLY degenerate (two assignments both cost
+            # 9.1739e-07, because one candidate matches a reference entry to
+            # the last bit), and the arbitrary winner re-created the borrowed
+            # residual the round removes. Ambiguous evidence is unresolved.
+            adm = np.flatnonzero(
+                np.abs(ref_arr - lam)
+                <= PAIR_AGREEMENT_RTOL * np.maximum(np.abs(lam), np.abs(ref_arr))
+            )
+            if adm.size != 1 or int(i) not in pair_of or int(adm[0]) != pair_of[int(i)]:
+                continue
         if int(i) not in pair_of:
             continue  # no eigenpair left to match: nothing measured, nothing certified
         j = pair_of[int(i)]
         mag = float(abs(ref[j]))
         # Fail closed when the borrowed decomposition disagrees about this mode:
         # a bound computed for a different eigenvalue certifies nothing.
-        if abs(ref[j] - lam) > 0.1 * max(abs(lam), mag) or mag == 0.0:
+        if abs(ref[j] - lam) > PAIR_AGREEMENT_RTOL * max(abs(lam), mag) or mag == 0.0:
             continue
         # ROUND-24 REVIEW (PR #121), finding B4. Every norm in this block is
         # underflow-safe. The residual pair is the one the reviewer named: for
@@ -718,6 +925,42 @@ def certified_nonzero_modes(
         )
         if mag > margin * (res / sep):
             out[i] = True
+
+    # ROUND-28 REVIEW (PR #121), the second half of the adjudicated rule. The
+    # loop above reasons about one eigenPAIR at a time, and that is the wrong
+    # object exactly where LAPACK says it is: inside a tight eigenvalue cluster
+    # the individual eigenvectors need not be determined at all -- ``|y^H x|``
+    # collapses and the per-mode bound blows up -- while the INVARIANT SUBSPACE
+    # they span is well conditioned and locates the cluster to full accuracy.
+    # Such a cluster is certified as a subspace, from the operator's own Schur
+    # basis, or not at all.
+    #
+    # A cluster takes this path ALWAYS, never as a rescue after the individual
+    # path declined. An earlier draft of this repair made it a fallback -- try
+    # each mode individually first, fall back to the subspace only if none
+    # succeeded -- and that draft was MEASURED not to fix the defect: on the D11
+    # network's ``dgeev-real`` route the two assignments
+    # ``{ev[3]->ref[8], ev[11]->ref[3]}`` and ``{ev[3]->ref[3], ev[11]->ref[11]}``
+    # cost exactly the same 9.1739e-07, so the individual path still certified
+    # ``ev[3]`` from ``ref[8]``'s residual and the fallback never ran. Inside a
+    # cluster the individual assignment is not merely imprecise, it is
+    # UNDETERMINED, which is why the subspace is the object and the choice is
+    # not offered.
+    #
+    # Restricted to the BORROWED route. When the caller supplies vectors, those
+    # vectors are the evidence and are handed on to D9/D19 downstream, so the
+    # certificate must vouch for THEM; a subspace certificate would clear
+    # eigenvectors that were never examined. There the pair index is the
+    # candidate's own index and no search happens at all.
+    if borrowed:
+        for group in clusters:
+            if len(group) < 2:
+                continue
+            if _certify_invariant_subspace(
+                L_c, ref, np.asarray(eigenvalues)[group], margin
+            ):
+                for g in group:
+                    out[g] = True
     return out
 
 
