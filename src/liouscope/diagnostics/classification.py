@@ -189,6 +189,39 @@ def _apply_spectral_certificate_floor(
     return verdict, tier
 
 
+def _apply_unevaluable_winner_floor(
+    a_class: str,
+    verdict: str,
+    tier: str,
+    *,
+    matrix: tuple[dict[str, object], ...],
+) -> tuple[str, str]:
+    """Insufficient-evidence floor for a winner the matrix cannot evaluate.
+
+    ROUND-25 REVIEW (PR #121). The dominant class and the hypothesis matrix are
+    derived from the same evidence but reported as two independent fields, and
+    they could contradict each other. Measured case: ``kreiss = 11`` with D9
+    withheld as ``petermann_max = NaN`` leaves the F1 rung UNEVALUABLE, so no
+    rung fires and the ladder falls through to ``A12``; the matrix correctly
+    marks the A12 fallback ``UNEVALUABLE`` with an ``UNDEFINED`` claim floor
+    (a rung that could not be evaluated might have fired, so "no mechanism
+    applies" is not established) -- yet ``_pick_verdict_tier`` published
+    ``NOT_EXCLUDED``. One report then asserted a dominant class that its own
+    audit column says is unsupported.
+
+    The floor reads the matrix rather than recomputing the condition, so the
+    two cannot drift apart. It is stated over the WINNER generally, not over
+    ``A12`` specifically: a fired rung is ``SUPPORTED`` by construction, so for
+    every other winner this is a no-op (asserted in the round-27 tests), and
+    should a future rung become unevaluable-and-winning the floor already
+    covers it.
+    """
+    for entry in matrix:
+        if entry.get("a_class") == a_class and entry.get("status") == HYPOTHESIS_UNEVALUABLE:
+            return VERDICT_UNDEFINED, TIER_EXPLORATION
+    return verdict, tier
+
+
 def _is_maximally_mixed(rho_steady_state: np.ndarray, *, atol: float = EPS_MAXMIX) -> bool:
     """Is ``rho_ss`` the maximally mixed state ``I/d`` (to ``atol``)?
 
@@ -1266,6 +1299,13 @@ def classify_mechanism(
     verdict, tier = _apply_spectral_certificate_floor(
         verdict, tier, spectral_resolved=spectral_resolved
     )
+    # Built once and consumed twice: the floor below reads the same object the
+    # report carries, so the published matrix and the published verdict are
+    # guaranteed to be the pair that was actually reconciled.
+    matrix = hypothesis_evidence_matrix(ev, relaxation=relaxation)
+    verdict, tier = _apply_unevaluable_winner_floor(
+        a_class, verdict, tier, matrix=matrix
+    )
     return ClassificationResult(
         a_class=a_class,
         f_family=f_family,
@@ -1278,7 +1318,7 @@ def classify_mechanism(
         support_score=conf,
         evidence=ev,
         triggered_hypotheses=triggered_hypotheses(ev, relaxation=relaxation),
-        hypothesis_matrix=hypothesis_evidence_matrix(ev, relaxation=relaxation),
+        hypothesis_matrix=matrix,
         taxonomy_version=TAXONOMY_VERSION,
         schema_version=DIAGNOSTIC_SCHEMA_VERSION,
     )

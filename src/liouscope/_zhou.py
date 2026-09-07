@@ -68,6 +68,7 @@ bit-stable.
 
 from __future__ import annotations
 
+import math
 from typing import Final
 
 import numpy as np
@@ -87,6 +88,29 @@ CLAIM_REFERENCE: Final[str] = (
     "Yi-Neng Zhou, 'Universal Predictors for Mixing Time more than Liouvillian "
     "Gap', arXiv:2601.06256 (verified 2026-06-04, v3 2026-05-20)"
 )
+
+
+def _unconverged(
+    epsilon: float,
+    gap: float | None,
+    petermann_factor: float | None,
+) -> ZhouPredictorResult:
+    """An unconverged record that honours the caller-supplied values verbatim.
+
+    Same contract as the two in-function early returns: the record must not
+    overwrite what the caller passed, so a manifest reader can see WHICH
+    supplied value made the predictor abstain.
+    """
+    return ZhouPredictorResult(
+        mixing_time_lower=float("inf"),
+        mixing_time_upper=float("inf"),
+        epsilon=epsilon,
+        converged=False,
+        gap=float(gap) if gap is not None else float("nan"),
+        petermann_factor=(
+            float(petermann_factor) if petermann_factor is not None else float("nan")
+        ),
+    )
 
 
 def compute_zhou_predictor(
@@ -124,6 +148,26 @@ def compute_zhou_predictor(
     ZhouPredictorResult
     """
     L_super = np.asarray(L_super, dtype=complex)  # complex128: scipy dispatches by dtype; the double-solve contract (#108) must hold
+
+    # ROUND-25 REVIEW (PR #121): a SUPPLIED value must be validated before it
+    # is allowed to bypass certification. NaN is this library's
+    # unavailable-value sentinel (see ``_strip_unavailable`` in
+    # ``diagnostics.classification``), so the natural caller -- reusing an
+    # UNRESOLVED report via ``gap=report.spectral.gap`` and
+    # ``petermann_factor=report.nonnorm.petermann_max`` -- passes two non-None
+    # NaNs. Both being non-None skipped the recomputation branch AND its
+    # certificate guard, and ``nan <= 0`` is False, so the function fell
+    # through to the arithmetic and returned ``converged=True`` with NaN
+    # bounds: a manifest-grade record asserting a mixing-time window that was
+    # never measured. Rejecting the input here is the fail-closed reading and
+    # is unit-agnostic (finiteness, not a threshold). ``+inf`` is refused for
+    # the same reason -- it is not a measurement either, and an infinite K
+    # would poison ``t_upper`` exactly as the certified recomputation path
+    # already documents for defective modes.
+    if gap is not None and not math.isfinite(float(gap)):
+        return _unconverged(epsilon, gap, petermann_factor)
+    if petermann_factor is not None and not math.isfinite(float(petermann_factor)):
+        return _unconverged(epsilon, gap, petermann_factor)
     if gap is None or petermann_factor is None:
         # Round-13 review: D24's recomputation must not retain a solver
         # failure that the spectral and Mpemba paths repair. On the stiff
