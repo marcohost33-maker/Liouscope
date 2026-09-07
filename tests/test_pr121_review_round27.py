@@ -26,30 +26,105 @@ fails here.
 
 from __future__ import annotations
 
-import sys
-from pathlib import Path
-
 import numpy as np
 import pytest
 
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-
-from test_classification import (  # noqa: E402
-    _lep,
-    _nonnorm,
-    _relaxation,
-    _resolvent,
-    _spectral,
-    _transient,
+from liouscope._types import (
+    LepResult,
+    NonNormalityResult,
+    RelaxationResult,
+    ResolventResult,
+    SpectralResult,
+    TransientResult,
 )
-
-from liouscope._zhou import compute_zhou_predictor  # noqa: E402
-from liouscope.diagnostics.classification import (  # noqa: E402
+from liouscope._zhou import compute_zhou_predictor
+from liouscope.diagnostics.classification import (
     HYPOTHESIS_SUPPORTED,
     HYPOTHESIS_UNEVALUABLE,
     VERDICT_UNDEFINED,
     classify_mechanism,
 )
+
+# Hand-built result dataclasses, the same idiom as ``tests/test_classification``
+# (the classifier reads scalar fields only, never the arrays). Kept local
+# rather than imported from that module: a test file importing another test
+# file couples two suites that are meant to fail independently.
+_ARR = np.zeros(1, dtype=complex)
+
+
+def _spectral(**kw) -> SpectralResult:
+    base = {
+        "gap": 0.5,
+        "gns_gap": 0.5,
+        "kms_gap": 0.5,
+        "oscillating_gap": 0.1,
+        "spectral_spread": 1.0,
+        "eigenvalues": _ARR,
+        "steady_state": np.zeros((1, 1), dtype=complex),
+        "has_complex_pairs": False,
+    }
+    base.update(kw)
+    return SpectralResult(**base)
+
+
+def _nonnorm(**kw) -> NonNormalityResult:
+    base = {
+        "henrici_eta": 0.5,
+        "petermann_max": 1.0,
+        "petermann_factors": _ARR,
+        "kreiss": 1.0,
+        "bohr_ap_length": 1,
+        "bohr_ap_pauli_bound": 0.0,
+    }
+    base.update(kw)
+    return NonNormalityResult(**base)
+
+
+def _relaxation(**kw) -> RelaxationResult:
+    base = {
+        "von_neumann_entropy": 0.0,
+        "relative_entropy_curve": _ARR.real,
+        "fidelity_curve": _ARR.real,
+        "entanglement_asymmetry": None,
+        "fits": {},
+        "aicc_model": "M1",
+        "beta_D": 0.5,
+        "bca_ci_beta": (0.4, 0.6),
+    }
+    base.update(kw)
+    return RelaxationResult(**base)
+
+
+def _resolvent(**kw) -> ResolventResult:
+    base = {
+        "resolvent_peak": 1.0,
+        "ridge_fwhm": 1.0,
+        "pseudospectral_radius": 0.5,
+        "pseudospec_eps": 1.0e-3,
+    }
+    base.update(kw)
+    return ResolventResult(**base)
+
+
+def _transient(**kw) -> TransientResult:
+    base = {
+        "trans_amplitude_ratio": 1.0,
+        "kappa_trans": 1.0,
+        "numerical_abscissa": 0.0,
+    }
+    base.update(kw)
+    return TransientResult(**base)
+
+
+def _lep(**kw) -> LepResult:
+    base = {
+        "lep_proximity": 1.0,
+        "gap_rate_consistency": 1.0,
+        "initial_state_sensitivity": 0.0,
+        "lep_candidate_count": 0,
+    }
+    base.update(kw)
+    return LepResult(**base)
 
 # A two-level generator with one stationary and one decaying mode. The
 # predictor's own recomputation resolves it, which is what makes the supplied
