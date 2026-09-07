@@ -106,21 +106,57 @@ def test_certificate_uses_each_mode_s_own_eigenpair(
 def test_borrowed_decomposition_matches_one_to_one(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Without supplied vectors the search must still consume each pair once.
+    """Without supplied vectors, a corrupt borrowed vector must not decide anything.
 
-    ``certified_eigvals`` takes this route: the candidate ladder's eigenvalues
-    are certified against the operator's OWN decomposition, so a search is
-    unavoidable. It is made one-to-one; the pre-fix ``argmin`` handed both slow
-    modes the first pair here as well.
+    ROUND-28 CHANGED THE ANSWER HERE, and the reason is the finding this file
+    exists for taken one step further. The two slow modes are EXACTLY
+    degenerate, so "which of the two borrowed eigenvectors belongs to which
+    mode" has no answer -- any assignment is as good as any other, and the
+    pre-round-26 ``argmin`` picked one and certified both from it. Round 26 made
+    the assignment one-to-one, which removed the borrowing but left the choice
+    arbitrary: this test then measured which arm of a tie the search happened to
+    take.
+
+    Round 28 stops making the choice. A degenerate cluster is certified as an
+    INVARIANT SUBSPACE, from the operator's own Schur basis, so the borrowed
+    eigenvectors are not consulted for it at all -- which is both the LAPACK
+    reading (a clustered subspace can be well conditioned while its individual
+    vectors are not determined) and strictly stronger here: the verdict can no
+    longer be changed by corrupting them, and both modes are certified because
+    both genuinely sit at ``_SLOW``, away from the stationary mode.
+
+    The stub therefore has to carry ``schur`` as well; it still controls the
+    eigenVALUES the certificate is handed, which is what this fixture is about.
     """
     L, lam, vr, vl = _fixture(2, 1)
     fake = types.SimpleNamespace(
         eig=lambda A, left=False, right=False: (lam.copy(), vl.copy(), vr.copy()),
+        schur=sla.schur,
         LinAlgError=sla.LinAlgError,
     )
     monkeypatch.setattr(la, "sla", fake)
     out = la.certified_nonzero_modes(L, lam, _in_band(L, lam))
-    assert [bool(out[1]), bool(out[2])] == [True, False]
+    assert [bool(out[1]), bool(out[2])] == [True, True]
+
+    # The load-bearing half: the same call with the borrowed right vectors
+    # INTACT must give the identical verdict. If corruption could move it, the
+    # cluster would still be resting on those vectors.
+    L_ok, lam_ok, _vr_ok, vl_ok = _fixture(2, None)
+    fake_ok = types.SimpleNamespace(
+        eig=lambda A, left=False, right=False: (
+            lam_ok.copy(), vl_ok.copy(), _vr_ok.copy()
+        ),
+        schur=sla.schur,
+        LinAlgError=sla.LinAlgError,
+    )
+    monkeypatch.setattr(la, "sla", fake_ok)
+    clean = la.certified_nonzero_modes(L_ok, lam_ok, _in_band(L_ok, lam_ok))
+    assert [bool(clean[1]), bool(clean[2])] == [True, True]
+
+    # NEGATIVE CONTROL on the same machinery: the fast mode is nowhere near the
+    # zero band, so a certificate that had simply started saying True would be
+    # caught here.
+    assert bool(out[3]) is False and bool(out[0]) is False
 
 
 def _trace_preserving_complex() -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
