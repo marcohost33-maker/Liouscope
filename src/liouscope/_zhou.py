@@ -124,6 +124,31 @@ def compute_zhou_predictor(
     ZhouPredictorResult
     """
     L_super = np.asarray(L_super, dtype=complex)  # complex128: scipy dispatches by dtype; the double-solve contract (#108) must hold
+
+    # Round-27 review: NaN/inf are the library's unavailable sentinels, not
+    # reusable measurements.  A non-None sentinel previously skipped the
+    # certificate branch and then slipped through ``gap <= 0`` because NaN
+    # comparisons are false, producing ``converged=True`` with NaN bounds.
+    # Validate caller-supplied values before they are allowed to bypass
+    # certification; preserve them verbatim in the manifest-grade abstention.
+    supplied_gap_unavailable = gap is not None and not np.isfinite(gap)
+    supplied_petermann_unavailable = (
+        petermann_factor is not None and not np.isfinite(petermann_factor)
+    )
+    if supplied_gap_unavailable or supplied_petermann_unavailable:
+        return ZhouPredictorResult(
+            mixing_time_lower=float("inf"),
+            mixing_time_upper=float("inf"),
+            epsilon=epsilon,
+            converged=False,
+            gap=float(gap) if gap is not None else float("nan"),
+            petermann_factor=(
+                float(petermann_factor)
+                if petermann_factor is not None
+                else float("nan")
+            ),
+        )
+
     if gap is None or petermann_factor is None:
         # Round-13 review: D24's recomputation must not retain a solver
         # failure that the spectral and Mpemba paths repair. On the stiff
