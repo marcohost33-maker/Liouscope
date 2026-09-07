@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-import math
-
 import numpy as np
 import pytest
 
@@ -36,15 +34,15 @@ def test_unavailable_supplied_diagnostics_cannot_publish_a_converged_d24(
     )
 
     assert result.converged is False
-    assert math.isinf(result.mixing_time_lower)
-    assert math.isinf(result.mixing_time_upper)
+    assert np.isinf(result.mixing_time_lower)
+    assert np.isinf(result.mixing_time_upper)
 
-    if math.isnan(gap):
-        assert math.isnan(result.gap)
+    if np.isnan(gap):
+        assert np.isnan(result.gap)
     else:
         assert result.gap == gap
-    if math.isnan(petermann_factor):
-        assert math.isnan(result.petermann_factor)
+    if np.isnan(petermann_factor):
+        assert np.isnan(result.petermann_factor)
     else:
         assert result.petermann_factor == petermann_factor
 
@@ -60,8 +58,8 @@ def test_finite_precomputed_values_still_take_the_fast_path() -> None:
     assert result.converged is True
     assert result.gap == 1.0
     assert result.petermann_factor == 4.0
-    assert result.mixing_time_lower == pytest.approx(math.log(1000.0))
-    assert result.mixing_time_upper == pytest.approx(math.log(2000.0))
+    assert result.mixing_time_lower == pytest.approx(np.log(1000.0))
+    assert result.mixing_time_upper == pytest.approx(np.log(2000.0))
 
 
 def test_existing_nonpositive_gap_abstention_is_unchanged() -> None:
@@ -73,7 +71,7 @@ def test_existing_nonpositive_gap_abstention_is_unchanged() -> None:
     )
 
     assert result.converged is False
-    assert math.isinf(result.mixing_time_lower)
-    assert math.isinf(result.mixing_time_upper)
+    assert np.isinf(result.mixing_time_lower)
+    assert np.isinf(result.mixing_time_upper)
     assert result.gap == -1.0
     assert result.petermann_factor == 4.0
