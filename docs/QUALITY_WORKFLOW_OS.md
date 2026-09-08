@@ -103,6 +103,28 @@ Quality claims must include at least one success metric and one counter-metric:
 | release frequency | failed release recovery time |
 | coverage | escaped defect rate |
 
+### Current enforced `main` contract — observed 2026-09-01
+
+This is an **observed governance snapshot**, not a timeless claim. At `main@386041b4072a776a985beb34af5815fb344c74f9`, GitHub's branch metadata reports `main` as protected with required-status-check enforcement level `everyone` and the following required checks:
+
+- `test (ubuntu-latest, 3.10)`
+- `test (ubuntu-latest, 3.11)`
+- `test (ubuntu-latest, 3.12)`
+- `test (ubuntu-latest, 3.13)`
+- `test (ubuntu-latest, 3.14)`
+- `qutip-cross-check (3.11)`
+- `qutip-cross-check (3.12)`
+- `quality contract`
+
+The `quality contract` is therefore merge-boundary evidence, not merely advisory workflow output, for this observed configuration.
+
+The enforcement path is tested in both directions:
+
+- ordinary PR heads have produced `quality contract = success`;
+- controlled negative PR #141 added an inert, `workflow_dispatch`-only workflow with an intentionally mutable `actions/checkout@main` reference; its `quality contract` failed specifically at `Check workflow hardening`. The violating workflow is test evidence only and must never be merged.
+
+A connector-access limitation remains explicit: the repository branch endpoint exposes the required-check set above, but the integration receives HTTP 403 for the full branch-protection detail endpoint. This audit therefore does **not** infer or certify review-count, force-push, deletion, administrator-bypass, or other protection settings that were not independently observable. Those settings must be verified in GitHub repository settings before any release process depends on them.
+
 ## 3. Repository Quality Delta Score (RQDS v0.2)
 
 `RQDS = 0.20*CI_Reliability + 0.20*Security_Posture + 0.15*Evidence_Coverage + 0.15*Maintainability + 0.15*Delivery_Stability + 0.10*Observability + 0.05*Cost_Discipline - Penalty`
