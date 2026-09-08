@@ -103,7 +103,17 @@ python examples/quickstart.py   # smoke run
 
 ## Conventions
 
-- **Imports:** absolute from `liouscope`, no `..` traversal.
+- **Imports:** *intra-package* imports are **relative** (`from .._consts import ...`,
+  `from ..numerics.linalg import ...`); *external* imports are absolute.
+  Tests, examples and benchmarks import the installed package absolutely
+  (`from liouscope... import ...`).
+  Rationale (issue #110, decided 2026-08-15): the rule here previously demanded
+  absolute intra-package imports, which the package has never followed —
+  measured at 135 relative statements across 39 of 53 modules and **0** absolute
+  ones. Relative intra-package imports are the norm for a `src/` layout and keep
+  the package re-namable; the divergence only produced false review findings
+  against conforming code, so the convention was corrected to the codebase rather
+  than the codebase to the convention.
 - **Numerical libraries:** prefer `numpy`/`scipy`; `qutip` is an optional
   extra used for cross-checks, not a core runtime dependency.
 - **Plots:** matplotlib only, no interactive backends in CI; save to

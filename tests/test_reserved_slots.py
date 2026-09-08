@@ -62,3 +62,29 @@ def test_u2_is_none_unless_supplied():
     assert compute_uncertainty_layer(_relaxation_with_ci(0.4, 0.6)).size_uncertainty is None
     u = compute_uncertainty_layer(_relaxation_with_ci(0.4, 0.6), size_residual=0.01)
     assert u.size_uncertainty == 0.01
+
+
+def test_established_catalogs_remain_serializable_and_copyable():
+    """A_CLASS_DESCRIPTIONS / F_FAMILY_DESCRIPTIONS / RESERVED_DIAGNOSTIC_SLOTS
+    predate the immutability hardening; consumers legitimately serialise and
+    deep-copy them, so freezing them would be a breaking change smuggled into
+    a hardening commit. Only the guard-relevant, newly exported
+    RESERVED_A_CLASSES is frozen.
+    """
+    import copy
+    import json
+
+    from liouscope._consts import (
+        A_CLASS_DESCRIPTIONS,
+        F_FAMILY_DESCRIPTIONS,
+        RESERVED_A_CLASSES,
+    )
+
+    for catalog in (RESERVED_DIAGNOSTIC_SLOTS, A_CLASS_DESCRIPTIONS, F_FAMILY_DESCRIPTIONS):
+        assert json.loads(json.dumps(catalog)) == dict(catalog)
+        assert copy.deepcopy(catalog) == catalog
+
+    import pytest
+
+    with pytest.raises(TypeError):
+        RESERVED_A_CLASSES["A6"] = "mutated"  # type: ignore[index]

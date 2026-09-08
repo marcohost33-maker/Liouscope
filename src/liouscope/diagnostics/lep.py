@@ -11,14 +11,19 @@ from __future__ import annotations
 import numpy as np
 import scipy.linalg as sla
 
-from .._consts import EPS_GAP
 from .._types import LepResult
 from ..core.lindblad import steady_state
 from ..io.seed import RNGLike, SeedLike, derive_seed
 from ..numerics.kronecker import unvec, vec
+from ..numerics.scale import spectral_zero_tolerance
 
 
-def lep_proximity(eigenvalues: np.ndarray, *, atol: float = EPS_GAP) -> tuple[float, int]:
+def lep_proximity(
+    eigenvalues: np.ndarray,
+    *,
+    rtol: float | None = None,
+    atol: float | None = None,
+) -> tuple[float, int]:
     """Minimum eigenvalue-pair separation, including complex-conjugate pairs.
 
     Returns ``(min_sep, candidate_count)`` where ``candidate_count`` is the
@@ -55,6 +60,17 @@ def lep_proximity(eigenvalues: np.ndarray, *, atol: float = EPS_GAP) -> tuple[fl
             "lep_proximity requires finite eigenvalues; "
             f"non-finite entries at indices {bad}"
         )
+    # Issue #108: the coalescence threshold is a rate-dimensioned SEPARATION,
+    # so an absolute floor made "are these two eigenvalues coalesced?" depend on
+    # the choice of rate unit -- under L -> cL with small c every separation
+    # fell below the floor and reported proximity 0.0, the STRONGEST possible EP
+    # signal, for an ordinary well-separated spectrum. Both the clamp and the
+    # candidate-count window now scale with the spectral radius.
+    tol = (
+        spectral_zero_tolerance(eigenvalues, atol=atol, name="eigenvalues")
+        if rtol is None
+        else spectral_zero_tolerance(eigenvalues, rtol=rtol, atol=atol, name="eigenvalues")
+    )
     n = eigenvalues.size
     if n < 2:
         return float("inf"), 0
@@ -65,9 +81,9 @@ def lep_proximity(eigenvalues: np.ndarray, *, atol: float = EPS_GAP) -> tuple[fl
             if sep < min_sep:
                 min_sep = sep
     # Exact / numerically-degenerate closest pair == strongest EP signal.
-    if min_sep <= atol:
+    if min_sep <= tol:
         min_sep = 0.0
-    window = max(10.0 * min_sep, atol)
+    window = max(10.0 * min_sep, tol)
     pairs_close = 0
     for i in range(n):
         for j in range(i + 1, n):
@@ -139,6 +155,7 @@ def compute_lep_layer(
     seed: int | None = None,
     rng: RNGLike | SeedLike | None = None,
     n_haar: int = 10,
+    spectral_resolved: bool = True,
 ) -> LepResult:
     """Run D16, D17, D18 together.
 
@@ -147,15 +164,53 @@ def compute_lep_layer(
     :func:`gap_rate_consistency` for why the relative-entropy rate must not be
     used here (issue #69). ``seed`` (legacy, default 7) and the SPEC 7 ``rng``
     keyword are mutually exclusive and only feed the D18 Haar ensemble.
+
+    ``spectral_resolved`` carries the zero-mode certificate's verdict into this
+    layer. ROUND-23 REVIEW (PR #121): where the certificate is applicable but
+    unresolved, the spectral layer withholds D1/D3/D4 as NaN because the
+    candidate spectrum is explicitly untrustworthy -- and D16 was still
+    computed from that same spectrum, because ``diagnose`` passed the
+    eigenvalues on unconditionally. A missing or ambiguous slow mode changes
+    the closest eigenvalue pair directly, so the number was not a measurement.
+    Measured on the issue-#113 stiff fixture: ``lep_proximity = 0.0`` with 51
+    candidate pairs -- and ``0.0`` is the coalescence limit, i.e. the STRONGEST
+    exceptional-point signal this diagnostic can emit, produced from modes
+    sitting below the eigensolver's backward error.
+
+    The certificate floor downstream caps the classifier's VERDICT, which is a
+    different guarantee from not publishing the number: ``LepResult`` is
+    returned to callers and persisted as audit metadata. D16 is therefore
+    withheld here (NaN proximity, ``None`` count), which is deliberately
+    distinguishable from both measured extremes -- ``0.0`` (coalesced) and
+    ``inf`` (no pair to compare) are answers, NaN is the absence of one, and
+    ``_strip_unavailable`` in the classifier keys on exactly that.
+
+    D17 and D18 are unaffected and stay measured: D17 already inherits the
+    withheld gap through ``gap_rate_consistency`` (NaN in, NaN out) and D18 is
+    computed from the operator, not from the spectrum.
     """
     L_super = np.asarray(L_super)
     if rho_steady_state is None:
         rho_steady_state = steady_state(L_super)
-    proximity, candidates = lep_proximity(eigenvalues)
     consistency = gap_rate_consistency(beta_D_linear, gap)
     sensitivity = initial_state_sensitivity(
         L_super, rho_steady_state, n_samples=n_haar, seed=seed, rng=rng
     )
+    # Computed BEFORE the withholding branch on purpose: ``lep_proximity``
+    # carries the issue-#82 fail-closed check that non-finite eigenvalues are
+    # solver corruption, not an LEP signal. Skipping the call to withhold the
+    # number would also skip that refusal, i.e. close one fail-open path by
+    # opening another. The cost is one O(n^2) scan on a result that is then
+    # discarded, which is the right trade for keeping a guard on the path.
+    proximity, candidates = lep_proximity(eigenvalues)
+    if not spectral_resolved:
+        return LepResult(
+            lep_proximity=float("nan"),
+            gap_rate_consistency=consistency,
+            initial_state_sensitivity=sensitivity,
+            lep_candidate_count=None,
+            beta_D_linear=float(beta_D_linear),
+        )
     return LepResult(
         lep_proximity=proximity if np.isfinite(proximity) else float("inf"),
         gap_rate_consistency=consistency,

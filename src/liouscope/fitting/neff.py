@@ -50,6 +50,19 @@ def estimate_neff_geyer(residuals: np.ndarray, *, max_lag: int | None = None) ->
     """
     residuals = np.asarray(residuals, dtype=float)
     n = residuals.size
+    # Round-20 review (PR #121). The final clamp below is
+    # ``max(1.0, min(float(n), n_eff))``, and Python's ``min`` returns its
+    # FIRST argument when the comparison is false -- which every comparison
+    # against NaN is. A non-finite residual series therefore left this
+    # function as ``n_eff = n``: the largest, most over-confident value
+    # available, laundered out of a NaN by a clamp that was written to bound
+    # a number, not to decide whether there was one. Same shape as the other
+    # findings this round: a guard certifying what it never measured.
+    #
+    # Reachable since the degenerate-curve refusal in ``fit_gls_ar1`` returns
+    # NaN residuals, which is the honest answer when no fit happened.
+    if n and not np.all(np.isfinite(residuals)):
+        return float("nan")
     if n < 4:
         return float(n)
     if max_lag is None:

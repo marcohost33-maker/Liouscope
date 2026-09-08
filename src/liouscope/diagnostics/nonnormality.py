@@ -52,12 +52,14 @@ resolvent peak (which is D11b in :mod:`liouscope.diagnostics.resolvent`).
 
 from __future__ import annotations
 
+import warnings
+
 import numpy as np
 import scipy.linalg as sla
 
-from .._consts import EPS_DIV, EPS_GAP
+from .._consts import EPS_DIV
 from .._types import KreissGridEstimate, NonNormalityResult
-from ..numerics.linalg import require_finite_square_2d
+from ..numerics.linalg import certified_eig, certified_eigvals, require_finite_square_2d
 from ..numerics.resolvent import resolvent_norm
 from ..numerics.scale import rate_scale
 
@@ -72,7 +74,7 @@ HENRICI_REL_CLIP_TOL = 1.0e-9
 
 def henrici_eta_n(A: np.ndarray) -> float:
     """Henrici departure-from-normality measure via Schur form."""
-    A = np.asarray(A)
+    A = np.asarray(A, dtype=complex)  # complex128: scipy dispatches by dtype; the double-solve contract (#108) must hold
     T, _ = sla.schur(A, output="complex")
     # The diagonal carries eigenvalues; the strictly-upper triangle is N.
     n = T.shape[0]
@@ -261,7 +263,7 @@ def kreiss_grid_lower_bound(
 def petermann_factors(
     L_super: np.ndarray,
     *,
-    atol: float = EPS_GAP,
+    atol: float | None = None,
 ) -> tuple[np.ndarray, np.ndarray]:
     """Petermann factors per non-zero eigenmode.
 
@@ -273,9 +275,38 @@ def petermann_factors(
     eigenmode ``j``; it does NOT equal the realised transient amplification of
     the propagator. Use D10 (Kreiss) / D15 (numerical abscissa) / D13
     (pseudospectrum) to bound ``sup_t ||e^{tL}||``. See the module docstring.
+
+    The eigendecomposition is CERTIFIED (round-14 review; issue #112). This
+    function previously recomputed its own raw ``zgeev`` decomposition, so on
+    a stiff trace-preserving generator it consumed exactly the solver failure
+    the spectral and Mpemba layers repair: the lost zero mode cannot be
+    restored by any cutoff (it is absent from the raw spectrum), and the
+    measured result was 16 "non-zero" modes with ``petermann_max ~ 622.7``
+    against the certified 15 modes with ``~ 2.0`` -- corrupting D9 and the
+    D11 input while the spectral layer looked resolved, i.e. a possible
+    false F1 signal that no verdict floor would catch. When the certificate
+    is applicable but NOT resolved, both returned arrays are a single NaN --
+    the library's unavailable sentinel -- so ``petermann_max`` becomes NaN
+    and the F1 rung reads UNEVALUABLE instead of a fabricated value.
     """
-    L_super = np.asarray(L_super)
-    eigvals, vl, vr = sla.eig(L_super, left=True, right=True)
+    L_super = np.asarray(L_super, dtype=complex)  # complex128: scipy dispatches by dtype; the double-solve contract (#108) must hold
+    decomp, certificate = certified_eig(L_super)
+    if certificate.applicable and not certificate.resolved:
+        warnings.warn(
+            "Petermann factors: the eigendecomposition of this trace-"
+            "preserving generator is unresolved (smallest |lambda| = "
+            f"{certificate.residual:.3e}, bound {certificate.bound:.3e}); "
+            "D9 is withheld as NaN rather than computed from a demonstrably "
+            "wrong spectrum (issues #112/#113, round-14 review).",
+            RuntimeWarning,
+            stacklevel=2,
+        )
+        nan_modes = np.full(1, np.nan, dtype=complex)
+        return nan_modes, np.full(1, np.nan)
+    eigvals = decomp.eigenvalues
+    vl, vr = decomp.left_vectors, decomp.right_vectors
+    if vl is None:  # pragma: no cover - certified_eig always sets left vectors
+        raise RuntimeError("certified_eig did not return left eigenvectors")
     # Normalise eigenvectors
     K_list: list[float] = []
     for j in range(eigvals.size):
@@ -288,8 +319,21 @@ def petermann_factors(
             K = float((np.linalg.norm(r) ** 2 * np.linalg.norm(l) ** 2) / denom)
         K_list.append(K)
     K_arr = np.asarray(K_list)
-    # Drop zero eigenvalue but KEEP complex pairs.
-    mask = np.abs(eigvals) > atol
+    # Drop zero eigenvalue but KEEP complex pairs. Scale-relative zero-mode
+    # separation (issue #108): with an absolute floor, a rescaled generator
+    # either dropped every mode (empty K array) or retained the round-off zero
+    # mode, whose Petermann factor is numerical noise feeding the F1 gate.
+    # The scale comes from the certificate's single filter entry point
+    # (round-13, corrected round-17 review / PR #121). This site used the raw
+    # ``bound``, which after an a posteriori refinement is LARGER than the
+    # tolerance actually applied: the slow mode the certificate had just
+    # rescued -- precisely the one whose eigenvector conditioning can dominate
+    # ``petermann_max`` -- was dropped from the D9 arrays again, which can
+    # change the F1 classification. ``zero_set_tolerance`` also carries the
+    # radius fallback for an inapplicable certificate (round-14).
+    mask = np.abs(eigvals) > certificate.zero_set_tolerance(
+        eigvals, atol=atol, name="eigenvalues of L_super"
+    )
     eigvals_filt = eigvals[mask]
     K_filt = K_arr[mask]
     order = np.argsort(-np.real(eigvals_filt))
@@ -316,7 +360,7 @@ def kreiss_constant(
     use :func:`kreiss_grid_lower_bound` (D10b) for the scale-relative,
     metadata-carrying successor.
     """
-    L_super = np.asarray(L_super)
+    L_super = np.asarray(L_super, dtype=complex)  # complex128: scipy dispatches by dtype; the double-solve contract (#108) must hold
     eigvals = sla.eigvals(L_super)
     re_part = np.real(eigvals)
     re_max = float(re_part.max())
@@ -410,7 +454,30 @@ def compute_nonnormality_layer(L_super: np.ndarray) -> NonNormalityResult:
     K_scaled = kreiss_grid_lower_bound(L_super)
     n2 = L_super.shape[0]
     d = int(round(np.sqrt(n2)))
-    ap_length, pauli_bound = bohr_arithmetic_progression(eigvals_filt, d)
+    # D11 consumes only EIGENVALUES (round-16 review). When D9 is withheld
+    # (round-15 eigenvector gate) the sentinel array must not flow into the
+    # progression scan -- NaN would be silently filtered there and the
+    # default length 1 reported as a MEASURED value. The eigenvalue
+    # certificate frequently still resolves in exactly that situation (the
+    # corruption is in the vectors), so D11 is recomputed from the certified
+    # spectrum; only when the eigenvalues themselves are unresolved does
+    # D11 become NaN, the library's unavailable sentinel.
+    if K_factors.size and bool(np.all(np.isnan(K_factors))):
+        ev_c, cert = certified_eigvals(np.asarray(L_super, dtype=complex))
+        if cert.applicable and not cert.resolved:
+            ap_length, pauli_bound = float("nan"), float(np.log2(max(d, 2)))
+        else:
+            # Round-17 review (PR #121): the raw ``bound`` discarded a mode
+            # the eigenvalue certificate had rescued by refinement, so D11
+            # could report the wrong progression depth. The refined zero set
+            # is what the spectral layer uses -- and now so does this
+            # fallback.
+            tol = cert.zero_set_tolerance(ev_c, name="eigenvalues of L_super")
+            ap_length, pauli_bound = bohr_arithmetic_progression(
+                ev_c[np.abs(ev_c) > tol], d
+            )
+    else:
+        ap_length, pauli_bound = bohr_arithmetic_progression(eigvals_filt, d)
     return NonNormalityResult(
         henrici_eta=eta_n,
         petermann_max=K_max,

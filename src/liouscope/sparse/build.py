@@ -13,6 +13,8 @@ from typing import Literal
 import numpy as np
 import scipy.sparse as sp
 
+from .._consts import EPS_HERMITICITY
+
 
 def build_sparse_liouvillian(
     H: np.ndarray | sp.spmatrix,
@@ -39,9 +41,48 @@ def build_sparse_liouvillian(
     # that is not GKSL at all while the dense twin raised.
     if H_sp.nnz and not np.all(np.isfinite(H_sp.data)):
         raise ValueError("H contains non-finite entries")
+    # Scale-relative Hermiticity gate, in parity with the dense builder
+    # (issue #109). Computed on the sparse data arrays so the d^2 dense
+    # materialisation the sparse path exists to avoid is not reintroduced.
     herm_defect = H_sp - H_sp.conj().T
-    if herm_defect.nnz and np.max(np.abs(herm_defect.data)) > 1.0e-9:
-        raise ValueError("H must be Hermitian within 1e-9 atol")
+    defect = float(np.max(np.abs(herm_defect.data))) if herm_defect.nnz else 0.0
+    # Gauge-fixed scale, in parity with the dense builder (twelfth-round
+    # review): a real identity offset is physically inert but inflates the
+    # scale, loosening the gate. Subtracting the real trace part touches only
+    # the diagonal, so sparsity is preserved.
+    #
+    # ROUND-22 REVIEW (PR #121). The dense twin was made overflow-safe in
+    # round 18; this path was not, and the two had to be repaired together
+    # because the whole point of these lines is parity. ``diagonal().sum()``
+    # adds the diagonal BEFORE dividing, so it returns inf for a finite H
+    # whose entries are large -- ``1.3e308 * I`` in two dimensions is enough.
+    # ``H_gauge`` then becomes NaN, ``scale`` becomes NaN, and
+    # ``defect > EPS * NaN`` is False, so the gate ACCEPTED a matrix with a
+    # Hermiticity defect of 1e290 that the dense builder rejected on the same
+    # input. Dividing each diagonal entry first bounds the shift by
+    # ``max|diag(H)|``, which cannot overflow while H itself is finite.
+    gauge_shift = float(np.sum(H_sp.diagonal().real / d))
+    H_gauge = (
+        H_sp - sp.identity(d, dtype=complex, format="csr") * gauge_shift
+    ).tocsr()
+    scale = float(np.max(np.abs(H_gauge.data))) if H_gauge.nnz else 0.0
+    # Second line of defence, identical to the dense builder: a scale or a
+    # defect that is not finite cannot decide anything, so the gate refuses
+    # rather than comparing against it. Without this, ANY future route to a
+    # non-finite scale silently reopens the same hole -- which is exactly how
+    # this one survived round 18.
+    if not np.isfinite(scale) or not np.isfinite(defect):
+        raise ValueError(
+            "H is finite but its gauge-fixed Hermiticity scale is not "
+            f"(max|H - H^dag| = {defect}, gauge-fixed max|H| = {scale}); "
+            "the Hermiticity gate cannot be evaluated, so H is refused"
+        )
+    if defect > EPS_HERMITICITY * scale:
+        raise ValueError(
+            f"H must be Hermitian within a relative {EPS_HERMITICITY:g} "
+            f"(max|H - H^dag| = {defect:.3e}, max|H| = {scale:.3e}, "
+            f"relative defect = {defect / scale if scale else float('inf'):.3e})"
+        )
     if jump_ops is None:
         jump_ops = []
     sparse_jumps = [sp.csr_matrix(L, dtype=complex) for L in jump_ops]

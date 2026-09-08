@@ -6,6 +6,7 @@ The top-level :class:`DiagnosticReport` is what `diagnose()` returns.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 from typing import Any, Literal
 
@@ -35,7 +36,38 @@ class SpectralResult:
     spectral_spread: float      # D4 max|Re| minus min|Re| (non-zero modes)
     eigenvalues: np.ndarray     # full sigma(L) sorted by real part
     steady_state: np.ndarray    # rho_ss matrix, d x d
-    has_complex_pairs: bool
+    has_complex_pairs: bool | None
+    """D3 oscillating-pair signal -- ``None`` when it is UNAVAILABLE.
+
+    A bool has no NaN, so the library's unavailable sentinel is ``None`` here.
+    It is set when the zero-mode certificate is applicable but uncertified:
+    the flag is derived from the same candidate spectrum that D1/D3/D4 are
+    withheld from, and ``False`` would be a claim ("no oscillating modes")
+    rather than an absence of one.
+
+    ``classification`` maps ``None`` to NaN in the evidence dict, where
+    ``_strip_unavailable`` removes it and the A8 rung consequently does not
+    hold -- the established route for an unavailable measurement.
+    """
+    # Issue #112. Structural check that the computed spectrum contains the zero
+    # mode that vec(I)^H L = 0 guarantees for a trace-preserving generator, plus
+    # which LAPACK route produced the accepted spectrum.
+    #
+    # LOAD-BEARING, not report-only (round-17 review, PR #121; the wording here
+    # said the opposite and contradicted both the code and the changelog).
+    # Three effects:
+    #   * ``classify_mechanism`` reads it and derives the
+    #     ``spectral_resolved`` evidence key from it;
+    #   * ``_apply_spectral_certificate_floor`` then caps BOTH the reported
+    #     verdict (-> UNDEFINED) and the tier (-> EXPLORATION) whenever an
+    #     applicable certificate is unresolved -- a fail-closed contract, not a
+    #     note in the margin;
+    #   * D1 is withheld as NaN for an applicable-but-unresolved certificate,
+    #     and D1/D3/D4 filter on the tolerance it carries
+    #     (``zero_tolerance``, issue #113 second axis).
+    # Optional with a default so the run-manifest contract is unchanged
+    # (additive field).
+    zero_mode_certificate: dict[str, object] | None = None
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -136,7 +168,7 @@ class NonNormalityResult:
     petermann_max: float        # D9 max K_j
     petermann_factors: np.ndarray
     kreiss: float               # D10 (legacy absolute-grid lower bound)
-    bohr_ap_length: int         # D11 Bohr arithmetic-progression depth
+    bohr_ap_length: float       # D11 Bohr AP depth (int-valued; NaN = withheld, round-16)
     bohr_ap_pauli_bound: float
     henrici_relative: float = float("nan")   # D8b eta_N / ||L||_F in [0, 1]
     kreiss_scaled: float = float("nan")      # D10b scale-relative grid lower bound
@@ -237,10 +269,14 @@ class LepResult:
     Note: conjugate-pair LEP candidates are INCLUDED (FIX-3, anchor I).
     """
 
-    lep_proximity: float                  # D16 min pair separation
+    lep_proximity: float                  # D16 min pair separation (NaN = withheld)
     gap_rate_consistency: float           # D17 |beta_D_linear - Delta| / Delta
     initial_state_sensitivity: float      # D18 std over Haar ensemble
-    lep_candidate_count: int
+    # ROUND-23 REVIEW (PR #121). ``None`` where D16 is withheld, in parity with
+    # ``SpectralResult.has_complex_pairs``. An integer count cannot express
+    # "not counted": 0 is a measured absence of close pairs, and the count is
+    # persisted as audit metadata.
+    lep_candidate_count: int | None
     # LIOU-#69: the LINEAR-metric rate actually fed to D17 (dimension-coherent
     # with the gap). Additive + defaulted so synthetic callers stay valid.
     beta_D_linear: float = float("nan")
@@ -280,13 +316,61 @@ class ClassificationResult:
     confidence: float                     # 0..1 — HEURISTIC support score, not
     #                                       a posterior probability (issue #102)
     evidence: dict[str, float]
+    # Issue #102 option 1 ("rename"): ``support_score`` is the honestly-named
+    # field for the SAME deterministic, rule-based ordinal value as
+    # ``confidence``. Semantics are explicitly NON-probabilistic: the value
+    # ranks rule strength (0.20 < 0.50 < 0.70 < 0.85 < 0.95) and carries no
+    # calibration evidence — do not read it as P(label is right). ``confidence``
+    # is retained as a legacy alias for serialised-report and API compatibility;
+    # a calibrated replacement (option 2) stays gated on the preregistered
+    # validation design in issue #102. Additive + defaulted (NaN) so results
+    # serialised by older versions stay valid; ``classify_mechanism`` always
+    # populates it, and the two fields are pinned equal in tests.
+    support_score: float = float("nan")  # defaults to ``confidence``; see __post_init__
     # Issue #102: every hypothesis that fired, in priority order, each flagged
     # ``shadowed`` when a higher rung already won. The dominant class above is a
     # convenience projection; without this the branch chain silently erases
     # concurrently supported mechanisms. Report only — no verdict consumes it.
     triggered_hypotheses: tuple[dict[str, object], ...] = ()
+    # Issue #102: hypothesis-wise evidence matrix over the FULL A1-A12 taxonomy
+    # (decision rungs + A12 fallback + schema-reserved A6/A7/A9). Each entry
+    # records supporting measurements, counterevidence, missing required
+    # evidence, an explicit claim floor and the ordinal support score — see
+    # ``hypothesis_evidence_matrix``. Report only — no decision consumes it.
+    hypothesis_matrix: tuple[dict[str, object], ...] = ()
     taxonomy_version: str = TAXONOMY_VERSION
     schema_version: str = DIAGNOSTIC_SCHEMA_VERSION
+
+    def __post_init__(self) -> None:
+        """Keep the ``support_score`` / ``confidence`` alias contract exact.
+
+        An older caller — or a result reconstructed from a serialised report
+        predating the field — supplies only ``confidence``. Leaving
+        ``support_score`` at its ``NaN`` sentinel would break the documented
+        promise that the two names carry the same value, precisely on the
+        backward-compatible path: code migrated to the new field would lose the
+        score for legacy results, and an export would emit a non-finite tag
+        where an ordinal value was promised.
+
+        An explicitly supplied ``support_score`` that DISAGREES with
+        ``confidence`` is rejected rather than kept or silently overwritten:
+        the two names are documented aliases of one value, so a report
+        carrying ``confidence=0.7`` next to ``support_score=0.2`` would hand
+        different scores to consumers depending on which name they read — a
+        contradiction, not a datum. If the fields ever legitimately diverge
+        (a CALIBRATED score, issue #102 option 2), that is a semantic change
+        that must ship with its own contract, not leak in through mismatched
+        constructor arguments.
+        """
+        if math.isnan(self.support_score):
+            object.__setattr__(self, "support_score", self.confidence)
+        elif self.support_score != self.confidence:
+            raise ValueError(
+                "support_score and confidence are documented aliases of one "
+                f"value; got support_score={self.support_score!r} vs "
+                f"confidence={self.confidence!r}. Supply only confidence (the "
+                "alias inherits it), or supply equal values."
+            )
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)

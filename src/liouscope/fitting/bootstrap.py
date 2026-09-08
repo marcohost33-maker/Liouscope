@@ -52,13 +52,57 @@ def parametric_bootstrap(
     if rng is None:
         rng = np.random.default_rng(0)
     base = fit_gls_ar1(model, t, y, p0, bounds=bounds)
+    if not base.success:
+        # Round-17 review (PR #121). Every replicate is simulated AROUND
+        # ``theta_hat``; if the base fit ended on the model's magnitude
+        # plateau, that centre is not an estimate and the whole resample is
+        # a distribution around a non-result. Raising routes this into the
+        # caller's existing handler, which reports the CI as NaN -- "fit
+        # uncertainty UNKNOWN" -- rather than as a narrow interval around a
+        # failure.
+        raise RuntimeError(
+            "parametric_bootstrap: the base fit did not converge"
+            + (f" (saturated: {', '.join(base.saturated)})" if base.saturated else "")
+            + (" (the curve carries no resolvable variation, issue #123)"
+               if base.degenerate else "")
+            + "; a bootstrap around a non-estimate has no meaning"
+        )
     theta_hat = base.params
     samples = np.empty((B, theta_hat.size))
+    failed = 0
     for b in range(B):
         eps_b = _ar1_resample(rng, t.size, base.rho_ar1, base.sigma)
         y_b = model(t, theta_hat) + eps_b
         fit_b = fit_gls_ar1(model, t, y_b, theta_hat, bounds=bounds)
+        failed += not fit_b.success
         samples[b] = fit_b.params
+    if failed:
+        # Round-20 review (PR #121). The previous round RETAINED failed
+        # replicates on the argument that keeping them can only widen the
+        # interval, hence err conservatively. That argument is wrong, and
+        # measurably so: a failed ``least_squares`` returns its unchanged
+        # STARTING value, which here is ``theta_hat`` itself, so every failure
+        # deposits mass exactly at the centre of the distribution. Measured on
+        # 400 replicates with 40 % failures, the BCa width fell to 0.93x and
+        # 0.87x of the interval computed without them -- NARROWER, in the
+        # dangerous direction, and narrower by more the more often the fit
+        # failed.
+        #
+        # Dropping them is not the alternative: that biases the endpoints in a
+        # direction nobody has characterised (a fit fails on the replicates
+        # that are hardest, which is not a random subset). Both routes need a
+        # failure-handling rule validated against something; there is none.
+        # Until there is, the honest output is no interval at all. The caller
+        # in ``compute_relaxation_layer`` already routes RuntimeError to
+        # ``bca_ci_beta = (nan, nan)`` -- "fit uncertainty UNKNOWN" -- which is
+        # the statement that survives review.
+        raise RuntimeError(
+            f"parametric_bootstrap: {failed} of {B} replicates did not "
+            "converge. A failed fit returns its unchanged starting value, so "
+            "retaining them narrows the BCa interval instead of widening it, "
+            "and dropping them biases the endpoints; neither has a validated "
+            "rule. No confidence interval is reported from this resample"
+        )
     return samples, theta_hat
 
 
@@ -69,14 +113,47 @@ def _jackknife(
     theta_hat: np.ndarray,
     bounds: tuple[np.ndarray, np.ndarray] | None,
 ) -> np.ndarray:
-    """Leave-one-out jackknife on the time grid."""
+    """Leave-one-out jackknife on the time grid.
+
+    Raises
+    ------
+    RuntimeError
+        If any leave-one-out fit fails to converge. Round-22 review (PR #121):
+        the round-20 guard on the BOOTSTRAP branch does not protect the
+        interval when every replicate converges but a jackknife fit does not.
+        The acceleration ``a`` in :func:`bca_ci` is a third moment of exactly
+        these estimates, and a failed ``least_squares`` returns its unchanged
+        STARTING value -- here ``theta_hat`` itself. One such value pulls the
+        jackknife distribution towards its own centre, which shifts ``a``, and
+        the BCa quantiles with it: the endpoints move without any data having
+        said so, and the interval that comes back is finite, narrow and
+        unwarranted.
+
+        The same two routes as in ``parametric_bootstrap`` are available and
+        the same objection applies to both: retaining a non-fit deposits mass
+        at the centre, dropping it biases the endpoints in a direction nobody
+        has characterised (a leave-one-out fit fails on the points that matter
+        most). Neither has a validated rule, so no interval is reported. The
+        caller in ``compute_relaxation_layer`` already routes RuntimeError to
+        ``bca_ci_beta = (nan, nan)`` -- "fit uncertainty UNKNOWN".
+    """
     n = t.size
     out = np.empty((n, theta_hat.size))
+    failed = 0
     for i in range(n):
         t_i = np.delete(t, i)
         y_i = np.delete(y, i)
         fit_i = fit_gls_ar1(model, t_i, y_i, theta_hat, bounds=bounds)
+        failed += not fit_i.success
         out[i] = fit_i.params
+    if failed:
+        raise RuntimeError(
+            f"_jackknife: {failed} of {n} leave-one-out fits did not "
+            "converge. A failed fit returns its unchanged starting value, so "
+            "the BCa acceleration would be computed from estimates that are "
+            "not estimates; no confidence interval is reported from this "
+            "jackknife"
+        )
     return out
 
 
