@@ -62,6 +62,16 @@ def _spectral(**kw) -> SpectralResult:
         "eigenvalues": _ARR,
         "steady_state": np.zeros((1, 1), dtype=complex),
         "has_complex_pairs": False,
+        # Issue #126 (PR #145) turned a missing certificate from "do not floor" into
+        # "unexamined, therefore withhold" -- deliberately, and documented in
+        # ``classification.py``. That migration added this exact line to the fixtures in
+        # ``test_failclosed_hardening.py`` and ``test_classification.py`` but not here, so
+        # the two positive controls below started failing with
+        # ``assert 'UNDEFINED' != 'UNDEFINED'``: the spectral floor fired where they assert
+        # the *A12 unevaluable* floor must not. Supplying a resolved certificate restores
+        # what these controls are meant to isolate. Tests that exercise the spectral floor
+        # itself pass their own certificate via ``**kw``.
+        "zero_mode_certificate": {"applicable": True, "certified": True, "resolved": True},
     }
     base.update(kw)
     return SpectralResult(**base)
