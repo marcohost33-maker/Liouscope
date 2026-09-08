@@ -25,8 +25,11 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from liouscope._consts import ZERO_MODE_EPS_FACTOR
-from liouscope.numerics.linalg import certified_nonzero_modes
+from liouscope._consts import ZERO_MODE_APOSTERIORI_MARGIN, ZERO_MODE_EPS_FACTOR
+from liouscope.numerics.linalg import (
+    _certify_invariant_subspace,
+    certified_nonzero_modes,
+)
 
 _SEED = 20260908
 
@@ -255,3 +258,87 @@ def test_certification_is_never_manufactured_for_the_stationary_mode(
     candidates = np.array([0.0, _SLOW, (1.0 + shift) * _SLOW, -1.0], dtype=complex)
     out = certified_nonzero_modes(L, candidates, np.abs(candidates) <= _band(L))
     assert bool(out[0]) is False
+
+
+# --------------------------------------------------------------------------
+# The subspace certificate's own bookkeeping guards
+#
+# The tests above reach ``_certify_invariant_subspace`` through
+# ``certified_nonzero_modes``, where ``ref`` is by construction the operator's
+# OWN ``sla.eig`` spectrum. Two of the refusals the function documents can then
+# never be the sole cause: another guard downstream refuses the same fixture
+# first. That was measured, not assumed -- a retraction probe over the round-28
+# repair (ledger DK-20260907T225012-a908bed7de33, 4 of 6) reported exactly those
+# two as BLIND, i.e. removable without any test noticing.
+#
+# ``ref``, ``L_c`` and ``cluster_values`` are three independent parameters, and
+# the guards exist for the case where they disagree -- a candidate ladder solved
+# by one route, a reference spectrum by another. They are therefore pinned at
+# the function's own contract boundary, where each is the sole cause.
+#
+# The operators here are diagonal on purpose, the opposite choice from
+# ``_operator_with_spectrum`` above and for the same reason: the bound must NOT
+# be what refuses, or the assertion would pass for the wrong reason. With an
+# exact invariant subspace the residual is ~0 and every downstream check passes,
+# so a verdict of ``False`` can only come from the guard under test -- which the
+# shared positive control demonstrates by certifying the identical fixture.
+# --------------------------------------------------------------------------
+
+_SUB_SLOW = -1.0e-6
+_SUB_CLUSTER = np.array([_SUB_SLOW, _SUB_SLOW], dtype=complex)
+_SUB_OPERATOR = np.diag(np.array([0.0, _SUB_SLOW, _SUB_SLOW, -1.0], dtype=complex))
+
+
+def test_a_reference_with_too_few_modes_at_that_position_stays_unresolved() -> None:
+    """Reference multiplicity below the cluster's: unresolved, not certified.
+
+    The candidate ladder reports two modes at ``-1e-6``; the reference spectrum
+    carries one there and its next entry at ``-1.2e-6``. Claiming two modes
+    where the reference has room for one is the D11 situation in miniature, and
+    the group must stay unresolved rather than have one member certified from
+    evidence gathered for the other.
+
+    The distances are chosen so that every LATER guard would pass: the second
+    reference entry sits at ``2e-7`` from the centre, above the ``0.1``
+    agreement guard's ``1e-7`` but far enough below the next distance
+    (``1e-6``) to clear the factor-4 separation, and the Schur reordering still
+    selects exactly the two operator modes.
+    """
+    ref = np.array([0.0, _SUB_SLOW, 1.2 * _SUB_SLOW, -1.0], dtype=complex)
+    assert (
+        _certify_invariant_subspace(_SUB_OPERATOR, ref, _SUB_CLUSTER, ZERO_MODE_APOSTERIORI_MARGIN)
+        is False
+    )
+
+
+def test_a_cluster_the_operator_carries_more_of_stays_unresolved() -> None:
+    """Schur selects k+1 modes for a k-cluster: unresolved, not a partial claim.
+
+    The operator has a THREEFOLD cluster at ``-1e-6`` while the candidate group
+    names two of its members. The leading columns of a Schur factorisation span
+    an invariant subspace for ANY truncation, so the residual would be ~0 and
+    the bound would certify happily -- on a two-dimensional slice cut out of a
+    three-dimensional cluster. That is the "splitting the group" the docstring
+    forbids: the block bound puts ``k`` eigenvalues of ``T11`` in bijection with
+    ``k`` of ``L``, and which two of the three were selected is not determined.
+    """
+    operator = np.diag(np.array([0.0, _SUB_SLOW, _SUB_SLOW, _SUB_SLOW, -1.0], dtype=complex))
+    ref = np.array([0.0, _SUB_SLOW, _SUB_SLOW, -0.5, -1.0], dtype=complex)
+    assert (
+        _certify_invariant_subspace(operator, ref, _SUB_CLUSTER, ZERO_MODE_APOSTERIORI_MARGIN)
+        is False
+    )
+
+
+def test_the_matching_reference_certifies_the_same_fixture() -> None:
+    """Positive control for both refusals above.
+
+    Same operator, same cluster, a reference that agrees in multiplicity: the
+    certificate is granted. Without this, a ``_certify_invariant_subspace`` that
+    had been broken into refusing everything would satisfy both tests above.
+    """
+    ref = np.array([0.0, _SUB_SLOW, _SUB_SLOW, -1.0], dtype=complex)
+    assert (
+        _certify_invariant_subspace(_SUB_OPERATOR, ref, _SUB_CLUSTER, ZERO_MODE_APOSTERIORI_MARGIN)
+        is True
+    )
