@@ -391,7 +391,25 @@ def compute_relaxation_layer(
 
     try:
         ent_asym = entanglement_asymmetry(final_rho)
-    except Exception:
+    except (ValueError, RuntimeError, np.linalg.LinAlgError) as exc:
+        # NARROWED + MADE AUDIBLE (2026-09-09, cross-family finding E). This was a
+        # bare ``except Exception:`` that swallowed the failure SILENTLY -- twenty
+        # lines below the comment block above, which argues (correctly) that a
+        # swallowed numerical failure is worse than a loud one: 'Fail loud, not
+        # certain'. Two defects in one:
+        #   * ``Exception`` also catches TypeError/AttributeError/KeyError, i.e.
+        #     PROGRAMMING errors inside ``entanglement_asymmetry`` itself, which
+        #     then surfaced as a NaN diagnostic instead of a traceback -- a defect
+        #     in the code was reported as a property of the physics;
+        #   * nothing was emitted, so a run whose D-value is UNKNOWN was
+        #     indistinguishable from one where it was genuinely not computable.
+        # The NaN result itself is deliberately UNCHANGED (no verdict change);
+        # only the caught exception surface and the visibility change.
+        warnings.warn(
+            f"entanglement_asymmetry failed ({exc!r}); reporting nan (UNKNOWN).",
+            RuntimeWarning,
+            stacklevel=2,
+        )
         ent_asym = float("nan")
 
     # LINEAR-metric relaxation rate for D17 (LIOU-#69). ``beta_D`` above is fit
