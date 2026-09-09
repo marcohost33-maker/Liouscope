@@ -141,9 +141,14 @@ def test_the_warning_names_the_achievable_eps() -> None:
     message = str(record[0].message)
     assert "sigma_min" in message
     assert "nan" in message
-    # The number it names must actually be the achievable eps.
+    # The ACTIONABLE half, asserted as a whole phrase. A retraction probe on
+    # 2026-09-09 showed why: asserting only that the number appears SOMEWHERE
+    # in the message left this test blind -- the diagnostic half ("smallest
+    # sigma_min on this grid was ...") already contains it, so the instruction
+    # half could be deleted and the test stayed green. A guard that accepts
+    # "something failed" in place of "do this" is not the guard we wrote.
     floor = pseudospectrum_sigma_floor(a, **_FINE_GRID)
-    assert f"{floor:.6e}" in message
+    assert f"raise eps to at least {floor:.6e}" in message
 
 
 def test_the_default_grid_still_resolves_a_liouvillian_like_spectrum() -> None:
