@@ -28,6 +28,8 @@ is therefore ``max|lambda| + eps``.
 
 from __future__ import annotations
 
+import warnings
+
 import numpy as np
 import pytest
 
@@ -268,3 +270,68 @@ def test_an_unresolved_d13_withholds_the_gapless_f5_limit() -> None:
 
     assert "F5_PSEUDOSPECTRAL" in _fired(0.0)
     assert "F5_PSEUDOSPECTRAL" not in _fired(float("nan"))
+
+
+# ---------------------------------------------------------------------------
+# END-TO-END. Everything above this line injects 0.0/nan into the evidence dict
+# BY HAND -- which pins the ladder's reaction, but not the causal chain that
+# produces the value. Equalita's ablation (2026-09-09) made the point by
+# measurement: retract the numerics fix and the fail-open returns, while the two
+# tests whose docstrings tell that very story stay GREEN. A guard that does not
+# hang on the running path is not a guard.
+#
+# The tests below therefore start at OPERATOR + GRID and end at the decision:
+#   operator + offset grid -> pseudospectral_radius -> evidence -> ladder
+# with no hand-written D13 value anywhere in between.
+# ---------------------------------------------------------------------------
+
+
+def _fired_from_operator(eps: float) -> tuple[float, list[str]]:
+    """Run the real chain once and return ``(measured D13, rules that fired)``.
+
+    ``gap = 0.0`` (MEASURED gapless) and ``henrici_eta = 2.0`` are the
+    surrounding state in which the F5 rung would fire; the ONLY thing varied
+    between the two tests is ``eps``, i.e. whether the sweep can resolve
+    anything on this grid. Warnings are recorded rather than asserted here so
+    that a retraction of the numerics fix kills the tests on their ASSERTION
+    about the decision, not on a missing warning.
+    """
+    a = _normal_matrix()
+    with warnings.catch_warnings(record=True):
+        warnings.simplefilter("always")
+        radius = pseudospectral_radius(a, eps, **_FINE_GRID)
+    ev = _ev(gap=0.0, henrici_eta=2.0, pseudospectral_radius=radius)
+    fired = [r[0] for r in _hypothesis_ladder(ev, relaxation=_Relaxation()) if r[3]]
+    return radius, fired
+
+
+def test_end_to_end_an_unresolved_sweep_cannot_manufacture_an_f5_claim() -> None:
+    """The regression Equalita's ablation showed was missing.
+
+    eps = 1e-3 on a grid whose nodes miss every eigenvalue: the sweep resolves
+    nothing. Pre-fix it handed the ladder a ``0.0``, the REQUIRED key was
+    present, the gapless leg returned True without ever reading the radius --
+    and an A10/F5 mechanism claim stood on a D13 that was never measured.
+
+    Retracting the numerics fix makes THIS test red, because the value it
+    judges comes out of ``pseudospectral_radius`` itself.
+    """
+    radius, fired = _fired_from_operator(1.0e-3)
+    assert "F5_PSEUDOSPECTRAL" not in fired, (
+        f"F5 fired on an UNMEASURED D13 (radius={radius!r}): the unresolved "
+        "sweep was laundered into evidence"
+    )
+    assert np.isnan(radius)
+
+
+def test_end_to_end_a_resolved_sweep_still_supports_the_gapless_f5_claim() -> None:
+    """Positive control on the SAME chain -- without it the test above is vacuous.
+
+    Identical operator, identical grid, identical surrounding evidence; only
+    ``eps`` is large enough for the sweep to resolve. F5 must still fire, so
+    "withheld because unmeasured" and "never fires any more" stay
+    distinguishable.
+    """
+    radius, fired = _fired_from_operator(0.5)
+    assert np.isfinite(radius)
+    assert "F5_PSEUDOSPECTRAL" in fired
