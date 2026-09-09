@@ -151,6 +151,23 @@ def test_the_warning_names_the_achievable_eps() -> None:
     assert f"raise eps to at least {floor:.6e}" in message
 
 
+def test_an_empty_grid_is_reported_as_empty_not_as_a_resolution_problem() -> None:
+    """The degenerate case must not name an eps it never computed.
+
+    With zero nodes ``sigma_min`` is never evaluated, so there is no achievable
+    eps to report. Naming one would repeat finding A one level up: a number
+    where no measurement happened. The floor is ``inf`` (no node, no eps would
+    have helped) and the message says EMPTY instead.
+    """
+    a = _normal_matrix()
+    grid = {"grid_re": (-6.0, 1.0, 0), "grid_im": (-5.0, 5.0, 0)}
+    assert pseudospectrum_sigma_floor(a, **grid) == float("inf")
+    with pytest.warns(RuntimeWarning, match="EMPTY") as record:
+        radius = pseudospectral_radius(a, 1.0e-3, **grid)
+    assert np.isnan(radius)
+    assert "raise eps" not in str(record[0].message)
+
+
 def test_the_default_grid_still_resolves_a_liouvillian_like_spectrum() -> None:
     """Positive control on the DEFAULT path -- the one production uses.
 
