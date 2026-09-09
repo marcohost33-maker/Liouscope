@@ -10,7 +10,11 @@ from .linalg import (
     is_hermitian,
     support_check,
 )
-from .pseudospec import pseudospectral_radius, pseudospectrum_extent
+from .pseudospec import (
+    pseudospectral_radius,
+    pseudospectrum_extent,
+    pseudospectrum_sigma_floor,
+)
 from .resolvent import resolvent_apply_superlu, resolvent_norm
 from .scale import rate_scale
 
@@ -24,6 +28,7 @@ __all__ = [
     "is_hermitian",
     "pseudospectral_radius",
     "pseudospectrum_extent",
+    "pseudospectrum_sigma_floor",
     "rate_scale",
     "resolvent_apply_superlu",
     "resolvent_norm",

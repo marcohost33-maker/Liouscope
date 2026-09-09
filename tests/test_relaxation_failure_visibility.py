@@ -77,10 +77,23 @@ def test_a_numerical_d7b_failure_is_audible_and_still_reports_unknown(
     The three caught types are the documented numerical surface. The returned
     value is unchanged (``None``, the report-layer encoding of NaN): this fix
     changes visibility, not verdicts.
+
+    Recorded rather than asserted via ``pytest.warns`` ON PURPOSE: a missing
+    warning kills ``pytest.warns`` with ``Failed: DID NOT WARN``, which a
+    retraction probe must classify as a crash, not as the test's own verdict.
+    An explicit assertion over the recorded warnings makes the death cause an
+    ``AssertionError``, i.e. attributable.
     """
     monkeypatch.setattr(rx, "entanglement_asymmetry", _raise(exc))
-    with pytest.warns(RuntimeWarning, match="entanglement_asymmetry failed"):
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
         result = rx.compute_relaxation_layer(_decay_generator(), bootstrap_B=20)
+    matching = [
+        w for w in caught if "entanglement_asymmetry failed" in str(w.message)
+    ]
+    assert matching, f"no D7b failure warning; got {[str(w.message) for w in caught]}"
+    assert issubclass(matching[0].category, RuntimeWarning)
+    assert repr(exc) in str(matching[0].message)  # the cause must be named
     assert result.entanglement_asymmetry is None
 
 
