@@ -526,6 +526,7 @@ def test_a_withheld_diagnostic_does_not_break_the_report(tmp_path) -> None:
     from dataclasses import replace
 
     from liouscope.io.stability_report import (
+        UNAVAILABLE_CLAIM_STATUS,
         dump_stability_report,
         validate_stability_report,
     )
@@ -539,29 +540,58 @@ def test_a_withheld_diagnostic_does_not_break_the_report(tmp_path) -> None:
         nonnorm=replace(report.nonnorm, petermann_max=float("nan")),
     )
     payload = _payload(unresolved, L, rho)
-    assert payload["diagnostics"]["D1_gap"] is None
-    assert payload["diagnostics"]["D3_oscillating_gap"] is None
-    assert payload["diagnostics"]["D9_petermann_max"] is None
+    for key in ("D1_gap", "D3_oscillating_gap", "D9_petermann_max"):
+        entry = payload["diagnostics"][key]
+        assert isinstance(entry, dict), (key, entry)
+        assert entry["value"] is None
+        assert entry["claim_status"] == UNAVAILABLE_CLAIM_STATUS
+        assert entry["__nonfinite__"] == "nan"
     validate_stability_report(payload)
     out = tmp_path / "unresolved.json"
     dump_stability_report(payload, out)
     import json
 
     loaded = json.loads(out.read_text(encoding="utf-8"))
-    assert loaded["diagnostics"]["D1_gap"] is None
+    assert loaded["diagnostics"]["D1_gap"]["value"] is None
+    assert loaded["diagnostics"]["D1_gap"]["__nonfinite__"] == "nan"
 
 
-def test_an_infinite_diagnostic_is_also_encoded_as_unavailable(tmp_path) -> None:
+def test_an_infinite_diagnostic_stays_distinguishable_from_a_withheld_one(
+    tmp_path,
+) -> None:
     """+-inf is equally non-conforming under RFC 8259 and raised in the same
-    place; the projection must not stop at NaN."""
+    place, so the encoding must not stop at NaN -- but it must not FLATTEN the
+    two either.
+
+    This assertion was ``is None`` until the PR #121 and PR #127 encodings were
+    unified. Both branches kept the report writable; only the tagged one keeps
+    a measured infinity (a Kreiss constant that really did diverge) apart from
+    an unavailable one (a certificate that was never resolved). Once both are
+    ``null`` on disk, no later reader can tell them apart again -- which is the
+    conflation the whole withholding mechanism exists to prevent.
+    """
     from dataclasses import replace
 
-    from liouscope.io.stability_report import dump_stability_report
+    from liouscope.io.stability_report import (
+        UNAVAILABLE_CLAIM_STATUS,
+        dump_stability_report,
+    )
 
     report, L, rho = _diagnosed()
     infinite = replace(report, nonnorm=replace(report.nonnorm, kreiss=float("inf")))
     payload = _payload(infinite, L, rho)
-    assert payload["diagnostics"]["D10_kreiss"] is None
+    entry = payload["diagnostics"]["D10_kreiss"]
+    assert entry["value"] is None
+    assert entry["claim_status"] == UNAVAILABLE_CLAIM_STATUS
+    assert entry["__nonfinite__"] == "inf"
+
+    # DISCRIMINATION: the same slot, withheld rather than measured, must carry
+    # a DIFFERENT token -- otherwise this encoding is a renamed ``null``.
+    withheld = replace(report, nonnorm=replace(report.nonnorm, kreiss=float("nan")))
+    assert _payload(withheld, L, rho)["diagnostics"]["D10_kreiss"][
+        "__nonfinite__"
+    ] == "nan"
+
     dump_stability_report(payload, tmp_path / "infinite.json")
 
 

@@ -12,11 +12,13 @@ Includes:
 from __future__ import annotations
 
 import contextlib
+import itertools
 from collections.abc import Iterator
 from dataclasses import dataclass
 
 import numpy as np
 import scipy.linalg as sla
+from scipy.optimize import linear_sum_assignment
 
 from .._consts import (
     EPS_HERMITICITY,
@@ -248,8 +250,53 @@ def operator_zero_tolerance(
     if not np.isfinite(rtol) or rtol < 0.0:
         raise ValueError(f"rtol must be finite and non-negative, got {rtol}")
     L_c = np.asarray(require_finite_square_2d(L_super, name=name), dtype=complex)
-    norm2 = float(np.linalg.norm(L_c, 2)) if L_c.size else 0.0
-    return float(rtol * float(np.finfo(float).eps) * norm2)
+    # ``require_finite_square_2d`` has already refused an empty operator, so
+    # ``L_c.size`` is non-zero from here on.
+    eps = float(np.finfo(float).eps)
+    norm2 = float(np.linalg.norm(L_c, 2))
+    if np.isfinite(norm2):
+        tol = float(rtol * eps * norm2)
+    else:
+        # ROUND-24 REVIEW (PR #121). The round-22 finding, one helper across.
+        # ``||L||_2`` can overflow for an operator every entry of which is
+        # finite -- a 2x2 filled with ``1e308`` has a spectral norm of
+        # ``2e308`` -- while the quantity this function returns,
+        # ``rtol * eps * ||L||_2 ~ 4.4e295``, is comfortably representable.
+        # Returning ``inf`` there is the same silent failure the spectrum-side
+        # helper closed in round 22: no mode satisfies ``|lambda| > inf``, so a
+        # consumer holding the OPERATOR discards its entire spectrum and reads
+        # a huge non-zero mode as stationary. The input was valid; only the
+        # intermediate was not.
+        #
+        # Scaling by the largest COMPONENT keeps every intermediate in range,
+        # exactly as in :func:`liouscope.numerics.scale.spectral_zero_tolerance`
+        # -- ``max(|Re|, |Im|)`` rather than ``max|.|`` because the modulus of
+        # a finite complex entry can itself overflow. ``frexp`` selects a POWER
+        # OF TWO, so the shift is exact in every mantissa bit and the round
+        # trip introduces no rounding into a number whose only purpose is to be
+        # compared against. ``m > 0`` holds here: a zero matrix has a finite
+        # (zero) 2-norm and never reaches this branch.
+        m = float(np.max(np.maximum(np.abs(np.real(L_c)), np.abs(np.imag(L_c)))))
+        exp = int(np.frexp(m)[1])
+        scaled = np.ldexp(np.real(L_c), -exp) + 1j * np.ldexp(np.imag(L_c), -exp)
+        with np.errstate(over="ignore"):
+            tol = float(
+                np.ldexp(rtol * eps * float(np.linalg.norm(scaled, 2)), exp)
+            )
+    if not np.isfinite(tol):
+        # Second line of defence, independent of the arithmetic above and the
+        # same rule ``spectral_zero_tolerance`` applies to its own derived
+        # value. A tolerance that is not finite cannot separate anything, so
+        # the operator is refused rather than filtered against an unusable
+        # threshold. Reached only when the tolerance ITSELF exceeds the double
+        # range (``rtol`` near the top of it), not merely the norm.
+        raise ValueError(
+            f"the zero-mode tolerance derived from {name} is not finite "
+            f"(rtol = {rtol}, ||L||_2 = {norm2}); no mode could exceed it, "
+            "so the operator is refused rather than filtered against an "
+            "unusable threshold"
+        )
+    return tol
 
 
 def trace_preservation_defect(L_super: np.ndarray) -> tuple[float, float]:
@@ -323,6 +370,68 @@ def trace_preservation_componentwise_error(L_super: np.ndarray) -> float:
     )
 
 
+def underflow_safe_norm(v: np.ndarray) -> float:
+    """2-norm of ``v`` that does not lose a nonzero vector to underflow.
+
+    ROUND-24 REVIEW (PR #121), finding B4. ``np.linalg.norm`` squares before
+    summing, so every component below ``sqrt(5e-324) ~ 1.5e-162`` contributes
+    exactly zero and a demonstrably nonzero vector comes back with norm
+    ``0.0``. That is not an accuracy loss but a change of KIND: a residual of
+    zero certifies an exact eigenpair, which is the strongest statement the
+    a-posteriori bound can make.
+
+    Same discipline as :func:`trace_preservation_defect` above: the rescue is
+    reachable ONLY from an exact ``0.0`` on a vector that is not itself zero,
+    so no overflowing quantity is made finite and a genuinely zero vector
+    keeps the correct answer rather than a rescued one. Scaling is by a POWER
+    OF TWO via ``frexp``/``ldexp``, so the mantissa bits survive the round trip
+    exactly and complex division by a subnormal -- which overflows inside
+    NumPy's algorithm -- is never formed.
+    """
+    v = np.asarray(v)
+    nrm = float(np.linalg.norm(v))
+    if nrm != 0.0 or not v.size or not bool(np.any(v != 0.0)):
+        return nrm
+    m = float(np.max(np.maximum(np.abs(np.real(v)), np.abs(np.imag(v)))))
+    if not np.isfinite(m) or m <= 0.0:  # pragma: no cover - unreachable via any(v != 0)
+        return nrm
+    exp = int(np.frexp(m)[1])
+    scaled = np.ldexp(np.real(v), -exp) + 1j * np.ldexp(np.imag(v), -exp)
+    return float(np.ldexp(float(np.linalg.norm(scaled)), exp))
+
+
+def underflow_safe_column_norms(M: np.ndarray) -> np.ndarray:
+    """Column-wise 2-norms of ``M``, none of which underflows to a false zero.
+
+    ROUND-25 REVIEW (PR #121). :func:`underflow_safe_norm` repaired the
+    residual pair inside ``certify_nonstationary``; the SEPARATE eigenvector
+    gate in :func:`certified_eig` still formed its column norms with a raw
+    ``np.linalg.norm(..., axis=0)``, so the same 1e-162 cliff produced a
+    residual of ``0.0`` -- an exact-eigenpair claim -- for a demonstrably
+    wrong eigenvector, and D9/D19 consumed a pair the gate exists to reject.
+
+    Repairing one call site rather than the CLASS is what let the defect
+    survive a round; this helper is the one place the rescue now lives for
+    every column-wise residual.
+
+    The healthy path is unchanged BIT FOR BIT: the vectorised NumPy result is
+    returned unless a column came back exactly ``0.0`` while containing a
+    nonzero entry, and only those columns are recomputed. A genuinely zero
+    column keeps its correct ``0.0`` rather than a rescued value.
+    """
+    M = np.asarray(M)
+    nrm = np.asarray(np.linalg.norm(M, axis=0), dtype=float)
+    if not M.size:
+        return nrm
+    lost = (nrm == 0.0) & np.any(M != 0.0, axis=0)
+    if not bool(np.any(lost)):
+        return nrm
+    out = np.array(nrm, dtype=float)
+    for k in np.flatnonzero(lost):
+        out[int(k)] = underflow_safe_norm(M[:, int(k)])
+    return out
+
+
 def band_discriminates(
     magnitudes: np.ndarray, zero_count: int, bound: float
 ) -> bool:
@@ -352,6 +461,213 @@ def band_discriminates(
     if bound <= 0.0:
         return True
     return zero_count < int(magnitudes.size)
+
+
+#: Relative distance at which a borrowed decomposition still counts as talking
+#: about the SAME mode. It is the pre-existing agreement guard of
+#: :func:`certified_nonzero_modes`, lifted to a name because the cluster and
+#: subspace paths must apply exactly the same criterion -- a second, silently
+#: different tolerance is how the two halves of a fail-closed rule drift apart.
+PAIR_AGREEMENT_RTOL: float = 0.1
+
+#: How much farther the nearest NON-member reference eigenvalue must sit than
+#: the farthest member before a cluster counts as separable. Below this the
+#: ball that defines the invariant subspace cannot be placed unambiguously and
+#: the verdict is ``unresolved`` rather than an optimistic guess.
+SUBSPACE_SEPARATION_FACTOR: float = 4.0
+
+
+def _frobenius_underflow_safe(M: np.ndarray) -> float:
+    """Frobenius norm that does not collapse to a false ``0.0``.
+
+    Round-24 finding B4 applies verbatim to the block residuals below: a
+    uniformly tiny residual matrix squares to zero under ``np.linalg.norm`` and
+    would certify an arbitrarily bad subspace. Built from the column norms so
+    the rescue lives in exactly one place (:func:`underflow_safe_column_norms`).
+    """
+    return underflow_safe_norm(underflow_safe_column_norms(np.asarray(M)))
+
+
+def _injective_pairing(
+    eigenvalues: np.ndarray, ref: np.ndarray, rows: np.ndarray
+) -> dict[int, int]:
+    """Globally injective candidate -> reference-index map, or ``{}``.
+
+    ROUND-28 REVIEW (PR #121), the adjudicated repair. Which reference eigenPAIR
+    may serve as evidence for candidate ``i`` used to be decided by an
+    independent nearest-value lookup per candidate. A lookup is not a map: two
+    candidates that are merely CLOSE both take the same reference index, and the
+    second is then certified from a residual measured for the first. For a
+    certification layer that is not a convention but a violation of evidence
+    identity, so the assignment is made injective BY CONSTRUCTION.
+
+    ``scipy.optimize.linear_sum_assignment`` minimises the TOTAL distance rather
+    than resolving collisions in candidate order. That distinction is
+    load-bearing and was measured: on the D11 network the greedy order hands
+    ``ev[3] = -3.3216107e-06`` the exact partner of ``ev[8] = -3.345505e-06``
+    and pushes ``ev[8]`` onto a stranger, while the global optimum leaves both
+    exact matches intact and strands ``ev[3]`` on ``ref[3] = -4.239e-06`` --
+    where the agreement guard refuses it, which is the correct fail-closed
+    verdict for a candidate the reference spectrum has no room for.
+
+    ``rows`` deliberately spans the whole zero band including the stationary
+    mode: it must reserve its own near-zero reference entry, or a slow candidate
+    could be handed the zero eigenvalue's eigenpair.
+
+    Returns ``{}`` -- certify nothing -- if any distance is non-finite, because
+    the assignment is then undefined and guessing would be fail-open.
+    """
+    if rows.size == 0:
+        return {}
+    ref_arr = np.asarray(ref)
+    cost = np.abs(ref_arr[np.newaxis, :] - np.asarray(eigenvalues)[rows][:, np.newaxis])
+    cost = np.asarray(cost, dtype=float)
+    if not bool(np.all(np.isfinite(cost))) or cost.shape[1] < cost.shape[0]:
+        return {}
+    r_idx, c_idx = linear_sum_assignment(cost)
+    return {int(rows[a]): int(j) for a, j in zip(r_idx, c_idx, strict=True)}
+
+
+def _relative_clusters(values: np.ndarray, indices: np.ndarray) -> list[list[int]]:
+    """Group ``indices`` whose ``values`` are within ``PAIR_AGREEMENT_RTOL``.
+
+    Transitive closure over the relative-distance relation, computed on the
+    magnitude-sorted order so a chain of near neighbours forms one group. A
+    group of size one is a separated, non-degenerate candidate and takes the
+    individual path; a group of size two or more is the near-degenerate cluster
+    the invariant-subspace argument is about.
+    """
+    if indices.size == 0:
+        return []
+    vals = np.asarray(values)[indices]
+    order = np.argsort(np.abs(vals), kind="stable")
+    groups: list[list[int]] = []
+    current: list[int] = [int(indices[order[0]])]
+    for prev, cur in itertools.pairwise(order):
+        a, b = complex(vals[prev]), complex(vals[cur])
+        scale = max(abs(a), abs(b))
+        if scale > 0.0 and abs(a - b) <= PAIR_AGREEMENT_RTOL * scale:
+            current.append(int(indices[cur]))
+        else:
+            groups.append(current)
+            current = [int(indices[cur])]
+    groups.append(current)
+    return groups
+
+
+def _certify_invariant_subspace(
+    L_c: np.ndarray, ref: np.ndarray, cluster_values: np.ndarray, margin: float
+) -> bool:
+    """Is the whole near-degenerate cluster provably away from the zero mode?
+
+    ROUND-28 REVIEW (PR #121). LAPACK states the case this exists for: when
+    eigenvalues cluster, the INVARIANT SUBSPACE can be well conditioned while
+    the individual eigenvectors are not determined at all. The per-mode bound
+    then divides by a ``|y^H x|`` that has collapsed and abstains on a cluster
+    whose position in the spectrum is in fact known to full accuracy. Forcing
+    individual eigenvectors there is the wrong object; the subspace is the right
+    one, and it is certified from the OPERATOR's own Schur basis, never from a
+    neighbour's eigenpair.
+
+    The bound is the exact block analogue of the scalar one already used above,
+
+        dist(spec, spec(T11)) <~ max(||L Q - Q T11||, ||L^H P - P S11||)
+                                 / sigma_min(P^H Q)
+
+    with ``Q``/``P`` orthonormal bases of the right/left invariant subspaces.
+    ``sigma_min(P^H Q)`` is the cosine of the LARGEST PRINCIPAL ANGLE between
+    them -- for ``k = 1`` it is ``|y^H x|`` and the whole expression reduces to
+    the scalar bound, so the two paths cannot disagree about a lone mode. The
+    same first-order caveat therefore applies and is covered by the same
+    ``margin``; the residual is measured in the Frobenius norm, which dominates
+    the spectral norm, so the bound errs towards refusing.
+
+    Certification is ALL-OR-NOTHING over the cluster. The block bound places the
+    ``k`` eigenvalues of ``T11`` in bijection with ``k`` eigenvalues of ``L``, so
+    the statement "none of these is the stationary mode" is a statement about the
+    group; splitting it would hand one member evidence gathered for the group.
+
+    Every separability failure returns ``False`` -- ``unresolved``, nothing
+    certified -- and never a fallback to a neighbouring eigenpair:
+
+    * fewer than two members: a one-dimensional subspace is the scalar case,
+      which the caller has already tried and which failed on its own evidence;
+    * no reference cluster of the SAME multiplicity within the agreement guard;
+    * the nearest non-member closer than ``SUBSPACE_SEPARATION_FACTOR`` times
+      the cluster radius, so no ball selects the cluster unambiguously;
+    * a Schur reordering that does not return exactly ``k`` selected modes;
+    * a singular or non-finite ``P^H Q``, or a cluster containing an exact zero.
+    """
+    vals = np.asarray(cluster_values, dtype=complex)
+    k = int(vals.size)
+    if k < 2 or not bool(np.all(np.isfinite(vals))):
+        return False
+    centre = complex(np.mean(vals))
+    ref_arr = np.asarray(ref, dtype=complex)
+    if ref_arr.size <= k or not bool(np.all(np.isfinite(ref_arr))):
+        return False
+
+    dist = np.sort(np.abs(ref_arr - centre))
+    inner, outer = float(dist[k - 1]), float(dist[k])
+    # The reference spectrum must carry a cluster of the SAME multiplicity that
+    # agrees with this one; otherwise the candidate ladder is claiming more
+    # modes at this position than the operator has, which is precisely the D11
+    # situation and must stay unresolved.
+    if not (inner <= PAIR_AGREEMENT_RTOL * abs(centre)):
+        return False
+    if inner > 0.0:
+        if not (outer > SUBSPACE_SEPARATION_FACTOR * inner):
+            return False
+    elif not (outer > 0.0):
+        return False
+    radius = 0.5 * (inner + outer)
+    if not np.isfinite(radius) or radius <= 0.0:
+        return False
+
+    A = np.asarray(L_c, dtype=complex)
+    try:
+        T_r, Z_r, sdim_r = sla.schur(
+            A, output="complex", sort=lambda x: bool(abs(x - centre) <= radius)
+        )
+        T_l, Z_l, sdim_l = sla.schur(
+            A.conj().T,
+            output="complex",
+            sort=lambda x: bool(abs(x - np.conj(centre)) <= radius),
+        )
+    except (ValueError, sla.LinAlgError):
+        return False
+    if int(sdim_r) != k or int(sdim_l) != k:
+        return False
+
+    Q, P = Z_r[:, :k], Z_l[:, :k]
+    T11, S11 = T_r[:k, :k], T_l[:k, :k]
+    mu = np.asarray(np.diag(T11), dtype=complex)
+    if not bool(np.all(np.isfinite(mu))) or bool(np.any(mu == 0.0)):
+        return False
+
+    # The cluster the Schur basis selected must be the cluster the candidates
+    # describe -- checked injectively, for the same reason the outer pairing is.
+    agree = np.abs(mu[np.newaxis, :] - vals[:, np.newaxis])
+    scale = np.maximum(np.abs(vals)[:, np.newaxis], np.abs(mu)[np.newaxis, :])
+    a_idx, b_idx = linear_sum_assignment(np.asarray(agree, dtype=float))
+    if bool(np.any(agree[a_idx, b_idx] > PAIR_AGREEMENT_RTOL * scale[a_idx, b_idx])):
+        return False
+
+    overlap = P.conj().T @ Q
+    if not bool(np.all(np.isfinite(overlap))):
+        return False
+    sep = float(np.min(np.linalg.svd(overlap, compute_uv=False)))
+    if not np.isfinite(sep) or sep <= 0.0:
+        return False
+    res = max(
+        _frobenius_underflow_safe(A @ Q - Q @ T11),
+        _frobenius_underflow_safe(A.conj().T @ P - P @ S11),
+    )
+    bound = res / sep
+    if not np.isfinite(bound):
+        return False
+    smallest = min(float(np.min(np.abs(vals))), float(np.min(np.abs(mu))))
+    return smallest > margin * bound
 
 
 def certified_nonzero_modes(
@@ -406,6 +722,7 @@ def certified_nonzero_modes(
     idx = idx[idx != idx[int(np.argmin(np.abs(eigenvalues[idx])))]]
 
     vr, vl, ref = right_vectors, left_vectors, eigenvalues
+    borrowed = vr is None or vl is None
     if vr is None or vl is None:
         # Own decomposition: the certificate is a property of the OPERATOR, so
         # it is legitimate to certify a candidate ladder's spectrum from the
@@ -415,26 +732,191 @@ def certified_nonzero_modes(
         except (ValueError, sla.LinAlgError):
             return out
 
+    # ROUND-26 REVIEW (PR #121). Which eigenPAIR belongs to candidate ``i`` was
+    # decided by ``argmin(|ref - lam|)``, a lookup BY VALUE. On a degenerate
+    # spectrum that is not a bijection: ``argmin`` returns the FIRST index
+    # attaining the minimum, so two equal in-band eigenvalues both borrow the
+    # first one's vectors and the second mode is certified on evidence that
+    # was never measured for it. Measured on a trace-preserving 4x4 with
+    # spectrum ``{0, -1e-14, -1e-14, -1}`` whose SECOND slow right vector was
+    # replaced by the fast mode's vector (residual 1.0 rather than 6e-18):
+    # both modes came back certified, ``certified=True, resolved=True``, and
+    # ``certified_eig`` handed the invalid pair to D9/D19. The later
+    # ``_vector_residual`` gate does not catch it -- it tests only modes above
+    # the RAW ``bound``, and a rescued mode is by construction below it.
+    #
+    # Two cases, and they need different repairs:
+    #
+    # * vectors SUPPLIED -> ``ref is eigenvalues``, so the pair index for
+    #   candidate ``i`` IS ``i``. No search is needed or wanted. For a
+    #   non-degenerate spectrum this is bit for bit the old ``argmin``
+    #   (``|ref[i] - lam| == 0`` is the unique minimum); it differs only where
+    #   the old lookup was ambiguous, which is exactly the defect.
+    # * vectors BORROWED -> ``ref`` really is a different decomposition and a
+    #   search is unavoidable. It is then a GLOBAL INJECTIVE ASSIGNMENT
+    #   (``_injective_pairing``), not a nearest-neighbour lookup per candidate.
+    #
+    # ROUND-28 REVIEW (PR #121): the adjudicated resolution of the collision an
+    # earlier round recorded as "left open deliberately". The equal-value
+    # ranking that stood here keyed on EXACT float equality, so two merely
+    # CLOSE candidates both took ``argmin`` and landed on the same reference
+    # eigenpair -- the same defect one step away from exact degeneracy, and
+    # reachable on a fixture this suite carries. Measured on the D11 network of
+    # ``tests/test_pr121_review_round17.py``: candidates
+    # ``{-3.3216107e-06, -3.345505e-06, -3.345505e-06}`` against a reference
+    # spectrum carrying ``-3.345505e-06`` EXACTLY TWICE (``ref[8]``,
+    # ``ref[11]``). Both copies are claimed to the last bit by the two exact
+    # candidates; ``ev[3]`` has no counterpart left, and its certification
+    # rested entirely on ``ref[8]``'s residual -- a residual already spoken for,
+    # and measured for a different eigenvalue.
+    #
+    # That is not a choosable convention. A residual is evidence for ONE
+    # eigenpair, so a many-to-one assignment cannot certify a second candidate;
+    # it must abstain. The three-way rule now reads:
+    #
+    #   separated, non-degenerate  -> index identity (same decomposition) or a
+    #                                 globally injective assignment (borrowed),
+    #                                 never greedy nearest-neighbour;
+    #   near-degenerate cluster    -> certify the INVARIANT SUBSPACE from the
+    #                                 operator's own Schur basis, because
+    #                                 LAPACK's own caveat applies: a clustered
+    #                                 subspace can be well conditioned while its
+    #                                 individual eigenvectors are not determined;
+    #   not separable              -> ``unresolved``: nothing certified, no
+    #                                 borrowed residual.
+    #
+    # The global optimum is what makes the injective rule safe here. An earlier
+    # round measured a BIJECTION as harmful, but that measurement was of a
+    # greedy one -- resolving collisions in candidate order hands ``ev[3]`` the
+    # exact partner of ``ev[8]``. Minimising the TOTAL distance instead leaves
+    # both exact matches intact and strands ``ev[3]`` on ``ref[3] =
+    # -4.239e-06`` at a relative distance of 0.216, where the agreement guard
+    # below refuses it. ``ev[8]`` and ``ev[11]`` keep their own evidence and
+    # stay certified; only the mode with no evidence of its own is lost, which
+    # is the point.
+    #
+    # The cost for the D11 fixture is stated rather than hidden: the certificate
+    # there goes ``resolved=True -> False`` and that network becomes a NEGATIVE
+    # control. Conceding that a network does not resolve is the honest verdict
+    # when the alternative is a borrowed residual; the positive path is carried
+    # by a separable fixture instead.
+    #
+    # Bit-for-bit on the healthy path: where every candidate has a unique
+    # nearest reference entry and no two compete for it, the minimum-cost
+    # assignment IS that set of nearest pairs, so a non-degenerate,
+    # well-separated spectrum takes exactly the old code path.
+    pair_of: dict[int, int] = {}
+    clusters: list[list[int]] = []
+    cluster_of: dict[int, int] = {}
+    ref_arr = np.asarray(ref)
+    if borrowed:
+        pair_of = _injective_pairing(eigenvalues, ref, np.flatnonzero(in_band))
+        clusters = _relative_clusters(eigenvalues, idx)
+        for pos, group in enumerate(clusters):
+            for member in group:
+                cluster_of[member] = pos
+    else:
+        pair_of = {int(raw): int(raw) for raw in np.flatnonzero(in_band)}
+
     tiny = np.finfo(float).tiny
     for i in idx:
         lam = eigenvalues[i]
-        j = int(np.argmin(np.abs(ref - lam)))
+        if borrowed:
+            if len(clusters[cluster_of[int(i)]]) > 1:
+                # Near-degenerate: no individual eigenpair is the right evidence
+                # object here. Handled below, as a subspace, or not at all.
+                continue
+            # A SEPARATED candidate may be certified only when the reference
+            # spectrum offers exactly ONE eigenpair that agrees with it. Two
+            # admissible partners mean the assignment is a coin toss between
+            # two different residuals -- minimising total distance would still
+            # return one of them, and on a tie it returns an arbitrary one.
+            # Measured on the D11 network before this gate: the minimum-cost
+            # assignment there is EXACTLY degenerate (two assignments both cost
+            # 9.1739e-07, because one candidate matches a reference entry to
+            # the last bit), and the arbitrary winner re-created the borrowed
+            # residual the round removes. Ambiguous evidence is unresolved.
+            adm = np.flatnonzero(
+                np.abs(ref_arr - lam)
+                <= PAIR_AGREEMENT_RTOL * np.maximum(np.abs(lam), np.abs(ref_arr))
+            )
+            if adm.size != 1 or int(i) not in pair_of or int(adm[0]) != pair_of[int(i)]:
+                continue
+        if int(i) not in pair_of:
+            continue  # no eigenpair left to match: nothing measured, nothing certified
+        j = pair_of[int(i)]
         mag = float(abs(ref[j]))
         # Fail closed when the borrowed decomposition disagrees about this mode:
         # a bound computed for a different eigenvalue certifies nothing.
-        if abs(ref[j] - lam) > 0.1 * max(abs(lam), mag) or mag == 0.0:
+        if abs(ref[j] - lam) > PAIR_AGREEMENT_RTOL * max(abs(lam), mag) or mag == 0.0:
             continue
-        x = vr[:, j] / max(float(np.linalg.norm(vr[:, j])), tiny)
-        y = vl[:, j] / max(float(np.linalg.norm(vl[:, j])), tiny)
+        # ROUND-24 REVIEW (PR #121), finding B4. Every norm in this block is
+        # underflow-safe. The residual pair is the one the reviewer named: for
+        # a generator whose nonzero eigenpair residuals are uniformly scaled
+        # below roughly 1e-162, ``np.linalg.norm`` squares the components to
+        # zero and returns ``0.0`` for a nonzero vector. ``mag > margin *
+        # (0 / sep)`` is then true for EVERY nonzero in-band candidate, so a
+        # numerically perturbed member of a degenerate stationary manifold is
+        # promoted into the physical spectrum and D1 reports a spurious gap --
+        # solely because the rate units changed. Measured on a deliberately
+        # inexact eigenpair (candidate magnitude 1e-3 of the operator scale, a
+        # residual 100x ABOVE it, so the correct verdict is "not certified"):
+        # NOT certified at c = 1, 1e-80 and 1e-160; certified at c = 1e-170
+        # and 1e-200. The refined midpoint below was already made
+        # underflow-safe in round 22; the residual that ESTABLISHES the
+        # refinement was not.
+        #
+        # The two normalisations are included for the same reason and in the
+        # same direction: a right/left vector whose own norm underflows would
+        # be divided by ``tiny`` and leave the unit sphere entirely, so ``x``
+        # and ``y`` would no longer be the unit vectors the bound assumes.
+        x = vr[:, j] / max(underflow_safe_norm(vr[:, j]), tiny)
+        y = vl[:, j] / max(underflow_safe_norm(vl[:, j]), tiny)
         sep = float(abs(np.vdot(y, x)))
         if sep <= 0.0:
             continue  # defective pair: the first-order bound does not apply
         res = max(
-            float(np.linalg.norm(L_c @ x - ref[j] * x)),
-            float(np.linalg.norm(L_c.conj().T @ y - np.conj(ref[j]) * y)),
+            underflow_safe_norm(L_c @ x - ref[j] * x),
+            underflow_safe_norm(L_c.conj().T @ y - np.conj(ref[j]) * y),
         )
         if mag > margin * (res / sep):
             out[i] = True
+
+    # ROUND-28 REVIEW (PR #121), the second half of the adjudicated rule. The
+    # loop above reasons about one eigenPAIR at a time, and that is the wrong
+    # object exactly where LAPACK says it is: inside a tight eigenvalue cluster
+    # the individual eigenvectors need not be determined at all -- ``|y^H x|``
+    # collapses and the per-mode bound blows up -- while the INVARIANT SUBSPACE
+    # they span is well conditioned and locates the cluster to full accuracy.
+    # Such a cluster is certified as a subspace, from the operator's own Schur
+    # basis, or not at all.
+    #
+    # A cluster takes this path ALWAYS, never as a rescue after the individual
+    # path declined. An earlier draft of this repair made it a fallback -- try
+    # each mode individually first, fall back to the subspace only if none
+    # succeeded -- and that draft was MEASURED not to fix the defect: on the D11
+    # network's ``dgeev-real`` route the two assignments
+    # ``{ev[3]->ref[8], ev[11]->ref[3]}`` and ``{ev[3]->ref[3], ev[11]->ref[11]}``
+    # cost exactly the same 9.1739e-07, so the individual path still certified
+    # ``ev[3]`` from ``ref[8]``'s residual and the fallback never ran. Inside a
+    # cluster the individual assignment is not merely imprecise, it is
+    # UNDETERMINED, which is why the subspace is the object and the choice is
+    # not offered.
+    #
+    # Restricted to the BORROWED route. When the caller supplies vectors, those
+    # vectors are the evidence and are handed on to D9/D19 downstream, so the
+    # certificate must vouch for THEM; a subspace certificate would clear
+    # eigenvectors that were never examined. There the pair index is the
+    # candidate's own index and no search happens at all.
+    if borrowed:
+        for group in clusters:
+            if len(group) < 2:
+                continue
+            if _certify_invariant_subspace(
+                L_c, ref, np.asarray(eigenvalues)[group], margin
+            ):
+                for g in group:
+                    out[g] = True
     return out
 
 
@@ -995,12 +1477,23 @@ def certified_eig(
         vl = decomp.left_vectors
         assert vl is not None  # every ladder route computes left vectors
         tiny = np.finfo(float).tiny
-        res_r = np.linalg.norm(L_c @ vr - vr * ev[None, :], axis=0) / np.maximum(
-            np.linalg.norm(vr, axis=0), tiny
-        )
-        res_l = np.linalg.norm(
-            L_c.conj().T @ vl - vl * np.conj(ev)[None, :], axis=0
-        ) / np.maximum(np.linalg.norm(vl, axis=0), tiny)
+        # ROUND-25 REVIEW (PR #121). Both residuals and both normalisations go
+        # through :func:`underflow_safe_column_norms`. Round 24 made the
+        # residual pair inside ``certify_nonstationary`` underflow-safe and
+        # left THIS gate on the raw norms, so the identical failure survived:
+        # for a generator in rate units below ~1e-162 the squares underflow,
+        # ``res_r`` reads ``0.0`` for a wrong eigenvector, nothing is
+        # "offending", and ``certified=True`` hands D9/D19 the pair this gate
+        # was built to withhold. The denominators are included for the same
+        # reason as in round 24: a vector whose own norm underflows would be
+        # divided by ``tiny`` and leave the unit sphere, so the per-mode
+        # relative residual would no longer be the quantity being compared.
+        res_r = underflow_safe_column_norms(
+            L_c @ vr - vr * ev[None, :]
+        ) / np.maximum(underflow_safe_column_norms(vr), tiny)
+        res_l = underflow_safe_column_norms(
+            L_c.conj().T @ vl - vl * np.conj(ev)[None, :]
+        ) / np.maximum(underflow_safe_column_norms(vl), tiny)
         res = np.maximum(res_r, res_l)
         magnitudes = np.abs(ev)
         consumed = magnitudes > bound
@@ -1211,17 +1704,48 @@ def is_hermitian(
     rtol
         Relative tolerance on ``max|A|``; ignored when ``atol`` is given.
 
+    Raises
+    ------
+    ValueError
+        If ``rtol`` or ``atol`` is not finite and non-negative, or if the
+        DERIVED tolerance ``rtol * max|A|`` is not finite. Round-24 review
+        (PR #121): with ``rtol = inf`` every finite square matrix passed --
+        ``is_hermitian([[0, 1], [0, 0]], rtol=float("inf"))`` returned ``True``
+        -- because any finite defect is ``<= inf``. ``rtol`` is a newly exposed
+        validation threshold, and an invalid threshold must not be able to turn
+        a validation gate into a fail-open pass-through. The same rule the
+        zero-mode tolerance helpers apply (:func:`liouscope.numerics.scale.
+        spectral_zero_tolerance`) applies here, including their second line of
+        defence on the derived value: a non-finite ``max|A|`` would reproduce
+        the hole through the scale instead of through ``rtol``.
+
+        Refusing rather than returning ``False`` is deliberate. ``False`` is a
+        statement about the MATRIX ("not Hermitian"); an unusable tolerance is
+        a statement about the CALL, and the two must not be reported as the
+        same thing -- the non-square early return above is the former, this is
+        the latter.
+
     Notes
     -----
     Zero-operator semantics: ``max|A| == 0`` gives ``tol = 0``, so the all-zero
     matrix (exactly Hermitian) passes and nothing else does. This mirrors the
     documented zero-operator behaviour of :func:`liouscope.numerics.scale.rate_scale`.
     """
+    if not np.isfinite(rtol) or rtol < 0.0:
+        raise ValueError(f"rtol must be finite and non-negative, got {rtol}")
+    if atol is not None and (not np.isfinite(atol) or atol < 0.0):
+        raise ValueError(f"atol must be finite and non-negative, got {atol}")
     A = np.asarray(A)
     if A.ndim != 2 or A.shape[0] != A.shape[1]:
         return False
     defect, scale = hermiticity_defect(A)
     tol = float(atol) if atol is not None else rtol * scale
+    if not np.isfinite(tol):
+        raise ValueError(
+            "the Hermiticity tolerance is not finite "
+            f"(rtol={rtol}, max|A|={scale}); a tolerance that accepts every "
+            "defect cannot validate anything"
+        )
     return bool(defect <= tol)
 
 

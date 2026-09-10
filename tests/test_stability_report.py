@@ -14,6 +14,7 @@ Oracles:
 
 from __future__ import annotations
 
+import dataclasses
 import json
 
 import numpy as np
@@ -21,6 +22,7 @@ import pytest
 
 from liouscope import build_liouvillian, diagnose, steady_state
 from liouscope.io.stability_report import (
+    UNAVAILABLE_CLAIM_STATUS,
     EvidenceBundle,
     build_stability_report,
     dump_stability_report,
@@ -156,3 +158,73 @@ def test_validate_rejects_bad_run_id():
     payload["run_id"] = "not-a-sha"
     with pytest.raises(ValueError, match="run_id"):
         validate_stability_report(payload)
+
+
+# ---------------------------------------------------------------------------
+# Round-18 review (external, PR #127): a fail-closed report must be writable
+# ---------------------------------------------------------------------------
+
+
+def test_withheld_diagnostics_are_encoded_and_the_report_still_dumps(tmp_path):
+    """The honest report must not be the one that cannot be persisted.
+
+    The zero-mode certificate withholds D1/D3 as NaN when the slow spectrum is
+    not resolvable, and the eigenvector gate withholds D9 the same way. Those
+    NaNs used to reach ``json.dumps(..., allow_nan=False)`` as bare floats, so
+    exactly the runs an audit most needs to see raised ValueError instead of
+    producing an artefact -- while every confident run wrote fine.
+    """
+    report, payload, L, rho_ss = _report_and_payload()
+    withheld = dataclasses.replace(
+        report,
+        spectral=dataclasses.replace(
+            report.spectral, gap=float("nan"), oscillating_gap=float("nan")
+        ),
+        nonnorm=dataclasses.replace(report.nonnorm, petermann_max=float("nan")),
+    )
+    out = build_stability_report(
+        withheld,
+        L_super=L,
+        rho_ss=rho_ss,
+        claim_level="BLOCK",
+        direction="ambiguous",
+    )
+    for key in ("D1_gap", "D3_oscillating_gap", "D9_petermann_max"):
+        entry = out["diagnostics"][key]
+        assert isinstance(entry, dict), (key, entry)
+        assert entry["value"] is None
+        assert entry["claim_status"] == UNAVAILABLE_CLAIM_STATUS
+        assert entry["__nonfinite__"] == "nan"
+
+    validate_stability_report(out)
+    path = tmp_path / "withheld.json"
+    dump_stability_report(out, path)          # must not raise
+    reloaded = json.loads(path.read_text(encoding="utf-8"))
+    assert reloaded["diagnostics"]["D1_gap"]["value"] is None
+
+    # NEGATIVE CONTROL on the same encoder: a MEASURED value is untouched, so
+    # the repair cannot be passing by turning every diagnostic into a tag.
+    assert isinstance(payload["diagnostics"]["D1_gap"], float)
+    assert payload["diagnostics"]["D1_gap"] == pytest.approx(report.spectral.gap)
+
+
+def test_infinite_diagnostic_keeps_its_sign_rather_than_becoming_unavailable():
+    """``inf`` is a measurement, ``nan`` is the absence of one.
+
+    Collapsing both to ``None`` would make a defective-eigenvector Petermann
+    factor indistinguishable from a withheld one, which is the same conflation
+    the withholding exists to avoid.
+    """
+    report, _, L, rho_ss = _report_and_payload()
+    infinite = dataclasses.replace(
+        report,
+        nonnorm=dataclasses.replace(report.nonnorm, petermann_max=float("inf")),
+    )
+    out = build_stability_report(
+        infinite, L_super=L, rho_ss=rho_ss, claim_level="BLOCK", direction="ambiguous"
+    )
+    entry = out["diagnostics"]["D9_petermann_max"]
+    assert entry["value"] is None
+    assert entry["__nonfinite__"] == "inf"
+    assert entry["claim_status"] == UNAVAILABLE_CLAIM_STATUS
+    json.dumps(out, allow_nan=False)  # must not raise
