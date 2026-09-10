@@ -288,7 +288,18 @@ def test_exactly_cancelling_large_column_is_no_longer_refused() -> None:
         "fixture no longer reproduces the intermediate overflow it was built for"
     )
 
-    reduced = restrict_to_traceless(L_super)
+    # Asserted at the helper first, so that a regression here fails as a
+    # verdict about a number and not as an exception escaping the call below.
+    # A test that dies of an unexpected error type classifies nothing.
+    defect, scale = trace_preservation_defect(L_super)
+    assert np.isfinite(defect), f"trace defect is not a number: {defect}"
+    assert defect == 0.0
+    assert scale == 1.0e308
+
+    try:
+        reduced = restrict_to_traceless(L_super)
+    except ValueError as exc:  # pragma: no cover - only on regression
+        pytest.fail(f"exactly trace-preserving generator refused: {exc}")
 
     assert reduced.trace_defect == 0.0
     assert reduced.operator_scale == 1.0e308
