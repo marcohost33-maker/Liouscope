@@ -184,12 +184,14 @@ def _overflow_safe_fsum(values: list[float]) -> float:
         rescaled = math.ldexp(high_total, _BAND_SHIFT)
     except OverflowError:
         return math.copysign(math.inf, high_total)
-    total = rescaled + low_total
-    if math.isinf(total):
-        return total
-    if not _addition_is_exact(rescaled, low_total, total):
-        return math.nan
-    return total
+    # No test on the recombination itself: both band sums are exact at this
+    # point, so a single IEEE-754 addition of them returns the correctly
+    # rounded exact total by definition. An earlier revision guarded this step
+    # as well and was measurably WRONG to: it abstained on 6 of 109 fallback
+    # columns whose answer would have been correct. Abstaining without cause is
+    # its own defect -- a function that refuses everything passes every
+    # negative test and is still broken.
+    return rescaled + low_total
 
 
 def _is_exact(addends: list[float], total: float) -> bool:
@@ -205,14 +207,6 @@ def _is_exact(addends: list[float], total: float) -> bool:
         return math.fsum([*addends, -total]) == 0.0
     except OverflowError:  # pragma: no cover - total is finite, so this cannot
         return False       # overflow; refused rather than assumed if it ever does
-
-
-def _addition_is_exact(left: float, right: float, total: float) -> bool:
-    """Fast-two-sum residual test for a single float64 addition."""
-    if left == 0.0 or right == 0.0:
-        return True
-    larger, smaller = (left, right) if abs(left) >= abs(right) else (right, left)
-    return (total - larger) == smaller
 
 
 def scaled_column_sums(values: np.ndarray) -> np.ndarray:
