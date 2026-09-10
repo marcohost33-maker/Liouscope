@@ -228,18 +228,26 @@ def test_a_genuine_generator_still_reports_an_exactly_zero_defect() -> None:
     assert cert.applicable is True
 
 
-def test_the_one_directional_overflow_policy_is_untouched() -> None:
-    """The round-21 decision must survive the round-24 repair.
+def test_the_round_20_counterexample_is_still_refused() -> None:
+    """The round-21 DECISION survives; its former MECHANISM does not.
 
-    ``fro = inf`` is the documented INPUT to the non-finite-reference-scale
-    refusal that closed the round-20 counterexample. The numerator repair is
-    reachable only from an exact zero, so it can neither observe nor undo an
-    overflow -- this pins that, so a later widening of the trigger cannot
-    quietly readmit the operator.
+    Round 21 refused the round-20 counterexample because ``||L||_F`` came back
+    ``inf``. That sentinel was never the physics -- it was an artefact of
+    squaring before summing. The true Frobenius norm of this operator is
+    ``sqrt(2) * 1e308 ~ 1.414e308``, comfortably inside float64, verified
+    against exact rational arithmetic: ``np.linalg.norm`` was simply WRONG
+    here, and ``scaled_euclidean_norm`` (issue #130) reports the representable
+    value to within one ulp.
+
+    So this test pins the property that had to be protected -- the operator is
+    REFUSED -- instead of the accident that used to deliver it. The refusal now
+    rests on ``trace_preservation_componentwise_error == 1``: several trace
+    equations have no cancellation at all, so no global scale can certify
+    trace preservation. That is a stronger argument than an overflow, because
+    it does not evaporate when the arithmetic improves.
     """
     # The round-20 counterexample, entry for entry: cancelling +-1e308 in the
-    # ``vec(I)^H L`` combination, so the defect is sqrt(17) while ||L||_F
-    # overflows.
+    # ``vec(I)^H L`` combination, so the defect is sqrt(17).
     L = np.diag([1.0, 2.0, 3.0, 4.0]).astype(complex)
     L[0, 1] = 1.0e308
     L[3, 1] = -1.0e308
@@ -247,9 +255,18 @@ def test_the_one_directional_overflow_policy_is_untouched() -> None:
     with np.errstate(over="ignore"):
         defect, fro = trace_preservation_defect(L)
     assert np.isfinite(defect), "the defect itself is finite -- that is the trap"
-    assert not np.isfinite(fro), (
-        "if the Frobenius norm stops overflowing, the round-21 refusal this "
-        "test guards no longer has an input and the test is hollow"
+    assert defect == pytest.approx(np.sqrt(17.0))
+    # The measurement is now CORRECT rather than saturated.
+    assert np.isfinite(fro), "the true norm is representable; inf was a defect"
+    assert fro == pytest.approx(np.sqrt(2.0) * 1.0e308, rel=2.0e-15)
+    # THE PROTECTED PROPERTY. If this ever flips to True, the round-20 hole is
+    # open again -- regardless of how the norms are computed.
+    with np.errstate(over="ignore"), warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        cert = certified_eigvals(L)[-1]
+    assert cert.applicable is False, (
+        "the round-20 counterexample must stay inapplicable; it is refused by "
+        "the componentwise backward error, not by an overflowing norm"
     )
 
 

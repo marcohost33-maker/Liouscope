@@ -52,6 +52,21 @@ def parametric_bootstrap(
     if rng is None:
         rng = np.random.default_rng(0)
     base = fit_gls_ar1(model, t, y, p0, bounds=bounds)
+    if base.scale_unavailable:
+        # Round-1 review (PR #147). The base fit is a legitimate AICc
+        # candidate -- its log-space likelihood is finite -- but its innovation
+        # scale is not representable, so there is nothing to draw replicates
+        # from. ``sigma`` is NaN there by construction, and ``rng.normal(0, nan)``
+        # returns NaN rather than raising, so every replicate would be fitted to
+        # NaN data and the resulting interval would be an artefact. Refusing
+        # here routes the case into the caller's existing handler, which reports
+        # the CI as NaN -- "fit uncertainty UNKNOWN", which is the true state.
+        raise RuntimeError(
+            "parametric_bootstrap: the base fit has no representable residual "
+            "scale (issue #135), so replicates cannot be simulated; the fit "
+            "itself remains a valid model-selection candidate, only its "
+            "interval is unavailable"
+        )
     if not base.success:
         # Round-17 review (PR #121). Every replicate is simulated AROUND
         # ``theta_hat``; if the base fit ended on the model's magnitude
@@ -65,6 +80,8 @@ def parametric_bootstrap(
             + (f" (saturated: {', '.join(base.saturated)})" if base.saturated else "")
             + (" (the curve carries no resolvable variation, issue #123)"
                if base.degenerate else "")
+            + (" (the residual likelihood scale is degenerate, issue #135)"
+               if base.likelihood_degenerate else "")
             + "; a bootstrap around a non-estimate has no meaning"
         )
     theta_hat = base.params

@@ -187,6 +187,16 @@ class FitResult:
     n_eff: float
     residual_ar1_rho: float
     success: bool
+    likelihood_degenerate: bool = False
+    #: True when the fit is a valid model-selection candidate -- its log-space
+    #: likelihood and AICc are finite -- but the positive MLE residual scale is
+    #: not representable as float64, so the parametric bootstrap and therefore
+    #: the confidence interval were withheld (issue #135, PR #147 round-2
+    #: review). Without this field the persisted report showed only
+    #: ``bca_ci_beta = (nan, nan)``, which is the same value ANY bootstrap or
+    #: jackknife failure produces: once the warning stream is gone, the reason
+    #: the interval is missing was unrecoverable from the artefact.
+    scale_unavailable: bool = False
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)

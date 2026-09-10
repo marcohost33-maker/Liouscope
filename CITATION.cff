@@ -84,6 +84,23 @@ abstract: >-
 # likewise scale-relative rather than absolute (issue #109), which closes a
 # fail-open path that admitted non-GKSL generators at small ||H||; this changes
 # which inputs are ACCEPTED, not the numerics of accepted ones.
+# Also pending for the next cut: the Gaussian likelihood behind AICc is
+# evaluated in log-RSS space rather than by forming the residual sum of squares
+# in ordinary units, and an exact-zero RSS is an explicit abstention rather than
+# a floored variance (issue #135). This CHANGES NUMERICAL RESULTS and is a
+# METHODOLOGY correction, not an addition: AICc ordering, the selected model
+# M0..M3b and therefore the reported decay rate can differ for runs whose
+# residual scale previously over- or underflowed, and a perfect fit now yields
+# no confidence interval instead of a zero-width one. The likelihood value is
+# scale-covariant and likelihood DIFFERENCES between models are invariant under
+# a common rescaling of the residuals, which is the quantity AICc consumes. It
+# must NOT be described as making model selection scale-free in general: only
+# the likelihood path was corrected, and the residual-scale parameter itself
+# still has a float64 representation limit -- a fit whose MLE scale underflows
+# keeps its log-space likelihood and stays selectable, but its bootstrap
+# interval is withheld (round-1 review of PR #147). Archived analyses whose
+# selected model matters should be re-run; per-model likelihoods are not run-
+# manifest fields, so this change is not visible in input_hash.
 keywords:
   - open quantum systems
   - Lindblad
