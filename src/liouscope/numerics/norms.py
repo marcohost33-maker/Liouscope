@@ -126,13 +126,22 @@ def scaled_column_sums(values: np.ndarray) -> np.ndarray:
     magnitude, hence a sum of ``k`` terms cannot exceed ``k`` and overflow is
     impossible by construction rather than by tolerance.
 
-    The scale is chosen PER COLUMN, not once for the whole array. A single
-    global scale would be simpler and would still stop the overflow, but a
-    matrix holding a column near 1e300 beside one near 1e-300 would then have
-    the small column shifted into the subnormal range and flushed to zero --
-    turning a real defect into an apparent exact zero. That is the same class
-    of failure in the opposite direction, and it is the one that would be
-    silent.
+    The scale is chosen PER COLUMN AND PER COMPONENT, not once for the whole
+    array. A single global scale would be simpler and would still stop the
+    overflow, but a matrix holding a column near 1e300 beside one near 1e-300
+    would then have the small column shifted into the subnormal range and
+    flushed to zero -- turning a real defect into an apparent exact zero. That
+    is the same class of failure in the opposite direction, and it is the
+    silent one.
+
+    Real and imaginary parts need separate scales for the same reason, one
+    level down. :func:`_finite_component_scale` deliberately shares one scale
+    between them, which is right for a NORM -- there no term can cancel, so a
+    1e-300 imaginary part beside a 1e300 real part contributes nothing anyway.
+    A SUM is not monotone: the large part can vanish by cancellation and leave
+    the small one as the entire answer. Measured on the column
+    ``[1e300+1e-300j, -1e300, 0]``, whose sum is ``1e-300j``, a shared scale
+    returned exactly zero.
 
     ``math.fsum`` accumulates the real and imaginary parts, matching
     :func:`scaled_cancellation_ratio`, which measures the same trace equations.
@@ -161,30 +170,27 @@ def scaled_column_sums(values: np.ndarray) -> np.ndarray:
     imag = np.asarray(np.imag(arr), dtype=float)
     nonfinite = np.any(~np.isfinite(real), axis=0) | np.any(~np.isfinite(imag), axis=0)
 
-    column_max = np.maximum(
-        np.max(np.abs(np.where(np.isfinite(real), real, 0.0)), axis=0),
-        np.max(np.abs(np.where(np.isfinite(imag), imag, 0.0)), axis=0),
-    )
-    exponent = np.zeros(cols, dtype=np.int32)
-    scalable = (column_max > 0.0) & ~nonfinite
-    if np.any(scalable):
-        exponent[scalable] = np.frexp(column_max[scalable])[1].astype(np.int32)
-        # Transposed once so the per-column accumulation reads Python lists
-        # instead of paying a NumPy indexing round trip per column, and the
-        # rescaling is applied to the assembled vectors in one call rather than
-        # one scalar call per column. Same arithmetic, measurably less overhead.
-        scaled_real = np.ldexp(real, -exponent[None, :]).T.tolist()
-        scaled_imag = np.ldexp(imag, -exponent[None, :]).T.tolist()
-        index = np.flatnonzero(scalable)
-        sum_real = np.fromiter(
-            (math.fsum(scaled_real[j]) for j in index), dtype=float, count=index.size
-        )
-        sum_imag = np.fromiter(
-            (math.fsum(scaled_imag[j]) for j in index), dtype=float, count=index.size
-        )
-        shifts = exponent[index]
-        with np.errstate(over="ignore", under="ignore"):
-            out[index] = np.ldexp(sum_real, shifts) + 1j * np.ldexp(sum_imag, shifts)
+    accumulated = []
+    for part in (real, imag):
+        component_max = np.max(np.abs(np.where(np.isfinite(part), part, 0.0)), axis=0)
+        exponent = np.zeros(cols, dtype=np.int32)
+        scalable = (component_max > 0.0) & ~nonfinite
+        totals = np.zeros(cols, dtype=float)
+        if np.any(scalable):
+            exponent[scalable] = np.frexp(component_max[scalable])[1].astype(np.int32)
+            # Transposed once so the per-column accumulation reads Python lists
+            # instead of paying a NumPy indexing round trip per column, and the
+            # rescaling is applied to the assembled vector in one call rather
+            # than one scalar call per column. Same arithmetic, less overhead.
+            scaled = np.ldexp(part, -exponent[None, :]).T.tolist()
+            index = np.flatnonzero(scalable)
+            sums = np.fromiter(
+                (math.fsum(scaled[j]) for j in index), dtype=float, count=index.size
+            )
+            with np.errstate(over="ignore", under="ignore"):
+                totals[index] = np.ldexp(sums, exponent[index])
+        accumulated.append(totals)
+    out = accumulated[0] + 1j * accumulated[1]
     if np.any(nonfinite):
         out[nonfinite] = np.sum(arr[:, nonfinite], axis=0)
     return out

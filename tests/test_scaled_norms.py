@@ -153,3 +153,18 @@ def test_column_sums_refuse_a_non_matrix() -> None:
     assert isinstance(exc.value, ValueError), (
         f"expected ValueError, got {type(exc.value).__name__}: {exc.value}"
     )
+
+
+def test_column_sums_scale_the_real_and_imaginary_parts_separately() -> None:
+    """The per-column scale is not enough; the components need their own.
+
+    Found by turning the overflow finding against its own repair. A norm may
+    share one scale between real and imaginary parts, because nothing cancels
+    in a norm. A sum is not monotone: here the real parts annihilate and the
+    entire answer is an imaginary part 600 orders of magnitude below them, so a
+    shared scale flushes the answer to zero and reports an exact cancellation
+    that did not happen.
+    """
+    values = np.array([[1.0e300 + 1.0e-300j], [-1.0e300 + 0.0j], [0.0j]], dtype=complex)
+
+    assert scaled_column_sums(values)[0] == 1.0e-300j
