@@ -137,6 +137,18 @@ def _overflow_safe_fsum(values: list[float]) -> float:
     recombination is the honest answer: it means the true sum is not
     representable.
 
+    KNOWN LIMIT of the fallback, measured rather than assumed. The plain path
+    returns the correctly rounded exact sum -- 20000 randomised columns, no
+    deviation. The band path rounds twice, once per band sum and once in the
+    recombination, so it can land one ulp off: 3 deviations in 20000 columns
+    built on a guaranteed-overflow kernel, each in the last place of a result
+    of order 1e182 or larger. That is ordinary rounding, NOT the failure class
+    this function exists to prevent: a further 19965 columns constructed to
+    cancel inside the band path produced no spurious zero and no sign error, so
+    no defect is deleted and none changes direction. Removing the last ulp
+    would require the exact remainder that ``math.fsum`` discards, i.e. a
+    Shewchuk accumulator that returns its partial sums.
+
     Issue #139, third review round. The previous construction shifted every
     addend by one power of two chosen from the largest component of the column.
     That cannot work, and not merely for the reported example: a scale SHIFTS

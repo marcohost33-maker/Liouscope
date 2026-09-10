@@ -232,3 +232,42 @@ def test_column_sums_match_exact_rational_arithmetic_across_the_exponent_range()
         got = scaled_column_sums(np.array([[v] for v in column], dtype=complex))[0]
 
         assert got.real == float(exact), f"mismatch for {column}"
+
+
+def test_band_fallback_stays_within_one_ulp_and_never_fabricates_a_zero() -> None:
+    """Pins the known limit of the overflow fallback so it cannot get worse.
+
+    The plain path is exactly rounded. The band path rounds twice and may land
+    one ulp off; what it must never do is delete a defect or flip its sign,
+    because those are the failure modes the whole function exists to prevent.
+    The kernel below is guaranteed to overflow ``math.fsum``, so these cases
+    really do exercise the fallback rather than the plain path.
+    """
+    rng = random.Random(20260910)
+    kernel = [1.5e308, 1.5e308, -1.5e308, -1.5e308]
+    entered = 0
+
+    for _ in range(300):
+        column = kernel + [
+            math.ldexp(rng.uniform(-1.0, 1.0), rng.randint(-1074, 1020))
+            for _ in range(rng.randint(1, 5))
+        ]
+        rng.shuffle(column)
+        try:
+            math.fsum(column)
+            continue
+        except OverflowError:
+            entered += 1
+
+        exact = sum(Fraction(v) for v in column)
+        got = scaled_column_sums(np.array([[v] for v in column], dtype=complex))[0].real
+        expected = float(exact)
+
+        if expected == 0.0:
+            assert got == 0.0
+            continue
+        assert got != 0.0, f"a real sum {expected!r} was reported as zero"
+        assert (got > 0.0) == (expected > 0.0), f"sign flipped for {expected!r}"
+        assert abs(got - expected) <= math.ulp(expected), f"{got!r} vs {expected!r}"
+
+    assert entered > 0, "the fixture never reached the band fallback"
