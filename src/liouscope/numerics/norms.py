@@ -137,28 +137,18 @@ def _overflow_safe_fsum(values: list[float]) -> float:
     recombination is the honest answer: it means the true sum is not
     representable.
 
-    KNOWN LIMIT of the fallback, measured rather than assumed. The plain path
-    returns the correctly rounded exact sum -- 20000 randomised columns, no
-    deviation. The band path rounds twice, once per band sum and once in the
-    recombination, so it can land one ulp off: 3 deviations in 20000 columns
-    built on a guaranteed-overflow kernel, each in the last place of a result
-    of order 1e182 or larger. That is ordinary rounding, NOT the failure class
-    this function exists to prevent: a further 19965 columns constructed to
-    cancel inside the band path produced no spurious zero and no sign error, so
-    no defect is deleted and none changes direction. Removing the last ulp
-    would require the exact remainder that ``math.fsum`` discards, i.e. a
-    Shewchuk accumulator that returns its partial sums.
+    KNOWN LIMIT of the fallback, and it is an ABSTENTION rather than an error.
+    Two bands rounded independently cannot carry a residual that survives only
+    across their boundary, so the fallback establishes whether either band sum
+    or the recombination lost anything and returns ``nan`` when it did. Every
+    number it does return is the exact sum. Measured: the plain path answers
+    20000 randomised columns exactly; the fallback is reached by a few percent
+    of overflowing columns and abstains on a minority of those.
 
-    Issue #139, third review round. The previous construction shifted every
-    addend by one power of two chosen from the largest component of the column.
-    That cannot work, and not merely for the reported example: a scale SHIFTS
-    the representable window, it does not widen it, so any addend below
-    ``max * 2**-1074`` is flushed to zero before the accumulation starts.
-    Measured on ``[1e300, -1e300, 1e-300]``, whose exact sum is ``1e-300``: the
-    scaled version returned 0, and a caller reading that number accepted a
-    generator that is not trace preserving. Choosing the scale smaller instead
-    reintroduces the overflow this function exists to prevent -- there is no
-    right choice once a column spans the range and its dominant terms cancel.
+    Making the fallback ANSWER those cases needs an accumulator that keeps
+    Shewchuk partial sums across the band boundary until a single final
+    rounding. That is a different construction and is deliberately not built
+    here.
     """
     try:
         return math.fsum(values)
@@ -168,11 +158,61 @@ def _overflow_safe_fsum(values: list[float]) -> float:
     low: list[float] = []
     for value in values:
         (high if abs(value) >= _BAND_SPLIT else low).append(value)
-    scaled_high = math.fsum(math.ldexp(value, -_BAND_SHIFT) for value in high)
+    scaled_high = [math.ldexp(value, -_BAND_SHIFT) for value in high]
+    high_total = math.fsum(scaled_high)
+    low_total = math.fsum(low)
+
+    # Each band sum is correctly ROUNDED, which is not the same as exact, and
+    # the difference is the whole finding of the fifth review round: for
+    # ``[7e307]*3 + [-7e307]*3 + [2**513] + [-2**511]*4 + [1e-300]`` the bands
+    # are ``+2**513`` and ``-2**513 + 1e-300``. The low band rounds to exactly
+    # ``-2**513`` -- the 1e-300 is far below its last place -- and the two then
+    # annihilate to 0.0, reporting an exactly trace-preserving generator for a
+    # column whose exact sum is 1e-300.
+    #
+    # Whether a band sum was rounded is cheap to establish: re-sum the band
+    # against its own negated total and see whether anything is left over.
+    # Recombination is checked the same way, by the fast-two-sum residual.
+    # When all three are exact the result is the exact sum; when any is not,
+    # this function does NOT guess. It reports ``nan``, so the trace-preservation
+    # gates refuse the operator instead of admitting it on a number nobody can
+    # vouch for. An unmeasurable result and a passing one are different things,
+    # and confusing them is why this pull request exists.
+    if not _is_exact(scaled_high, high_total) or not _is_exact(low, low_total):
+        return math.nan
     try:
-        return math.ldexp(scaled_high, _BAND_SHIFT) + math.fsum(low)
+        rescaled = math.ldexp(high_total, _BAND_SHIFT)
     except OverflowError:
-        return math.copysign(math.inf, scaled_high)
+        return math.copysign(math.inf, high_total)
+    total = rescaled + low_total
+    if math.isinf(total):
+        return total
+    if not _addition_is_exact(rescaled, low_total, total):
+        return math.nan
+    return total
+
+
+def _is_exact(addends: list[float], total: float) -> bool:
+    """Whether ``math.fsum(addends)`` lost anything when it produced ``total``.
+
+    ``fsum`` returns the correctly rounded exact sum, so re-summing the addends
+    together with the negated total leaves exactly the part that was rounded
+    away. Zero means nothing was.
+    """
+    if not addends or math.isinf(total):
+        return True
+    try:
+        return math.fsum([*addends, -total]) == 0.0
+    except OverflowError:  # pragma: no cover - total is finite, so this cannot
+        return False       # overflow; refused rather than assumed if it ever does
+
+
+def _addition_is_exact(left: float, right: float, total: float) -> bool:
+    """Fast-two-sum residual test for a single float64 addition."""
+    if left == 0.0 or right == 0.0:
+        return True
+    larger, smaller = (left, right) if abs(left) >= abs(right) else (right, left)
+    return (total - larger) == smaller
 
 
 def scaled_column_sums(values: np.ndarray) -> np.ndarray:

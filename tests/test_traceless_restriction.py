@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import warnings
 from fractions import Fraction
 
@@ -386,3 +387,58 @@ def test_a_defect_far_below_the_dominant_scale_is_still_refused() -> None:
     assert isinstance(exc.value, ValueError), (
         f"expected ValueError, got {type(exc.value).__name__}: {exc.value}"
     )
+
+
+def test_a_cross_band_residual_is_refused_rather_than_admitted() -> None:
+    """#139, fifth round: unmeasurable must not read as trace preserving.
+
+    These twelve coefficients form the trace equation of a finite 144x144
+    operator whose exact defect is 1e-300. While the two exponent bands were
+    rounded independently the defect read 0.0 and ``tp_rtol=0`` -- the
+    strictest request there is -- ACCEPTED the operator. The evidence is now
+    reported as not representable, so the existing fail-closed channel refuses
+    it.
+    """
+    column = [7e307] * 3 + [-7e307] * 3 + [2.0**513] + [-(2.0**511)] * 4 + [1e-300]
+    d = 12
+    n = d * d
+    L_super = np.zeros((n, n), dtype=complex)
+    trace_rows = np.arange(0, n, d + 1, dtype=int)
+    for row, value in zip(trace_rows, column, strict=False):
+        L_super[row, 0] = value
+
+    assert np.all(np.isfinite(L_super))
+    assert float(sum(Fraction(v) for v in column)) == 1.0e-300
+
+    with pytest.raises(Exception, match="not representable") as exc:
+        restrict_to_traceless(L_super, tp_rtol=0.0)
+    assert isinstance(exc.value, ValueError), (
+        f"expected ValueError, got {type(exc.value).__name__}: {exc.value}"
+    )
+
+
+@pytest.mark.parametrize("fast_rate", [1.0e8, 1.0e10, 1.0e12])
+def test_a_legitimate_stiff_generator_never_reaches_the_band_fallback(
+    fast_rate: float,
+) -> None:
+    """Positive control for the abstention: it costs legitimate input nothing.
+
+    An abstaining gate that abstains on real generators would be as useless as
+    one that admits everything, so this measures the thing that matters rather
+    than assuming it: whether a physical stiff generator's trace equations ever
+    overflow ``math.fsum`` at all. They do not -- the fallback is unreachable
+    for them -- and the restriction still succeeds with a finite defect.
+    """
+    L_super = _classical_stiff_network(fast_rate)
+    n = L_super.shape[0]
+    d = int(round(np.sqrt(n)))
+
+    for column in range(n):
+        terms = L_super[np.arange(0, n, d + 1, dtype=int), column]
+        math.fsum(terms.real.tolist())
+        math.fsum(terms.imag.tolist())
+
+    reduced = restrict_to_traceless(L_super)
+
+    assert np.isfinite(reduced.trace_defect)
+    assert reduced.trace_defect <= 1.0e-10 * reduced.operator_scale

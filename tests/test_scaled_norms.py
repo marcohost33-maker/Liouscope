@@ -234,18 +234,23 @@ def test_column_sums_match_exact_rational_arithmetic_across_the_exponent_range()
         assert got.real == float(exact), f"mismatch for {column}"
 
 
-def test_band_fallback_stays_within_one_ulp_and_never_fabricates_a_zero() -> None:
-    """Pins the known limit of the overflow fallback so it cannot get worse.
+def test_band_fallback_is_exact_or_says_it_cannot_be() -> None:
+    """The fallback may abstain, but it may never be wrong.
 
-    The plain path is exactly rounded. The band path rounds twice and may land
-    one ulp off; what it must never do is delete a defect or flip its sign,
-    because those are the failure modes the whole function exists to prevent.
-    The kernel below is guaranteed to overflow ``math.fsum``, so these cases
-    really do exercise the fallback rather than the plain path.
+    Two independently rounded bands cannot represent a residual that survives
+    only across their boundary, so the fallback checks whether either band sum
+    or the recombination lost anything and reports ``nan`` when it did. This
+    pins the resulting contract, which is stronger than the one-ulp bound it
+    replaces: every number it returns is the exact sum, and everything else is
+    an abstention. What it must never do is return a wrong number, a fabricated
+    zero or a flipped sign, because a gate reading those admits an operator
+    nobody measured.
     """
     rng = random.Random(20260910)
     kernel = [1.5e308, 1.5e308, -1.5e308, -1.5e308]
     entered = 0
+    abstained = 0
+    answered = 0
 
     for _ in range(300):
         column = kernel + [
@@ -259,15 +264,34 @@ def test_band_fallback_stays_within_one_ulp_and_never_fabricates_a_zero() -> Non
         except OverflowError:
             entered += 1
 
-        exact = sum(Fraction(v) for v in column)
+        expected = float(sum(Fraction(v) for v in column))
         got = scaled_column_sums(np.array([[v] for v in column], dtype=complex))[0].real
-        expected = float(exact)
 
-        if expected == 0.0:
-            assert got == 0.0
+        if np.isnan(got):
+            abstained += 1
             continue
-        assert got != 0.0, f"a real sum {expected!r} was reported as zero"
-        assert (got > 0.0) == (expected > 0.0), f"sign flipped for {expected!r}"
-        assert abs(got - expected) <= math.ulp(expected), f"{got!r} vs {expected!r}"
+        answered += 1
+        assert got == expected, f"returned {got!r} for an exact sum of {expected!r}"
 
     assert entered > 0, "the fixture never reached the band fallback"
+    assert answered > 0, "the fallback abstained on everything, so nothing was tested"
+
+
+def test_band_fallback_abstains_on_a_cross_band_residual() -> None:
+    """#139, fifth round: the residual lives only across the band boundary.
+
+    The bands here are ``+2**513`` and ``-2**513 + 1e-300``. The low band is
+    correctly rounded to exactly ``-2**513``, because 1e-300 is far below its
+    last place, and the two then annihilate -- reporting an exactly cancelling
+    column for one whose exact sum is 1e-300. The function must not return that
+    zero; it must say it cannot tell.
+    """
+    column = [7e307] * 3 + [-7e307] * 3 + [2.0**513] + [-(2.0**511)] * 4 + [1e-300]
+
+    assert float(sum(Fraction(v) for v in column)) == 1.0e-300
+    with pytest.raises(OverflowError):
+        math.fsum(column)
+
+    got = scaled_column_sums(np.array([[v] for v in column], dtype=complex))[0]
+
+    assert np.isnan(got.real), f"expected an abstention, got {got!r}"
