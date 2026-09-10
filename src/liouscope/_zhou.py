@@ -124,6 +124,48 @@ def compute_zhou_predictor(
     ZhouPredictorResult
     """
     L_super = np.asarray(L_super, dtype=complex)  # complex128: scipy dispatches by dtype; the double-solve contract (#108) must hold
+
+    # ROUND-27 REVIEW (PR #121). NaN and inf are this library's unavailable
+    # sentinels (see ``_strip_unavailable`` in ``diagnostics.classification``),
+    # not reusable measurements. A non-None sentinel skipped the recomputation
+    # branch AND its certificate guard, and then slipped through ``gap <= 0``
+    # because NaN comparisons are false -- so the function fell through to the
+    # arithmetic and returned ``converged=True`` with NaN bounds: a
+    # manifest-grade record asserting a mixing-time window that was never
+    # measured. The natural caller reaches it without doing anything unusual,
+    # by reusing an UNRESOLVED report via ``gap=report.spectral.gap`` and
+    # ``petermann_factor=report.nonnorm.petermann_max``.
+    #
+    # Validate caller-supplied values before they may bypass certification, and
+    # preserve them verbatim in the abstention so a manifest reader can see
+    # WHICH value caused it. The test is finiteness, not a threshold, so it is
+    # unit-agnostic; ``+inf`` is refused on the same ground -- it is not a
+    # measurement either, and an infinite K would poison ``t_upper`` exactly as
+    # the certified recomputation path already documents for defective modes.
+    #
+    # MERGE NOTE (2026-09-08): this finding was repaired twice, independently
+    # and on the same day -- once here on ``pr107-fix`` and once on a local
+    # branch. The two gates were behaviourally identical; the pushed one is
+    # kept and the other's comment folded in, so nothing that was known about
+    # the defect is lost with the duplicate code.
+    supplied_gap_unavailable = gap is not None and not np.isfinite(gap)
+    supplied_petermann_unavailable = (
+        petermann_factor is not None and not np.isfinite(petermann_factor)
+    )
+    if supplied_gap_unavailable or supplied_petermann_unavailable:
+        return ZhouPredictorResult(
+            mixing_time_lower=float("inf"),
+            mixing_time_upper=float("inf"),
+            epsilon=epsilon,
+            converged=False,
+            gap=float(gap) if gap is not None else float("nan"),
+            petermann_factor=(
+                float(petermann_factor)
+                if petermann_factor is not None
+                else float("nan")
+            ),
+        )
+
     if gap is None or petermann_factor is None:
         # Round-13 review: D24's recomputation must not retain a solver
         # failure that the spectral and Mpemba paths repair. On the stiff

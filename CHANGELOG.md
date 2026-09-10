@@ -7,6 +7,102 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Fixed
+- **A degenerate spectrum let one eigenvector certify two modes (PR #121,
+  round-26 external review, P1).** `certified_nonzero_modes` picked the
+  eigenpair for an in-band candidate with `argmin(|ref - lambda|)`, a lookup by
+  VALUE. `np.argmin` returns the FIRST index attaining the minimum, so equal
+  eigenvalues all borrowed the first pair's vectors and the a-posteriori bound
+  for the second mode was computed from a residual never measured for it.
+  `certified_eig`'s eigenvector gate does not catch this: it tests only modes
+  above the raw `bound`, and a rescued mode is by construction below it.
+  Measured on a trace-preserving 4x4 with spectrum `{0, -1e-14, -1e-14, -1}`
+  whose second slow right vector was replaced by the fast mode's vector
+  (residual 1.0 instead of 6e-18): `certified=True, resolved=True`, and the
+  invalid pair reached D9/D19. Both directions were defective — a corrupt mode
+  certified on a healthy neighbour's residual, and a healthy mode refused on a
+  corrupt one's. When the vectors are SUPPLIED the pair index is now the
+  candidate's own index (no search); when they are borrowed from the operator's
+  own decomposition, EQUAL eigenvalues are ranked so the r-th of them takes the
+  r-th nearest reference entry, while distinct eigenvalues keep their
+  independent lookup. A blanket bijection was tried first and is wrong: across
+  two genuinely different decompositions a merely-close mode consumes the
+  partner an equal one needs, which on the stiff four-level network of
+  `test_pr121_review_round17.py` lost a correctly rescued mode and abandoned
+  the whole refinement. Non-degenerate spectra are unchanged: of nine measured
+  multiplicity/corruption combinations, the five that disagreed with ground
+  truth before the fix are all degenerate and all four non-degenerate ones
+  already agreed.
+- **The a-posteriori zero-mode certificate stopped being a test below ~1e-162
+  (PR #121, round-24 external review, B4).** `certified_nonzero_modes`
+  computes the eigenpair residual with `np.linalg.norm`, which squares before
+  summing: when the generator and its residuals are uniformly scaled so every
+  component falls below ~`1.5e-162`, a demonstrably nonzero residual comes back
+  as `0.0`. `mag > margin * (0 / sep)` then holds for EVERY nonzero in-band
+  candidate, so a numerically perturbed member of a degenerate stationary
+  manifold is promoted into the physical spectrum and D1 reports a spurious gap
+  — purely because the rate units changed, on a certificate whose every term is
+  degree-one homogeneous. Measured on a deliberately inexact eigenpair whose
+  residual is 100x above the candidate's own magnitude (correct verdict: not
+  certified): NOT certified at `c = 1`, `1e-80`, `1e-160`; certified at
+  `1e-170` and `1e-200`. Round 22 made the refined MIDPOINT underflow-safe; the
+  residual that establishes the refinement was not. A new
+  `numerics.linalg.underflow_safe_norm` follows the same one-directional
+  discipline as `trace_preservation_defect` (power-of-two `frexp`/`ldexp`
+  scaling, reachable only from an exact `0.0` on a nonzero vector, overflow
+  deliberately left alone) and is used for both residual norms and both
+  eigenvector normalisations.
+- **`is_hermitian` accepted an infinite relative tolerance (PR #121, round-24
+  external review, B5).** `is_hermitian([[0, 1], [0, 0]], rtol=float("inf"))`
+  returned `True`, because any finite defect is `<= inf`. `rtol` is a newly
+  exposed validation threshold (issue #109), so an invalid one could turn the
+  gate into a fail-open pass-through — the exact failure the scale-relative
+  reading exists to close. `rtol` and `atol` must now be finite and
+  non-negative, and the DERIVED tolerance `rtol * max|A|` must be finite too,
+  the same two-stage rule `numerics.scale.spectral_zero_tolerance` applies. An
+  unusable tolerance raises `ValueError` rather than returning `False`: `False`
+  is a statement about the matrix, an invalid threshold is a statement about
+  the call, and reporting them identically is the conflation this round is
+  about.
+- **Malformed observations were reported as a flat curve instead of refused
+  (PR #121, round-24 review, finding B3).** The issue-#123 degeneracy test in
+  `fit_gls_ar1` reads `y` alone and never touches `t`, and it ran before any
+  shape validation. A 64-point grid against a one-point constant curve
+  therefore returned `degenerate=True` -- "no resolvable variation" asserted
+  about a curve that was never supplied on that grid, and a verdict that does
+  not mention the grid is one nothing downstream can undo. An 8x8 pair slipped
+  through the same way with a 2-D NaN residual array. `t` and `y` are now
+  checked to be one-dimensional and equal in length before anything else
+  inspects them, raising `ValueError` like the finiteness gate beside it. A
+  well-formed flat curve still returns `degenerate=True`.
+- **The trace-preservation defect underflowed while the operator around it did
+  not (PR #121, round-24 review, finding B2).** The round-23 underflow repair
+  in `trace_preservation_defect` was triggered by `fro == 0.0` alone, but the
+  two norms do not share a scale. Adding a representable `1e-200`
+  trace-preservation violation to an O(1) generator leaves `vec(I)^H L =
+  [1e-200, 0, 0, 0]`, whose SQUARES fall below `5e-324`, so the numerator came
+  back `0.0` while `||L||_F` stayed at 1.62 and the whole-operator rescue never
+  fired. With `tp_rtol = 0` the applicability gate then read `0.0 > 0.0` --
+  False -- and `certified_eigvals` and `certified_eig` both reported
+  `applicable=True, trace_defect=0.0` for an operator that is demonstrably not
+  trace preserving. Scaled recomputation is now triggered when EITHER nonzero
+  source expression collapses, the numerator by its OWN exponent rather than
+  the operator's. The repair remains reachable only from an exact zero, so the
+  one-directional policy of round 23 -- underflow repaired, overflow left to
+  the round-21 refusal -- is unchanged.
+- **The operator-derived zero-mode cutoff came back infinite for a finite
+  operator (PR #121, round-24 review, finding B1).** `operator_zero_tolerance`
+  formed `rtol * eps * ||L||_2` directly, and `||L||_2` overflows for an
+  operator every entry of which is representable -- a 2x2 filled with `1e308`
+  has a spectral norm of `2e308`. The returned cutoff was `inf` although the
+  quantity itself, `~4.4e295`, fits comfortably in a double. No mode satisfies
+  `|lambda| > inf`, so a consumer holding the operator discarded its entire
+  spectrum and read huge non-zero modes as stationary -- the same silent
+  acceptance the spectrum-side helper closed in round 22, one helper across.
+  The norm is now taken on a copy scaled by an exact power of two selected
+  from the largest COMPONENT (`max(|Re|, |Im|)`, because the modulus of a
+  finite complex entry can itself overflow), and a derived value that is still
+  not finite -- reachable only for an `rtol` near the top of the double range
+  -- is refused rather than returned, matching `spectral_zero_tolerance`.
 - **D16 was published from the spectrum for which D1/D3/D4 had just been
   withheld (PR #121, round-23 review, finding 13).** Where the zero-mode
   certificate is applicable but unresolved, the spectral layer reports D1, D3,

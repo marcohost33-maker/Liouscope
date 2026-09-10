@@ -21,10 +21,11 @@ import numpy as np
 import pytest
 
 from liouscope import build_liouvillian
+from liouscope._consts import ZERO_MODE_EPS_FACTOR
 from liouscope._zhou import compute_zhou_predictor
 from liouscope.diagnostics import nonnormality as nn
 from liouscope.diagnostics.mpemba import expansion_alpha, overlap_c1
-from liouscope.numerics.linalg import certified_eigvals
+from liouscope.numerics.linalg import certified_eigvals, certified_nonzero_modes
 
 # --------------------------------------------------------------------------
 # Fixtures
@@ -63,6 +64,43 @@ def _d11_fallback_generator() -> np.ndarray:
         j[to, frm] = 1.0
         jumps.append(j)
     return build_liouvillian(np.zeros((4, 4), dtype=complex), jumps, _D11_RATES)
+
+
+#: Same topology as ``_D11_RATES``, rates chosen so the zero band SEPARATES.
+#: Round-28 turned the stiff network above into a negative control -- its
+#: certificate resolved only by way of a borrowed residual -- so the positive
+#: path needs a network that resolves on its own evidence. Measured here:
+#: solver ``dgeev-real``, ``resolved=True``, ``zero_mode_count=1``,
+#: ``ambiguous_count=0``, tolerance refined from ``3.156e-05`` to ``2.64e-09``,
+#: and the rescued pair sits at ``3.134e-05`` -- 33x above the ambiguity split,
+#: while the only uncertified in-band mode is the stationary one at ``2.2e-13``,
+#: four decades BELOW it. Both margins are deliberate: a fixture whose verdict
+#: turns on the third digit would be measuring the BLAS, not the code.
+_D11_SEP_RATES = [
+    9.694699e-06,
+    1.005e08,
+    1.408235e-05,
+    3.470533e-06,
+    4.859915e-05,
+    7.291308e-05,
+    1.0e-11,
+]
+
+
+def _d11_separable_generator() -> np.ndarray:
+    """The positive path: eigenvalues resolve WITH a refinement, D9 withheld.
+
+    Carries what ``_d11_fallback_generator`` used to carry. The rescued pair is
+    exactly degenerate, so the rescue runs through the round-28 invariant-
+    subspace certificate rather than through per-mode eigenpairs -- which is the
+    point: the seam below must work when the evidence is a subspace.
+    """
+    jumps = []
+    for to, frm in _D11_PAIRS:
+        j = np.zeros((4, 4), dtype=complex)
+        j[to, frm] = 1.0
+        jumps.append(j)
+    return build_liouvillian(np.zeros((4, 4), dtype=complex), jumps, _D11_SEP_RATES)
 
 
 def _rescued_modes(L: np.ndarray) -> tuple[np.ndarray, object]:
@@ -175,7 +213,7 @@ def test_d11_fallback_scans_the_refined_zero_set(monkeypatch) -> None:
     to be 1 for this (Hamiltonian-free) network either way, so an assertion on
     the reported number alone would be blind here.
     """
-    L = _d11_fallback_generator()
+    L = _d11_separable_generator()
     rescued, cert = _rescued_modes(L)
     assert cert.resolved, "precondition: the eigenvalue certificate resolves"
     assert cert.applied_tolerance < cert.bound, "precondition: a refinement happened"
@@ -210,6 +248,39 @@ def test_d11_fallback_scans_the_refined_zero_set(monkeypatch) -> None:
     # Every rescued mode is still in the scan; the raw band would drop all three.
     for mode in rescued:
         assert np.any(np.isclose(scanned, mode, rtol=1.0e-9))
+
+
+def test_the_stiff_d11_network_is_a_negative_control() -> None:
+    """ROUND-28: the network that resolved only on a borrowed residual.
+
+    Until round 28 this generator carried the test above, and its certificate
+    reached ``resolved=True`` by certifying ``ev[3] = -3.3216107e-06`` from the
+    eigenpair of ``ref[8] = -3.345505e-06`` -- a residual already spoken for by
+    ``ev[8]``, which matches ``ref[8]`` to the last bit. The operator's spectrum
+    carries that value exactly twice and the candidate ladder claims it three
+    times, so one candidate has no evidence of its own and the honest verdict is
+    that this network does not resolve.
+
+    Asserted at BOTH ends, because either alone is passable by accident:
+    the certificate must not resolve, AND no route may certify anything -- a
+    ladder that merely switched solvers would satisfy the first assertion while
+    leaving the borrowed residual in place, which is exactly what an earlier
+    draft of the repair did.
+    """
+    L = _d11_fallback_generator()
+    _ev, cert = certified_eigvals(L)
+    assert cert.resolved is False
+    assert cert.ambiguous_count > 0
+
+    L_c = np.asarray(L, dtype=complex)
+    bound = ZERO_MODE_EPS_FACTOR * float(np.finfo(float).eps) * float(
+        np.linalg.norm(L_c, 2)
+    )
+    for spectrum in (np.linalg.eigvals(L_c), np.linalg.eigvals(np.real(L_c))):
+        in_band = np.abs(spectrum) <= bound
+        assert int(np.count_nonzero(in_band)) >= 2, "precondition: the band is populated"
+        certified = certified_nonzero_modes(L_c, spectrum, in_band)
+        assert not bool(certified.any()), "no candidate may be certified on a neighbour"
 
 
 # --------------------------------------------------------------------------
