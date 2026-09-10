@@ -6,6 +6,34 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+- **Trace-preserving generators can be restricted to the traceless operator
+  space by an exact structural identity, with no eigenvalue-magnitude
+  threshold (issue #113).** For column-stacked operators trace preservation IS
+  `vec(I)^H L = 0`, so the traceless space `ker(vec(I)^H)` is invariant under
+  `L` and contains every eigenvector with non-zero eigenvalue.
+  `numerics.traceless.restrict_to_traceless` builds an explicit orthonormal
+  basis `B` of that kernel -- off-diagonal matrix units plus the standard
+  diagonal traceless generators, so no numerical rank routine is asked to infer
+  a subspace whose defining left-null vector is known analytically -- and
+  returns `L0 = B^H L B` together with the evidence that makes the reduction
+  auditable: `invariance_defect = ||q^H L B||`, `reconstruction_defect =
+  ||L B - B L0||`, and the two trace-preservation readings that admitted the
+  input. A degenerate stationary manifold keeps its additional traceless zero
+  modes, which a primitive that simply deletes small eigenvalues would erase.
+  This CHANGES NO REPORTED NUMBER: no diagnostic is routed through the
+  restriction yet, and the run manifest contract is unchanged.
+- **Admission to that restriction is gated on both readings of
+  `vec(I)^H L = 0` (PR #139 review).** The normwise ratio `||q^H L|| / ||L||`
+  divides one number by the norm of the whole operator, so an entry taking part
+  in no violated trace equation dilutes a violation elsewhere until the
+  quotient is round-off -- measured on the 4x4 input `L[1, 0] = 1e300`,
+  `L[0, 2] = 1`: ratio 1e-300, accepted at the default `tp_rtol`, while column
+  2's trace equation has relative error 1, and the restriction returned for it
+  carried `invariance_defect = 0.707`. The componentwise backward error of
+  issue #130 is now applied here with exactly the comparison the certified
+  eigensolver paths use, so one quantity is not measured two different ways.
+
 ### Changed
 - **The Gaussian likelihood behind AICc is evaluated in log-RSS space, and an
   exact-zero RSS is now an explicit abstention (issue #135).** This is a
