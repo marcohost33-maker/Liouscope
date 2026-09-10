@@ -87,9 +87,18 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   preserving. Vectorised summation was rejected on the same grounds, despite
   benchmarking 2.4x to 11.9x faster: it returned 0 for a column whose exact sum
   is 1, and ordinary summation does not round such a defect away, it deletes it.
-  Known limit, measured: the plain path is exactly rounded, while the band
-  fallback rounds twice and can land one ulp off; it produced no spurious zero
-  and no sign flip in 19965 columns built to cancel inside it.
+  Two independently rounded bands still cannot carry a residual that survives
+  only across their boundary -- `[7e307]*3 + [-7e307]*3 + [2**513] +
+  [-2**511]*4 + [1e-300]` has the exact sum `1e-300`, yet the bands are
+  `+2**513` and `-2**513 + 1e-300` and annihilate to zero. The fallback
+  therefore establishes whether either band sum was rounded and returns `nan`
+  when it was, so the trace-preservation gates REFUSE the operator instead of
+  admitting it on a number nobody can vouch for. Every value the fallback does
+  return is the exact sum. Measured: it is entered 10 times in 10280 calls
+  across the trace-related suite and abstains once; physical stiff generators
+  never reach it at all, for fast rates up to 1e12. Making it answer those
+  cases needs an accumulator that keeps Shewchuk partials across the band
+  boundary until one final rounding, which is a separate construction.
   **CHANGES A REPORTED NUMBER.** `trace_defect` is now the correctly rounded
   exact sum of the represented coefficients rather than an artefact of the
   summation route, and it reaches persisted reports through the zero-mode

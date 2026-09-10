@@ -121,8 +121,9 @@ abstract: >-
 # (MANIFEST_SCHEMA is deliberately unchanged). When a diagnostic is routed
 # through it, THAT change is the one that must be described as a correction.
 # Also pending for the next cut: the trace-preservation defect vec(I)^H L is
-# accumulated with exact per-column summation, falling back to exponent-banded
-# accumulation only on overflow, instead of an ordinary matrix product (#139). This CHANGES A REPORTED
+# accumulated with exact per-column summation, falling back on overflow to an
+# exponent-banded accumulation that reports an unmeasurable result as such
+# rather than as zero, instead of an ordinary matrix product (#139). This CHANGES A REPORTED
 # NUMBER and is a correction, not an addition: the ordinary product could leave
 # the float64 range on the way to a column sum that is exactly zero -- measured
 # for d=16 with eight coefficients +2.5e307 and eight -2.5e307 in one column,
