@@ -73,6 +73,40 @@ def scaled_euclidean_norm(values: np.ndarray) -> float:
         return float(np.ldexp(scaled_norm, exponent))
 
 
+def scaled_log_sum_squares(values: np.ndarray) -> float:
+    """Return ``log(sum(abs(values)**2))`` without spurious under/overflow.
+
+    The return value is ``-inf`` for an exact all-zero input, ``nan`` when any
+    component is NaN, and ``inf`` when any component is infinite. For finite,
+    non-zero float64 input the logarithm remains finite even when the true sum
+    of squares (or its square root) is outside the representable float64 range.
+
+    This is the likelihood-facing companion to :func:`scaled_euclidean_norm`:
+    both use the same exact power-of-two scaling contract, but this function
+    never reconstructs RSS in ordinary floating-point units.
+    """
+    arr = np.asarray(values)
+    if arr.size == 0:
+        return float("-inf")
+
+    real = np.asarray(np.real(arr), dtype=float)
+    imag = np.asarray(np.imag(arr), dtype=float)
+    if np.any(np.isnan(real)) or np.any(np.isnan(imag)):
+        return float("nan")
+    if np.any(np.isinf(real)) or np.any(np.isinf(imag)):
+        return float("inf")
+
+    scaled = _finite_component_scale(arr)
+    if scaled is None:
+        return float("-inf")
+    scaled_real, scaled_imag, exponent = scaled
+    sumsq = float(
+        np.sum(scaled_real * scaled_real, dtype=float)
+        + np.sum(scaled_imag * scaled_imag, dtype=float)
+    )
+    return float(math.log(sumsq) + 2.0 * exponent * math.log(2.0))
+
+
 def scaled_cancellation_ratio(values: np.ndarray) -> float:
     """Return ``abs(sum(values)) / sum(abs(values))`` scale-safely.
 

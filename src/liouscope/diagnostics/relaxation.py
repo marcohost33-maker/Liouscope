@@ -215,6 +215,16 @@ def _fit_with_model(
         n_eff=n_eff,
         residual_ar1_rho=fit.rho_ar1,
         success=fit.success,
+        likelihood_degenerate=fit.likelihood_degenerate,
+        # ROUND-2 REVIEW (PR #147). This conversion carried
+        # ``likelihood_degenerate`` and dropped ``scale_unavailable``, so the
+        # newly supported underflow case -- ``success=True`` with a withheld
+        # ``sigma`` -- reached the report indistinguishable from an ordinary
+        # fit. Its bootstrap then fails and ``compute_relaxation_layer``
+        # records ``bca_ci_beta = (nan, nan)``, exactly what a jackknife
+        # failure or a non-converged resample produces. The reason lived only
+        # in a RuntimeWarning, which a persisted artefact does not keep.
+        scale_unavailable=fit.scale_unavailable,
     )
     return fit_result, fit.params
 
