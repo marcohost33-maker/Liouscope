@@ -70,14 +70,26 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   and `-2.5e307` in the other eight: the product returned `inf+nanj`, the
   defect came back `nan` beside a representable Frobenius norm of `1e308`, and
   `restrict_to_traceless` refused a generator whose trace equation is exactly
-  zero. The new `numerics.norms.scaled_column_sums` accumulates in the
-  power-of-two scaled domain this module already uses, with a scale chosen per
-  column AND per component: a shared scale stops the overflow too, but flushes
-  a small real defect beside a huge one to zero, which is the same failure in
-  the silent, fail-open direction. `math.fsum` is used rather than a vectorised
-  sum -- benchmarked 2.4x to 11.9x faster -- because the latter returned 0 for
-  a column whose exact sum is 1: ordinary summation does not round such a
-  defect away, it deletes it.
+  zero. The new `numerics.norms.scaled_column_sums` sums each column, and each
+  component of it, with `math.fsum`, which is exact over the whole float64
+  range; its only failure is an intermediate that leaves the range, and that is
+  order-dependent. Only then does it fall back to two exponent bands split at
+  `2**512`, where neither band can overflow or underflow, so no addend is
+  sacrificed.
+  Three earlier review rounds took the same class one level at a time --
+  overflow between columns, a shared scale for real and imaginary parts, then
+  underflow of a small addend under a common scale -- and the third made the
+  pattern the finding: a power-of-two scale SHIFTS the representable window, it
+  does not widen it, so any addend below `max * 2**-1074` dies before the
+  accumulation starts, while a smaller scale brings the overflow back. Measured:
+  `[1e300, -1e300, 1e-300]` returned 0 instead of `1e-300`, and
+  `restrict_to_traceless(..., tp_rtol=0)` accepted a generator that is not trace
+  preserving. Vectorised summation was rejected on the same grounds, despite
+  benchmarking 2.4x to 11.9x faster: it returned 0 for a column whose exact sum
+  is 1, and ordinary summation does not round such a defect away, it deletes it.
+  Known limit, measured: the plain path is exactly rounded, while the band
+  fallback rounds twice and can land one ulp off; it produced no spurious zero
+  and no sign flip in 19965 columns built to cancel inside it.
   **CHANGES A REPORTED NUMBER.** `trace_defect` is now the correctly rounded
   exact sum of the represented coefficients rather than an artefact of the
   summation route, and it reaches persisted reports through the zero-mode
