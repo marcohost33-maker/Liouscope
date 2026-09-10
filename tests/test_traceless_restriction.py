@@ -8,6 +8,10 @@ import numpy as np
 import pytest
 
 from liouscope import build_liouvillian
+from liouscope.numerics.linalg import (
+    trace_preservation_componentwise_error,
+    trace_preservation_defect,
+)
 from liouscope.numerics.traceless import (
     restrict_to_traceless,
     trace_vector,
@@ -126,3 +130,115 @@ def test_stiff_network_keeps_the_known_slow_mode_without_zero_filter(
     gap = -float(np.max(np.real(eigenvalues)))
     assert gap == pytest.approx(1.074e-5, rel=2.0e-8, abs=0.0)
     assert reduced.invariance_defect <= 1.0e-12 * reduced.operator_scale
+
+
+def _diluted_trace_violation() -> np.ndarray:
+    """A generator whose trace violation is invisible to the normwise ratio.
+
+    Column 2 of this 4x4 superoperator has the trace equation
+    ``L[0, 2] + L[3, 2] = 1``, a relative error of one. The entry ``L[1, 0]``
+    takes part in no trace equation at all, but it sets ``||L||_F``, so the
+    global ratio ``||q^H L|| / ||L||`` reads 1e-300.
+    """
+    L_super = np.zeros((4, 4), dtype=complex)
+    L_super[1, 0] = 1.0e300
+    L_super[0, 2] = 1.0
+    return L_super
+
+
+def test_componentwise_gate_refuses_diluted_defect() -> None:
+    """PR #139 review, finding B1: a normwise gate carries no bits here.
+
+    Before the componentwise gate this input was ACCEPTED and a restriction
+    was returned whose own audit numbers refuted it: ``invariance_defect``
+    and ``reconstruction_defect`` were both 0.707, i.e. the traceless subspace
+    -- the one property the whole construction relies on -- was not invariant
+    under the generator that had just passed the gate.
+    """
+    L_super = _diluted_trace_violation()
+
+    # The dilution is a fact about the two readings, not an artefact of the
+    # test fixture: assert it before asserting what the gate does with it.
+    defect, scale = trace_preservation_defect(L_super)
+    assert defect / scale == pytest.approx(1.0e-300, rel=1.0e-12)
+    assert trace_preservation_componentwise_error(L_super) == pytest.approx(1.0)
+
+    # Caught broadly, then classified: a test that dies of an unexpected
+    # exception type would otherwise read as a pass for the wrong reason.
+    with pytest.raises(Exception, match="componentwise") as exc:
+        restrict_to_traceless(L_super)
+    assert isinstance(exc.value, ValueError), (
+        f"expected ValueError, got {type(exc.value).__name__}: {exc.value}"
+    )
+
+
+def test_the_same_large_entry_without_a_violated_equation_is_still_accepted() -> None:
+    """Positive control paired with the negative one: only the violation moves.
+
+    This is the refusal fixture with the offending ``L[0, 2] = 1`` removed and
+    nothing else changed. The 1e300 entry, the stiffness and the dimension are
+    identical, so a gate that rejected this too would be rejecting SIZE rather
+    than a broken trace equation.
+    """
+    L_super = _diluted_trace_violation()
+    L_super[0, 2] = 0.0
+
+    reduced = restrict_to_traceless(L_super)
+
+    assert reduced.trace_componentwise_error == 0.0
+    assert reduced.operator.shape == (3, 3)
+    # Accepted for the right reason: the subspace really is invariant.
+    assert reduced.invariance_defect == 0.0
+    assert reduced.reconstruction_defect == 0.0
+
+
+@pytest.mark.parametrize("fast_rate", [1.0e8, 1.0e10, 1.0e12])
+def test_stiff_physical_generator_passes_a_live_componentwise_gate(
+    fast_rate: float,
+) -> None:
+    """Positive control that proves the gate it passes is not vacuous.
+
+    A gate that accepts everything and a gate that reads a real number can
+    both produce a green test here, so acceptance alone is not evidence. The
+    componentwise reading of this genuine jump-network generator is nonzero
+    (~1e-17, six orders of rate span notwithstanding), and tightening
+    ``tp_rtol`` below that measured value rejects THIS SAME operator through
+    THIS SAME gate -- which is what shows the comparison is on the code path
+    and the pass at the default tolerance was earned.
+    """
+    L_super = _classical_stiff_network(fast_rate)
+
+    reduced = restrict_to_traceless(L_super)
+
+    error = reduced.trace_componentwise_error
+    assert 0.0 < error < 1.0e-10, f"expected a live sub-tolerance reading, got {error}"
+    assert reduced.invariance_defect <= 1.0e-12 * reduced.operator_scale
+
+    with pytest.raises(Exception, match="componentwise") as exc:
+        restrict_to_traceless(L_super, tp_rtol=error / 2.0)
+    assert isinstance(exc.value, ValueError), (
+        f"expected ValueError, got {type(exc.value).__name__}: {exc.value}"
+    )
+
+
+def test_componentwise_gate_shares_the_eigensolver_verdict() -> None:
+    """Same evidence, same tolerance, same verdict as the certified paths.
+
+    Two gates that measure the same quantity differently are a defect class of
+    their own, so the agreement is asserted rather than assumed.
+    """
+    for L_super in (
+        _diluted_trace_violation(),
+        _classical_stiff_network(1.0e12),
+        _amplitude_damped_qubit(1.0),
+    ):
+        error = trace_preservation_componentwise_error(L_super)
+        rejected_by_eigensolver_rule = error > 1.0e-10
+
+        try:
+            restrict_to_traceless(L_super, tp_rtol=1.0e-10)
+            rejected_here = False
+        except ValueError:
+            rejected_here = True
+
+        assert rejected_here == rejected_by_eigensolver_rule

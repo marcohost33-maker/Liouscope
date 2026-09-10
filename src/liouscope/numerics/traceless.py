@@ -10,6 +10,15 @@ eigensolve: choose an orthonormal basis ``B`` of ``ker(q^H)`` and solve the
 restriction ``L0 = B^H L B``. No eigenvalue-magnitude threshold is involved in
 constructing the subspace. If the stationary manifold is degenerate, its
 additional traceless zero modes correctly remain in ``L0``.
+
+Trace preservation is checked in BOTH readings before the restriction is
+formed, exactly as the certified eigensolver paths in :mod:`.linalg` do. The
+normwise ratio ``||q^H L|| / ||L||`` answers a question about the operator as
+a whole and can be driven to round-off by a large entry that takes part in no
+violated trace equation; the componentwise reading normalises every column's
+trace equation by only those coefficients that can cancel within it. A gate
+that reads only the first accepts generators whose traceless subspace is not
+invariant, which is the one property this module exists to rely on.
 """
 
 from __future__ import annotations
@@ -19,7 +28,10 @@ from dataclasses import dataclass
 
 import numpy as np
 
-from .linalg import trace_preservation_defect
+from .linalg import (
+    trace_preservation_componentwise_error,
+    trace_preservation_defect,
+)
 from .norms import scaled_euclidean_norm
 
 
@@ -31,6 +43,7 @@ class TracelessRestriction:
     basis: np.ndarray
     trace_defect: float
     operator_scale: float
+    trace_componentwise_error: float
     invariance_defect: float
     reconstruction_defect: float
 
@@ -90,16 +103,21 @@ def restrict_to_traceless(
 ) -> TracelessRestriction:
     """Restrict a trace-preserving ``d^2 x d^2`` generator to traceless space.
 
-    The routine fails closed when trace preservation is not established. It
-    does *not* decide how many stationary modes exist: for a unique stationary
-    state the one non-traceless zero mode is removed exactly; for a degenerate
-    stationary manifold the remaining traceless zero directions stay in the
-    reduced operator and must be handled explicitly by the caller.
+    The routine fails closed when trace preservation is not established, in
+    both the normwise and the componentwise reading of ``q^H L = 0``. Those are
+    the same two gates, in the same order and with the same comparisons, that
+    the certified eigensolvers in :mod:`.linalg` apply, and ``tp_rtol`` bounds
+    both. It does *not* decide how many stationary modes exist: for a unique
+    stationary state the one non-traceless zero mode is removed exactly; for a
+    degenerate stationary manifold the remaining traceless zero directions stay
+    in the reduced operator and must be handled explicitly by the caller.
 
     ``invariance_defect`` measures ``||q^H L B||_2`` and
     ``reconstruction_defect`` measures ``||L B - B (B^H L B)||_F``. Both should
     be at round-off for a legal trace-preserving input and make the subspace
-    reduction auditable rather than assumed.
+    reduction auditable rather than assumed. ``trace_componentwise_error``
+    reports the worst single trace equation, the reading the normwise ratio
+    cannot make.
     """
     if not np.isfinite(tp_rtol) or tp_rtol < 0.0:
         raise ValueError(f"tp_rtol must be finite and non-negative, got {tp_rtol}")
@@ -131,6 +149,39 @@ def restrict_to_traceless(
             f"tp_rtol={tp_rtol:.6e}"
         )
 
+    # REVIEW (PR #139), finding B1. The normwise test above divides ONE number
+    # by the norm of the whole operator, so an entry that participates in no
+    # violated trace equation can dilute a violation elsewhere until the ratio
+    # is round-off. Measured on the 4x4 input ``L[1, 0] = 1e300``,
+    # ``L[0, 2] = 1``: global ratio 1e-300, hence accepted at the default
+    # ``tp_rtol``, while the trace equation for column 2 has relative error 1.
+    # The restriction returned for it carried ``invariance_defect = 0.707`` --
+    # the subspace this module restricts to was not invariant, which is the
+    # single assumption everything downstream rests on.
+    #
+    # Issue #130 already built the correct reading and both certified
+    # eigensolver paths already gate on it (``linalg.py`` lines 1116-1117 and
+    # 1392-1393). The SAME comparison is used here rather than a second,
+    # slightly different one: the componentwise error is already dimensionless,
+    # so it is compared DIRECTLY against ``tp_rtol`` with no scale factor, and
+    # a non-finite reading is refused instead of being compared.
+    tp_componentwise = trace_preservation_componentwise_error(L_c)
+    # ``L_c`` is already validated finite, square and of perfect-square
+    # dimension above, which are the only inputs for which the helper returns
+    # NaN -- so this branch is unreachable today and is kept only so the gate
+    # still fails closed if any of those validations is ever relaxed.
+    if not np.isfinite(tp_componentwise):  # pragma: no cover
+        raise ValueError(
+            "componentwise trace-preservation evidence is not representable as "
+            "finite float64"
+        )
+    if tp_componentwise > tp_rtol:
+        raise ValueError(
+            "L_super is not trace preserving componentwise within the requested "
+            f"relative tolerance: componentwise_error={tp_componentwise:.6e}, "
+            f"tp_rtol={tp_rtol:.6e}"
+        )
+
     basis = traceless_basis(d)
     if basis.shape[1] == 0:
         reduced = np.empty((0, 0), dtype=complex)
@@ -139,6 +190,7 @@ def restrict_to_traceless(
             basis=basis,
             trace_defect=trace_defect,
             operator_scale=operator_scale,
+            trace_componentwise_error=tp_componentwise,
             invariance_defect=0.0,
             reconstruction_defect=0.0,
         )
@@ -154,6 +206,7 @@ def restrict_to_traceless(
         basis=basis,
         trace_defect=trace_defect,
         operator_scale=operator_scale,
+        trace_componentwise_error=tp_componentwise,
         invariance_defect=invariance_defect,
         reconstruction_defect=reconstruction_defect,
     )
