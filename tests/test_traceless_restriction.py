@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import warnings
+from fractions import Fraction
 
 import numpy as np
 import pytest
@@ -211,11 +212,18 @@ def test_stiff_physical_generator_passes_a_live_componentwise_gate(
     reduced = restrict_to_traceless(L_super)
 
     error = reduced.trace_componentwise_error
+    normwise = reduced.trace_defect / reduced.operator_scale
     assert 0.0 < error < 1.0e-10, f"expected a live sub-tolerance reading, got {error}"
+    assert 0.0 < normwise < 1.0e-10, f"expected a live normwise reading, got {normwise}"
     assert reduced.invariance_defect <= 1.0e-12 * reduced.operator_scale
 
-    with pytest.raises(Exception, match="componentwise") as exc:
-        restrict_to_traceless(L_super, tp_rtol=error / 2.0)
+    # Both readings are real, nonzero numbers here, so lowering the tolerance
+    # below both must refuse the very same operator. Which of the two speaks
+    # first is deliberately NOT asserted: they are within a factor of two of
+    # each other on this fixture, and pinning the order would make the test
+    # about evaluation sequence rather than about the gate being live.
+    with pytest.raises(Exception, match="not trace preserving") as exc:
+        restrict_to_traceless(L_super, tp_rtol=min(error, normwise) / 2.0)
     assert isinstance(exc.value, ValueError), (
         f"expected ValueError, got {type(exc.value).__name__}: {exc.value}"
     )
@@ -242,3 +250,100 @@ def test_componentwise_gate_shares_the_eigensolver_verdict() -> None:
             rejected_here = True
 
         assert rejected_here == rejected_by_eigensolver_rule
+
+
+def _exactly_cancelling_large_column(d: int = 16, upper: float = 2.5e307) -> np.ndarray:
+    """A legal generator whose trace equation only cancels outside float range.
+
+    Column 0 carries ``+upper`` in the first half of the trace rows and
+    ``-upper`` in the second, so the trace equation is EXACTLY zero while the
+    partial sums reach ``d/2 * upper``. The Frobenius norm is
+    ``sqrt(d) * upper``, which stays inside float64 for these values.
+    """
+    n = d * d
+    L_super = np.zeros((n, n), dtype=complex)
+    trace_rows = np.arange(0, n, d + 1, dtype=int)
+    half = trace_rows.size // 2
+    L_super[trace_rows[:half], 0] = upper
+    L_super[trace_rows[half:], 0] = -upper
+    return L_super
+
+
+def test_exactly_cancelling_large_column_is_no_longer_refused() -> None:
+    """PR #139 review, P2: the mirror image of the finding fixed in 5c151f9.
+
+    That one was fail-open on an invalid generator. This is fail-closed on a
+    valid one: the operator is exactly trace preserving and entirely
+    representable, and it was refused because an intermediate product -- not
+    the result -- left the float64 range.
+    """
+    L_super = _exactly_cancelling_large_column()
+    d = 16
+
+    # The rejected evidence, as the helper used to assemble it.
+    vec_i = np.eye(d, dtype=complex).reshape(-1, order="F")
+    with np.errstate(over="ignore", invalid="ignore"):
+        old_reading = (vec_i.conj() @ L_super)[0]
+    assert not np.isfinite(old_reading), (
+        "fixture no longer reproduces the intermediate overflow it was built for"
+    )
+
+    reduced = restrict_to_traceless(L_super)
+
+    assert reduced.trace_defect == 0.0
+    assert reduced.operator_scale == 1.0e308
+    assert reduced.trace_componentwise_error == 0.0
+    # Accepted for the right reason: the subspace really is invariant, measured
+    # RELATIVE to the operator's own scale as everywhere else in this module.
+    assert reduced.invariance_defect <= 1.0e-13 * reduced.operator_scale
+
+
+def test_the_overflow_repair_still_measures_a_real_defect_in_that_regime() -> None:
+    """Non-emptiness: the repaired reading is computed, not merely survived.
+
+    A helper that returned zero for everything near the float ceiling would
+    also make the test above pass. Perturbing one term by a representable
+    amount must therefore produce that exact defect and a refusal.
+    """
+    L_super = _exactly_cancelling_large_column()
+    trace_rows = np.arange(0, 256, 17, dtype=int)
+    L_super[trace_rows[8], 0] += 1.0e306
+
+    # Exact oracle over the REPRESENTED coefficients: the perturbation itself
+    # is rounded when it is added to 2.5e307, so 1e306 is not the number the
+    # matrix actually holds. Fractions are exact for float64 values.
+    exact = sum(Fraction(v) for v in L_super[trace_rows, 0].real.tolist())
+    defect, scale = trace_preservation_defect(L_super)
+
+    assert exact != 0
+    assert defect == float(abs(exact))
+    assert defect / scale > 1.0e-10
+
+    with pytest.raises(Exception, match="not trace preserving") as exc:
+        restrict_to_traceless(L_super)
+    assert isinstance(exc.value, ValueError), (
+        f"expected ValueError, got {type(exc.value).__name__}: {exc.value}"
+    )
+
+
+def test_the_overflow_repair_does_not_reopen_the_diluted_defect() -> None:
+    """Guarding the previous repair against this one.
+
+    An overflow fix that widened the normwise reading could hand the diluted
+    generator of finding B1 straight back through, and that regression would
+    look exactly like a green suite. The refusal is asserted together with the
+    reason, so a refusal for some unrelated cause cannot stand in for it.
+    """
+    L_super = _diluted_trace_violation()
+
+    defect, scale = trace_preservation_defect(L_super)
+    # The normwise reading still passes -- it is the componentwise gate that
+    # must do the work, exactly as before the overflow repair.
+    assert defect / scale == pytest.approx(1.0e-300, rel=1.0e-12)
+    assert trace_preservation_componentwise_error(L_super) == pytest.approx(1.0)
+
+    with pytest.raises(Exception, match="componentwise") as exc:
+        restrict_to_traceless(L_super)
+    assert isinstance(exc.value, ValueError), (
+        f"expected ValueError, got {type(exc.value).__name__}: {exc.value}"
+    )

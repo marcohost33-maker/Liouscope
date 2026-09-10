@@ -29,7 +29,11 @@ from .._consts import (
     ZERO_MODE_APOSTERIORI_MARGIN,
     ZERO_MODE_EPS_FACTOR,
 )
-from .norms import scaled_cancellation_ratio, scaled_euclidean_norm
+from .norms import (
+    scaled_cancellation_ratio,
+    scaled_column_sums,
+    scaled_euclidean_norm,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -323,12 +327,27 @@ def trace_preservation_defect(L_super: np.ndarray) -> tuple[float, float]:
     the resulting zero-mode evidence actually discriminates.
     """
     L_super = np.asarray(L_super)
+    # A 1-D argument used to reach the matrix product and come back with a
+    # number, which said nothing about any superoperator. It is reported as
+    # unevaluable through the same channel the non-square case already uses,
+    # rather than as an index error from the row selection below.
+    if L_super.ndim != 2:
+        return float("nan"), float("nan")
     n = L_super.shape[0]
     d = int(round(np.sqrt(n)))
     if d * d != n:
         return float("nan"), float("nan")
-    vec_i = np.eye(d, dtype=complex).reshape(-1, order="F")
-    defect_vector = vec_i.conj() @ L_super
+    # ISSUE #139, P2 REVIEW. ``vec(I)^H @ L`` selects the diagonal-output rows
+    # and adds them per column -- but an ordinary matrix product accumulates in
+    # ordinary units, so a column that cancels to exactly zero can overflow on
+    # the way there. Measured for d=16 with eight entries ``+2.5e307`` and
+    # eight ``-2.5e307`` in one column: the product returned ``inf+nanj`` and
+    # the caller refused a generator whose trace equation is exactly zero and
+    # whose Frobenius norm, 1e308, is representable. The row selection and the
+    # summation are the same mathematics as before; only the accumulation is
+    # done in the scaled domain this module already uses everywhere else.
+    trace_rows = np.arange(0, n, d + 1, dtype=int)
+    defect_vector = scaled_column_sums(L_super[trace_rows, :])
     return scaled_euclidean_norm(defect_vector), scaled_euclidean_norm(L_super)
 
 
