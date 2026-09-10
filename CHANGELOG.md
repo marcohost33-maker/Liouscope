@@ -63,6 +63,31 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     the change is not visible in `input_hash`.
 
 ### Fixed
+- **The trace-preservation defect overflowed on the way to a column sum that is
+  exactly zero (issue #139, P2 review).** `trace_preservation_defect` assembled
+  `vec(I)^H L` with an ordinary matrix product, which accumulates in ordinary
+  units. Measured for `d=16` with `+2.5e307` in eight trace rows of one column
+  and `-2.5e307` in the other eight: the product returned `inf+nanj`, the
+  defect came back `nan` beside a representable Frobenius norm of `1e308`, and
+  `restrict_to_traceless` refused a generator whose trace equation is exactly
+  zero. The new `numerics.norms.scaled_column_sums` accumulates in the
+  power-of-two scaled domain this module already uses, with a scale chosen per
+  column AND per component: a shared scale stops the overflow too, but flushes
+  a small real defect beside a huge one to zero, which is the same failure in
+  the silent, fail-open direction. `math.fsum` is used rather than a vectorised
+  sum -- benchmarked 2.4x to 11.9x faster -- because the latter returned 0 for
+  a column whose exact sum is 1: ordinary summation does not round such a
+  defect away, it deletes it.
+  **CHANGES A REPORTED NUMBER.** `trace_defect` is now the correctly rounded
+  exact sum of the represented coefficients rather than an artefact of the
+  summation route, and it reaches persisted reports through the zero-mode
+  certificate. For the stiff four-level fixture it reads `1.158640e-11` instead
+  of `0.0` (2.29e-17 relative, adjudicated with `fractions.Fraction`), so
+  `test_stiff_generator_is_exactly_trace_preserving` is renamed to
+  `..._is_trace_preserving_to_rounding`: the old equality described the
+  summation route, not the generator. Certificate verdicts do not move at any
+  sane tolerance. The run manifest contract is untouched, so `input_hash` does
+  not move.
 - **The reason a confidence interval was withheld did not reach the report (PR
   #147, round-2 external review).** When the residual MLE scale is not
   representable as float64 the fit stays a valid AICc candidate and only its

@@ -120,6 +120,25 @@ abstract: >-
 # byte-identical to before and the run manifest contract is untouched
 # (MANIFEST_SCHEMA is deliberately unchanged). When a diagnostic is routed
 # through it, THAT change is the one that must be described as a correction.
+# Also pending for the next cut: the trace-preservation defect vec(I)^H L is
+# accumulated with power-of-two scaled, per-column and per-component arithmetic
+# instead of an ordinary matrix product (issue #139). This CHANGES A REPORTED
+# NUMBER and is a correction, not an addition: the ordinary product could leave
+# the float64 range on the way to a column sum that is exactly zero -- measured
+# for d=16 with eight coefficients +2.5e307 and eight -2.5e307 in one column,
+# where it returned inf+nanj and a legal, fully representable generator was
+# refused -- and where it did not overflow it returned whatever its summation
+# order produced rather than the exact sum of the represented coefficients. The
+# reported `trace_defect`, which travels into persisted reports through the
+# zero-mode certificate, is now the correctly rounded exact sum: for the stiff
+# four-level fixture it reads 1.158640e-11 instead of 0.0, adjudicated with
+# exact rational arithmetic. Certificate VERDICTS do not move at any sane
+# tolerance, because the affected readings are at rounding level (2.29e-17
+# relative for that fixture). It must NOT be described as making the layer
+# overflow-proof in general: only the trace-equation accumulation was changed.
+# MANIFEST_SCHEMA is deliberately unchanged -- `trace_defect` is a report
+# field, not a run-manifest field, so the manifest contract is untouched and
+# `input_hash` does not move.
 keywords:
   - open quantum systems
   - Lindblad
