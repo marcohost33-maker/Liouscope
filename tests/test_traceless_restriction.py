@@ -358,3 +358,31 @@ def test_the_overflow_repair_does_not_reopen_the_diluted_defect() -> None:
     assert isinstance(exc.value, ValueError), (
         f"expected ValueError, got {type(exc.value).__name__}: {exc.value}"
     )
+
+
+def test_a_defect_far_below_the_dominant_scale_is_still_refused() -> None:
+    """#139, third round: the gate must see a defect it cannot round away.
+
+    Column 0's trace equation is ``1e300 - 1e300 + 1e-300``, whose exact value
+    is ``1e-300``. While the column sum was formed under one common scale that
+    addend was flushed to zero, the defect read 0.0, and ``tp_rtol=0`` -- the
+    strictest request a caller can make -- ACCEPTED a generator that is not
+    trace preserving.
+    """
+    d = 3
+    n = d * d
+    L_super = np.zeros((n, n), dtype=complex)
+    trace_rows = np.arange(0, n, d + 1, dtype=int)
+    L_super[trace_rows[0], 0] = 1.0e300
+    L_super[trace_rows[1], 0] = -1.0e300
+    L_super[trace_rows[2], 0] = 1.0e-300
+
+    exact = sum(Fraction(v) for v in L_super[trace_rows, 0].real.tolist())
+    defect, _ = trace_preservation_defect(L_super)
+    assert defect == float(abs(exact)) == 1.0e-300
+
+    with pytest.raises(Exception, match="not trace preserving") as exc:
+        restrict_to_traceless(L_super, tp_rtol=0.0)
+    assert isinstance(exc.value, ValueError), (
+        f"expected ValueError, got {type(exc.value).__name__}: {exc.value}"
+    )

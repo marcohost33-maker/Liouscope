@@ -13,6 +13,13 @@ import math
 
 import numpy as np
 
+# Issue #139: exponent bands for the overflow fallback in
+# :func:`_overflow_safe_fsum`. The split at 2**512 is what makes two bands
+# provably enough -- see that function for why neither band can overflow or
+# underflow.
+_BAND_SHIFT = 1024
+_BAND_SPLIT = 2.0**512
+
 
 def _finite_component_scale(values: np.ndarray) -> tuple[np.ndarray, np.ndarray, int] | None:
     """Return real/imag parts shifted so their largest component is O(1).
@@ -107,8 +114,57 @@ def scaled_log_sum_squares(values: np.ndarray) -> float:
     return float(math.log(sumsq) + 2.0 * exponent * math.log(2.0))
 
 
+def _overflow_safe_fsum(values: list[float]) -> float:
+    """Exact sum of finite float64 values, without sacrificing any addend.
+
+    ``math.fsum`` is already exact over the whole float64 range -- Shewchuk
+    accumulation keeps a set of non-overlapping partial sums, so no bit of any
+    addend is lost. Its one failure mode is an intermediate that leaves the
+    range, and that depends on the ORDER of the input: eight ``+2.5e307``
+    followed by eight ``-2.5e307`` raises ``OverflowError``, while the same
+    sixteen values alternating return zero.
+
+    The first attempt is therefore the plain call. Only when it raises do we
+    split the addends into two exponent bands at ``2**512``:
+
+    * above the split, shifting by ``2**-1024`` lands every term in
+      ``[2**-512, 1)`` -- far above the subnormal floor, so nothing is lost --
+      and ``k`` such terms sum below ``k``, so nothing overflows;
+    * below the split, ``k`` terms sum below ``k * 2**512 < 2**1024``, so the
+      band needs no scaling at all and hence cannot underflow either.
+
+    Both bands are summed exactly and recombined once. Overflow in the
+    recombination is the honest answer: it means the true sum is not
+    representable.
+
+    Issue #139, third review round. The previous construction shifted every
+    addend by one power of two chosen from the largest component of the column.
+    That cannot work, and not merely for the reported example: a scale SHIFTS
+    the representable window, it does not widen it, so any addend below
+    ``max * 2**-1074`` is flushed to zero before the accumulation starts.
+    Measured on ``[1e300, -1e300, 1e-300]``, whose exact sum is ``1e-300``: the
+    scaled version returned 0, and a caller reading that number accepted a
+    generator that is not trace preserving. Choosing the scale smaller instead
+    reintroduces the overflow this function exists to prevent -- there is no
+    right choice once a column spans the range and its dominant terms cancel.
+    """
+    try:
+        return math.fsum(values)
+    except OverflowError:
+        pass
+    high: list[float] = []
+    low: list[float] = []
+    for value in values:
+        (high if abs(value) >= _BAND_SPLIT else low).append(value)
+    scaled_high = math.fsum(math.ldexp(value, -_BAND_SHIFT) for value in high)
+    try:
+        return math.ldexp(scaled_high, _BAND_SHIFT) + math.fsum(low)
+    except OverflowError:
+        return math.copysign(math.inf, scaled_high)
+
+
 def scaled_column_sums(values: np.ndarray) -> np.ndarray:
-    """Return ``values.sum(axis=0)`` without spurious intermediate overflow.
+    """Return ``values.sum(axis=0)`` exactly, column by column.
 
     Issue #139, P2 review. An ordinary matrix product accumulates in ordinary
     units, so a column whose terms cancel exactly can still overflow on the way
@@ -118,41 +174,24 @@ def scaled_column_sums(values: np.ndarray) -> np.ndarray:
     corrupt evidence about a generator that is perfectly representable, and a
     gate reading that evidence refuses a legal operator.
 
-    Scaling is a precondition of the accumulation, not a refinement of it:
-    ``math.fsum`` on the unscaled column above does not return a sentinel, it
-    raises ``OverflowError``. Same contract as the rest of this module: values
-    are shifted by a POWER OF TWO before accumulation and shifted back afterwards, so no mantissa bit is
-    lost to the choice of units. After scaling, every component is below one in
-    magnitude, hence a sum of ``k`` terms cannot exceed ``k`` and overflow is
-    impossible by construction rather than by tolerance.
+    Each column is summed by :func:`_overflow_safe_fsum`, separately for the
+    real and the imaginary part. Both readings are exact: no addend is dropped
+    however far it lies below the largest term of its column, and no
+    intermediate leaves the float64 range. The result is the correctly rounded
+    exact sum whenever that is representable, and ``inf`` only when it is not.
 
-    The scale is chosen PER COLUMN AND PER COMPONENT, not once for the whole
-    array. A single global scale would be simpler and would still stop the
-    overflow, but a matrix holding a column near 1e300 beside one near 1e-300
-    would then have the small column shifted into the subnormal range and
-    flushed to zero -- turning a real defect into an apparent exact zero. That
-    is the same class of failure in the opposite direction, and it is the
-    silent one.
+    Real and imaginary parts are summed independently rather than through a
+    shared treatment, because a SUM is not monotone the way a norm is: the real
+    parts can annihilate and leave an imaginary part six hundred orders of
+    magnitude below them as the entire answer. Measured on the column
+    ``[1e300+1e-300j, -1e300, 0]``, whose sum is ``1e-300j``.
 
-    Real and imaginary parts need separate scales for the same reason, one
-    level down. :func:`_finite_component_scale` deliberately shares one scale
-    between them, which is right for a NORM -- there no term can cancel, so a
-    1e-300 imaginary part beside a 1e300 real part contributes nothing anyway.
-    A SUM is not monotone: the large part can vanish by cancellation and leave
-    the small one as the entire answer. Measured on the column
-    ``[1e300+1e-300j, -1e300, 0]``, whose sum is ``1e-300j``, a shared scale
-    returned exactly zero.
-
-    ``math.fsum`` accumulates the real and imaginary parts, matching
-    :func:`scaled_cancellation_ratio`, which measures the same trace equations.
-    This is not a matter of the last few bits: a vectorised variant of this
-    function, benchmarked at 2.4x to 11.9x faster, returned 0 for the column
-    ``[1, 1e16, -1e16]`` whose exact sum is 1. Ordinary summation does not
-    merely round such a defect, it deletes it -- and a deleted trace defect
+    Exactness here is not a matter of the last few bits. A vectorised variant
+    of this function, benchmarked 2.4x to 11.9x faster, returned 0 for the
+    column ``[1, 1e16, -1e16]`` whose exact sum is 1: ordinary summation does
+    not round such a defect away, it deletes it -- and a deleted trace defect
     reads as an exactly trace-preserving generator, which is the failure
-    direction that must never be traded for speed. Measured cost of keeping it:
-    0.07 ms at d=4, where the accompanying eigensolve takes 0.26 ms, falling to
-    0.30 percent of the eigensolve at d=16.
+    direction that must never be traded for speed.
 
     Columns holding a NaN or an infinity are summed in ordinary arithmetic, so
     the sentinel the caller expects still arrives: input that genuinely is not
@@ -170,27 +209,17 @@ def scaled_column_sums(values: np.ndarray) -> np.ndarray:
     imag = np.asarray(np.imag(arr), dtype=float)
     nonfinite = np.any(~np.isfinite(real), axis=0) | np.any(~np.isfinite(imag), axis=0)
 
-    accumulated = []
-    for part in (real, imag):
-        component_max = np.max(np.abs(np.where(np.isfinite(part), part, 0.0)), axis=0)
-        exponent = np.zeros(cols, dtype=np.int32)
-        scalable = (component_max > 0.0) & ~nonfinite
-        totals = np.zeros(cols, dtype=float)
-        if np.any(scalable):
-            exponent[scalable] = np.frexp(component_max[scalable])[1].astype(np.int32)
-            # Transposed once so the per-column accumulation reads Python lists
-            # instead of paying a NumPy indexing round trip per column, and the
-            # rescaling is applied to the assembled vector in one call rather
-            # than one scalar call per column. Same arithmetic, less overhead.
-            scaled = np.ldexp(part, -exponent[None, :]).T.tolist()
-            index = np.flatnonzero(scalable)
-            sums = np.fromiter(
-                (math.fsum(scaled[j]) for j in index), dtype=float, count=index.size
-            )
-            with np.errstate(over="ignore", under="ignore"):
-                totals[index] = np.ldexp(sums, exponent[index])
-        accumulated.append(totals)
-    out = accumulated[0] + 1j * accumulated[1]
+    # Transposed once so each column is a Python list, rather than paying a
+    # NumPy indexing round trip per column inside the accumulation loop.
+    real_columns = real.T.tolist()
+    imag_columns = imag.T.tolist()
+    for j in range(cols):
+        if nonfinite[j]:
+            continue
+        out[j] = complex(
+            _overflow_safe_fsum(real_columns[j]),
+            _overflow_safe_fsum(imag_columns[j]),
+        )
     if np.any(nonfinite):
         out[nonfinite] = np.sum(arr[:, nonfinite], axis=0)
     return out

@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import math
+import random
+from fractions import Fraction
 
 import numpy as np
 import pytest
@@ -168,3 +170,65 @@ def test_column_sums_scale_the_real_and_imaginary_parts_separately() -> None:
     values = np.array([[1.0e300 + 1.0e-300j], [-1.0e300 + 0.0j], [0.0j]], dtype=complex)
 
     assert scaled_column_sums(values)[0] == 1.0e-300j
+
+
+def test_column_sums_keep_an_addend_below_the_dominant_scale() -> None:
+    """#139, third round: a scale shifts the window, it does not widen it.
+
+    The construction this replaced picked one power of two from the largest
+    term of the column, which flushed every addend below ``max * 2**-1074`` to
+    zero before the accumulation began. Here the two dominant terms annihilate
+    and the surviving addend IS the answer.
+    """
+    values = np.array([[1.0e300], [-1.0e300], [1.0e-300]], dtype=complex)
+
+    assert scaled_column_sums(values)[0] == 1.0e-300
+
+
+def test_column_sums_keep_a_remainder_in_a_column_that_overflows() -> None:
+    """The two failure modes in one column: overflow AND a subnormal remainder.
+
+    Neither the previous construction nor a bare ``math.fsum`` can do this one.
+    ``fsum`` raises ``OverflowError`` on these partial sums, and a common scale
+    large enough to prevent that annihilates the 1e-320 remainder.
+    """
+    column = [2.5e307] * 8 + [-2.5e307] * 8 + [1.0e-320]
+    values = np.array([[v] for v in column], dtype=complex)
+
+    with pytest.raises(OverflowError):
+        math.fsum(column)
+
+    exact = sum(Fraction(v) for v in column)
+    assert scaled_column_sums(values)[0] == float(exact)
+    assert scaled_column_sums(values)[0] > 0.0
+
+
+def test_column_sums_report_infinity_only_when_the_true_sum_is_not_representable() -> None:
+    values = np.array([[1.5e308], [1.5e308]], dtype=complex)
+
+    got = scaled_column_sums(values)[0]
+
+    assert np.isinf(got.real)
+    assert got.real > 0.0
+
+
+def test_column_sums_match_exact_rational_arithmetic_across_the_exponent_range() -> None:
+    """Property check against an oracle that cannot share the failure.
+
+    ``fractions.Fraction`` is exact for float64 input, so it is not subject to
+    the overflow and underflow this function has to survive -- unlike an
+    ordinary float sum, which failed as an oracle for exactly these inputs.
+    """
+    rng = random.Random(20260910)
+    for _ in range(500):
+        column = [
+            math.ldexp(rng.uniform(-1.0, 1.0), rng.randint(-1060, 1020))
+            for _ in range(rng.randint(1, 12))
+        ]
+        # Force the cancellation that makes small addends decisive.
+        column.append(-column[0])
+
+        exact = sum(Fraction(v) for v in column)
+        got = scaled_column_sums(np.array([[v] for v in column], dtype=complex))[0]
+
+        assert got.real == float(exact), f"mismatch for {column}"
