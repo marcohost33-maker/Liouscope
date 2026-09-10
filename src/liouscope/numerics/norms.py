@@ -162,7 +162,7 @@ def scaled_column_sums(values: np.ndarray) -> np.ndarray:
     if arr.ndim != 2:
         raise ValueError(f"values must be a 2-D array, got {arr.ndim}-D")
     cols = int(arr.shape[1])
-    out = np.zeros(cols, dtype=complex)
+    out: np.ndarray = np.zeros(cols, dtype=complex)
     if arr.shape[0] == 0 or cols == 0:
         return out
 
