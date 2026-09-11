@@ -496,21 +496,35 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   gauge-fixed relative gate on `main` gave the same verdict to two fixtures
   that review had pinned to opposite ones: `I + 2**-53 e01` with sigma- (must
   be accepted) and `1e308 * I + 1e290 e01` with no jump operators (must be
-  rejected). Measured: for every `H = c*I + N` with `N` strictly upper
-  triangular, `defect / gauge_scale` is exactly 1 (20,000 random cases,
-  `|c|, |N|` across 1e-300..1e300, maximum deviation 0.0), and a gauge shift
-  plus a change of units maps both fixtures onto `e01` — so no test that reads
-  `H` alone and respects both symmetries can separate them. The defect is now
+  rejected). For `H = c*I + N` with `N` strictly upper triangular, EXACT
+  arithmetic gives `defect / gauge_scale = 1`; in floating point this holds
+  only where the gauge shift is computed exactly, as it is for both fixtures
+  (counter-example with an inexact shift: `d = 3, c = 0.1, N = 1e-30` gives
+  `7.2e-14`). A gauge shift plus a change of units maps both fixtures onto
+  `e01` — so no test that reads `H` alone and respects both symmetries can
+  separate them. The defect is now
   compared against `max(max|H_gauge|, max|sum_k gamma_k L_k^dag L_k| / 2)`, the
   scale of `H_eff = H - iK/2`; the dissipator preserves Hermiticity by
   construction, so the only non-preserving part of the generator is the
-  anti-Hermitian part of `H`. The scale is gauge invariant and unit covariant;
-  with no dissipation it equals the old gauge-fixed scale, so every purely
-  coherent verdict (issue #109 fixtures, twelfth-round hole) is unchanged. It
-  is consulted only when the coherent scale alone would refuse, excuses
-  nothing for malformed jump lists or an overflowing sum, and closes the
-  residual recorded below: `[[1e308, 1], [0, 1e308]]` is rejected by both
-  builders. Both builders, in parity.
+  anti-Hermitian part of `H`. Both scales are read in the canonical Lindblad
+  gauge — traceless `L0 = L - tr(L)/d * I` with the Hamiltonian compensated
+  so the generator is unchanged — because `(H, L)` and
+  `(H + (c/2i)(L - L^dag), L + c*I)` are one generator: review round 2
+  measured a null dissipator `2**20 * I` and exactly this gauge excusing an
+  order-one defect, and traceless jumps alone would still have let the
+  compensating term inflate the coherent scale. The reference is therefore
+  invariant under `H -> H + c*I`, under the Lindblad gauge, and covariant
+  under a change of units. Without jump operators it is the gauge-fixed scale
+  of `H`, as on `main` (the gauge shift itself is formed by
+  `overflow_safe_mean_real`, so it can differ from `main`'s divide-first sum
+  in the last bit). A non-finite gauge-fixed scale is refused as on `main`:
+  the round-20 half-scale restatement accepted `diag(1.7e308, 1.7e308,
+  -1.7e308)` and returned a generator containing `inf`. Malformed jump lists
+  and an overflowing dissipation sum excuse nothing. Closes the residual
+  recorded below: `[[1e308, 1], [0, 1e308]]` is rejected by both builders.
+  Open (cross-family review requested): whether a large PHYSICAL dissipation
+  may excuse a coherent defect at all; the answer changes only the one
+  `max(...)` that forms the reference.
 - **`neff_car1` allocated two `n x n` arrays for a scalar (PR #127, round-20
   external review).** The exact CAR(1) effective sample size formed a full
   separation matrix and a full exponential of it on every evaluation, and
