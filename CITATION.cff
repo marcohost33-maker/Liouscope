@@ -101,6 +101,45 @@ abstract: >-
 # interval is withheld (round-1 review of PR #147). Archived analyses whose
 # selected model matters should be re-run; per-model likelihoods are not run-
 # manifest fields, so this change is not visible in input_hash.
+# Also pending for the next cut: trace-preserving generators can be restricted
+# to the traceless operator space by an exact structural identity rather than by
+# an eigenvalue-magnitude threshold (issue #113). For column-stacked operators
+# trace preservation IS the statement vec(I)^H L = 0, so ker(vec(I)^H) -- the
+# traceless space -- is invariant under L and carries every eigenvector with
+# non-zero eigenvalue; the reduction L0 = B^H L B onto an explicit orthonormal
+# basis B of that kernel therefore removes the unique stationary direction with
+# no tolerance in the construction, and a degenerate stationary manifold keeps
+# its additional traceless zero modes instead of having them filtered away.
+# Admission is gated on BOTH readings of the identity -- the normwise ratio and
+# the componentwise backward error of each column's trace equation (issue #130)
+# -- because the normwise ratio alone is diluted to round-off by entries that
+# take part in no violated trace equation, and it then admits generators whose
+# traceless subspace is not invariant. This entry describes a METHODOLOGY that
+# is available in the codebase, and it must NOT be described as changing any
+# reported number: no diagnostic consumes the restriction yet, so D1-D24 are
+# byte-identical to before and the run manifest contract is untouched
+# (MANIFEST_SCHEMA is deliberately unchanged). When a diagnostic is routed
+# through it, THAT change is the one that must be described as a correction.
+# Also pending for the next cut: the trace-preservation defect vec(I)^H L is
+# accumulated with exact per-column summation, falling back on overflow to an
+# exponent-banded accumulation that reports an unmeasurable result as such
+# rather than as zero, instead of an ordinary matrix product (#139). This CHANGES A REPORTED
+# NUMBER and is a correction, not an addition: the ordinary product could leave
+# the float64 range on the way to a column sum that is exactly zero -- measured
+# for d=16 with eight coefficients +2.5e307 and eight -2.5e307 in one column,
+# where it returned inf+nanj and a legal, fully representable generator was
+# refused -- and where it did not overflow it returned whatever its summation
+# order produced rather than the exact sum of the represented coefficients. The
+# reported `trace_defect`, which travels into persisted reports through the
+# zero-mode certificate, is now the correctly rounded exact sum: for the stiff
+# four-level fixture it reads 1.158640e-11 instead of 0.0, adjudicated with
+# exact rational arithmetic. Certificate VERDICTS do not move at any sane
+# tolerance, because the affected readings are at rounding level (2.29e-17
+# relative for that fixture). It must NOT be described as making the layer
+# overflow-proof in general: only the trace-equation accumulation was changed.
+# MANIFEST_SCHEMA is deliberately unchanged -- `trace_defect` is a report
+# field, not a run-manifest field, so the manifest contract is untouched and
+# `input_hash` does not move.
 keywords:
   - open quantum systems
   - Lindblad

@@ -74,12 +74,23 @@ def _gap(ev, rel=1e-12):
 # --------------------------------------------------------------------------
 
 
-def test_stiff_generator_is_exactly_trace_preserving() -> None:
-    """No zero mode may be blamed on a malformed generator."""
+def test_stiff_generator_is_trace_preserving_to_rounding() -> None:
+    """No zero mode may be blamed on a malformed generator.
+
+    This asserted ``defect == 0.0`` until issue #139. That equality was a
+    property of the SUMMATION ROUTE, not of the generator: the old
+    ``vec(I)^H @ L`` product happened to round its partial sums to zero, while
+    the exact sum of the represented float64 coefficients -- computed with
+    ``fractions.Fraction``, which is exact for float64 -- is 1.158640e-11 in
+    column 10. The assembled generator is trace preserving to rounding
+    (2.29e-17 relative to its own Frobenius norm, well under one eps), which is
+    all a float64 assembly of these rates can be, and all this test needs: the
+    lost zero mode below is the solver's doing, not a malformed input.
+    """
     lsup = _classical_network(STIFF_PAIRS, STIFF_RATES)
     defect, fro = trace_preservation_defect(lsup)
-    assert defect == 0.0
     assert fro > 0.0
+    assert defect / fro < 1.0e-15
 
 
 def test_incumbent_solver_loses_the_zero_mode() -> None:
