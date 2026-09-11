@@ -280,3 +280,52 @@ def test_the_half_in_the_dissipation_scale_is_load_bearing(
     H[0, 1] = fraction * EPS_HERMITICITY
     dense, sparse = _verdicts(H, [_SIGMA_MINUS])
     assert (dense is None, sparse is None) == (accepted, accepted), (dense, sparse)
+
+
+def test_the_lindblad_gauge_with_unequal_rates_keeps_verdict_and_parity() -> None:
+    """Round 3: the compensation carries the RATE, ``gamma_k``, per jump operator.
+
+    Every earlier gauge test used unit rates, so a compensation that dropped
+    ``gamma`` in one builder was invisible (0 of 202 red in the review's
+    mutation OWN_D). Here two jump operators with rates 0.37 and 2.5 are each
+    shifted, ``L_k -> L_k + c_k I`` with ``H -> H + sum_k gamma_k (conj(c_k) L_k
+    - c_k L_k^dag) / 2i``: the SAME generator (premise, from the definition,
+    using ``gamma D[L] = D[sqrt(gamma) L]``). With the defect 1e-8 the canonical
+    scale refuses both pairs; a compensation off by a factor ``gamma`` leaves
+    ``|1 - gamma| * c / 2 ~ 3e2`` of coherent scale behind and accepts the
+    shifted pair. Checked on BOTH builders, which must also agree.
+
+    ``c`` is ``2**10``, not ``2**20``: with non-dyadic rates the ``gamma c^2``
+    terms cancel only to round-off, measured 4.7e-5 relative at ``2**20``
+    (the premise would fail) against 4.5e-11 at ``2**10``.
+    """
+    rates = [0.37, 2.5]
+    jumps = [_SIGMA_MINUS, _SIGMA_MINUS.conj().T]
+    shifts = [2.0**10, -3.0 * 2.0**8]
+    eye = np.eye(2, dtype=complex)
+
+    def shifted(H: np.ndarray) -> tuple[np.ndarray, list[np.ndarray]]:
+        H_out = H.copy()
+        for g, L, c in zip(rates, jumps, shifts, strict=True):
+            H_out = H_out + g * (np.conj(c) * L - c * L.conj().T) / 2j
+        return H_out, [L + c * eye for L, c in zip(jumps, shifts, strict=True)]
+
+    for defect, refused in ((1.0e-8, True), (1.0e-12, False)):
+        H = _SIGMA_X + np.array([[0.0, defect], [0.0, 0.0]], dtype=complex)
+        H_s, jumps_s = shifted(H)
+        ref = _generator(H, [np.sqrt(g) * L for g, L in zip(rates, jumps, strict=True)])
+        other = _generator(
+            H_s, [np.sqrt(g) * L for g, L in zip(rates, jumps_s, strict=True)]
+        )
+        assert float(np.max(np.abs(other - ref))) <= 1.0e-9 * float(
+            np.max(np.abs(ref))
+        ), "fixture: the shifted pair must describe the same generator"
+        plain = _verdicts(H, jumps, rates)
+        moved = _verdicts(H_s, jumps_s, rates)
+        # Parity first: the two builders must agree on each pair.
+        assert (plain[0] is None) == (plain[1] is None), (defect, plain)
+        assert (moved[0] is None) == (moved[1] is None), (defect, moved)
+        # Then gauge invariance of the verdict, on both builders.
+        expected = (not refused, not refused)
+        assert (plain[0] is None, plain[1] is None) == expected, (defect, plain)
+        assert (moved[0] is None, moved[1] is None) == expected, (defect, moved)
