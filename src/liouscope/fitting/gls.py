@@ -68,6 +68,19 @@ class _ScaledResidualOverflowError(ArithmeticError):
     """
 
 
+class AmplitudeRescalingFallbackWarning(RuntimeWarning):
+    """The #124 residual rescaling was not representable; the fit ran unscaled.
+
+    A dedicated ``RuntimeWarning`` subclass (PR #134 review): for a free
+    amplitude parameter at ``max|y| >= ~1e150`` the fallback fires where the
+    pre-#124 code was silent, with a result identical to it. A caller running
+    with ``-W error`` can filter exactly this notice by class instead of all
+    RuntimeWarnings. It is emitted per fit, not once per process: which curve
+    lost the #124 invariance is audit information, and a process-global
+    "once" registry would make it depend on call order.
+    """
+
+
 def _whiten(y: np.ndarray, rho: float) -> np.ndarray:
     if y.size < 2:
         y_copy: np.ndarray = y.copy()
@@ -310,7 +323,7 @@ def fit_gls_ar1(
                     "optimiser's probe points; fitting the unscaled residuals "
                     "instead, so the amplitude-scale invariance of issue #124 "
                     "does not hold for this curve (PR #134).",
-                    RuntimeWarning,
+                    AmplitudeRescalingFallbackWarning,
                     stacklevel=2,
                 )
                 fit_scale = 1.0

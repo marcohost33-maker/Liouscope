@@ -82,10 +82,15 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   raw residuals, evaluated exactly as before #124, with a `RuntimeWarning`
   stating that the #124 invariance does not hold for the curve. A finite
   rescaled solve that did not converge, and an exception with no
-  floating-point event, are still reported unsuccessful. For `max|y| >= ~1e150`
-  the fallback fires as well and the fit fails closed exactly as on main
-  (`success=False`), without leaking the private exception that an earlier
-  revision of this fix raised there (PR #134 review). Raw residuals, rho, sigma and
+  floating-point event, are still reported unsuccessful. For a FREE amplitude
+  parameter at `max|y| >= ~1e150` the fallback fires as well (measured at
+  1e150, 1e200 and 1e300; a fixed-amplitude model does not fall back there and
+  fits rate 1.3) and the fit fails closed exactly as on main (`success=False`),
+  without leaking the private exception that an earlier revision of this fix
+  raised there (PR #134 review). Unlike main, such a fit now emits the fallback
+  warning. It has the dedicated category
+  `liouscope.fitting.gls.AmplitudeRescalingFallbackWarning`, a `RuntimeWarning`
+  subclass, so a caller running with `-W error` can filter it by class. Raw residuals, rho, sigma and
   the likelihood remain in the caller's data units.
 - **The AR(1) lag-1 autocorrelation is formed from residuals normalised by an
   exact power of two (PR #134, round-3 review).** `ar1_correlation` took its dot

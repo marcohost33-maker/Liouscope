@@ -257,3 +257,53 @@ def test_ar1_correlation_is_bit_identical_under_power_of_two_rescaling() -> None
     base = ar1_correlation(y)
     for k in (-900, -540, 500, 1000):
         assert ar1_correlation(np.ldexp(y, k)) == base, k
+
+
+# --------------------------------------------------------------------------
+# PR #134 round 3 (Equalita follow-up on 9a623e8)
+# --------------------------------------------------------------------------
+
+
+def _sinc_model(t: np.ndarray, params: np.ndarray) -> np.ndarray:
+    # Same values at every parameter; the 0/0 at t = 0 is only RAISED at the
+    # seed, i.e. inside the optimiser's first evaluation. The post-fit model
+    # evaluation (at ~1.3) is event-free, so it cannot mask what the solve did.
+    if params[0] == _SEED_RATE:
+        sinc = np.where(t > 0, np.sin(t) / t, 1.0)
+    else:
+        sinc = np.where(t > 0, np.sin(t) / np.where(t > 0, t, 1.0), 1.0)
+    return 1.0e-40 * np.exp(-params[0] * t) * sinc
+
+
+def test_model_runs_under_the_callers_floating_point_policy() -> None:
+    """The detector's errstate must not replace the caller's for the MODEL.
+
+    A caller that asks for ``invalid="raise"`` gets the model's 0/0 during the
+    solve as a ``FloatingPointError``, exactly as on main. Evaluating the
+    model under the detector's own errstate (ignore or call) swallows it.
+    """
+    y = _sinc_model(_T, np.array([_TRUE_RATE]))  # event-free away from the seed
+    with np.errstate(invalid="raise"):
+        with pytest.raises(FloatingPointError):
+            fit_gls_ar1(
+                _sinc_model, _T, y, np.array([_SEED_RATE]),
+                bounds=(np.array([0.0]), np.array([5.0])), n_iters=1,
+            )
+
+
+def test_fallback_warning_has_a_dedicated_filterable_category() -> None:
+    """``-W error`` users can silence exactly the fallback notice by class."""
+    import warnings
+
+    from liouscope.fitting.gls import AmplitudeRescalingFallbackWarning
+
+    assert issubclass(AmplitudeRescalingFallbackWarning, RuntimeWarning)
+    scale = 1.0e200
+    y = scale * np.exp(-_TRUE_RATE * _T)
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        fit = fit_gls_ar1(_free_amplitude, _T, y, np.array([scale, 0.2]))
+    fallback = [w for w in caught if _FALLBACK in str(w.message)]
+    assert fallback, [str(w.message) for w in caught]
+    assert all(w.category is AmplitudeRescalingFallbackWarning for w in fallback)
+    assert not fit.success
