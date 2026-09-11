@@ -63,6 +63,23 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     the change is not visible in `input_hash`.
 
 ### Fixed
+- **GLS optimiser residuals are divided by the curve's own scale, and fall
+  back to the raw residuals where that rescaling is not representable (issue
+  #124, PR #134).** Rescaling makes SciPy's termination amplitude-invariant
+  for a model whose amplitude is not a fitted parameter: `1e-40*exp(-1.3 t)`
+  no longer returns its seed rate as a converged fit. It does not cure a
+  FREE amplitude parameter, which still returns the seed rate at 1e-40 when
+  fitted from `p0 = [1e-40, 0.2]` without bounds.
+  SciPy's finite-difference probes, however, step in absolute parameter
+  units, so for a tiny scale the rescaled residual, Jacobian or cost can leave
+  float64 -- measured at `max|y| = 5e-324` (the #147 fixture) and, through
+  `_fit_with_model("M0")`, at 1e-150 and 1e-310, where the fit was reported
+  unsuccessful and dropped from AICc selection. Any floating-point exception or
+  non-finite result of the rescaled solve now sends that iteration to the raw
+  residuals (the pre-#124 problem) with a `RuntimeWarning` stating that the
+  #124 invariance does not hold for the curve; a finite rescaled solve that did
+  not converge is still reported unsuccessful. Raw residuals, rho, sigma and
+  the likelihood remain in the caller's data units.
 - **The trace-preservation defect overflowed on the way to a column sum that is
   exactly zero (issue #139, P2 review).** `trace_preservation_defect` assembled
   `vec(I)^H L` with an ordinary matrix product, which accumulates in ordinary
