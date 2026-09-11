@@ -16,6 +16,7 @@ import math
 import warnings
 from collections.abc import Callable
 from dataclasses import dataclass
+from typing import Any
 
 import numpy as np
 from scipy.optimize import OptimizeResult, least_squares
@@ -216,20 +217,35 @@ def fit_gls_ar1(
     # silent. A raw residual that is itself non-finite still fails closed.
     fit_scale = y_scale
 
-    def _residual_fn(
-        rho_local: float, scale: float
-    ) -> Callable[[np.ndarray], np.ndarray]:
+    def _raw_residual_fn(rho_local: float) -> Callable[[np.ndarray], np.ndarray]:
+        # The unscaled problem, verbatim as before #124: no detection, no
+        # errstate. A non-finite raw residual reaches ``least_squares``, which
+        # raises ``ValueError`` and the fit fails closed (PR #134 review: the
+        # detector used to run here too and leaked a private exception from
+        # the public API for ``max|y| >= ~1e155``).
         def residual(params: np.ndarray) -> np.ndarray:
-            y_hat = model(t, params)
-            r_raw = y - y_hat
-            # errstate: the overflow is DETECTED below, so it must not also
-            # surface as a numpy RuntimeWarning (an error under this repo's
-            # ``filterwarnings = error``) before the detection can act.
-            with np.errstate(over="ignore", divide="ignore", invalid="ignore"):
-                scaled = _whiten(r_raw / scale, rho_local)
-            if not np.all(np.isfinite(scaled)) and np.all(np.isfinite(r_raw)):
-                raise _ScaledResidualOverflowError
-            return scaled
+            return _whiten(y - model(t, params), rho_local)
+
+        return residual
+
+    def _rescaled_residual_fn(
+        rho_local: float,
+        scale: float,
+        caller_err: dict[str, Any],
+        caller_call: Any,
+    ) -> Callable[[np.ndarray], np.ndarray]:
+        # Runs inside the counting errstate of ``_solve_rescaled``. The MODEL
+        # and the raw difference are evaluated under the CALLER's floating-point
+        # policy instead: an event there (e.g. a sinc factor's 0/0 at t = 0,
+        # finite after ``np.where``) belongs to the raw problem, not to the
+        # rescaling, and must not trigger the fallback (PR #134 review: it did,
+        # and returned the seed rate as a converged fit at 1e-40).
+        def residual(params: np.ndarray) -> np.ndarray:
+            with np.errstate(call=caller_call, **caller_err):
+                r_raw = y - model(t, params)
+            # Counted: an overflow of the division or the whitening IS the
+            # rescaled problem leaving float64.
+            return _whiten(r_raw / scale, rho_local)
 
         return residual
 
@@ -252,11 +268,17 @@ def fit_gls_ar1(
         def _record(kind: str, _flag: int) -> None:
             events.append(kind)
 
+        caller_err = dict(np.geterr())
+        caller_call = np.geterrcall()
         with np.errstate(
             over="call", divide="call", invalid="call", under="ignore", call=_record
         ):
             try:
-                res = least_squares(_residual_fn(rho_local, fit_scale), x0, **kw)
+                res = least_squares(
+                    _rescaled_residual_fn(rho_local, fit_scale, caller_err, caller_call),
+                    x0,
+                    **kw,
+                )
             except (ValueError, RuntimeError):
                 if events:
                     raise _ScaledResidualOverflowError from None
@@ -278,9 +300,7 @@ def fit_gls_ar1(
         try:
             try:
                 if fit_scale == 1.0:
-                    result = least_squares(
-                        _residual_fn(rho, fit_scale), p, **ls_kwargs
-                    )
+                    result = least_squares(_raw_residual_fn(rho), p, **ls_kwargs)
                 else:
                     result = _solve_rescaled(rho, p, **ls_kwargs)
             except _ScaledResidualOverflowError:
@@ -294,7 +314,7 @@ def fit_gls_ar1(
                     stacklevel=2,
                 )
                 fit_scale = 1.0
-                result = least_squares(_residual_fn(rho, fit_scale), p, **ls_kwargs)
+                result = least_squares(_raw_residual_fn(rho), p, **ls_kwargs)
             p = result.x
             success = result.success
         except (ValueError, RuntimeError):

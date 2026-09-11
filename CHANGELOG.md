@@ -74,11 +74,18 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   units, so for a tiny scale the rescaled residual, Jacobian or cost can leave
   float64 -- measured at `max|y| = 5e-324` (the #147 fixture) and, through
   `_fit_with_model("M0")`, at 1e-150 and 1e-310, where the fit was reported
-  unsuccessful and dropped from AICc selection. Any floating-point exception or
-  non-finite result of the rescaled solve now sends that iteration to the raw
-  residuals (the pre-#124 problem) with a `RuntimeWarning` stating that the
-  #124 invariance does not hold for the curve; a finite rescaled solve that did
-  not converge is still reported unsuccessful. Raw residuals, rho, sigma and
+  unsuccessful and dropped from AICc selection. A floating-point exception
+  raised by the rescaled arithmetic itself (the division, the whitening, or
+  SciPy's own computation on the rescaled values -- NOT the evaluation of the
+  model, which keeps the caller's floating-point policy) or a non-finite
+  cost/residual/Jacobian of the rescaled solve now sends that iteration to the
+  raw residuals, evaluated exactly as before #124, with a `RuntimeWarning`
+  stating that the #124 invariance does not hold for the curve. A finite
+  rescaled solve that did not converge, and an exception with no
+  floating-point event, are still reported unsuccessful. For `max|y| >= ~1e150`
+  the fallback fires as well and the fit fails closed exactly as on main
+  (`success=False`), without leaking the private exception that an earlier
+  revision of this fix raised there (PR #134 review). Raw residuals, rho, sigma and
   the likelihood remain in the caller's data units.
 - **The trace-preservation defect overflowed on the way to a column sum that is
   exactly zero (issue #139, P2 review).** `trace_preservation_defect` assembled
