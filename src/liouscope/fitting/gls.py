@@ -16,9 +16,10 @@ import math
 import warnings
 from collections.abc import Callable
 from dataclasses import dataclass
+from typing import Any
 
 import numpy as np
-from scipy.optimize import least_squares
+from scipy.optimize import OptimizeResult, least_squares
 
 from ..numerics.norms import scaled_log_sum_squares
 from .aicc import gaussian_log_likelihood
@@ -56,6 +57,28 @@ class GLSFitOutput:
     #: the CI -- is withheld. Distinct from ``likelihood_degenerate``, where the
     #: likelihood itself has no finite value.
     scale_unavailable: bool = False
+
+
+class _ScaledResidualOverflowError(ArithmeticError):
+    """A residual rescaled for the optimiser left float64 while the raw one is finite.
+
+    Private control flow of :func:`fit_gls_ar1` (PR #134). Deliberately NOT a
+    ``ValueError``/``RuntimeError``: those mean "the fit failed" there, while
+    this means only "the #124 rescaling is not representable for this curve".
+    """
+
+
+class AmplitudeRescalingFallbackWarning(RuntimeWarning):
+    """The #124 residual rescaling was not representable; the fit ran unscaled.
+
+    A dedicated ``RuntimeWarning`` subclass (PR #134 review): for a free
+    amplitude parameter at ``max|y| >= ~1e150`` the fallback fires where the
+    pre-#124 code was silent, with a result identical to it. A caller running
+    with ``-W error`` can filter exactly this notice by class instead of all
+    RuntimeWarnings. It is emitted per fit, not once per process: which curve
+    lost the #124 invariance is audit information, and a process-global
+    "once" registry would make it depend on call order.
+    """
 
 
 def _whiten(y: np.ndarray, rho: float) -> np.ndarray:
@@ -181,19 +204,130 @@ def fit_gls_ar1(
             degenerate=True,
         )
 
+    # Issue #124: the mathematical least-squares optimum is unchanged when an
+    # observable is multiplied by a positive constant, but SciPy's numerical
+    # termination is not. In particular, TRF declares success when its scaled
+    # gradient falls below ``gtol``; a curve such as ``1e-40*exp(-1.3*t)`` can
+    # therefore return the INITIAL RATE as a "converged" estimate after one
+    # evaluation. Divide only the residuals presented to the optimiser by the
+    # curve's own finite, non-zero scale. This multiplies the objective by one
+    # positive constant, so the minimiser is identical, while the numerical
+    # problem becomes amplitude-scale invariant. Raw residuals, AR(1) rho,
+    # sigma and likelihood below remain in the caller's original data units.
+    #
+    # The rescaled problem is not always REPRESENTABLE (PR #134 x PR #147).
+    # SciPy's finite-difference probes step by ``~1.5e-8 * max(1, |x|)`` in
+    # ABSOLUTE parameter units, so the model moves by an amount unrelated to
+    # the curve's scale. Measured on the #147 fixture (``max|y| = 5e-324``):
+    # the scaled residual at ``p0`` is finite (``max = 1.0``), the first
+    # Jacobian probe gives ``1.5e-8 / 5e-324 = inf``, ``least_squares`` raises
+    # and the fit was reported unsuccessful -- a curve withheld from model
+    # selection because of its absolute amplitude, the boundary #135 removed.
+    # The overflow is a property of the rescaling, not of the fit: when a
+    # scaled residual leaves float64 while the raw one is finite, the
+    # iteration is repeated on the raw residuals, exactly the pre-#124
+    # problem, and the loss of the #124 invariance is announced rather than
+    # silent. A raw residual that is itself non-finite still fails closed.
+    fit_scale = y_scale
+
+    def _raw_residual_fn(rho_local: float) -> Callable[[np.ndarray], np.ndarray]:
+        # The unscaled problem, verbatim as before #124: no detection, no
+        # errstate. A non-finite raw residual reaches ``least_squares``, which
+        # raises ``ValueError`` and the fit fails closed (PR #134 review: the
+        # detector used to run here too and leaked a private exception from
+        # the public API for ``max|y| >= ~1e155``).
+        def residual(params: np.ndarray) -> np.ndarray:
+            return _whiten(y - model(t, params), rho_local)
+
+        return residual
+
+    def _rescaled_residual_fn(
+        rho_local: float,
+        scale: float,
+        caller_err: dict[str, Any],
+        caller_call: Any,
+    ) -> Callable[[np.ndarray], np.ndarray]:
+        # Runs inside the counting errstate of ``_solve_rescaled``. The MODEL
+        # and the raw difference are evaluated under the CALLER's floating-point
+        # policy instead: an event there (e.g. a sinc factor's 0/0 at t = 0,
+        # finite after ``np.where``) belongs to the raw problem, not to the
+        # rescaling, and must not trigger the fallback (PR #134 review: it did,
+        # and returned the seed rate as a converged fit at 1e-40).
+        def residual(params: np.ndarray) -> np.ndarray:
+            with np.errstate(call=caller_call, **caller_err):
+                r_raw = y - model(t, params)
+            # Counted: an overflow of the division or the whitening IS the
+            # rescaled problem leaving float64.
+            return _whiten(r_raw / scale, rho_local)
+
+        return residual
+
+    # The residual is not the only place the rescaled problem can leave
+    # float64: with a FREE amplitude parameter the Jacobian and the cost carry
+    # the same ``1/scale`` factor. Measured through ``_fit_with_model("M0")``
+    # on ``s*exp(-1.3 t)``: at s = 1e-150 and 1e-310 the rescaled optimiser
+    # overflowed inside SciPy (``dot``/``square``) and the fit was reported
+    # unsuccessful (aicc = inf), where the raw problem fits rate 1.3. So every
+    # floating-point exception raised while the RESCALED problem is solved,
+    # and any non-finite cost/residual/Jacobian it returns, counts as "not
+    # representable" and sends the iteration to the raw residuals. A finite
+    # rescaled result that merely did not converge is NOT retried: that is a
+    # genuine failure, and retrying it raw would re-admit the #124 seed.
+    def _solve_rescaled(
+        rho_local: float, x0: np.ndarray, **kw: object
+    ) -> OptimizeResult:
+        events: list[str] = []
+
+        def _record(kind: str, _flag: int) -> None:
+            events.append(kind)
+
+        caller_err = dict(np.geterr())
+        caller_call = np.geterrcall()
+        with np.errstate(
+            over="call", divide="call", invalid="call", under="ignore", call=_record
+        ):
+            try:
+                res = least_squares(
+                    _rescaled_residual_fn(rho_local, fit_scale, caller_err, caller_call),
+                    x0,
+                    **kw,
+                )
+            except (ValueError, RuntimeError):
+                if events:
+                    raise _ScaledResidualOverflowError from None
+                raise
+        if events or not (
+            np.isfinite(res.cost)
+            and np.all(np.isfinite(res.fun))
+            and np.all(np.isfinite(res.jac))
+        ):
+            raise _ScaledResidualOverflowError
+        return res
+
     rho = 0.0
     success = True
     for _ in range(n_iters):
-        def residual(params: np.ndarray, rho_local: float = rho) -> np.ndarray:
-            y_hat = model(t, params)
-            r = y - y_hat
-            return _whiten(r, rho_local)
-
         ls_kwargs: dict[str, object] = {"max_nfev": max_nfev}
         if bounds is not None:
             ls_kwargs["bounds"] = bounds
         try:
-            result = least_squares(residual, p, **ls_kwargs)
+            try:
+                if fit_scale == 1.0:
+                    result = least_squares(_raw_residual_fn(rho), p, **ls_kwargs)
+                else:
+                    result = _solve_rescaled(rho, p, **ls_kwargs)
+            except _ScaledResidualOverflowError:
+                warnings.warn(
+                    "fit_gls_ar1: residuals rescaled by the curve's own scale "
+                    f"({fit_scale:.3e}) are not representable as float64 at the "
+                    "optimiser's probe points; fitting the unscaled residuals "
+                    "instead, so the amplitude-scale invariance of issue #124 "
+                    "does not hold for this curve (PR #134).",
+                    AmplitudeRescalingFallbackWarning,
+                    stacklevel=2,
+                )
+                fit_scale = 1.0
+                result = least_squares(_raw_residual_fn(rho), p, **ls_kwargs)
             p = result.x
             success = result.success
         except (ValueError, RuntimeError):

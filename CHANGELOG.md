@@ -63,6 +63,44 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     the change is not visible in `input_hash`.
 
 ### Fixed
+- **GLS optimiser residuals are divided by the curve's own scale, and fall
+  back to the raw residuals where that rescaling is not representable (issue
+  #124, PR #134).** Rescaling makes SciPy's termination amplitude-invariant
+  for a model whose amplitude is not a fitted parameter: `1e-40*exp(-1.3 t)`
+  no longer returns its seed rate as a converged fit. It does not cure a
+  FREE amplitude parameter, which still returns the seed rate at 1e-40 when
+  fitted from `p0 = [1e-40, 0.2]` without bounds.
+  SciPy's finite-difference probes, however, step in absolute parameter
+  units, so for a tiny scale the rescaled residual, Jacobian or cost can leave
+  float64 -- measured at `max|y| = 5e-324` (the #147 fixture) and, through
+  `_fit_with_model("M0")`, at 1e-150 and 1e-310, where the fit was reported
+  unsuccessful and dropped from AICc selection. A floating-point exception
+  raised by the rescaled arithmetic itself (the division, the whitening, or
+  SciPy's own computation on the rescaled values -- NOT the evaluation of the
+  model, which keeps the caller's floating-point policy) or a non-finite
+  cost/residual/Jacobian of the rescaled solve now sends that iteration to the
+  raw residuals, evaluated exactly as before #124, with a `RuntimeWarning`
+  stating that the #124 invariance does not hold for the curve. A finite
+  rescaled solve that did not converge, and an exception with no
+  floating-point event, are still reported unsuccessful. For a FREE amplitude
+  parameter at `max|y| >= ~1e150` the fallback fires as well (measured at
+  1e150, 1e200 and 1e300; a fixed-amplitude model does not fall back there and
+  fits rate 1.3) and the fit fails closed exactly as on main (`success=False`),
+  without leaking the private exception that an earlier revision of this fix
+  raised there (PR #134 review). Unlike main, such a fit now emits the fallback
+  warning. It has the dedicated category
+  `liouscope.fitting.gls.AmplitudeRescalingFallbackWarning`, a `RuntimeWarning`
+  subclass, so a caller running with `-W error` can filter it by class. Raw residuals, rho, sigma and
+  the likelihood remain in the caller's data units.
+- **The AR(1) lag-1 autocorrelation is formed from residuals normalised by an
+  exact power of two (PR #134, round-3 review).** `ar1_correlation` took its dot
+  products on unscaled residuals, which underflow to 0 below ~1e-162 -- the
+  corrected rho then collapses to its floor `1/(n-3)` -- and overflow to NaN
+  above ~1e154. Measured through `fit_gls_ar1` with `n_iters=3` on one AR(1)
+  correlated curve: rho 0.012987 at 1e-170, 0.44637 at 1e0 and NaN with
+  `success=False` at 1e160. Scaling by `2**k` is exact, so rho is bit-identical
+  wherever the old computation stayed in range (200/200 random series between
+  1e-100 and 1e100).
 - **The trace-preservation defect overflowed on the way to a column sum that is
   exactly zero (issue #139, P2 review).** `trace_preservation_defect` assembled
   `vec(I)^H L` with an ordinary matrix product, which accumulates in ordinary
