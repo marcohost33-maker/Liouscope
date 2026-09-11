@@ -57,42 +57,57 @@ class DegenerateSteadyStateError(ValueError):
         )
 
 
-def _dissipation_scale(
+def _canonical_generator_scales(
+    H: np.ndarray,
     jump_ops: Sequence[np.ndarray] | None,
     rates: Sequence[float] | None,
     d: int,
-) -> float:
-    """``max|sum_k gamma_k L_k^dag L_k| / 2``, or 0.0 when it cannot be trusted.
+) -> tuple[float, float] | None:
+    """``(coherent, dissipation)`` scales of the generator in its canonical gauge.
 
-    The scale of the dissipative half of ``H_eff = H - (i/2) sum_k gamma_k
-    L_k^dag L_k``. 0.0 is the fail-closed value: it excuses no Hermiticity
-    defect. It is returned for every input the validation in
-    :func:`build_liouvillian` refuses (wrong shape, non-finite entries, bad
-    rates, length mismatch), so which error surfaces first is unchanged, and
-    for a sum that overflows, because an infinite scale would excuse every
-    defect there is.
+    Canonical Lindblad gauge: every jump operator traceless,
+    ``L0 = L - tr(L)/d * I``, with the Hamiltonian compensated by
+    ``H0 = H + gamma (m L^dag - conj(m) L) / 2i`` (``m = tr(L)/d``), which
+    leaves the generator unchanged. Returns ``max|H0 - shift0 I|`` and
+    ``max|sum_k gamma_k L0_k^dag L0_k| / 2``.
+
+    ``None`` means "no dissipator to consult" and makes the caller keep the
+    gauge-fixed scale of H alone -- the fail-closed reading. It is returned for
+    an empty jump list, for every input the validation in
+    :func:`build_liouvillian` refuses (so which error surfaces first is
+    unchanged), and whenever a derived scale is not finite, because an
+    infinite scale would excuse every defect there is.
     """
     if jump_ops is None or len(jump_ops) == 0:
-        return 0.0
+        return None
     try:
         ops = [np.asarray(L, dtype=complex) for L in jump_ops]
         gammas = [1.0] * len(ops) if rates is None else [float(g) for g in rates]
     except (TypeError, ValueError):
-        return 0.0
+        return None
     if len(gammas) != len(ops):
-        return 0.0
+        return None
+    eye = np.eye(d, dtype=complex)
+    H0 = np.array(H, dtype=complex)
     K = np.zeros((d, d), dtype=complex)
     with np.errstate(all="ignore"):
         for gamma, L in zip(gammas, ops, strict=True):
             if L.shape != (d, d) or not np.all(np.isfinite(L)):
-                return 0.0
+                return None
             if not (np.isfinite(gamma) and gamma >= 0.0):
-                return 0.0
+                return None
             if gamma == 0.0:
                 continue
-            K = K + gamma * (L.conj().T @ L)
-        value = 0.5 * float(np.max(np.abs(K))) if K.size else 0.0
-    return value if np.isfinite(value) else 0.0
+            m = complex(np.sum(np.diagonal(L) / d))
+            L0 = L - m * eye
+            H0 = H0 + gamma * (m * L.conj().T - np.conj(m) * L) / 2j
+            K = K + gamma * (L0.conj().T @ L0)
+        shift0 = overflow_safe_mean_real(np.diagonal(H0))
+        _, coherent = hermiticity_defect(H0 - shift0 * eye)
+        dissipation = 0.5 * float(np.max(np.abs(K))) if K.size else 0.0
+    if not (np.isfinite(coherent) and np.isfinite(dissipation)):
+        return None
+    return coherent, dissipation
 
 
 def build_liouvillian(
@@ -153,80 +168,70 @@ def build_liouvillian(
     # diagonal shift cannot change H - H^dag), while the SCALE comes from the
     # gauge-fixed traceless part.
     d_h = H.shape[0]
-    # ROUND-19 REVIEW (external, PR #127). The shift divides before summing:
-    # ``np.trace(H).real`` overflows for finite entries whose total is not
-    # representable, and an infinite shift makes the round-off allowance below
-    # infinite too, so the comparison fails OPEN for every defect. See
-    # :func:`overflow_safe_mean_real` for the measured case.
+    # ROUND-19 REVIEW (external, PR #127): the shift divides before summing
+    # where the direct sum overflows; see :func:`overflow_safe_mean_real`.
     gauge_shift = overflow_safe_mean_real(np.diagonal(H))
     eye_h = np.eye(d_h, dtype=complex)
-    H_gauge = H - gauge_shift * eye_h
-    defect, _ = hermiticity_defect(H)
-    _, scale = hermiticity_defect(H_gauge)
+    with np.errstate(over="ignore", invalid="ignore"):
+        H_gauge = H - gauge_shift * eye_h
+        defect, _ = hermiticity_defect(H)
+        _, scale = hermiticity_defect(H_gauge)
+    # Non-finite scale or defect: REFUSED, as on ``main`` (PR #127 round-2
+    # review, P4). The half-scale restatement tried in round 20 accepted
+    # ``diag(1.7e308, 1.7e308, -1.7e308)`` -- and then returned a generator
+    # containing ``inf``, because a gauge-fixed diagonal that overflows means
+    # a diagonal DIFFERENCE ``H_jj - H_kk`` that overflows, and those
+    # differences are the entries of ``-i[H, .]``.
+    if not np.isfinite(scale) or not np.isfinite(defect):
+        raise ValueError(
+            "H is finite but its gauge-fixed Hermiticity scale is not "
+            f"(max|H - H^dag| = {defect}, gauge-fixed max|H| = {scale}); "
+            "the Hermiticity gate cannot be evaluated, so H is refused"
+        )
     # PR #127 -- WHAT THE TOLERANCE IS RELATIVE TO (replaces the round-18
-    # ``d * eps * |gauge_shift|`` allowance). Gauge fixing leaves nothing of a
-    # Hamiltonian that is (numerically) a pure gauge term: for ``H = c*I + N``
-    # with ``N`` strictly upper triangular the shift is ``c`` exactly,
-    # ``H_gauge = N`` and ``max|H - H^dag| = max|N|`` (disjoint supports), so
-    # the relative defect is EXACTLY 1 whatever ``c`` and ``N`` are. A gauge
-    # shift followed by a change of units maps ``I + 2**-53 e01`` (round 18:
-    # must be accepted) and ``1e308*I + 1e290 e01`` (PR #121 round 19: must be
-    # rejected) onto the same ``e01``, so NO test that reads H alone and
-    # respects both symmetries can separate them. The round-18 allowance broke
-    # the gauge symmetry and still accepted both (4.4e-16 > 1.1e-16,
-    # 4.4e292 > 1e290), together with ``[[1e308, 1], [0, 1e308]]``, whose
-    # generator measurably does not preserve Hermiticity
-    # (``||drho - drho^dag||_F = 0.632456`` on a Hermitian rho).
+    # ``d * eps * |gauge_shift|`` allowance). For ``H = c*I + N`` with ``N``
+    # strictly upper triangular, EXACT arithmetic gives ``H_gauge = N`` and
+    # ``max|H - H^dag| = max|N|`` (disjoint supports), so the relative defect
+    # is 1 whatever ``c`` and ``N`` are. (In floating point that holds only
+    # where the shift is computed exactly -- e.g. the two fixtures below; for
+    # ``c = 0.1, d = 3, N = 1e-30`` the shift carries round-off and the ratio
+    # is 7.2e-14.) A gauge shift followed by a change of units maps
+    # ``I + 2**-53 e01`` (round 18: must be accepted) and
+    # ``1e308*I + 1e290 e01`` (PR #121 round 19: must be rejected) onto the
+    # same ``e01``, so no test that reads H alone and respects both symmetries
+    # can separate them. The separating information is in the dissipator.
     #
-    # The information that separates them is in the DISSIPATOR. The physical
-    # object is the generator, and its only part that fails to preserve
-    # Hermiticity is ``-i[A, .]`` with ``A`` the anti-Hermitian part of H --
-    # the dissipator preserves Hermiticity by construction. H and
-    # ``K/2 = sum_k gamma_k L_k^dag L_k / 2`` enter the generator on the same
-    # footing, as ``H_eff = H - i K/2``, so the defect is compared against
-    # ``max(max|H_gauge|, max|K|/2)``. That scale is gauge invariant (K does
-    # not see ``c``), covariant under a change of units, and with no
-    # dissipation it IS the gauge-fixed scale: every purely coherent verdict --
-    # the issue-#109 fixtures and the twelfth-round hole included -- is
-    # unchanged. The dissipation scale is consulted only when the coherent
-    # scale alone would refuse, so a malformed jump list still raises the
-    # Hermiticity error it raised before, and a dissipation scale that cannot
-    # be computed (overflow) excuses nothing.
-    # Same review, one line further out, and a SECOND route to the same
-    # fail-open. The shift lies between the smallest and the largest diagonal
-    # entry, so ``H_ii - gauge_shift`` can reach twice the largest entry and
-    # overflow even when the shift itself is finite. Measured on
-    # ``diag(1.7e308, -1.7e308, 1.7e308)`` with an off-diagonal defect of 1:
-    # shift 5.67e307, gauge-fixed diagonal -inf, ``scale = inf``, and
-    # ``defect > EPS * inf`` is False -- accepted.
-    #
-    # Refusing such an operator would be a false rejection of exactly
-    # Hermitian input, so the comparison is RESTATED at half scale instead.
-    # ``0.5 * H - 0.5 * shift * I`` cannot overflow (both terms are at most
-    # half the largest float), and halving every term of an inequality is
-    # exact in binary floating point, so the restated test is the same
-    # predicate -- not a loosened one. It is entered only when the direct
-    # ``scale`` is non-finite, so the healthy path keeps the original
-    # expression literally, down to the subnormal corner where halving would
-    # not be exact.
-    if np.isfinite(scale):
-        excessive = defect > EPS_HERMITICITY * scale
-    else:
-        _, half_scale = hermiticity_defect(0.5 * H - (0.5 * gauge_shift) * eye_h)
-        scale = 2.0 * half_scale
-        excessive = 0.5 * defect > EPS_HERMITICITY * half_scale
+    # The generator is the physical object, and its only part that fails to
+    # preserve Hermiticity is ``-i[A, .]`` with ``A`` the anti-Hermitian part
+    # of H. The pair ``(H, {L_k})`` is not unique: ``L -> L + c I`` together
+    # with ``H -> H + gamma (conj(c) L - c L^dag) / 2i`` is the SAME generator
+    # (PR #127 round-2 review measured both a zero dissipator ``2**20 * I``
+    # and this Lindblad gauge excusing an order-one defect). So both scales
+    # are read in the canonical gauge -- traceless ``L0 = L - tr(L)/d I`` and
+    # the compensated ``H0`` -- where they are functions of the generator
+    # alone: ``max(max|H0_gauge|, max|sum gamma L0^dag L0| / 2)``, the two
+    # halves of ``H_eff = H0 - i K0/2``. The compensating term is Hermitian,
+    # so the defect itself is still measured on H. Without jump operators the
+    # reference is the gauge-fixed scale of H, as on ``main``.
+    canonical = _canonical_generator_scales(H, jump_ops, rates, d_h)
+    reference = scale
+    coherent_scale = scale
     dissipation_scale = 0.0
-    if excessive:
-        dissipation_scale = _dissipation_scale(jump_ops, rates, d_h)
-        # Written as ``not <=`` so that a NaN defect cannot be excused either.
-        excessive = not defect <= EPS_HERMITICITY * dissipation_scale
-    if excessive:
-        reference = max(scale, dissipation_scale)
+    if canonical is not None:
+        coherent_scale, dissipation_scale = canonical
+        # OPEN QUESTION (E3, cross-family review requested): whether a large
+        # PHYSICAL dissipation may excuse a Hermiticity defect of the coherent
+        # part at all. The answer changes exactly this one expression -- e.g.
+        # to ``coherent_scale`` alone -- and nothing else in the gate.
+        reference = max(coherent_scale, dissipation_scale)
+    # Written as ``not <=`` so that a NaN defect cannot be accepted either.
+    if not defect <= EPS_HERMITICITY * reference:
         raise ValueError(
             f"H must be Hermitian within a relative {EPS_HERMITICITY:g} "
             f"of the generator scale (max|H - H^dag| = {defect:.3e}, "
-            f"gauge-fixed max|H| = {scale:.3e}, dissipation scale "
-            f"max|sum gamma L^dag L|/2 = {dissipation_scale:.3e}, "
+            f"gauge-fixed max|H| = {scale:.3e}, canonical-gauge coherent "
+            f"scale = {coherent_scale:.3e}, dissipation scale "
+            f"max|sum gamma L0^dag L0|/2 = {dissipation_scale:.3e}, "
             f"relative defect = "
             f"{defect / reference if reference else float('inf'):.3e})"
         )

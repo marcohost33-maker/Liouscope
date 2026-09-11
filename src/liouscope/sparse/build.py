@@ -17,40 +17,51 @@ from .._consts import EPS_HERMITICITY
 from ..numerics.linalg import overflow_safe_mean_real
 
 
-def _sparse_dissipation_scale(
+def _sparse_canonical_generator_scales(
+    H_sp: sp.csr_matrix,
     jump_ops: Sequence[np.ndarray | sp.spmatrix] | None,
     rates: Sequence[float] | None,
     d: int,
-) -> float:
-    """Sparse twin of :func:`liouscope.core.lindblad._dissipation_scale`.
+) -> tuple[float, float] | None:
+    """Sparse twin of :func:`liouscope.core.lindblad._canonical_generator_scales`.
 
-    ``max|sum_k gamma_k L_k^dag L_k| / 2`` on the sparse data arrays, 0.0
-    (excuses nothing) for anything the validation below refuses and for a
-    sum that overflows.
+    Same canonical Lindblad gauge on the sparse data arrays; ``None`` (keep
+    the gauge-fixed scale of H alone) for an empty or malformed jump list and
+    for a non-finite derived scale.
     """
     if jump_ops is None or len(jump_ops) == 0:
-        return 0.0
+        return None
     try:
         ops = [sp.csr_matrix(L, dtype=complex) for L in jump_ops]
         gammas = [1.0] * len(ops) if rates is None else [float(g) for g in rates]
     except (TypeError, ValueError):
-        return 0.0
+        return None
     if len(gammas) != len(ops):
-        return 0.0
+        return None
+    eye = sp.identity(d, dtype=complex, format="csr")
+    H0 = sp.csr_matrix(H_sp, dtype=complex, copy=True)
     K = sp.csr_matrix((d, d), dtype=complex)
     with np.errstate(all="ignore"):
         for gamma, L_op in zip(gammas, ops, strict=True):
             if L_op.shape != (d, d):
-                return 0.0
+                return None
             if L_op.nnz and not np.all(np.isfinite(L_op.data)):
-                return 0.0
+                return None
             if not (np.isfinite(gamma) and gamma >= 0.0):
-                return 0.0
+                return None
             if gamma == 0.0:
                 continue
-            K = (K + gamma * (L_op.conj().T @ L_op)).tocsr()
-        value = 0.5 * float(np.max(np.abs(K.data))) if K.nnz else 0.0
-    return value if np.isfinite(value) else 0.0
+            m = complex(np.sum(L_op.diagonal() / d))
+            L0 = (L_op - eye * m).tocsr()
+            H0 = (H0 + (L_op.conj().T * m - L_op * np.conj(m)) * (gamma / 2j)).tocsr()
+            K = (K + gamma * (L0.conj().T @ L0)).tocsr()
+        shift0 = overflow_safe_mean_real(H0.diagonal())
+        H0g = (H0 - eye * shift0).tocsr()
+        coherent = float(np.max(np.abs(H0g.data))) if H0g.nnz else 0.0
+        dissipation = 0.5 * float(np.max(np.abs(K.data))) if K.nnz else 0.0
+    if not (np.isfinite(coherent) and np.isfinite(dissipation)):
+        return None
+    return coherent, dissipation
 
 
 def build_sparse_liouvillian(
@@ -87,42 +98,40 @@ def build_sparse_liouvillian(
     # review): a real identity offset is physically inert but inflates the
     # scale, loosening the gate. Subtracting the real trace part touches only
     # the diagonal, so sparsity is preserved.
-    # ROUND-19 REVIEW (external, PR #127), the mirrored calculation the finding
-    # names explicitly. Identical overflow, identical fail-open, and it has to
-    # be repaired here too or the two builders disagree about whether the same
-    # Hamiltonian is valid. See
-    # :func:`liouscope.numerics.linalg.overflow_safe_mean_real`.
+    # ROUND-19 REVIEW (external, PR #127), mirrored: overflow-safe shift.
     gauge_shift = overflow_safe_mean_real(H_sp.diagonal())
     eye_d = sp.identity(d, dtype=complex, format="csr")
     H_gauge = (H_sp - eye_d * gauge_shift).tocsr()
     scale = float(np.max(np.abs(H_gauge.data))) if H_gauge.nnz else 0.0
-    # Generator-relative tolerance in parity with the dense builder (PR #127,
-    # replaces the round-18 ``d * eps * |gauge_shift|`` allowance, which broke
-    # the gauge symmetry and accepted a unit defect on ``1e308 * I``). See
-    # core/lindblad.py for why no test on H alone can separate the pure-gauge
-    # fixture from the overflow fixture and why the dissipation scale can.
-    # Half-scale restatement in parity with the dense builder: the gauge-fixed
-    # DIAGONAL can overflow even for a finite shift, which makes ``scale``
-    # infinite and the relative test vacuous. See core/lindblad.py for the
-    # measured case and for why halving keeps the predicate identical.
-    if np.isfinite(scale):
-        excessive = defect > EPS_HERMITICITY * scale
-    else:
-        H_half = (H_sp * 0.5 - eye_d * (0.5 * gauge_shift)).tocsr()
-        half_scale = float(np.max(np.abs(H_half.data))) if H_half.nnz else 0.0
-        scale = 2.0 * half_scale
-        excessive = 0.5 * defect > EPS_HERMITICITY * half_scale
+    # Non-finite scale or defect: refused, in parity with the dense builder
+    # and with ``main`` (PR #127 round-2 review, P4).
+    if not np.isfinite(scale) or not np.isfinite(defect):
+        raise ValueError(
+            "H is finite but its gauge-fixed Hermiticity scale is not "
+            f"(max|H - H^dag| = {defect}, gauge-fixed max|H| = {scale}); "
+            "the Hermiticity gate cannot be evaluated, so H is refused"
+        )
+    # Generator-relative tolerance in the canonical Lindblad gauge, in parity
+    # with the dense builder; see core/lindblad.py for the derivation.
+    canonical = _sparse_canonical_generator_scales(H_sp, jump_ops, rates, d)
+    reference = scale
+    coherent_scale = scale
     dissipation_scale = 0.0
-    if excessive:
-        dissipation_scale = _sparse_dissipation_scale(jump_ops, rates, d)
-        excessive = not defect <= EPS_HERMITICITY * dissipation_scale
-    if excessive:
-        reference = max(scale, dissipation_scale)
+    if canonical is not None:
+        coherent_scale, dissipation_scale = canonical
+        # OPEN QUESTION (E3, cross-family review requested): whether a large
+        # PHYSICAL dissipation may excuse a Hermiticity defect of the coherent
+        # part at all. The answer changes exactly this one expression -- e.g.
+        # to ``coherent_scale`` alone -- and nothing else in the gate.
+        reference = max(coherent_scale, dissipation_scale)
+    # Written as ``not <=`` so that a NaN defect cannot be accepted either.
+    if not defect <= EPS_HERMITICITY * reference:
         raise ValueError(
             f"H must be Hermitian within a relative {EPS_HERMITICITY:g} "
             f"of the generator scale (max|H - H^dag| = {defect:.3e}, "
-            f"gauge-fixed max|H| = {scale:.3e}, dissipation scale "
-            f"max|sum gamma L^dag L|/2 = {dissipation_scale:.3e}, "
+            f"gauge-fixed max|H| = {scale:.3e}, canonical-gauge coherent "
+            f"scale = {coherent_scale:.3e}, dissipation scale "
+            f"max|sum gamma L0^dag L0|/2 = {dissipation_scale:.3e}, "
             f"relative defect = "
             f"{defect / reference if reference else float('inf'):.3e})"
         )

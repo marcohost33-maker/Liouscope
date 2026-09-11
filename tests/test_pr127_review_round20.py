@@ -109,28 +109,49 @@ def test_a_defect_above_the_allowance_is_rejected_by_both_builders(
 ) -> None:
     """The regression. Before the repair both builders accepted both of these."""
     for build in (build_liouvillian, build_sparse_liouvillian):
-        with pytest.raises(ValueError, match="Hermitian"), np.errstate(all="ignore"):
+        # ``Hermiticity``: since round 2 of the PR #127 review the gauge-scale
+        # overflow is refused by main's non-finite-scale message, not by the
+        # relative comparison -- still a refusal, still this regression.
+        with pytest.raises(ValueError, match=r"Hermitian|Hermiticity"), np.errstate(
+            all="ignore"
+        ):
             build(H, [])
 
 
-@pytest.mark.parametrize(
-    ("name", "H"),
-    [
-        ("trace overflow", _trace_overflows(0.0)),
-        ("gauge-fixed scale overflow", _gauge_scale_overflows(0.0)),
-    ],
-)
-def test_an_exactly_hermitian_operator_is_still_accepted(
-    name: str, H: np.ndarray
-) -> None:
-    """No-over-reject control, and the reason the repair is not a refusal.
+def test_an_exactly_hermitian_operator_with_a_finite_scale_is_still_accepted() -> None:
+    """No-over-reject control: the trace overflows, nothing else does."""
+    H = _trace_overflows(0.0)
+    assert _refusal(H) is None, "exactly Hermitian (trace overflow) was refused"
 
-    Both diagonals are exactly Hermitian. Rejecting on a non-finite derived
-    quantity -- the obvious repair, and the one tried first here -- turns these
-    into errors. The gate is restated at half scale instead, which cannot
-    overflow and is the same predicate rather than a looser one.
+
+@pytest.mark.parametrize(
+    "H",
+    [
+        _gauge_scale_overflows(0.0),
+        np.diag([1.7e308, 1.7e308, -1.7e308]).astype(complex),
+    ],
+    ids=["round20-E", "round2-P4"],
+)
+def test_a_hermitian_operator_whose_generator_overflows_is_refused(
+    H: np.ndarray,
+) -> None:
+    """REVERSED in round 2 of the PR #127 review (P4), and why.
+
+    Round 20 pinned the first fixture as ACCEPTED, restating the comparison at
+    half scale. The generator that acceptance produced is not finite: a
+    gauge-fixed diagonal that overflows means a diagonal difference
+    ``H_jj - H_kk`` that overflows, and those differences are entries of
+    ``-i[H, .]``. ``main`` refused these operators; so does this branch again.
+    The premise below measures the overflow instead of asserting it.
     """
-    assert _refusal(H) is None, f"exactly Hermitian ({name}) was refused"
+    with np.errstate(all="ignore"):
+        diag = np.real(np.diagonal(H))
+        assert not np.isfinite(float(np.max(diag) - np.min(diag))), (
+            "fixture: the coherent generator must overflow"
+        )
+    refusal = _refusal(H)
+    assert refusal is not None, "a generator containing inf was built"
+    assert "cannot be evaluated" in refusal, refusal
 
 
 def test_the_round_18_allowance_is_unmoved() -> None:

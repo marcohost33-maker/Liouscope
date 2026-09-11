@@ -199,3 +199,84 @@ def test_the_verdict_does_not_move_with_the_units(unit: float) -> None:
     assert _verdicts(H, [_SIGMA_MINUS], [unit]) == (None, None)
     dense, sparse = _verdicts(H, [])
     assert dense is not None and sparse is not None
+
+
+# ---------------------------------------------------------------------------
+# Round 2 of the review: the scale must be a function of the GENERATOR.
+# ---------------------------------------------------------------------------
+
+_SIGMA_X = np.array([[0.0, 1.0], [1.0, 0.0]], dtype=complex)
+
+
+def _generator(H: np.ndarray, jumps: list[np.ndarray]) -> np.ndarray:
+    """``-i[H, .] + sum_k D[L_k]``, column stacking, built here from the definition."""
+    d = H.shape[0]
+    eye = np.eye(d)
+    out = -1j * (np.kron(eye, H) - np.kron(H.T, eye))
+    for L in jumps:
+        LdL = L.conj().T @ L
+        out = out + np.kron(L.conj(), L) - 0.5 * (np.kron(eye, LdL) + np.kron(LdL.T, eye))
+    return out
+
+
+def test_a_null_dissipator_excuses_nothing() -> None:
+    """P1: ``L = 2**20 * I`` dissipates nothing, so it cannot excuse anything.
+
+    ``D[cI] = 0`` exactly, so the generator IS ``-i[H, .]`` -- asserted below
+    from the definition -- and H carries an order-one Hermiticity defect.
+    Measured before the canonical gauge: ``max|L^dag L| / 2 = 2**39`` was read
+    as a dissipation scale and the operator was ACCEPTED by both builders.
+    """
+    H = _SIGMA_X + np.array([[0.0, 1.0], [0.0, 0.0]], dtype=complex)
+    null = 2.0**20 * np.eye(2, dtype=complex)
+    assert np.array_equal(_generator(H, [null]), _generator(H, [])), (
+        "fixture: the dissipator of c*I must vanish exactly"
+    )
+    dense, sparse = _verdicts(H, [null])
+    assert dense is not None and "Hermitian" in dense, dense
+    assert sparse is not None and "Hermitian" in sparse, sparse
+
+
+@pytest.mark.parametrize("defect", [1.0, 1.0e-6])
+def test_the_verdict_does_not_move_with_the_lindblad_gauge(defect: float) -> None:
+    """P6: ``(H, L)`` and ``(H + (c/2i)(L - L^dag), L + c I)`` are ONE generator.
+
+    ``c = 2**20``. Two ways the old scale saw the gauge: the defect of 1 was
+    excused by ``max|L'^dag L'|/2 ~ 5.5e11``, and the defect of 1e-6 by the
+    coherent scale ``~ c/2`` that the compensating term adds to H. In the
+    canonical gauge both pairs reduce to ``(H, sigma-)`` and both are refused.
+    """
+    c = 2.0**20
+    H = _SIGMA_X + np.array([[0.0, defect], [0.0, 0.0]], dtype=complex)
+    H_shift = H + (c / 2j) * (_SIGMA_MINUS - _SIGMA_MINUS.conj().T)
+    L_shift = _SIGMA_MINUS + c * np.eye(2, dtype=complex)
+    ref = _generator(H, [_SIGMA_MINUS])
+    other = _generator(H_shift, [L_shift])
+    assert float(np.max(np.abs(other - ref))) <= 1.0e-12 * float(np.max(np.abs(ref))), (
+        "fixture: the two pairs must describe the same generator"
+    )
+    plain = _verdicts(H, [_SIGMA_MINUS])
+    shifted = _verdicts(H_shift, [L_shift])
+    assert all(v is not None and "Hermitian" in v for v in plain), plain
+    assert all(v is not None and "Hermitian" in v for v in shifted), shifted
+
+
+@pytest.mark.parametrize(
+    ("fraction", "accepted"), [(0.75, False), (0.25, True)], ids=["above", "below"]
+)
+def test_the_half_in_the_dissipation_scale_is_load_bearing(
+    fraction: float, accepted: bool
+) -> None:
+    """``max|K|/2``, not ``max|K|``: pinned from both sides of the boundary.
+
+    ``H = I + a e01`` with unit-rate sigma-: coherent scale and defect are both
+    ``a``, the dissipation scale is ``max|sigma+ sigma-| / 2 = 1/2``, so the
+    boundary sits at ``a = EPS / 2``. ``a = 0.75 EPS`` must be refused -- a
+    scale without the half would accept it -- and ``a = 0.25 EPS`` accepted.
+    """
+    from liouscope._consts import EPS_HERMITICITY
+
+    H = np.eye(2, dtype=complex)
+    H[0, 1] = fraction * EPS_HERMITICITY
+    dense, sparse = _verdicts(H, [_SIGMA_MINUS])
+    assert (dense is None, sparse is None) == (accepted, accepted), (dense, sparse)
