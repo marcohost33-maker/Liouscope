@@ -166,9 +166,9 @@ ENSEMBLE_OVERRIDE_EVIDENCE_KEY: str = "ensemble_confirmation"
 
 # Issues #112/#113 (twelfth-round review): evidence key recording whether the
 # spectral layer's structural zero-mode certificate resolved. Written by
-# ``classify_mechanism`` from ``SpectralResult.zero_mode_certificate`` when one
-# is present; absent for synthetic results that carry no certificate, so every
-# pre-existing test and serialised result is untouched. Class-INFLUENCING by
+# ``classify_mechanism`` from ``SpectralResult.zero_mode_certificate``. The key
+# is always present: missing or inapplicable certificates record 0.0 rather than
+# silently inheriting a permissive default. Class-INFLUENCING by
 # design, in the fail-closed direction only: an unresolved certificate means
 # D1/D3/D4 -- and every evidence ratio built on them -- came from a spectrum
 # the solver demonstrably could not resolve, so no mechanism claim may stand
@@ -181,11 +181,54 @@ def _apply_spectral_certificate_floor(
     verdict: str,
     tier: str,
     *,
+    certificate_applicable: bool | None = None,
     spectral_resolved: bool,
 ) -> tuple[str, str]:
-    """Insufficient-evidence floor for an unresolved spectral certificate."""
-    if not spectral_resolved:
+    """Floor missing or applicable-unresolved evidence, not inapplicable evidence.
+
+    ``certificate_applicable is None`` means no certificate was available at all:
+    the spectrum is unexamined, so publication-level classification must withhold.
+    ``False`` means the certificate explicitly declares this gate inapplicable;
+    that state must not be laundered into "resolved", but it also must not trigger
+    a gate that does not apply to the input. Legacy/matrix callers that do not
+    carry applicability remain governed by their explicit ``spectral_resolved``
+    value; the authoritative classifier always passes applicability explicitly.
+    """
+    if certificate_applicable is not False and not spectral_resolved:
         return VERDICT_UNDEFINED, TIER_EXPLORATION
+    return verdict, tier
+
+
+def _apply_unevaluable_winner_floor(
+    a_class: str,
+    verdict: str,
+    tier: str,
+    *,
+    matrix: tuple[dict[str, object], ...],
+) -> tuple[str, str]:
+    """Insufficient-evidence floor for a winner the matrix cannot evaluate.
+
+    ROUND-25 REVIEW (PR #121). The dominant class and the hypothesis matrix are
+    derived from the same evidence but reported as two independent fields, and
+    they could contradict each other. Measured case: ``kreiss = 11`` with D9
+    withheld as ``petermann_max = NaN`` leaves the F1 rung UNEVALUABLE, so no
+    rung fires and the ladder falls through to ``A12``; the matrix correctly
+    marks the A12 fallback ``UNEVALUABLE`` with an ``UNDEFINED`` claim floor
+    (a rung that could not be evaluated might have fired, so "no mechanism
+    applies" is not established) -- yet ``_pick_verdict_tier`` published
+    ``NOT_EXCLUDED``. One report then asserted a dominant class that its own
+    audit column says is unsupported.
+
+    The floor reads the matrix rather than recomputing the condition, so the
+    two cannot drift apart. It is stated over the WINNER generally, not over
+    ``A12`` specifically: a fired rung is ``SUPPORTED`` by construction, so for
+    every other winner this is a no-op (asserted in the round-27 tests), and
+    should a future rung become unevaluable-and-winning the floor already
+    covers it.
+    """
+    for entry in matrix:
+        if entry.get("a_class") == a_class and entry.get("status") == HYPOTHESIS_UNEVALUABLE:
+            return VERDICT_UNDEFINED, TIER_EXPLORATION
     return verdict, tier
 
 
@@ -312,13 +355,12 @@ def _gather_evidence(
         )
         else 0.0
     )
-    # ``None`` means the spectral layer withheld the flag (in parity with
-    # D1/D3/D4 when the certificate is applicable but unresolved). NaN is the
-    # evidence dict's unavailable sentinel, and ``_strip_unavailable`` removes
-    # it so the A8 rung does not hold on an unanswered question.
+    # ``None`` is the unavailable marker for this bool (withheld together
+    # with D1/D3/D4 when the certificate is applicable but uncertified). NaN
+    # is the evidence dict's unavailable sentinel, and ``_strip_unavailable``
+    # removes it so the A8 rung does not hold on an unanswered question.
     ev["has_complex_pairs"] = (
-        float("nan")
-        if spectral.has_complex_pairs is None
+        float("nan") if spectral.has_complex_pairs is None
         else float(spectral.has_complex_pairs)
     )
     ev["kreiss"] = float(nonnorm.kreiss)
@@ -396,16 +438,16 @@ class _Condition:
     Keeping the two apart is what preserves the matrix/ladder equivalence: if a
     defaulted key were declared required, the matrix would report UNEVALUABLE
     for evidence on which the ladder happily fires (the F5 reach leg reads
-    ``ev.get("gap_to_gns_ratio", 1.0)`` and decides without it), and the two
-    would disagree exactly on the partially collected evidence the matrix
-    exists to describe.
+    ``ev.get("gap_to_gns_ratio", 1.0)`` and has documented semantics without
+    it), and the two would disagree exactly on the partially collected
+    evidence the matrix exists to describe.
 
-    The converse error is the one the round-18 review of PR #127 found, and it
-    is the more expensive: declaring a key optional when its DEFAULT is not a
-    neutral reading of "not measured" but the strongest available evidence.
-    ``gap`` defaulted to ``0.0``, which the reach leg reads as the gapless
-    limit, so a withheld D1 was converted into positive F5 support. A key whose
-    absence would be silently answered in the affirmative belongs in ``keys``.
+    The converse error is the round-22 finding: a key whose DEFAULT is
+    positive evidence must not be optional. ``gap`` was defaulted to ``0.0``
+    in the F5 reach leg, i.e. to the gapless limit, so a missing D1 read as
+    support for the phantom-relaxation hypothesis rather than as the absence
+    of the measurement. A default is only admissible when the predicate has
+    documented semantics WITHOUT the value -- not when it invents one.
 
     ``relaxation_fields`` names any :class:`RelaxationResult` attributes read,
     for the same audit purpose. ``fn`` MUST reproduce the decision predicate
@@ -445,20 +487,22 @@ def _f5_reach(ev: dict[str, float], relaxation: RelaxationResult) -> bool:
     # leading order (both radius and gap scale as c). A vanishing gap (no
     # spectral gap) is treated as inf reach: a gapless, strongly non-normal
     # operator is the phantom/critical limit.
+    # ROUND-22 REVIEW (PR #121). ``ev.get("gap", 0.0)`` read a MISSING
+    # measurement as a measured zero. When the certificate is unresolved the
+    # spectral layer withholds D1 as NaN, ``_strip_unavailable`` removes the
+    # key, and the default then supplied the gapless limit -- positive
+    # evidence for the very leg that could not be computed. With
+    # ``henrici_eta > 1`` the rung fired, the classifier returned A10/F5 and
+    # the matrix reported the F5 hypothesis SUPPORTED. The certificate floor
+    # downstream caps the VERDICT at UNDEFINED, but it does not withdraw the
+    # class, the family or the matrix status, so a fabricated mechanism label
+    # survived the floor that was supposed to contain it.
     #
-    # ROUND-18 REVIEW (external, PR #127). ``gap`` is indexed, not defaulted.
-    # A MEASURED zero and an UNAVAILABLE gap are different states, and the
-    # former default ``ev.get("gap", 0.0)`` collapsed them into the stronger
-    # one: when the zero-mode certificate withholds D1 as NaN,
-    # ``_strip_unavailable`` removes the key, the default supplied the gapless
-    # limit, and this leg returned True unconditionally -- so every unresolved
-    # spectrum with ``henrici_eta > 1`` was labelled A10/F5 with F5 reported
-    # SUPPORTED, on a radius-to-gap ratio that was never measurable. The key
-    # is REQUIRED in the rung spec below, so both consumers refuse in step:
-    # the ladder cannot fire the rung (``all(k in ev ...)``) and the matrix
-    # reports UNEVALUABLE with ``gap`` in ``missing``. A gap that really was
-    # measured as 0.0 is present in ``ev`` and still takes the gapless branch,
-    # so the documented #101 blind spot is unchanged.
+    # ``gap`` is therefore a REQUIRED key of this condition (see the rung
+    # below): absent, the rung is unevaluable and cannot fire. A gap that was
+    # MEASURED as 0.0 still means gapless and still counts as reach evidence --
+    # the distinction is between "no gap" and "no measurement", which is
+    # exactly the distinction the default erased.
     _gap = ev["gap"]
     if _gap > 0.0:
         return bool(
@@ -524,9 +568,7 @@ def _ladder_spec() -> tuple[_Rung, ...]:
         conditions=(
             _Condition(
                 description="pseudospectral reach: radius/gap > 2 * gap_to_gns_ratio "
-                "(measured gap 0.0 => infinite reach; see #101 gapless blind "
-                "spot. An UNAVAILABLE gap makes this rung unevaluable -- "
-                "round-18 review, PR #127)",
+                "(gapless => infinite reach; see #101 gapless blind spot)",
                 keys=("pseudospectral_radius", "gap"),
                 optional_keys=("gap_to_gns_ratio",),
                 fn=_f5_reach,
@@ -1250,10 +1292,24 @@ def classify_mechanism(
     ev["maximally_mixed_steady_state"] = float(maximally_mixed)
     ev[ENSEMBLE_OVERRIDE_EVIDENCE_KEY] = float(bool(ensemble_confirmation))
     certificate = getattr(spectral, "zero_mode_certificate", None)
-    spectral_resolved = True
-    if isinstance(certificate, dict) and certificate.get("applicable"):
-        spectral_resolved = bool(certificate.get("resolved", certificate.get("certified")))
-        ev[SPECTRAL_RESOLVED_EVIDENCE_KEY] = float(spectral_resolved)
+    # Issue #126: the certificate has four semantically distinct states.
+    # Missing => unexamined and therefore withheld. Explicitly inapplicable =>
+    # no zero-mode certificate gate applies to this input, so do not floor.
+    # Applicable+unresolved => withhold. Applicable+resolved => preserve the
+    # pre-existing classification. ``certified`` is only a legacy fallback for
+    # applicable certificates that predate the explicit ``resolved`` field.
+    certificate_applicable: bool | None = None
+    spectral_resolved = False
+    if isinstance(certificate, dict):
+        certificate_applicable = bool(certificate.get("applicable"))
+        if certificate_applicable:
+            spectral_resolved = bool(
+                certificate.get("resolved", certificate.get("certified", False))
+            )
+            ev[SPECTRAL_RESOLVED_EVIDENCE_KEY] = float(spectral_resolved)
+    else:
+        # Missing evidence must be auditable as unresolved, not silently absent.
+        ev[SPECTRAL_RESOLVED_EVIDENCE_KEY] = 0.0
     a_class, f_family = _pick_a_class(ev, relaxation=relaxation)
     conf = _confidence(ev, a_class)
     verdict, tier = _pick_verdict_tier(a_class, relaxation, conf)
@@ -1265,7 +1321,17 @@ def classify_mechanism(
         ensemble_confirmation=bool(ensemble_confirmation),
     )
     verdict, tier = _apply_spectral_certificate_floor(
-        verdict, tier, spectral_resolved=spectral_resolved
+        verdict,
+        tier,
+        certificate_applicable=certificate_applicable,
+        spectral_resolved=spectral_resolved,
+    )
+    # Built once and consumed twice: the floor below reads the same object the
+    # report carries, so the published matrix and the published verdict are
+    # guaranteed to be the pair that was actually reconciled.
+    matrix = hypothesis_evidence_matrix(ev, relaxation=relaxation)
+    verdict, tier = _apply_unevaluable_winner_floor(
+        a_class, verdict, tier, matrix=matrix
     )
     return ClassificationResult(
         a_class=a_class,
@@ -1279,7 +1345,7 @@ def classify_mechanism(
         support_score=conf,
         evidence=ev,
         triggered_hypotheses=triggered_hypotheses(ev, relaxation=relaxation),
-        hypothesis_matrix=hypothesis_evidence_matrix(ev, relaxation=relaxation),
+        hypothesis_matrix=matrix,
         taxonomy_version=TAXONOMY_VERSION,
         schema_version=DIAGNOSTIC_SCHEMA_VERSION,
     )

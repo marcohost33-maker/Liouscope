@@ -38,8 +38,7 @@ import numpy as np
 from .._consts import EPS_DIV, EPS_HERMITICITY
 from .._types import MpembaResult
 from ..numerics.kronecker import vec
-from ..numerics.linalg import certified_eig
-from ..numerics.scale import spectral_zero_tolerance
+from ..numerics.linalg import ZeroModeCertificate, certified_eig
 
 
 # Twelfth-round review sentinel: "the slow spectrum is UNRESOLVED for this
@@ -56,7 +55,7 @@ _UNRESOLVED = _UnresolvedType()
 
 def _certified_decomposition(
     L_super: np.ndarray, *, what: str
-) -> tuple[np.ndarray, np.ndarray, np.ndarray, float | None] | None:
+) -> tuple[np.ndarray, np.ndarray, np.ndarray, ZeroModeCertificate] | None:
     """Certified eigendecomposition, or ``None`` when it must not be consumed.
 
     Shared by the Mpemba-layer consumers so they cannot drift apart on whether
@@ -70,16 +69,16 @@ def _certified_decomposition(
     consuming it points D19 at a mode that does not exist, on the very rung
     that fires A11/F4.
 
-    The fourth element is the certificate's operator-derived zero-mode bound
-    ``rtol * eps * ||L||_2`` (round-13 review): the zero/non-zero split the
-    consumers apply MUST use the same scale the certificate certified with,
-    or a certified-resolved stationary mode of a strongly non-normal
-    generator survives the smaller radius-based filter and becomes a
-    spurious "slowest mode" -- exactly what this helper exists to prevent.
-    It is ``None`` when the certificate is inapplicable (round-14 review):
-    without established trace preservation no zero mode is guaranteed and
-    the operator-norm bound is not a valid cutoff, so the consumers fall
-    back to the radius-based tolerance.
+    The fourth element is the CERTIFICATE ITSELF, not a bare number
+    (round-17 review, PR #121). The zero/non-zero split the consumers apply
+    must use the tolerance the certificate ACTUALLY applied, and handing out
+    a raw ``bound`` is what let this layer filter on the pre-refinement band:
+    a genuine slow mode rescued by the a posteriori certificate was discarded
+    again in :func:`_slowest_mode`, so D19 was evaluated against the next
+    FASTER mode and could produce a wrong A11/F4 signal. Applicability, the
+    radius fallback and the refinement all live in
+    ``ZeroModeCertificate.zero_set_tolerance``, so no consumer of this helper
+    can pick the wrong one.
     """
     decomp, certificate = certified_eig(L_super)
     if certificate.applicable and not certificate.resolved:
@@ -104,15 +103,11 @@ def _certified_decomposition(
     left = decomp.left_vectors
     if left is None:  # pragma: no cover - certified_eig always sets left vectors
         raise RuntimeError("certified_eig did not return left eigenvectors")
-    # Round-14 review: the operator-norm bound is only a valid zero-mode
-    # cutoff when trace preservation -- and hence the structural zero mode --
-    # is established. For an inapplicable certificate the callers fall back
-    # to the radius-based tolerance (``None`` here means "no override").
     return (
         decomp.eigenvalues,
         left,
         decomp.right_vectors,
-        certificate.bound if certificate.applicable else None,
+        certificate,
     )
 
 
@@ -141,12 +136,13 @@ def _slowest_mode(
     certified = _certified_decomposition(L_super, what="slowest mode")
     if certified is None:
         return _UNRESOLVED
-    eigvals, vl, vr, cert_bound = certified
-    # One zero-mode scale (round-13): default to the certificate's own
-    # operator-derived bound; a caller-supplied ``atol`` (the legacy opt-in)
+    eigvals, vl, vr, certificate = certified
+    # One zero-mode scale, ONE decision site (round-13, corrected round-17):
+    # the certificate resolves applicability, the radius fallback and the a
+    # posteriori refinement; a caller-supplied ``atol`` (the legacy opt-in)
     # still wins.
-    tol = spectral_zero_tolerance(
-        eigvals, atol=cert_bound if atol is None else atol, name="eigenvalues of L_super"
+    tol = certificate.zero_set_tolerance(
+        eigvals, atol=atol, name="eigenvalues of L_super"
     )
     nonzero_mask = np.abs(eigvals) > tol
     if not np.any(nonzero_mask):
@@ -274,10 +270,11 @@ def expansion_alpha(
     certified = _certified_decomposition(L_super, what="mode expansion")
     if certified is None:
         return float("nan")  # unresolved slow spectrum: no expansion to fit
-    eigvals, vl, vr, cert_bound = certified
-    # One zero-mode scale (round-13), same rule as _slowest_mode.
-    tol = spectral_zero_tolerance(
-        eigvals, atol=cert_bound if atol is None else atol, name="eigenvalues of L_super"
+    eigvals, vl, vr, certificate = certified
+    # One zero-mode scale (round-13, corrected round-17), same rule as
+    # _slowest_mode.
+    tol = certificate.zero_set_tolerance(
+        eigvals, atol=atol, name="eigenvalues of L_super"
     )
     mask = np.abs(eigvals) > tol
     eigvals_nz = eigvals[mask]

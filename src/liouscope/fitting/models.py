@@ -12,7 +12,9 @@ correction) to compare them, never likelihood-ratio tests.
 
 from __future__ import annotations
 
-from collections.abc import Callable
+import contextlib
+import contextvars
+from collections.abc import Callable, Iterator
 
 import numpy as np
 
@@ -63,12 +65,57 @@ _EXP_CLIP: float = 345.0
 _MODEL_CLIP: float = 1.0e100
 
 
+# Both guards above keep an out-of-range probe FINITE, which is what the
+# optimiser needs -- but a finite constant is also FLAT, and a flat region
+# satisfies a gradient-based convergence test for entirely the wrong reason.
+# Measured (issue #118 finding 9): ``fit_gls_ar1(M0, t in [0, 1e10],
+# y = exp(-5t/1e10), p0 = [1, -1])`` returns ``success=True`` with the START
+# vector unchanged and a residual norm of 7.9e100 -- ``exp(+1e10)`` saturates,
+# every partial derivative is exactly zero, and ``least_squares`` reports
+# "gradient is small" at a point 100 decades from the data.
+#
+# The saturation itself is right and stays. What was missing is that the caller
+# could not tell it had happened. The watcher below is installed only around
+# the FINAL evaluation of a fit: probes the optimiser generates on its way are
+# exactly what the caps exist for, whereas LANDING on the plateau means the
+# reported optimum is an artefact of the cap. Zero cost when no watcher is
+# installed -- the guards do not even look at their arguments.
+_SATURATION: contextvars.ContextVar[set[str] | None] = contextvars.ContextVar(
+    "liouscope_model_saturation", default=None
+)
+
+
+@contextlib.contextmanager
+def saturation_watch() -> Iterator[set[str]]:
+    """Record which magnitude guards fired while models are evaluated.
+
+    The set is empty unless a model evaluated inside the block hit the exponent
+    cap or the model-magnitude cap. Re-entrant and thread/async safe: the
+    binding is a :mod:`contextvars` variable, so concurrent bootstrap folds do
+    not see each other's entries.
+    """
+    fired: set[str] = set()
+    token = _SATURATION.set(fired)
+    try:
+        yield fired
+    finally:
+        _SATURATION.reset(token)
+
+
+def _note(kind: str, hit: np.ndarray | bool) -> None:
+    fired = _SATURATION.get()
+    if fired is not None and bool(np.any(hit)):
+        fired.add(kind)
+
+
 def _safe_exp(x: np.ndarray) -> np.ndarray:
     """``exp(x)`` with the exponent capped from above only.
 
     Bit-identical to ``np.exp`` for every ``x <= 345``, including the whole
     decaying range; saturating instead of overflowing to ``inf`` above it.
     """
+    if _SATURATION.get() is not None:
+        _note("exponent", x > _EXP_CLIP)
     result: np.ndarray = np.exp(np.minimum(x, _EXP_CLIP))
     return result
 
@@ -88,6 +135,8 @@ def _bounded(result: np.ndarray) -> np.ndarray:
     encoding is the saturation value the optimiser steps away from — models
     are evaluated under a suppressed overflow errstate for the same reason.
     """
+    if _SATURATION.get() is not None:
+        _note("magnitude", ~np.isfinite(result) | (np.abs(result) > _MODEL_CLIP))
     out: np.ndarray = np.nan_to_num(
         result, nan=_MODEL_CLIP, posinf=_MODEL_CLIP, neginf=-_MODEL_CLIP
     )

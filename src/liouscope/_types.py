@@ -36,18 +36,37 @@ class SpectralResult:
     spectral_spread: float      # D4 max|Re| minus min|Re| (non-zero modes)
     eigenvalues: np.ndarray     # full sigma(L) sorted by real part
     steady_state: np.ndarray    # rho_ss matrix, d x d
-    #: D3-derived oscillation flag. ``None`` when the zero-mode certificate is
-    #: applicable but not resolved: the flag is read off the same candidate
-    #: spectrum for which D1/D3/D4 are already withheld, and ``False`` there
-    #: would assert the ABSENCE of the oscillation that may be the very reason
-    #: the spectrum is unresolved (PR #127, round-17 review, fifth finding).
     has_complex_pairs: bool | None
+    """D3 oscillating-pair signal -- ``None`` when it is UNAVAILABLE.
+
+    A bool has no NaN, so the library's unavailable sentinel is ``None`` here.
+    It is set when the zero-mode certificate is applicable but uncertified:
+    the flag is derived from the same candidate spectrum that D1/D3/D4 are
+    withheld from, and ``False`` would be a claim ("no oscillating modes")
+    rather than an absence of one.
+
+    ``classification`` maps ``None`` to NaN in the evidence dict, where
+    ``_strip_unavailable`` removes it and the A8 rung consequently does not
+    hold -- the established route for an unavailable measurement.
+    """
     # Issue #112. Structural check that the computed spectrum contains the zero
     # mode that vec(I)^H L = 0 guarantees for a trace-preserving generator, plus
-    # which LAPACK route produced the accepted spectrum. Report-only: it does
-    # not enter any verdict, but a ``certified=False`` entry marks D1/D3/D4 as
-    # unresolved for that system. Optional with a default so the run-manifest
-    # contract is unchanged (additive field).
+    # which LAPACK route produced the accepted spectrum.
+    #
+    # LOAD-BEARING, not report-only (round-17 review, PR #121; the wording here
+    # said the opposite and contradicted both the code and the changelog).
+    # Three effects:
+    #   * ``classify_mechanism`` reads it and derives the
+    #     ``spectral_resolved`` evidence key from it;
+    #   * ``_apply_spectral_certificate_floor`` then caps BOTH the reported
+    #     verdict (-> UNDEFINED) and the tier (-> EXPLORATION) whenever an
+    #     applicable certificate is unresolved -- a fail-closed contract, not a
+    #     note in the margin;
+    #   * D1 is withheld as NaN for an applicable-but-unresolved certificate,
+    #     and D1/D3/D4 filter on the tolerance it carries
+    #     (``zero_tolerance``, issue #113 second axis).
+    # Optional with a default so the run-manifest contract is unchanged
+    # (additive field).
     zero_mode_certificate: dict[str, object] | None = None
 
 
@@ -179,6 +198,16 @@ class FitResult:
     #             ``n^2 / sum_jk exp(-theta |t_j - t_k|)``.
     # Additive + defaulted, so older callers and serialised fits stay valid.
     residual_theta_car1: float = float("nan")
+    likelihood_degenerate: bool = False
+    #: True when the fit is a valid model-selection candidate -- its log-space
+    #: likelihood and AICc are finite -- but the positive MLE residual scale is
+    #: not representable as float64, so the parametric bootstrap and therefore
+    #: the confidence interval were withheld (issue #135, PR #147 round-2
+    #: review). Without this field the persisted report showed only
+    #: ``bca_ci_beta = (nan, nan)``, which is the same value ANY bootstrap or
+    #: jackknife failure produces: once the warning stream is gone, the reason
+    #: the interval is missing was unrecoverable from the artefact.
+    scale_unavailable: bool = False
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -297,10 +326,14 @@ class LepResult:
     Note: conjugate-pair LEP candidates are INCLUDED (FIX-3, anchor I).
     """
 
-    lep_proximity: float                  # D16 min pair separation
+    lep_proximity: float                  # D16 min pair separation (NaN = withheld)
     gap_rate_consistency: float           # D17 |beta_D_linear - Delta| / Delta
     initial_state_sensitivity: float      # D18 std over Haar ensemble
-    lep_candidate_count: int
+    # ROUND-23 REVIEW (PR #121). ``None`` where D16 is withheld, in parity with
+    # ``SpectralResult.has_complex_pairs``. An integer count cannot express
+    # "not counted": 0 is a measured absence of close pairs, and the count is
+    # persisted as audit metadata.
+    lep_candidate_count: int | None
     # LIOU-#69: the LINEAR-metric rate actually fed to D17 (dimension-coherent
     # with the gap). Additive + defaulted so synthetic callers stay valid.
     beta_D_linear: float = float("nan")

@@ -37,9 +37,16 @@ class HoldoutResult:
     ratio
         ``holdout_rmse / train_rmse`` (``inf`` if ``train_rmse == 0``).
     accept
-        ``True`` iff ``holdout_rmse <= train_rmse * (1 + delta)`` -- the model
-        generalises. ``False`` signals overfitting / unmodelled structure and
-        should trigger a fallback to a simpler nested model (BLOCK).
+        ``True`` iff the underlying fit SUCCEEDED **and**
+        ``holdout_rmse <= train_rmse * (1 + delta)`` -- the model generalises.
+        ``False`` signals overfitting, unmodelled structure, or a fit that
+        never converged, and should trigger a fallback to a simpler nested
+        model (BLOCK).
+    fit_success
+        Whether the training fit itself converged. Carried separately so a
+        rejection can be read for its cause: a model that generalises badly
+        and a model that was never fitted demand different responses, and a
+        bare ``accept=False`` cannot tell them apart.
     n_train, n_holdout
         Segment sizes.
     """
@@ -50,6 +57,7 @@ class HoldoutResult:
     accept: bool
     n_train: int
     n_holdout: int
+    fit_success: bool = True
 
 
 def train_holdout_split(
@@ -140,7 +148,20 @@ def holdout_validate(
     train_rmse = float(np.sqrt(np.mean(train_resid**2)))
     holdout_rmse = float(np.sqrt(np.mean(hold_resid**2)))
     ratio = holdout_rmse / train_rmse if train_rmse > 0.0 else float("inf")
-    accept = holdout_rmse <= train_rmse * (1.0 + delta)
+
+    # AUDIT FIX (round-18 review): the gate used to score ``fit.params``
+    # without ever asking whether the fit succeeded. A saturated fit is
+    # rejected by ``fit_gls_ar1`` -- and then scored here anyway. Measured on
+    # the reviewer's example, ``holdout_validate(M0, linspace(0, 1e10, 64),
+    # exp(-5t/1e10), [1, 1])`` came back ``accept=True`` while the parameters
+    # sat on the ~1e100 saturation plateau: on that plateau the model is
+    # CONSTANT, so train and holdout RMSE are equally enormous, their ratio is
+    # ~1, and the anti-overfit criterion is satisfied by a non-fit.
+    #
+    # That is the failure mode this gate exists to prevent, arriving through
+    # the one door it never checked. An anti-overfit gate answers "does this
+    # fit generalise?" -- a question with no meaning when there is no fit.
+    accept = bool(fit.success) and holdout_rmse <= train_rmse * (1.0 + delta)
     return HoldoutResult(
         train_rmse=train_rmse,
         holdout_rmse=holdout_rmse,
@@ -148,6 +169,7 @@ def holdout_validate(
         accept=accept,
         n_train=t_tr.size,
         n_holdout=t_ho.size,
+        fit_success=bool(fit.success),
     )
 
 

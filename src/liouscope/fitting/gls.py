@@ -12,6 +12,7 @@ rounds (Cochrane-Orcutt style).
 
 from __future__ import annotations
 
+import math
 import warnings
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -19,6 +20,7 @@ from dataclasses import dataclass
 import numpy as np
 from scipy.optimize import least_squares
 
+from ..numerics.norms import scaled_log_sum_squares
 from .aicc import gaussian_log_likelihood
 from .car1 import (
     estimate_car1_theta,
@@ -26,6 +28,7 @@ from .car1 import (
     whiten_car1,
     whiten_car1_log_jacobian,
 )
+from .models import saturation_watch
 from .neff import _AR1_SMALL_N, ar1_correlation_corrected
 
 
@@ -56,6 +59,28 @@ class GLSFitOutput:
     log_likelihood: float
     success: bool
     theta_car1: float = float("nan")
+    #: Magnitude guards that fired on the FINAL model evaluation, if any
+    #: (``"exponent"`` / ``"magnitude"``). Non-empty implies ``success`` is
+    #: False -- see the note at the final evaluation below.
+    saturated: tuple[str, ...] = ()
+    #: True when the CURVE carried no resolvable variation, so no fit was
+    #: attempted at all (issue #123). Distinct from ``saturated``, which
+    #: reports a fit that ran and ended on a magnitude plateau; here there was
+    #: nothing to fit. Implies ``success`` is False and ``params`` is NaN.
+    degenerate: bool = False
+    #: True when the residual Gaussian scale has no finite usable MLE for model
+    #: selection (issue #135). Distinct from ``degenerate`` above: the curve
+    #: may carry variation and the optimiser may have run, but exact-zero RSS
+    #: (or an unrepresentable positive MLE scale) cannot support AICc/CI claims.
+    likelihood_degenerate: bool = False
+    #: True when the profile likelihood IS computable in log space but the
+    #: positive MLE scale ``exp(log_sigma)`` is not representable as a float64
+    #: (round-1 review of PR #147). ``sigma`` is then NaN while
+    #: ``log_likelihood`` stays finite: the fit remains a valid AICc candidate,
+    #: and only the scale-dependent evidence -- the parametric bootstrap, hence
+    #: the CI -- is withheld. Distinct from ``likelihood_degenerate``, where the
+    #: likelihood itself has no finite value.
+    scale_unavailable: bool = False
 
 
 def _whiten(y: np.ndarray, rho: float) -> np.ndarray:
@@ -98,6 +123,31 @@ def fit_gls_ar1(
     t = np.asarray(t, dtype=float)
     y = np.asarray(y, dtype=float)
     p = np.asarray(p0, dtype=float).copy()
+    # Fail closed on MALFORMED observations, BEFORE anything else inspects them
+    # (round-24 review, PR #121). The degeneracy test below reads ``y`` alone;
+    # it never touches ``t``, so a mismatched pair reaches it intact and a
+    # constant or single-point ``y`` short-circuits out with
+    # ``degenerate=True`` -- a plausible, structured answer that says "this
+    # curve has no resolvable variation" about a curve that was never supplied.
+    # Measured: a 64-point ``t`` against a one-point ``y`` was reported as a
+    # flat curve on that grid. Nothing downstream can recover the mismatch from
+    # that verdict, because the verdict does not mention the grid.
+    #
+    # Placed ahead of the finiteness gate deliberately: the index list that
+    # gate reports is meaningless for a pair that is not aligned in the first
+    # place, and shape is the more fundamental question. The rule is the same
+    # one -- data the caller hands in must be measurements.
+    if t.ndim != 1 or y.ndim != 1:
+        raise ValueError(
+            "fit_gls_ar1: t and y must be one-dimensional observation arrays; "
+            f"got t.ndim={t.ndim} (shape {t.shape}) and y.ndim={y.ndim} "
+            f"(shape {y.shape})"
+        )
+    if t.size != y.size:
+        raise ValueError(
+            "fit_gls_ar1: t and y must have the same length; got "
+            f"len(t)={t.size} and len(y)={y.size}"
+        )
     # Fail closed on corrupted input at the FIT boundary (eighth-round review):
     # the models saturate non-finite intermediates so that optimiser overflow
     # probes keep a finite, informative residual — but that same saturation
@@ -111,6 +161,51 @@ def fit_gls_ar1(
                 f"fit_gls_ar1: {name} must be finite; non-finite entries at "
                 f"indices {bad}"
             )
+    # Fail closed on a curve with NO RESOLVABLE VARIATION (issue #123,
+    # round-20 review). Measured on ``t = linspace(0, 5, 64)`` against an
+    # identically-zero relative-entropy curve: the fit returned
+    # ``success=True`` with the rate parameter equal to its own seed, and the
+    # parametric bootstrap around that point produced a BCa interval of width
+    # EXACTLY 0.0 -- perfect confidence as the failure mode of an uncertainty
+    # pipeline. The optimiser is not at fault: with zero data variation every
+    # direction is equally optimal, so "gradient is small" is satisfied at the
+    # starting point and the seed comes back wearing the shape of a
+    # measurement.
+    #
+    # The criterion is relative to the curve's OWN scale, never absolute: an
+    # absolute floor would reintroduce exactly the rate-unit dependence that
+    # #108/#111 removed from the spectral layer. ``ptp(y) <= eps * max|y|``
+    # says the variation is at or below the representation resolution of the
+    # values it varies between -- for the identically-zero curve, ``0 <= 0``.
+    # It is scale-invariant by construction: multiplying ``y`` by any constant
+    # multiplies both sides.
+    #
+    # This is deliberately a statement about the CURVE, not about the grid.
+    # The resolution guard of PR #115 asks "was the mode sampled?"; a curve
+    # can be flat for reasons no grid can see -- a stationary initial state, a
+    # fully decayed one, an observable with no support on the dynamics.
+    spread = float(np.ptp(y)) if y.size else 0.0
+    y_scale = float(np.max(np.abs(y))) if y.size else 0.0
+    if spread <= float(np.finfo(float).eps) * y_scale:
+        warnings.warn(
+            f"fit_gls_ar1: the curve varies by {spread:.3e} over a scale of "
+            f"{y_scale:.3e}, at or below double-precision resolution -- there "
+            "is nothing to fit. Returning NaN parameters with success=False "
+            "rather than the seed, which is what the optimiser would hand "
+            "back unchanged (issue #123).",
+            RuntimeWarning,
+            stacklevel=2,
+        )
+        return GLSFitOutput(
+            params=np.full(p.shape, float("nan")),
+            residuals=np.full(y.shape, float("nan")),
+            rho_ar1=0.0,
+            sigma=float("nan"),
+            log_likelihood=float("nan"),
+            success=False,
+            degenerate=True,
+        )
+
     # Which residual model applies is a property of the GRID, decided once.
     # A uniform grid keeps the historical discrete AR(1) path bit-for-bit; a
     # grid whose step varies gets the continuous-time CAR(1) model, whose
@@ -158,7 +253,18 @@ def fit_gls_ar1(
         else:
             theta = estimate_car1_theta(t, residuals_raw)
 
-    y_hat_final = model(t, p)
+    # Fail closed on a fit that ENDED inside the model's magnitude guards. The
+    # guards keep an out-of-range probe finite so the optimiser can step away
+    # from it, but the finite value they return is constant, so its derivatives
+    # vanish and ``least_squares`` reports "gradient is small" -- convergence
+    # for the wrong reason. Measured (issue #118 finding 9): M0 on
+    # ``t in [0, 1e10]`` from ``p0 = [1, -1]`` returned ``success=True`` with p0
+    # unchanged and a residual norm of 7.9e100. Probes that merely PASS through
+    # the plateau stay untouched; only the reported optimum is judged.
+    with saturation_watch() as fired:
+        y_hat_final = model(t, p)
+    if fired:
+        success = False
     residuals_raw = y - y_hat_final
     n_resid = residuals_raw.size
     if n_resid <= _AR1_SMALL_N:
@@ -221,14 +327,85 @@ def fit_gls_ar1(
     # remedy -- it has not been implemented or shown sufficient; it is recorded
     # because the choice among the three is a modelling decision.
     n = whitened.size
-    sigma = float(np.sqrt(max(np.dot(whitened, whitened) / max(n, 1), 1.0e-30)))
-    log_lik = gaussian_log_likelihood(whitened, sigma=sigma) + jac
+    log_rss = scaled_log_sum_squares(whitened)
+    if log_rss == float("-inf") or not math.isfinite(log_rss):
+        warnings.warn(
+            "fit_gls_ar1: residual Gaussian scale has no finite positive MLE "
+            "for model selection; likelihood/AICc/CI evidence is unavailable "
+            "(issue #135).",
+            RuntimeWarning,
+            stacklevel=2,
+        )
+        return GLSFitOutput(
+            params=p,
+            residuals=residuals_raw,
+            rho_ar1=rho,
+            sigma=float("nan"),
+            log_likelihood=float("nan"),
+            success=False,
+            saturated=tuple(sorted(fired)),
+            likelihood_degenerate=True,
+            theta_car1=theta,
+        )
+
+    log_sigma = 0.5 * (log_rss - math.log(n))
+    try:
+        sigma = float(math.exp(log_sigma))
+    except OverflowError:
+        sigma = float("inf")
+    scale_unavailable = not math.isfinite(sigma) or sigma <= 0.0
+    if scale_unavailable:
+        # ROUND-1 REVIEW (PR #147). This branch used to return
+        # ``success=False, log_likelihood=nan, likelihood_degenerate=True``,
+        # which withheld the whole FIT because a number the likelihood never
+        # needs could not be materialised. ``log_rss`` is finite here -- the
+        # gate above already refused the case where it is not -- so the profile
+        # likelihood is computable directly in log space by
+        # ``gaussian_log_likelihood``, which never forms ``sigma``. Only
+        # ``exp(log_sigma)`` left the float64 range.
+        #
+        # Measured on the reviewer's construction: one minimum-subnormal
+        # residual (5e-324) in an otherwise-zero series of 64 points gives
+        # ``log_rss = -1488.88``, ``log_sigma = -746.52`` and a perfectly
+        # finite profile log-likelihood of ``+47686.44`` -- while
+        # ``exp(-746.52)`` underflows to ``0.0`` because the smallest
+        # subnormal is ``exp(-744.44)``. Marking the fit unsuccessful there
+        # makes ``aicc()`` return ``inf`` in ``_fit_one`` and the model drops
+        # out of selection, which reintroduces exactly the ABSOLUTE SCALE
+        # BOUNDARY into model selection that issue #135 removed: the same
+        # curve in different rate units is or is not a candidate.
+        #
+        # So the fit stays selectable and only the scale-dependent evidence is
+        # withheld. ``sigma`` is NaN, never 0.0 or inf: it is consumed by
+        # ``_ar1_resample`` as the standard deviation of the innovation, where
+        # 0.0 would silently generate a bootstrap of IDENTICAL replicates --
+        # a zero-width CI, which is the failure mode of an uncertainty
+        # pipeline, not a wide one. ``parametric_bootstrap`` refuses on the
+        # dedicated flag rather than on ``success``, so "no interval" and "no
+        # estimate" stay distinguishable.
+        warnings.warn(
+            "fit_gls_ar1: the positive residual MLE scale is not representable "
+            f"as float64 (log sigma = {log_sigma:.6g}); the log-space "
+            "likelihood and AICc remain available, but bootstrap/CI evidence "
+            "is withheld (issue #135, PR #147 review).",
+            RuntimeWarning,
+            stacklevel=2,
+        )
+
+    # ``jac`` is the log-Jacobian of whichever whitening ran above -- the
+    # CAR(1) per-step transform on a non-uniform grid, Prais-Winsten AR(1)
+    # on a uniform one (merge of PR #127 with issue #135). The profile
+    # likelihood is evaluated directly from log(RSS), not by squaring
+    # ``sigma`` or materialising RSS.
+    log_lik = gaussian_log_likelihood(whitened) + jac
     return GLSFitOutput(
         params=p,
         residuals=residuals_raw,
         rho_ar1=rho,
-        sigma=sigma,
+        sigma=float("nan") if scale_unavailable else sigma,
         log_likelihood=log_lik,
         success=success,
         theta_car1=theta,
+        saturated=tuple(sorted(fired)),
+        scale_unavailable=scale_unavailable,
     )

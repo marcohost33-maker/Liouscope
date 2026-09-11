@@ -6,6 +6,490 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+- **The Gaussian likelihood behind AICc is evaluated in log-RSS space, and an
+  exact-zero RSS is now an explicit abstention (issue #135).** This is a
+  METHODOLOGY change with user-visible consequences: it can reorder AICc,
+  change which of M0..M3b is selected, and therefore change the reported decay
+  rate for a given run. Three parts:
+  - `gaussian_log_likelihood` evaluates the profile likelihood at the Gaussian
+    MLE directly from `log(RSS)` via the new
+    `numerics.norms.scaled_log_sum_squares`, instead of forming RSS in ordinary
+    units. Residual series whose true sum of squares lies outside the float64
+    range — a rescaled curve is enough — previously produced `0` or `inf` RSS
+    and an unusable likelihood. The value is now scale-covariant, and
+    likelihood *differences* between models are invariant under a common
+    rescaling of the residuals, which is the quantity AICc actually consumes.
+  - An exact-zero RSS has no finite interior MLE for the positive scale
+    parameter, so the profile likelihood is `NaN` rather than an invented
+    absolute epsilon variance. `fit_gls_ar1` reports this as
+    `likelihood_degenerate=True` with `success=False`, `aicc()` then scores the
+    model `inf`, and `parametric_bootstrap` refuses: a perfect fit yields no
+    interval rather than a zero-width one. Passing an explicit positive `sigma`
+    still gives a finite likelihood for zero residuals, which is the
+    well-posed case.
+  - Runs whose reported model or rate changes are those where the previous
+    absolute-RSS path had over- or underflowed, or where the winner was chosen
+    against a floored likelihood. Re-run any archived analysis whose selected
+    model matters; the run manifest does not record per-model likelihoods, so
+    the change is not visible in `input_hash`.
+
+### Fixed
+- **The reason a confidence interval was withheld did not reach the report (PR
+  #147, round-2 external review).** When the residual MLE scale is not
+  representable as float64 the fit stays a valid AICc candidate and only its
+  interval is withheld — but `_fit_with_model` copied `likelihood_degenerate`
+  and dropped `scale_unavailable`, so the persisted report showed only
+  `bca_ci_beta = (nan, nan)`. That is the value ANY bootstrap or jackknife
+  failure produces, and the distinguishing information lived in a
+  `RuntimeWarning` an artefact does not keep. `FitResult` carries
+  `scale_unavailable` now and `_fit_with_model` copies it; `io.export`
+  serialises `FitResult` field-wise, so the reason travels into dumped
+  reports.
+- **The one-half factor was applied after the overflow guard (PR #147, round-2
+  external review).** For the explicit-`sigma` path the standardised RSS never
+  appears on its own: it enters the log-likelihood as `-0.5 * RSS`, so the
+  representable range reaches `2 * float64.max`. The guard compared against
+  `log(float64.max)` and returned `-inf` for the octave above it — measured:
+  `sigma = 1` with a single residual near `1.4e154` has RSS ~`1.96e308` and a
+  finite log-likelihood of ~`-9.8e307`, and the model was dropped from
+  selection on that arithmetic boundary rather than on the data. The bound now
+  carries `+ log(2)` and the exponential is taken after subtracting `log(2)`
+  in the octave that needs it; below that octave the arithmetic is unchanged,
+  so no previously computable likelihood moves by even one ulp.
+- **A fit was withheld entirely because a number its likelihood never uses
+  could not be materialised (PR #147, round-1 review).** When the whitened
+  residuals have a finite, non-zero RMS below the smallest positive float64,
+  `log_rss` and `log_sigma` are both finite and the profile likelihood is
+  computable — but `exp(log_sigma)` underflows to `0.0`, and `fit_gls_ar1`
+  then returned `success=False`, `log_likelihood=NaN` and
+  `likelihood_degenerate=True`. `_fit_with_model` scored that model `inf` and
+  dropped it from selection, which reintroduces exactly the ABSOLUTE SCALE
+  BOUNDARY into model selection that the change above removed: the same curve
+  in different rate units either is or is not a candidate. Measured on one
+  minimum-subnormal residual (`5e-324`) among 64 otherwise-zero points:
+  `log_rss = -1488.88`, `log_sigma = -746.52`, profile log-likelihood
+  `+47686.44`, `exp(log_sigma) = 0.0`.
+
+  The fit now stays selectable with its finite log-space likelihood, and only
+  the scale-dependent evidence is withheld. `GLSFitOutput` gains
+  `scale_unavailable` (additive, default `False`); `sigma` is `NaN` there,
+  deliberately not `0.0`, because `_ar1_resample` consumes it as the
+  innovation standard deviation and `0.0` would generate identical replicates
+  — a zero-width confidence interval, which is the failure mode of an
+  uncertainty pipeline, not a conservative one. `parametric_bootstrap` refuses
+  on the new flag rather than on `success`, so "no interval" and "no estimate"
+  stay distinguishable, and `compute_relaxation_layer` reports the CI as `NaN`
+  through its existing handler. Three mutations, one per guard line, are
+  proven to discriminate.
+- **A degenerate spectrum let one eigenvector certify two modes (PR #121,
+  round-26 external review, P1).** `certified_nonzero_modes` picked the
+  eigenpair for an in-band candidate with `argmin(|ref - lambda|)`, a lookup by
+  VALUE. `np.argmin` returns the FIRST index attaining the minimum, so equal
+  eigenvalues all borrowed the first pair's vectors and the a-posteriori bound
+  for the second mode was computed from a residual never measured for it.
+  `certified_eig`'s eigenvector gate does not catch this: it tests only modes
+  above the raw `bound`, and a rescued mode is by construction below it.
+  Measured on a trace-preserving 4x4 with spectrum `{0, -1e-14, -1e-14, -1}`
+  whose second slow right vector was replaced by the fast mode's vector
+  (residual 1.0 instead of 6e-18): `certified=True, resolved=True`, and the
+  invalid pair reached D9/D19. Both directions were defective — a corrupt mode
+  certified on a healthy neighbour's residual, and a healthy mode refused on a
+  corrupt one's. When the vectors are SUPPLIED the pair index is now the
+  candidate's own index (no search); when they are borrowed from the operator's
+  own decomposition, EQUAL eigenvalues are ranked so the r-th of them takes the
+  r-th nearest reference entry, while distinct eigenvalues keep their
+  independent lookup. A blanket bijection was tried first and is wrong: across
+  two genuinely different decompositions a merely-close mode consumes the
+  partner an equal one needs, which on the stiff four-level network of
+  `test_pr121_review_round17.py` lost a correctly rescued mode and abandoned
+  the whole refinement. Non-degenerate spectra are unchanged: of nine measured
+  multiplicity/corruption combinations, the five that disagreed with ground
+  truth before the fix are all degenerate and all four non-degenerate ones
+  already agreed.
+- **The a-posteriori zero-mode certificate stopped being a test below ~1e-162
+  (PR #121, round-24 external review, B4).** `certified_nonzero_modes`
+  computes the eigenpair residual with `np.linalg.norm`, which squares before
+  summing: when the generator and its residuals are uniformly scaled so every
+  component falls below ~`1.5e-162`, a demonstrably nonzero residual comes back
+  as `0.0`. `mag > margin * (0 / sep)` then holds for EVERY nonzero in-band
+  candidate, so a numerically perturbed member of a degenerate stationary
+  manifold is promoted into the physical spectrum and D1 reports a spurious gap
+  — purely because the rate units changed, on a certificate whose every term is
+  degree-one homogeneous. Measured on a deliberately inexact eigenpair whose
+  residual is 100x above the candidate's own magnitude (correct verdict: not
+  certified): NOT certified at `c = 1`, `1e-80`, `1e-160`; certified at
+  `1e-170` and `1e-200`. Round 22 made the refined MIDPOINT underflow-safe; the
+  residual that establishes the refinement was not. A new
+  `numerics.linalg.underflow_safe_norm` follows the same one-directional
+  discipline as `trace_preservation_defect` (power-of-two `frexp`/`ldexp`
+  scaling, reachable only from an exact `0.0` on a nonzero vector, overflow
+  deliberately left alone) and is used for both residual norms and both
+  eigenvector normalisations.
+- **`is_hermitian` accepted an infinite relative tolerance (PR #121, round-24
+  external review, B5).** `is_hermitian([[0, 1], [0, 0]], rtol=float("inf"))`
+  returned `True`, because any finite defect is `<= inf`. `rtol` is a newly
+  exposed validation threshold (issue #109), so an invalid one could turn the
+  gate into a fail-open pass-through — the exact failure the scale-relative
+  reading exists to close. `rtol` and `atol` must now be finite and
+  non-negative, and the DERIVED tolerance `rtol * max|A|` must be finite too,
+  the same two-stage rule `numerics.scale.spectral_zero_tolerance` applies. An
+  unusable tolerance raises `ValueError` rather than returning `False`: `False`
+  is a statement about the matrix, an invalid threshold is a statement about
+  the call, and reporting them identically is the conflation this round is
+  about.
+- **Malformed observations were reported as a flat curve instead of refused
+  (PR #121, round-24 review, finding B3).** The issue-#123 degeneracy test in
+  `fit_gls_ar1` reads `y` alone and never touches `t`, and it ran before any
+  shape validation. A 64-point grid against a one-point constant curve
+  therefore returned `degenerate=True` -- "no resolvable variation" asserted
+  about a curve that was never supplied on that grid, and a verdict that does
+  not mention the grid is one nothing downstream can undo. An 8x8 pair slipped
+  through the same way with a 2-D NaN residual array. `t` and `y` are now
+  checked to be one-dimensional and equal in length before anything else
+  inspects them, raising `ValueError` like the finiteness gate beside it. A
+  well-formed flat curve still returns `degenerate=True`.
+- **The trace-preservation defect underflowed while the operator around it did
+  not (PR #121, round-24 review, finding B2).** The round-23 underflow repair
+  in `trace_preservation_defect` was triggered by `fro == 0.0` alone, but the
+  two norms do not share a scale. Adding a representable `1e-200`
+  trace-preservation violation to an O(1) generator leaves `vec(I)^H L =
+  [1e-200, 0, 0, 0]`, whose SQUARES fall below `5e-324`, so the numerator came
+  back `0.0` while `||L||_F` stayed at 1.62 and the whole-operator rescue never
+  fired. With `tp_rtol = 0` the applicability gate then read `0.0 > 0.0` --
+  False -- and `certified_eigvals` and `certified_eig` both reported
+  `applicable=True, trace_defect=0.0` for an operator that is demonstrably not
+  trace preserving. Scaled recomputation is now triggered when EITHER nonzero
+  source expression collapses, the numerator by its OWN exponent rather than
+  the operator's. The repair remains reachable only from an exact zero, so the
+  one-directional policy of round 23 -- underflow repaired, overflow left to
+  the round-21 refusal -- is unchanged.
+- **The operator-derived zero-mode cutoff came back infinite for a finite
+  operator (PR #121, round-24 review, finding B1).** `operator_zero_tolerance`
+  formed `rtol * eps * ||L||_2` directly, and `||L||_2` overflows for an
+  operator every entry of which is representable -- a 2x2 filled with `1e308`
+  has a spectral norm of `2e308`. The returned cutoff was `inf` although the
+  quantity itself, `~4.4e295`, fits comfortably in a double. No mode satisfies
+  `|lambda| > inf`, so a consumer holding the operator discarded its entire
+  spectrum and read huge non-zero modes as stationary -- the same silent
+  acceptance the spectrum-side helper closed in round 22, one helper across.
+  The norm is now taken on a copy scaled by an exact power of two selected
+  from the largest COMPONENT (`max(|Re|, |Im|)`, because the modulus of a
+  finite complex entry can itself overflow), and a derived value that is still
+  not finite -- reachable only for an `rtol` near the top of the double range
+  -- is refused rather than returned, matching `spectral_zero_tolerance`.
+- **D16 was published from the spectrum for which D1/D3/D4 had just been
+  withheld (PR #121, round-23 review, finding 13).** Where the zero-mode
+  certificate is applicable but unresolved, the spectral layer reports D1, D3,
+  D4 as NaN and `has_complex_pairs` as `None`, because the candidate spectrum
+  is explicitly untrustworthy. `diagnose()` nevertheless passed those same
+  eigenvalues into `lep_proximity`, and the LEP layer returned a finite D16.
+  Measured on the issue-#113 stiff fixture: `lep_proximity = 0.0` with 51
+  candidate pairs -- and `0.0` is not a neutral number but the *coalescence*
+  limit, i.e. the strongest exceptional-point signal the diagnostic can emit,
+  manufactured out of slow modes sitting below the eigensolver's backward
+  error. A missing or ambiguous slow mode changes the closest eigenvalue pair
+  directly, so the number was never a measurement.
+
+  `compute_lep_layer` gains `spectral_resolved` (default `True`, so callers
+  who say nothing keep measuring) and withholds D16 as NaN with
+  `lep_candidate_count=None` when it is `False`; `LepResult.lep_candidate_count`
+  is therefore `int | None`, in parity with `SpectralResult.has_complex_pairs`.
+  `diagnose()` derives the flag from the same `applicable and not resolved`
+  predicate the spectral layer uses, so the whole run withholds on one
+  condition rather than on two. The withheld value is deliberately
+  distinguishable from both measured extremes: `0.0` (coalesced) and `inf`
+  (no pair) are answers, NaN is the absence of one, and `_strip_unavailable`
+  in the classifier keys on exactly that. D17 and D18 stay measured -- D17
+  already inherits the withheld gap, D18 is computed from the operator.
+
+  The certificate floor downstream caps the classifier's *verdict*, which is a
+  different guarantee from not publishing the number: `LepResult` is returned
+  to callers and persisted as audit metadata.
+- **A non-trace-preserving operator became certificate-applicable when it was
+  written in small enough rate units (PR #121, round-23 review, finding 12).**
+  `trace_preservation_defect` squares its entries before summing, so for
+  `diag([0, -1e-200, -2e-200, -3e-200])` every square falls below the smallest
+  subnormal and the pair comes back `(0.0, 0.0)`. The applicability gate then
+  evaluates `0.0 > tp_rtol * max(0.0, tiny)`, which is False for *every*
+  operator, and both certificate APIs reported `applicable=True,
+  certified=True` for an operator whose relative trace defect is
+  `3 / sqrt(14) ~ 0.80`. The same operator at `1e-150` was correctly refused,
+  so a pure change of rate unit decided whether the object counted as a legal
+  generator. Both norms are now recomputed on a copy scaled by the largest
+  finite component whenever the reference scale has been lost.
+
+  The rescue is deliberately **one-directional**: it repairs underflow and
+  leaves overflow alone. `||L||_F = inf` for the round-20 counterexample is
+  not an accident to be worked around but the input to the round-21 refusal of
+  a non-finite reference scale. That norm is mathematically about `1.4e308`
+  and therefore representable, so a scaled computation would hand back a
+  finite number, readmit the operator and silently reopen a hole that took
+  five interpreter versions of CI to close. The two directions look symmetric
+  and are not: only one of them has a decision behind it. A dedicated test
+  pins the overflow refusal so that a later "symmetric" tidy-up goes red.
+- **The workflow hardening gate was blind to the commonest way to write a step
+  (PR #129).** `.github/scripts/check_workflow_hardening.py` enforces the
+  SHA-pinning rule of AGENTS.md section 4 on every workflow, and nothing
+  enforced it in turn. It reported green while four classes of unsafe workflow
+  passed:
+  - `USES_RE` was `^\s*uses:`, which does not match the list form `- uses:`.
+    **Seven of 27 action references in this repository were invisible to the
+    gate**, every `actions/checkout` among them. They are correctly pinned
+    today by discipline, not by this check; a PR moving one to `@main` passed.
+  - `docker://` was exempt outright, so a mutable third-party tag
+    (`docker://org/img:latest`) was waved through. The exemption now requires
+    an immutable `@sha256:` digest.
+  - `permissions` was checked for *presence* only, so `permissions: write-all`
+    -- a declaration of total access -- counted as evidence of least privilege.
+  - The `pull_request_target` waiver was a substring test over the raw file, so
+    writing the waiver's *name* inside a `#` comment satisfied it.
+
+  The `github.com/` exemption is removed as dead code: `uses:` does not accept
+  that prefix and a GitHub owner name cannot contain a dot, so no such
+  organisation can exist. It was the subject of a CodeQL
+  incomplete-substring alert -- which is the only reason the file came under
+  scrutiny. CodeQL flagged the harmless line and missed the regex two lines
+  above it that actually broke the gate.
+
+  Closing the `docker://` hole initially rejected *digest-pinned* containers:
+  `_check_uses_pin` splits the reference at `@` before consulting
+  `_is_third_party_uses`, so a digest test there ran on the truncated string
+  and the digest then failed the 40-character git-SHA rule. Container digests
+  and git SHAs are now checked as the different pin shapes they are. That
+  regression was caught by an over-correction control, not by review.
+
+- **Two zizmor audits re-enabled whose suppression reasons no longer hold
+  (PR #129).** `impostor-commit` was disabled because the audit crashed on the
+  private cross-repo pin `coworkerz-ci`; that pin is gone, and the only two
+  occurrences of the name left in the tree are the comments explaining the
+  suppression. It is the one audit that verifies a 40-character SHA actually
+  exists upstream, so the entire pinning strategy was unverified without it.
+  `advanced-security: false` was justified with "private repo without GHAS" --
+  this repository is public, measured rather than assumed, so zizmor findings
+  were never uploaded to Code Scanning: absent there for want of an upload,
+  not for want of findings. (`annotations` is set to `false` alongside it; the
+  action refuses to start with both enabled.)
+
+### Added
+- **Tests for the hardening gate itself (PR #129).** It had none. Each unsafe
+  workflow is asserted next to a positive control that must still pass --
+  rejection alone would be satisfied by a gate that fails everything, which is
+  exactly as useless as one that passes everything. Includes a digest-pinned
+  container that must remain allowed, and a check that the real tree passes its
+  own gate.
+
+### Known gaps
+- `quality contract` is **not** a required status check on `main`; only
+  `test (3.10-3.14)` and `qutip-cross-check (3.11/3.12)` are. Five security
+  workflows run and none of them blocks a merge, so the comment in
+  `.github/workflows/zizmor.yml` claiming the step "GATET die CI (rot = blockt
+  merge)" is factually wrong. Making it required is the right follow-up, but
+  only after this fix lands -- otherwise a blind gate becomes mandatory.
+- **Eight gates that decided from what they never had (PR #121 round-22
+  review). CHANGES `StabilityReport` PAYLOAD TYPES and the A10/F5 CLASSIFIER
+  BRANCH.** All eight share one shape: a value that is not a measurement is
+  used as if it were one.
+  - *Non-finite tolerances were honoured instead of refused.* `defect >
+    tp_rtol * fro` is False for every operator when `tp_rtol` is NaN, and has
+    an infinite right-hand side when it is `inf`, so
+    `certified_eigvals(diag([0,-1,-2,-3]), tp_rtol=nan)` came back
+    `applicable=True, certified=True` for a trace defect of 3.0. Round 21
+    closed this shape one variable further along (the reference scale `fro`)
+    and left the parameter beside it unchecked; `rtol` and `tp_rtol` are now
+    validated in `certified_eigvals` **and** `certified_eig`.
+  - *An inapplicable certificate reported one zero mode.* `zero_mode_count`
+    kept its dataclass default of `1` in both inapplicable branches, so
+    `diag([1,2,3,4])` -- a spectrum with no zero eigenvalue -- claimed a
+    stationary mode into persisted audit metadata. It is now `0`.
+  - *The refined tolerance underflowed to zero.* `sqrt(lo * hi)` forms the
+    product first, and that product scales as `c^2` under a uniform rate
+    rescale while the refinement itself is scale free; below `c ~ 1e-139` the
+    tolerance became `0.0` and the numerical stationary residual survived the
+    gap filter as physics. `sqrt(lo) * sqrt(hi)` is the same number and cannot
+    underflow (measured: `lo=1e-177, hi=1e-165` gave `0.0`, now `1e-171`).
+  - *An overflowing spectral radius produced a gapless verdict.*
+    `|1.3e308 + 1.3e308j|` exceeds the double range, so `np.abs` returned
+    `inf` although every component is finite and passed the finiteness gate.
+    `spectral_zero_tolerance` returned `inf`, no mode satisfied
+    `|lambda| > tol`, and D1/D3/D4 all reported `0.0` for a spectrum with
+    modes of order `1e308`. Now computed by scaling on the largest component
+    (measured after: tolerance `4.08e295`, D1 `5.0e307`, D3 `1.3e308`,
+    D4 `8.0e307`); a tolerance that is still not finite is refused.
+  - *The sparse builder inherited none of the dense overflow repair.* The
+    round-18 fix divided each diagonal entry before summing in
+    `build_liouvillian` only; `build_sparse_liouvillian` still called
+    `diagonal().sum()`, overflowed to `inf`, and accepted the very matrix its
+    dense twin rejected on the same input (Hermiticity defect `1e290`). Both
+    paths now share the overflow-safe gauge shift and the refusal of a
+    non-finite derived scale.
+  - *The jackknife never asked whether its fits converged.* The round-20 guard
+    protects the bootstrap replicates only; `_jackknife` copied `fit.params`
+    unconditionally, and a failed `least_squares` returns its unchanged
+    starting value -- `theta_hat` itself. The BCa acceleration is a third
+    moment of exactly these estimates, so the endpoints moved with no data
+    behind them (measured: one non-fit in forty shifted one interval width to
+    `0.923x`). `_jackknife` now raises `RuntimeError`, which
+    `compute_relaxation_layer` already routes to `bca_ci_beta = (nan, nan)`.
+  - *The unresolved run was the one whose report would not serialise.*
+    `build_stability_report` copied D1/D3/D9 through as raw floats while the
+    layers above deliberately publish NaN when a certificate is unresolved,
+    and `dump_stability_report` writes with `allow_nan=False` -- so
+    `json.dumps` raised on precisely the run whose audit record matters most.
+    Non-finite diagnostic values are now encoded as `null`, the placeholder
+    already used for D8b/D10b and by `ZeroModeCertificate.as_dict`.
+    **Consumers reading `diagnostics["D1_gap"]` must accept `None`.**
+  - *A missing gap was read as the gapless limit.* `_f5_reach` defaulted
+    `gap` to `0.0`, which is positive evidence for the phantom-relaxation
+    reach leg. With an unresolved certificate the spectral layer withholds D1
+    as NaN, `_strip_unavailable` removes the key, and with `henrici_eta > 1`
+    the classifier returned A10/F5 and marked the hypothesis `SUPPORTED` for a
+    reach it could not compute. The downstream certificate floor caps the
+    verdict at `UNDEFINED` but does not withdraw the class, the family or the
+    matrix status. `gap` is now a REQUIRED key of that condition, so the rung
+    is `UNEVALUABLE` without it; a gap MEASURED as `0.0` still fires the
+    documented gapless branch. This reverses the deliberate choice recorded in
+    `test_missing_optional_key_is_reported_without_forcing_unevaluable`, whose
+    invariant now travels on `gap_to_gns_ratio` -- a key that genuinely has
+    documented semantics without a value.
+- **The second repair step ended the eigenvalue ladder instead of continuing it
+  (PR #121 round-18 review).** `certified_eigvals` guarded its primary solve
+  but not the `dgeev-real` step that runs next -- and unlike the primary, that
+  step sits BEFORE `zgees-schur` and `balanced-zgeev`. A `LinAlgError` there
+  left the generator and discarded two repair routes that could still have
+  certified the spectrum. The sibling ladder in `certified_eig` already
+  suppressed exactly this step, so the defect was two ladders drifting apart,
+  not an overlooked case. A structural test now fails if either `dgeev-real`
+  route is left outside a suppression block.
+- **The anti-overfit gate scored fits that never converged (PR #121 round-19
+  review). CHANGES `HoldoutResult.accept`** for saturated fits.
+  `holdout_validate` ignored `fit.success` and scored `fit.params` regardless.
+  On the saturation plateau the model is CONSTANT, so train and holdout RMSE
+  are equally enormous and their ratio is about 1 -- measured `1.0106` on
+  `holdout_validate(M0, linspace(0, 1e10, 64), exp(-5t/1e10), [1, -1])`, which
+  passed the `1 + delta` criterion and returned `accept=True`. The gate that
+  exists to catch non-generalising models was satisfied by a non-model.
+  `accept` now requires `fit.success`, and the new `HoldoutResult.fit_success`
+  field keeps "did not generalise" separable from "was never fitted" -- they
+  demand different responses.
+- **D3, D4 and the oscillating-pair flag are withheld with D1 (PR #121
+  round-19 review). CHANGES `SpectralResult` OUTPUTS** when an applicable
+  certificate stays uncertified. The round-17 repair withheld D1 and stopped
+  there; `oscillating_gap`, `spectral_spread` and `has_complex_pairs` were
+  still published from the same candidate spectrum the layer's own warning
+  calls untrustworthy. Withholding D1 alone was not a partial fix but an
+  inconsistent one: it taught consumers that this layer withholds what it
+  cannot stand behind, which made the surviving finite values *more* credible,
+  not less. `has_complex_pairs` is now `bool | None`, because a bool has no
+  NaN and `False` would assert "no oscillating modes" rather than report an
+  unanswered question; `classification` maps `None` to the evidence dict's NaN
+  sentinel, where `_strip_unavailable` removes it and the A8 rung does not
+  hold.
+- **A comparison against NaN read as "no Hermiticity violation" (PR #121
+  round-19 review).** `np.trace(H)` sums the diagonal before dividing, so it
+  overflows to `inf` for a FINITE `H` with large entries -- the explicit
+  finiteness gate immediately above has already passed at that point. The
+  gauge-fixed `scale` then became NaN and `defect > EPS_HERMITICITY * scale`
+  evaluated False, so `build_liouvillian` accepted a two-dimensional
+  `1e308 * I` carrying a one-sided `1e290` entry, an order-one gauge-fixed
+  Hermiticity defect. The gauge shift is now computed as
+  `sum(diag(H) / d)`, which is bounded by `max|diag(H)|` and cannot overflow
+  while `H` is finite; independently, a non-finite derived scale is refused
+  outright so that any future route to one cannot silently reopen the hole.
+  A genuinely Hermitian `1e308 * I` is still accepted -- the repair is not a
+  size limit.
+- **One zero-mode cutoff, obtained one way (PR #121 round-17 review, four
+  findings). CHANGES NUMERICAL RESULTS** on any generator where the a
+  posteriori refinement rescues a genuine slow mode. Four consumer layers kept
+  filtering with the certificate's *raw* band after the refinement had lowered
+  the applied tolerance, discarding the rescued mode one layer after the
+  certificate saved it. Measured on the two-level `omega = 1`, rates
+  `1e-15 / 1e-14` generator (`bound = 2.22e-13`, `applied = 5e-16`, ratio 444):
+  D24 gap `2.05e-14 -> 1e-15` and the mixing-time window `3.37e14 -> 6.91e15`;
+  D9 kept 2 modes with `petermann_max = 1.0` and now keeps 3 with `2.0`; the
+  D19 overlap moved from `0.0` — the *false* A11/F4 trigger on the highest
+  rung — to `0.141`, and `expansion_alpha` from `-1e-15` to `-33.6`; the D11
+  fallback scanned 12 of 15 certified modes and now scans all 15.
+  These were not four independent mistakes: the same two-branch expression was
+  copy-written at five sites, only the spectral layer was migrated when the
+  refinement landed, and the docstring of `operator_zero_tolerance` still told
+  readers to filter "equivalently, with the `bound` of the
+  `ZeroModeCertificate`" — true when written, false since. The decision now
+  lives once, in `ZeroModeCertificate.zero_set_tolerance()`; `bound` is
+  documented as report-only; `_certified_decomposition` hands its consumers the
+  certificate instead of a bare number; and a guard test pins the remaining
+  `.bound` readers so a sixth site fails the suite instead of a review.
+- **D1 is withheld when no repair route certifies the spectrum (PR #121).**
+  With an applicable certificate and `certified=False`, `compute_spectral_layer`
+  still published a finite gap read off the explicitly untrustworthy candidate
+  spectrum. The warning does not reach a caller that consumes
+  `SpectralResult.gap`, and `_gather_evidence` derives ratios from that value,
+  so the number travelled further than its caveat. `gap` is now the NaN
+  unavailable sentinel for *both* unresolved kinds, as the ambiguous case
+  already was. D3/D4 are unchanged (see the note in `spectral.py`).
+- **A saturated GLS fit is no longer selectable (PR #121).** Flipping
+  `GLSFitOutput.success` changed nothing: no consumer read the flag, the fit
+  still carried a finite AICc, and the exact plateau case the guard detects
+  could win `choose_model` and supply the reported decay rate. The failure is
+  made non-selectable at the single choke point (`_fit_with_model` assigns
+  `aicc = inf`) rather than as four separate obligations on the consumers; with
+  no selectable model left, `aicc_model` is the existing `"none"` sentinel and
+  `beta_D` is NaN instead of being read off a failed fit.
+  `parametric_bootstrap` refuses a saturated *base* fit outright — a resample
+  around a non-estimate is not an uncertainty — and reports the count of
+  non-converged replicates it retained (retaining widens the interval;
+  dropping them would narrow it).
+- **The eigensolver repair ladder survives a primary nonconvergence (PR #121).**
+  A `LinAlgError` from the incumbent `zgeev` call ended `certified_eigvals` /
+  `certified_eig` before the real-driver, Schur and balanced routes were tried
+  — defeating the ladder in precisely the case it exists for. The error is now
+  carried and re-raised only if *no* route produced a spectrum.
+- **The `zero_mode_certificate` field documentation matched neither the code nor
+  this changelog (PR #121).** It described a report-only field while
+  `classify_mechanism` reads it and `_apply_spectral_certificate_floor` caps
+  both the reported verdict and the tier from it. Documentation only; no
+  behaviour change.
+- **The zero-mode band gets a second, independent axis: an a posteriori
+  backward-error certificate (issue #118 finding 15). CHANGES NUMERICAL
+  RESULTS** on generators whose slowest decay sits far below the scale their
+  Hamiltonian sets. The band is `1e3 * eps * ||L||_2`, and `||L||_2` is fixed
+  by the *oscillation* frequency while the decision is about *decay*: a
+  two-level system with `omega = 1` and jump rates `1e-15 / 1e-14` had its
+  genuine slowest mode (D1 = 1e-15) swallowed by the band, was certified
+  `resolved` with `zero_mode_count = 2`, and D1 reported the next, twentyfold
+  faster eigenvalue (2.05e-14) with full confidence.
+  The magnitude axis cannot fix this, and the `ZERO_MODE_AMBIGUITY_FACTOR`
+  comment already said why: healthy round-off reaches `2.38 * eps*||L||` while
+  unresolved slow modes were measured at `4.87` — populations a factor of two
+  apart, which no threshold separates. `certified_nonzero_modes` therefore adds
+  the per-mode bound
+  `|lambda - lambda_hat| <~ max(||L x - lambda_hat x||, ||L^H y - conj(lambda_hat) y||) / |y^H x|`,
+  which is a *certificate*: were the mode stationary, the bound would force
+  `|lambda_hat| <= bound`, so exceeding it proves it is not. Measured over the
+  same corpus that calibrated the existing factor (96 healthy generators / 132
+  in-band modes; 6 stiff generators with analytic gaps): **0 healthy modes
+  reached `q = 1`** (max 0.472) and **all 3 stiff members carrying a genuine
+  in-band mode were rescued**. The refinement is one-directional — it can only
+  take a mode OUT of the zero set — so it cannot produce the false "unresolved"
+  verdict the ambiguity split guards against. The certificate now carries
+  `zero_tolerance`, which D1/D3/D4 filter by; without a rescue it equals
+  `bound` and the healthy path is unchanged bit for bit.
+- **A GLS fit that ends inside the model magnitude guards fails closed
+  (issue #118 finding 9).** The guards keep an out-of-range optimiser probe
+  finite, which is what they are for — but the value they return is *constant*,
+  so its derivatives vanish and `least_squares` terminates on "gradient is
+  small". Measured: `fit_gls_ar1(M0, t in [0, 1e10], y = exp(-5t/1e10),
+  p0 = [1, -1])` returned `success=True` with `p0` unchanged and a residual
+  norm of `7.9e100`. Only the FINAL evaluation is judged (probes passing
+  through the plateau are exactly what the caps exist for); `GLSFitOutput`
+  gains `saturated`, naming which guard fired.
+
+### Documentation
+- `SpectralResult.zero_mode_certificate` is no longer described as
+  "report-only" (issue #118 finding 16). It was load-bearing from the commit
+  that introduced `_apply_spectral_certificate_floor`, and is now load-bearing
+  on a second path through `zero_tolerance`. See the corrected entry below.
+
 ### Fixed
 - **The Hermiticity tolerance is now relative to the generator, not to H alone
   (PR #127).** The round-18 allowance `d * eps * |gauge_shift|` and the
@@ -642,9 +1126,17 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   alike, `zgeev` was retained in 400/400 and no system's gap got worse.
   If no route is certified, `compute_spectral_layer` emits a `RuntimeWarning`
   and marks the layer unresolved rather than reporting a gap it cannot stand
-  behind. `SpectralResult.zero_mode_certificate` records the outcome
-  (report-only, additive field with a default — the run-manifest contract is
-  unchanged).
+  behind. `SpectralResult.zero_mode_certificate` records the outcome. The
+  **field is additive** (it has a default, so the run-manifest contract is
+  unchanged), but it is **not report-only**: `classify` reads
+  `certificate["resolved"]` and applies `_apply_spectral_certificate_floor`,
+  which caps verdict and tier. An unresolved certificate therefore changes the
+  reported classification, by design — a certificate that could not withhold a
+  verdict would be decoration. This entry previously called the field
+  "report-only"; that description was wrong from the commit that introduced the
+  floor, and the correction is recorded here rather than silently dropped.
+  Since the a posteriori refinement below, the certificate also carries
+  `zero_tolerance`, which D1/D3/D4 filter by — a second load-bearing path.
 - **Hermiticity validation is scale-relative: `H` is no longer accepted or
   rejected on the basis of its units (issue #109).**
   `is_hermitian` and both Liouvillian builders applied an **absolute**
