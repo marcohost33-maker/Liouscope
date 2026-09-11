@@ -57,6 +57,44 @@ class DegenerateSteadyStateError(ValueError):
         )
 
 
+def _dissipation_scale(
+    jump_ops: Sequence[np.ndarray] | None,
+    rates: Sequence[float] | None,
+    d: int,
+) -> float:
+    """``max|sum_k gamma_k L_k^dag L_k| / 2``, or 0.0 when it cannot be trusted.
+
+    The scale of the dissipative half of ``H_eff = H - (i/2) sum_k gamma_k
+    L_k^dag L_k``. 0.0 is the fail-closed value: it excuses no Hermiticity
+    defect. It is returned for every input the validation in
+    :func:`build_liouvillian` refuses (wrong shape, non-finite entries, bad
+    rates, length mismatch), so which error surfaces first is unchanged, and
+    for a sum that overflows, because an infinite scale would excuse every
+    defect there is.
+    """
+    if jump_ops is None or len(jump_ops) == 0:
+        return 0.0
+    try:
+        ops = [np.asarray(L, dtype=complex) for L in jump_ops]
+        gammas = [1.0] * len(ops) if rates is None else [float(g) for g in rates]
+    except (TypeError, ValueError):
+        return 0.0
+    if len(gammas) != len(ops):
+        return 0.0
+    K = np.zeros((d, d), dtype=complex)
+    with np.errstate(all="ignore"):
+        for gamma, L in zip(gammas, ops, strict=True):
+            if L.shape != (d, d) or not np.all(np.isfinite(L)):
+                return 0.0
+            if not (np.isfinite(gamma) and gamma >= 0.0):
+                return 0.0
+            if gamma == 0.0:
+                continue
+            K = K + gamma * (L.conj().T @ L)
+        value = 0.5 * float(np.max(np.abs(K))) if K.size else 0.0
+    return value if np.isfinite(value) else 0.0
+
+
 def build_liouvillian(
     H: np.ndarray,
     jump_ops: Sequence[np.ndarray] | None = None,
@@ -125,66 +163,35 @@ def build_liouvillian(
     H_gauge = H - gauge_shift * eye_h
     defect, _ = hermiticity_defect(H)
     _, scale = hermiticity_defect(H_gauge)
-    # ROUND-18 REVIEW (external, PR #127). Gauge-fixing removes the physical
-    # scale entirely when H is (numerically) a pure gauge term, and then the
-    # relative test has nothing left to be relative TO. For a numerical 2x2
-    # unitary Q, ``H = Q @ I @ Q^H`` is the exact Hamiltonian I -- its
-    # commutator vanishes, so it is as valid as a Hamiltonian gets -- yet
-    # ``H_gauge`` is pure round-off (measured 1.99e-16 max entry) and the
-    # Hermiticity defect is round-off of the same size (4.98e-17), so
-    # ``build_liouvillian`` raised on it.
+    # PR #127 -- WHAT THE TOLERANCE IS RELATIVE TO (replaces the round-18
+    # ``d * eps * |gauge_shift|`` allowance). Gauge fixing leaves nothing of a
+    # Hamiltonian that is (numerically) a pure gauge term: for ``H = c*I + N``
+    # with ``N`` strictly upper triangular the shift is ``c`` exactly,
+    # ``H_gauge = N`` and ``max|H - H^dag| = max|N|`` (disjoint supports), so
+    # the relative defect is EXACTLY 1 whatever ``c`` and ``N`` are. A gauge
+    # shift followed by a change of units maps ``I + 2**-53 e01`` (round 18:
+    # must be accepted) and ``1e308*I + 1e290 e01`` (PR #121 round 19: must be
+    # rejected) onto the same ``e01``, so NO test that reads H alone and
+    # respects both symmetries can separate them. The round-18 allowance broke
+    # the gauge symmetry and still accepted both (4.4e-16 > 1.1e-16,
+    # 4.4e292 > 1e290), together with ``[[1e308, 1], [0, 1e308]]``, whose
+    # generator measurably does not preserve Hermiticity
+    # (``||drho - drho^dag||_F = 0.632456`` on a Hermitian rho).
     #
-    # The allowance is the REPRESENTATION error of the component that was
-    # removed: forming a d x d similarity in floating point costs about
-    # ``d * eps`` relative, so ``d * eps * |trace(H).real / d|`` is the size
-    # below which no statement about H can be made from the stored matrix at
-    # all. Same backward-error idiom the repo already uses for the Schur
-    # split (``n * eps * ||L||_F``, see diagnostics/transient.py), not a new
-    # tolerance.
-    #
-    # ADDITIVE, not multiplied by EPS_HERMITICITY: the defect being excused
-    # is machine round-off, which does not scale with the relative gate.
-    #
-    # It does not reopen the twelfth-round gauge hole. Measured on that very
-    # fixture (traceless part of scale 1, non-Hermitian defect 1e-6, plus
-    # ``1e9 * I``): allowance 4.44e-7, defect 1e-6, still rejected. For a
-    # TRACELESS H the allowance is exactly 0.0, so every Hamiltonian without
-    # an identity component keeps a bit-for-bit identical verdict.
-    #
-    # What it does concede, and knowingly: with a gauge shift of 1e9 a defect
-    # of 2e-7 is now accepted, because 1e9 * eps = 2.2e-7 is the resolution
-    # of the stored matrix -- no test on those bytes can tell that defect
-    # from storage round-off, and refusing it would mean refusing exactly
-    # Hermitian matrices for having been written down.
-    # OPEN, MEASURED 2026-09-04, and larger than the concession stated above.
-    # The defect is shift-INDEPENDENT (a real diagonal shift cannot change
-    # H - H^dag, as noted at the top of this block) and so is ``scale``, which
-    # is taken from the gauge-fixed part. This allowance is the only term that
-    # tracks ``gauge_shift``, so the verdict on ONE PHYSICAL Hamiltonian moves
-    # when a multiple of the identity is added -- the very gauge hole the
-    # twelfth round closed, reopened at a higher threshold. Fixed traceless
-    # part of scale 1 with a non-Hermitian defect, only ``c`` in ``H + c*I``
-    # varying:
-    #
-    #     defect    rejected below c ~     accepted above
-    #     1e-9      1                      yes
-    #     1e-6      2.25e+09               yes
-    #     1e-3      2.25e+12               yes
-    #     1         2.25e+15               yes
-    #
-    # The external PR #127 example ``[[1e308, 1], [0, 1e308]]`` is the last
-    # row: its unit defect is excused because 2*eps*1e308 = 4.4e292. Round 19
-    # removed the OVERFLOW that finding named -- the shift is finite now --
-    # but not the OUTCOME it asserted. Checked end to end: the accepted
-    # generator gives ||drho - drho^dag||_F = 0.632456 on a Hermitian rho,
-    # i.e. it really does not preserve Hermiticity.
-    #
-    # Not repaired here on purpose. Capping the allowance (at the gauge-fixed
-    # scale, or making it relative like every other term in this gate) is a
-    # threshold decision that moves round-18 behaviour, which was itself a
-    # review response, and it carries anchor risk. It needs its own PR with a
-    # physics justification, not a quiet change here.
-    roundoff_allowance = d_h * float(np.finfo(float).eps) * abs(gauge_shift)
+    # The information that separates them is in the DISSIPATOR. The physical
+    # object is the generator, and its only part that fails to preserve
+    # Hermiticity is ``-i[A, .]`` with ``A`` the anti-Hermitian part of H --
+    # the dissipator preserves Hermiticity by construction. H and
+    # ``K/2 = sum_k gamma_k L_k^dag L_k / 2`` enter the generator on the same
+    # footing, as ``H_eff = H - i K/2``, so the defect is compared against
+    # ``max(max|H_gauge|, max|K|/2)``. That scale is gauge invariant (K does
+    # not see ``c``), covariant under a change of units, and with no
+    # dissipation it IS the gauge-fixed scale: every purely coherent verdict --
+    # the issue-#109 fixtures and the twelfth-round hole included -- is
+    # unchanged. The dissipation scale is consulted only when the coherent
+    # scale alone would refuse, so a malformed jump list still raises the
+    # Hermiticity error it raised before, and a dissipation scale that cannot
+    # be computed (overflow) excuses nothing.
     # Same review, one line further out, and a SECOND route to the same
     # fail-open. The shift lies between the smallest and the largest diagonal
     # entry, so ``H_ii - gauge_shift`` can reach twice the largest entry and
@@ -203,20 +210,25 @@ def build_liouvillian(
     # expression literally, down to the subnormal corner where halving would
     # not be exact.
     if np.isfinite(scale):
-        excessive = defect > EPS_HERMITICITY * scale + roundoff_allowance
+        excessive = defect > EPS_HERMITICITY * scale
     else:
         _, half_scale = hermiticity_defect(0.5 * H - (0.5 * gauge_shift) * eye_h)
         scale = 2.0 * half_scale
-        excessive = (
-            0.5 * defect > EPS_HERMITICITY * half_scale + 0.5 * roundoff_allowance
-        )
+        excessive = 0.5 * defect > EPS_HERMITICITY * half_scale
+    dissipation_scale = 0.0
     if excessive:
+        dissipation_scale = _dissipation_scale(jump_ops, rates, d_h)
+        # Written as ``not <=`` so that a NaN defect cannot be excused either.
+        excessive = not defect <= EPS_HERMITICITY * dissipation_scale
+    if excessive:
+        reference = max(scale, dissipation_scale)
         raise ValueError(
             f"H must be Hermitian within a relative {EPS_HERMITICITY:g} "
-            f"(max|H - H^dag| = {defect:.3e}, max|H| = {scale:.3e}, "
-            f"machine-round-off allowance for the removed identity "
-            f"component = {roundoff_allowance:.3e}, "
-            f"relative defect = {defect / scale if scale else float('inf'):.3e})"
+            f"of the generator scale (max|H - H^dag| = {defect:.3e}, "
+            f"gauge-fixed max|H| = {scale:.3e}, dissipation scale "
+            f"max|sum gamma L^dag L|/2 = {dissipation_scale:.3e}, "
+            f"relative defect = "
+            f"{defect / reference if reference else float('inf'):.3e})"
         )
 
     if jump_ops is None:

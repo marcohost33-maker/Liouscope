@@ -17,6 +17,42 @@ from .._consts import EPS_HERMITICITY
 from ..numerics.linalg import overflow_safe_mean_real
 
 
+def _sparse_dissipation_scale(
+    jump_ops: Sequence[np.ndarray | sp.spmatrix] | None,
+    rates: Sequence[float] | None,
+    d: int,
+) -> float:
+    """Sparse twin of :func:`liouscope.core.lindblad._dissipation_scale`.
+
+    ``max|sum_k gamma_k L_k^dag L_k| / 2`` on the sparse data arrays, 0.0
+    (excuses nothing) for anything the validation below refuses and for a
+    sum that overflows.
+    """
+    if jump_ops is None or len(jump_ops) == 0:
+        return 0.0
+    try:
+        ops = [sp.csr_matrix(L, dtype=complex) for L in jump_ops]
+        gammas = [1.0] * len(ops) if rates is None else [float(g) for g in rates]
+    except (TypeError, ValueError):
+        return 0.0
+    if len(gammas) != len(ops):
+        return 0.0
+    K = sp.csr_matrix((d, d), dtype=complex)
+    with np.errstate(all="ignore"):
+        for gamma, L_op in zip(gammas, ops, strict=True):
+            if L_op.shape != (d, d):
+                return 0.0
+            if L_op.nnz and not np.all(np.isfinite(L_op.data)):
+                return 0.0
+            if not (np.isfinite(gamma) and gamma >= 0.0):
+                return 0.0
+            if gamma == 0.0:
+                continue
+            K = (K + gamma * (L_op.conj().T @ L_op)).tocsr()
+        value = 0.5 * float(np.max(np.abs(K.data))) if K.nnz else 0.0
+    return value if np.isfinite(value) else 0.0
+
+
 def build_sparse_liouvillian(
     H: np.ndarray | sp.spmatrix,
     jump_ops: Sequence[np.ndarray | sp.spmatrix] | None = None,
@@ -60,33 +96,35 @@ def build_sparse_liouvillian(
     eye_d = sp.identity(d, dtype=complex, format="csr")
     H_gauge = (H_sp - eye_d * gauge_shift).tocsr()
     scale = float(np.max(np.abs(H_gauge.data))) if H_gauge.nnz else 0.0
-    # ROUND-18 REVIEW (external, PR #127), the mirrored calculation the
-    # finding names explicitly. Same machine-round-off allowance as the dense
-    # builder in core/lindblad.py, and it has to be here too or the two
-    # builders disagree about whether the same Hamiltonian is valid --
-    # which is the failure mode "in parity with the dense builder" above
-    # exists to prevent. See that function for the full derivation.
-    roundoff_allowance = d * float(np.finfo(float).eps) * abs(gauge_shift)
+    # Generator-relative tolerance in parity with the dense builder (PR #127,
+    # replaces the round-18 ``d * eps * |gauge_shift|`` allowance, which broke
+    # the gauge symmetry and accepted a unit defect on ``1e308 * I``). See
+    # core/lindblad.py for why no test on H alone can separate the pure-gauge
+    # fixture from the overflow fixture and why the dissipation scale can.
     # Half-scale restatement in parity with the dense builder: the gauge-fixed
     # DIAGONAL can overflow even for a finite shift, which makes ``scale``
     # infinite and the relative test vacuous. See core/lindblad.py for the
     # measured case and for why halving keeps the predicate identical.
     if np.isfinite(scale):
-        excessive = defect > EPS_HERMITICITY * scale + roundoff_allowance
+        excessive = defect > EPS_HERMITICITY * scale
     else:
         H_half = (H_sp * 0.5 - eye_d * (0.5 * gauge_shift)).tocsr()
         half_scale = float(np.max(np.abs(H_half.data))) if H_half.nnz else 0.0
         scale = 2.0 * half_scale
-        excessive = (
-            0.5 * defect > EPS_HERMITICITY * half_scale + 0.5 * roundoff_allowance
-        )
+        excessive = 0.5 * defect > EPS_HERMITICITY * half_scale
+    dissipation_scale = 0.0
     if excessive:
+        dissipation_scale = _sparse_dissipation_scale(jump_ops, rates, d)
+        excessive = not defect <= EPS_HERMITICITY * dissipation_scale
+    if excessive:
+        reference = max(scale, dissipation_scale)
         raise ValueError(
             f"H must be Hermitian within a relative {EPS_HERMITICITY:g} "
-            f"(max|H - H^dag| = {defect:.3e}, max|H| = {scale:.3e}, "
-            f"machine-round-off allowance for the removed identity "
-            f"component = {roundoff_allowance:.3e}, "
-            f"relative defect = {defect / scale if scale else float('inf'):.3e})"
+            f"of the generator scale (max|H - H^dag| = {defect:.3e}, "
+            f"gauge-fixed max|H| = {scale:.3e}, dissipation scale "
+            f"max|sum gamma L^dag L|/2 = {dissipation_scale:.3e}, "
+            f"relative defect = "
+            f"{defect / reference if reference else float('inf'):.3e})"
         )
     if jump_ops is None:
         jump_ops = []
