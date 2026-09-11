@@ -228,6 +228,10 @@ def test_the_twelfth_round_gauge_hole_stays_closed() -> None:
     4.44e-7 and the defect is 1e-6, so the rejection survives -- but the
     margin is a factor of two, which is exactly why this control is pinned
     rather than argued.
+
+    Later in PR #127 the allowance was replaced by the generator-relative
+    scale, which does not see the ``1e9`` at all: the defect of 1e-6 now
+    meets a reference of 1e-9 * max(1, 1/2), a margin of three decades.
     """
     h_hole = np.array([[1.0, 1.0e-6], [0.0, -1.0]], dtype=complex) + 1.0e9 * np.eye(2)
     with pytest.raises(ValueError, match="Hermitian"):

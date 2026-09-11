@@ -39,6 +39,11 @@ the removed identity component -- a SECOND, independent mechanism with its own
 recorded justification, not the overflow this finding is about. Whether that
 allowance should be capped at the gauge-fixed scale is a threshold decision
 with anchor consequences and is raised separately.
+
+SUPERSEDED (later in PR #127): the round-18 allowance is gone. The Hermiticity
+defect is now measured against the generator scale, and the literal example
+above is rejected -- see ``tests/test_pr127_generator_relative_hermiticity.py``.
+The assertions in this file are unchanged and still hold.
 """
 
 from __future__ import annotations

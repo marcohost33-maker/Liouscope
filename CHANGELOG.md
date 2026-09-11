@@ -7,6 +7,26 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Fixed
+- **The Hermiticity tolerance is now relative to the generator, not to H alone
+  (PR #127).** The round-18 allowance `d * eps * |gauge_shift|` and the
+  gauge-fixed relative gate on `main` gave the same verdict to two fixtures
+  that review had pinned to opposite ones: `I + 2**-53 e01` with sigma- (must
+  be accepted) and `1e308 * I + 1e290 e01` with no jump operators (must be
+  rejected). Measured: for every `H = c*I + N` with `N` strictly upper
+  triangular, `defect / gauge_scale` is exactly 1 (20,000 random cases,
+  `|c|, |N|` across 1e-300..1e300, maximum deviation 0.0), and a gauge shift
+  plus a change of units maps both fixtures onto `e01` — so no test that reads
+  `H` alone and respects both symmetries can separate them. The defect is now
+  compared against `max(max|H_gauge|, max|sum_k gamma_k L_k^dag L_k| / 2)`, the
+  scale of `H_eff = H - iK/2`; the dissipator preserves Hermiticity by
+  construction, so the only non-preserving part of the generator is the
+  anti-Hermitian part of `H`. The scale is gauge invariant and unit covariant;
+  with no dissipation it equals the old gauge-fixed scale, so every purely
+  coherent verdict (issue #109 fixtures, twelfth-round hole) is unchanged. It
+  is consulted only when the coherent scale alone would refuse, excuses
+  nothing for malformed jump lists or an overflowing sum, and closes the
+  residual recorded below: `[[1e308, 1], [0, 1e308]]` is rejected by both
+  builders. Both builders, in parity.
 - **`neff_car1` allocated two `n x n` arrays for a scalar (PR #127, round-20
   external review).** The exact CAR(1) effective sample size formed a full
   separation matrix and a full exponential of it on every evaluation, and
@@ -57,9 +77,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   point, hence the same predicate rather than a looser one, and specifically
   NOT a refusal, so an exactly Hermitian operator of that shape is still
   accepted. The round-18 concession (`1e9 * I` plus a traceless defect of
-  `1e-6`, still rejected) is unmoved. Known residual: `[[1e308, 1], [0, 1e308]]`
-  remains accepted, because its defect of 1 falls below the round-18 allowance
-  `d * eps * |shift| = 4.4e292` — a different mechanism, raised separately.
+  `1e-6`, still rejected) is unmoved. Residual at the time of this entry:
+  `[[1e308, 1], [0, 1e308]]` remained accepted, because its defect of 1 fell
+  below the round-18 allowance `d * eps * |shift| = 4.4e292` — a different
+  mechanism, since closed by the generator-relative tolerance above.
 - **An unavailable D1 was converted into the strongest gapless evidence (PR
   #127, round-18 external review).** When the zero-mode certificate withholds
   D1 as NaN, `_strip_unavailable` removes both `gap` and `gap_to_gns_ratio`
