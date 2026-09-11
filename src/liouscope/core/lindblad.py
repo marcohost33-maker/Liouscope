@@ -89,7 +89,7 @@ def _canonical_generator_scales(
         return None
     eye = np.eye(d, dtype=complex)
     H0 = np.array(H, dtype=complex)
-    K = np.zeros((d, d), dtype=complex)
+    K: np.ndarray = np.zeros((d, d), dtype=complex)
     with np.errstate(all="ignore"):
         for gamma, L in zip(gammas, ops, strict=True):
             if L.shape != (d, d) or not np.all(np.isfinite(L)):
