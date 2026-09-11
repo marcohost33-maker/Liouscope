@@ -139,11 +139,12 @@ def test_a_resolved_certificate_still_publishes_d3_d4_and_the_flag(monkeypatch) 
 def _overflowing_norm_operator() -> np.ndarray:
     """The reviewer's counterexample, entry for entry.
 
-    Finite 4x4, cancelling ``+-1e308`` in the ``vec(I)^H L`` combination, so
-    the absolute trace defect is ``sqrt(17) = 4.12`` while ``||L||_F``
-    overflows to ``inf``. Eigenvalues are exactly ``{1, 2, 3, 4}``: column 0
-    and column 2 each carry a single diagonal entry, and the remaining 2x2 on
-    indices ``{1, 3}`` is lower triangular.
+    Finite 4x4, cancelling ``+-1e308`` in one trace equation. A naive
+    sum-of-squares Frobenius norm overflows, but the TRUE norm is the finite
+    representable value ``sqrt(2)*1e308``. The absolute trace defect is
+    ``sqrt(17) = 4.12`` and the componentwise trace-equation error is 1: other
+    enormous entries are not allowed to dilute the violated columns.
+    Eigenvalues are exactly ``{1, 2, 3, 4}``.
     """
     L = np.diag([1.0, 2.0, 3.0, 4.0]).astype(complex)
     L[0, 1] = 1.0e308
@@ -152,14 +153,13 @@ def _overflowing_norm_operator() -> np.ndarray:
 
 
 def _nilpotent_wide_band_operator() -> np.ndarray:
-    """The same failure WITHOUT any overflow, to show the class is general.
+    """The same band failure WITHOUT a trace-preservation failure.
 
     Strictly upper triangular with ``1e10`` entries confined to row 1, so
     ``vec(I)^H L = 0`` EXACTLY (trace preserving, defect 0.0), ``||L||_F`` is
     a perfectly ordinary ``1.4e10``, and every eigenvalue is exactly zero.
     The band ``rtol * eps * ||L||_2`` is then ``3.1e-3`` and swallows all four
-    -- a nilpotent generator certified as a four-dimensional stationary
-    manifold, on finite, well-scaled arithmetic.
+    -- a nilpotent generator whose band has discriminated nothing.
     """
     L = np.zeros((4, 4), dtype=complex)
     L[1, 2] = 1.0e10
@@ -167,34 +167,36 @@ def _nilpotent_wide_band_operator() -> np.ndarray:
     return L
 
 
-def test_the_overflowing_operator_is_the_state_the_reviewer_described() -> None:
-    """Pins the preconditions, so a numpy change cannot hollow out the test."""
-    from liouscope.numerics.linalg import trace_preservation_defect
+def test_large_operator_measurement_and_local_tp_error_are_both_real() -> None:
+    """Pin the corrected arithmetic and the independent policy precondition."""
+    from liouscope.numerics.linalg import (
+        trace_preservation_componentwise_error,
+        trace_preservation_defect,
+    )
 
     L = _overflowing_norm_operator()
-    assert np.all(np.isfinite(L)), "the input must be FINITE for this to be the bug"
-    with np.errstate(over="ignore"):
-        defect, fro = trace_preservation_defect(L)
+    assert np.all(np.isfinite(L)), "the input must be FINITE for this to be the case"
+    defect, fro = trace_preservation_defect(L)
+    local_error = trace_preservation_componentwise_error(L)
+
     assert defect == pytest.approx(np.sqrt(17.0)), "a real, order-one trace defect"
-    assert not np.isfinite(fro), (
-        "the whole failure is that ``defect > tp_rtol * fro`` compares "
-        "against infinity; if ||L||_F stops overflowing the test is hollow"
+    assert np.isfinite(fro), "a representable norm must not be turned into infinity"
+    assert fro == pytest.approx(np.sqrt(2.0) * 1.0e308, rel=2.0e-15)
+    assert local_error == pytest.approx(1.0), (
+        "at least one trace equation has no cancellation at all; unrelated "
+        "1e308 entries must not make that violation look relatively small"
     )
     assert np.allclose(np.sort(np.linalg.eigvals(L).real), [1.0, 2.0, 3.0, 4.0])
 
 
 @pytest.mark.parametrize(
-    "make", [_overflowing_norm_operator, _nilpotent_wide_band_operator]
+    ("make", "expected_applicable"),
+    [(_overflowing_norm_operator, False), (_nilpotent_wide_band_operator, True)],
 )
-def test_a_band_that_swallows_the_spectrum_does_not_certify(make) -> None:
-    """THE regression, on both ladders.
-
-    Before this guard the certificate read ``certified=True, resolved=True``
-    with ``zero_mode_count = 4`` -- every eigenvalue declared stationary,
-    which for a d=2 system asserts that the entire operator space is a steady
-    state. ``resolved=True`` is the damaging half: it tells the spectral layer
-    that D1/D3/D4 may be published.
-    """
+def test_a_non_tp_input_or_a_nondiscriminating_band_does_not_certify(
+    make, expected_applicable: bool
+) -> None:
+    """Both ladders fail closed, but the two counterexamples fail differently."""
     from liouscope.numerics.linalg import certified_eig, certified_eigvals
 
     L = make()
@@ -203,64 +205,35 @@ def test_a_band_that_swallows_the_spectrum_does_not_certify(make) -> None:
         _, cert_vals = certified_eigvals(L)
         _, cert_vec = certified_eig(L)
 
-    # ROUND 21. Both operators must be refused, but for DIFFERENT reasons, and
-    # this test names which -- asserting only the shared verdict would let
-    # either mechanism rot unnoticed behind the other.
-    #
-    #  * finite scale (the nilpotent twin): the certificate legitimately
-    #    applies, and the BAND GUARD catches it -- the band swallowed the whole
-    #    spectrum, so it discriminated nothing.
-    #  * non-finite scale (the overflowing operator): there is no measurable
-    #    scale to be trace preserving *relative to*. ``defect <= tp_rtol * fro``
-    #    against an infinite ``fro`` admits everything, so the band drawn from
-    #    it was never grounded in a measurement. Which modes it then swallows
-    #    is decided by the LAPACK build -- 4 of 4 on Windows, 2 of 4 on the CI
-    #    runners, and the 2-of-4 case slipped past a guard that only asks
-    #    whether the band took *everything*. The refusal now happens one level
-    #    earlier, where it is platform-independent.
-    with np.errstate(over="ignore"):
-        finite_scale = bool(np.isfinite(np.linalg.norm(L, ord="fro")))
-
     for cert in (cert_vals, cert_vec):
         assert cert.certified is False
         assert cert.resolved is False
-        if finite_scale:
-            assert cert.applicable is True
-            assert cert.zero_mode_count == 0
-        else:
-            assert cert.applicable is False, (
-                "an operator whose own scale overflows cannot be judged "
-                "trace preserving relative to that scale"
-            )
+        assert cert.applicable is expected_applicable
+        assert cert.zero_mode_count == 0
 
 
-def test_a_non_finite_scale_is_refused_before_any_band_is_drawn() -> None:
-    """ROUND 21: the fail-closed must key on the SCALE, not on the outcome.
+def test_componentwise_tp_gate_refuses_local_defect_before_zero_mode_claim() -> None:
+    """The #130 regression: finite global norm must not create a fail-open.
 
-    ``trace_preservation_defect`` returns ``(defect, ||L||_F)`` and the
-    applicability test is ``defect <= tp_rtol * ||L||_F``. A non-finite
-    ``defect`` was already refused; a non-finite ``||L||_F`` was not, and that
-    asymmetry is the whole bug -- a comparison against infinity is vacuously
-    true, so every operator passed and the band that followed was drawn from a
-    scale nobody measured.
-
-    This pins the invariant directly rather than through a downstream verdict,
-    so it cannot be satisfied by accident the way the band guard was.
+    The true Frobenius norm is ~1.4e308, so a GLOBAL normwise quotient makes
+    ``sqrt(17)/||L||`` microscopic. Trace preservation, however, consists of
+    separate cancellation equations. Several columns here have order-one
+    equation error, which invalidates the exact-zero-mode theorem regardless
+    of unrelated entries elsewhere in the operator.
     """
     from liouscope.numerics.linalg import (
         certified_eigvals,
+        trace_preservation_componentwise_error,
         trace_preservation_defect,
     )
 
     L = _overflowing_norm_operator()
-    with np.errstate(over="ignore"):
-        defect, fro = trace_preservation_defect(L)
+    defect, fro = trace_preservation_defect(L)
+    local_error = trace_preservation_componentwise_error(L)
 
-    assert np.isfinite(defect), "the defect itself is finite -- that is the trap"
-    assert not np.isfinite(fro), (
-        "if the Frobenius norm stops overflowing this test is hollow and the "
-        "asymmetry it guards no longer exists"
-    )
+    assert np.isfinite(defect)
+    assert np.isfinite(fro)
+    assert local_error == pytest.approx(1.0)
 
     with np.errstate(over="ignore"), warnings.catch_warnings():
         warnings.simplefilter("ignore")

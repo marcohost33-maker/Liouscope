@@ -6,7 +6,252 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+- **Trace-preserving generators can be restricted to the traceless operator
+  space by an exact structural identity, with no eigenvalue-magnitude
+  threshold (issue #113).** For column-stacked operators trace preservation IS
+  `vec(I)^H L = 0`, so the traceless space `ker(vec(I)^H)` is invariant under
+  `L` and contains every eigenvector with non-zero eigenvalue.
+  `numerics.traceless.restrict_to_traceless` builds an explicit orthonormal
+  basis `B` of that kernel -- off-diagonal matrix units plus the standard
+  diagonal traceless generators, so no numerical rank routine is asked to infer
+  a subspace whose defining left-null vector is known analytically -- and
+  returns `L0 = B^H L B` together with the evidence that makes the reduction
+  auditable: `invariance_defect = ||q^H L B||`, `reconstruction_defect =
+  ||L B - B L0||`, and the two trace-preservation readings that admitted the
+  input. A degenerate stationary manifold keeps its additional traceless zero
+  modes, which a primitive that simply deletes small eigenvalues would erase.
+  This CHANGES NO REPORTED NUMBER: no diagnostic is routed through the
+  restriction yet, and the run manifest contract is unchanged.
+- **Admission to that restriction is gated on both readings of
+  `vec(I)^H L = 0` (PR #139 review).** The normwise ratio `||q^H L|| / ||L||`
+  divides one number by the norm of the whole operator, so an entry taking part
+  in no violated trace equation dilutes a violation elsewhere until the
+  quotient is round-off -- measured on the 4x4 input `L[1, 0] = 1e300`,
+  `L[0, 2] = 1`: ratio 1e-300, accepted at the default `tp_rtol`, while column
+  2's trace equation has relative error 1, and the restriction returned for it
+  carried `invariance_defect = 0.707`. The componentwise backward error of
+  issue #130 is now applied here with exactly the comparison the certified
+  eigensolver paths use, so one quantity is not measured two different ways.
+
+### Changed
+- **The Gaussian likelihood behind AICc is evaluated in log-RSS space, and an
+  exact-zero RSS is now an explicit abstention (issue #135).** This is a
+  METHODOLOGY change with user-visible consequences: it can reorder AICc,
+  change which of M0..M3b is selected, and therefore change the reported decay
+  rate for a given run. Three parts:
+  - `gaussian_log_likelihood` evaluates the profile likelihood at the Gaussian
+    MLE directly from `log(RSS)` via the new
+    `numerics.norms.scaled_log_sum_squares`, instead of forming RSS in ordinary
+    units. Residual series whose true sum of squares lies outside the float64
+    range — a rescaled curve is enough — previously produced `0` or `inf` RSS
+    and an unusable likelihood. The value is now scale-covariant, and
+    likelihood *differences* between models are invariant under a common
+    rescaling of the residuals, which is the quantity AICc actually consumes.
+  - An exact-zero RSS has no finite interior MLE for the positive scale
+    parameter, so the profile likelihood is `NaN` rather than an invented
+    absolute epsilon variance. `fit_gls_ar1` reports this as
+    `likelihood_degenerate=True` with `success=False`, `aicc()` then scores the
+    model `inf`, and `parametric_bootstrap` refuses: a perfect fit yields no
+    interval rather than a zero-width one. Passing an explicit positive `sigma`
+    still gives a finite likelihood for zero residuals, which is the
+    well-posed case.
+  - Runs whose reported model or rate changes are those where the previous
+    absolute-RSS path had over- or underflowed, or where the winner was chosen
+    against a floored likelihood. Re-run any archived analysis whose selected
+    model matters; the run manifest does not record per-model likelihoods, so
+    the change is not visible in `input_hash`.
+
 ### Fixed
+- **The trace-preservation defect overflowed on the way to a column sum that is
+  exactly zero (issue #139, P2 review).** `trace_preservation_defect` assembled
+  `vec(I)^H L` with an ordinary matrix product, which accumulates in ordinary
+  units. Measured for `d=16` with `+2.5e307` in eight trace rows of one column
+  and `-2.5e307` in the other eight: the product returned `inf+nanj`, the
+  defect came back `nan` beside a representable Frobenius norm of `1e308`, and
+  `restrict_to_traceless` refused a generator whose trace equation is exactly
+  zero. The new `numerics.norms.scaled_column_sums` sums each column, and each
+  component of it, with `math.fsum`, which is exact over the whole float64
+  range; its only failure is an intermediate that leaves the range, and that is
+  order-dependent. Only then does it fall back to two exponent bands split at
+  `2**512`, where neither band can overflow or underflow, so no addend is
+  sacrificed.
+  Three earlier review rounds took the same class one level at a time --
+  overflow between columns, a shared scale for real and imaginary parts, then
+  underflow of a small addend under a common scale -- and the third made the
+  pattern the finding: a power-of-two scale SHIFTS the representable window, it
+  does not widen it, so any addend below `max * 2**-1074` dies before the
+  accumulation starts, while a smaller scale brings the overflow back. Measured:
+  `[1e300, -1e300, 1e-300]` returned 0 instead of `1e-300`, and
+  `restrict_to_traceless(..., tp_rtol=0)` accepted a generator that is not trace
+  preserving. Vectorised summation was rejected on the same grounds, despite
+  benchmarking 2.4x to 11.9x faster: it returned 0 for a column whose exact sum
+  is 1, and ordinary summation does not round such a defect away, it deletes it.
+  Two independently rounded bands still cannot carry a residual that survives
+  only across their boundary -- `[7e307]*3 + [-7e307]*3 + [2**513] +
+  [-2**511]*4 + [1e-300]` has the exact sum `1e-300`, yet the bands are
+  `+2**513` and `-2**513 + 1e-300` and annihilate to zero. The fallback
+  therefore establishes whether either band sum was rounded and returns `nan`
+  when it was, so the trace-preservation gates REFUSE the operator instead of
+  admitting it on a number nobody can vouch for. Every value the fallback does
+  return is the exact sum. Measured: it is entered 10 times in 10280 calls
+  across the trace-related suite and abstains once; physical stiff generators
+  never reach it at all, for fast rates up to 1e12. Making it answer those
+  cases needs an accumulator that keeps Shewchuk partials across the band
+  boundary until one final rounding, which is a separate construction.
+  **CHANGES A REPORTED NUMBER.** `trace_defect` is now the correctly rounded
+  exact sum of the represented coefficients rather than an artefact of the
+  summation route, and it reaches persisted reports through the zero-mode
+  certificate. For the stiff four-level fixture it reads `1.158640e-11` instead
+  of `0.0` (2.29e-17 relative, adjudicated with `fractions.Fraction`), so
+  `test_stiff_generator_is_exactly_trace_preserving` is renamed to
+  `..._is_trace_preserving_to_rounding`: the old equality described the
+  summation route, not the generator. Certificate verdicts do not move at any
+  sane tolerance. The run manifest contract is untouched, so `input_hash` does
+  not move.
+- **The reason a confidence interval was withheld did not reach the report (PR
+  #147, round-2 external review).** When the residual MLE scale is not
+  representable as float64 the fit stays a valid AICc candidate and only its
+  interval is withheld — but `_fit_with_model` copied `likelihood_degenerate`
+  and dropped `scale_unavailable`, so the persisted report showed only
+  `bca_ci_beta = (nan, nan)`. That is the value ANY bootstrap or jackknife
+  failure produces, and the distinguishing information lived in a
+  `RuntimeWarning` an artefact does not keep. `FitResult` carries
+  `scale_unavailable` now and `_fit_with_model` copies it; `io.export`
+  serialises `FitResult` field-wise, so the reason travels into dumped
+  reports.
+- **The one-half factor was applied after the overflow guard (PR #147, round-2
+  external review).** For the explicit-`sigma` path the standardised RSS never
+  appears on its own: it enters the log-likelihood as `-0.5 * RSS`, so the
+  representable range reaches `2 * float64.max`. The guard compared against
+  `log(float64.max)` and returned `-inf` for the octave above it — measured:
+  `sigma = 1` with a single residual near `1.4e154` has RSS ~`1.96e308` and a
+  finite log-likelihood of ~`-9.8e307`, and the model was dropped from
+  selection on that arithmetic boundary rather than on the data. The bound now
+  carries `+ log(2)` and the exponential is taken after subtracting `log(2)`
+  in the octave that needs it; below that octave the arithmetic is unchanged,
+  so no previously computable likelihood moves by even one ulp.
+- **A fit was withheld entirely because a number its likelihood never uses
+  could not be materialised (PR #147, round-1 review).** When the whitened
+  residuals have a finite, non-zero RMS below the smallest positive float64,
+  `log_rss` and `log_sigma` are both finite and the profile likelihood is
+  computable — but `exp(log_sigma)` underflows to `0.0`, and `fit_gls_ar1`
+  then returned `success=False`, `log_likelihood=NaN` and
+  `likelihood_degenerate=True`. `_fit_with_model` scored that model `inf` and
+  dropped it from selection, which reintroduces exactly the ABSOLUTE SCALE
+  BOUNDARY into model selection that the change above removed: the same curve
+  in different rate units either is or is not a candidate. Measured on one
+  minimum-subnormal residual (`5e-324`) among 64 otherwise-zero points:
+  `log_rss = -1488.88`, `log_sigma = -746.52`, profile log-likelihood
+  `+47686.44`, `exp(log_sigma) = 0.0`.
+
+  The fit now stays selectable with its finite log-space likelihood, and only
+  the scale-dependent evidence is withheld. `GLSFitOutput` gains
+  `scale_unavailable` (additive, default `False`); `sigma` is `NaN` there,
+  deliberately not `0.0`, because `_ar1_resample` consumes it as the
+  innovation standard deviation and `0.0` would generate identical replicates
+  — a zero-width confidence interval, which is the failure mode of an
+  uncertainty pipeline, not a conservative one. `parametric_bootstrap` refuses
+  on the new flag rather than on `success`, so "no interval" and "no estimate"
+  stay distinguishable, and `compute_relaxation_layer` reports the CI as `NaN`
+  through its existing handler. Three mutations, one per guard line, are
+  proven to discriminate.
+- **A degenerate spectrum let one eigenvector certify two modes (PR #121,
+  round-26 external review, P1).** `certified_nonzero_modes` picked the
+  eigenpair for an in-band candidate with `argmin(|ref - lambda|)`, a lookup by
+  VALUE. `np.argmin` returns the FIRST index attaining the minimum, so equal
+  eigenvalues all borrowed the first pair's vectors and the a-posteriori bound
+  for the second mode was computed from a residual never measured for it.
+  `certified_eig`'s eigenvector gate does not catch this: it tests only modes
+  above the raw `bound`, and a rescued mode is by construction below it.
+  Measured on a trace-preserving 4x4 with spectrum `{0, -1e-14, -1e-14, -1}`
+  whose second slow right vector was replaced by the fast mode's vector
+  (residual 1.0 instead of 6e-18): `certified=True, resolved=True`, and the
+  invalid pair reached D9/D19. Both directions were defective — a corrupt mode
+  certified on a healthy neighbour's residual, and a healthy mode refused on a
+  corrupt one's. When the vectors are SUPPLIED the pair index is now the
+  candidate's own index (no search); when they are borrowed from the operator's
+  own decomposition, EQUAL eigenvalues are ranked so the r-th of them takes the
+  r-th nearest reference entry, while distinct eigenvalues keep their
+  independent lookup. A blanket bijection was tried first and is wrong: across
+  two genuinely different decompositions a merely-close mode consumes the
+  partner an equal one needs, which on the stiff four-level network of
+  `test_pr121_review_round17.py` lost a correctly rescued mode and abandoned
+  the whole refinement. Non-degenerate spectra are unchanged: of nine measured
+  multiplicity/corruption combinations, the five that disagreed with ground
+  truth before the fix are all degenerate and all four non-degenerate ones
+  already agreed.
+- **The a-posteriori zero-mode certificate stopped being a test below ~1e-162
+  (PR #121, round-24 external review, B4).** `certified_nonzero_modes`
+  computes the eigenpair residual with `np.linalg.norm`, which squares before
+  summing: when the generator and its residuals are uniformly scaled so every
+  component falls below ~`1.5e-162`, a demonstrably nonzero residual comes back
+  as `0.0`. `mag > margin * (0 / sep)` then holds for EVERY nonzero in-band
+  candidate, so a numerically perturbed member of a degenerate stationary
+  manifold is promoted into the physical spectrum and D1 reports a spurious gap
+  — purely because the rate units changed, on a certificate whose every term is
+  degree-one homogeneous. Measured on a deliberately inexact eigenpair whose
+  residual is 100x above the candidate's own magnitude (correct verdict: not
+  certified): NOT certified at `c = 1`, `1e-80`, `1e-160`; certified at
+  `1e-170` and `1e-200`. Round 22 made the refined MIDPOINT underflow-safe; the
+  residual that establishes the refinement was not. A new
+  `numerics.linalg.underflow_safe_norm` follows the same one-directional
+  discipline as `trace_preservation_defect` (power-of-two `frexp`/`ldexp`
+  scaling, reachable only from an exact `0.0` on a nonzero vector, overflow
+  deliberately left alone) and is used for both residual norms and both
+  eigenvector normalisations.
+- **`is_hermitian` accepted an infinite relative tolerance (PR #121, round-24
+  external review, B5).** `is_hermitian([[0, 1], [0, 0]], rtol=float("inf"))`
+  returned `True`, because any finite defect is `<= inf`. `rtol` is a newly
+  exposed validation threshold (issue #109), so an invalid one could turn the
+  gate into a fail-open pass-through — the exact failure the scale-relative
+  reading exists to close. `rtol` and `atol` must now be finite and
+  non-negative, and the DERIVED tolerance `rtol * max|A|` must be finite too,
+  the same two-stage rule `numerics.scale.spectral_zero_tolerance` applies. An
+  unusable tolerance raises `ValueError` rather than returning `False`: `False`
+  is a statement about the matrix, an invalid threshold is a statement about
+  the call, and reporting them identically is the conflation this round is
+  about.
+- **Malformed observations were reported as a flat curve instead of refused
+  (PR #121, round-24 review, finding B3).** The issue-#123 degeneracy test in
+  `fit_gls_ar1` reads `y` alone and never touches `t`, and it ran before any
+  shape validation. A 64-point grid against a one-point constant curve
+  therefore returned `degenerate=True` -- "no resolvable variation" asserted
+  about a curve that was never supplied on that grid, and a verdict that does
+  not mention the grid is one nothing downstream can undo. An 8x8 pair slipped
+  through the same way with a 2-D NaN residual array. `t` and `y` are now
+  checked to be one-dimensional and equal in length before anything else
+  inspects them, raising `ValueError` like the finiteness gate beside it. A
+  well-formed flat curve still returns `degenerate=True`.
+- **The trace-preservation defect underflowed while the operator around it did
+  not (PR #121, round-24 review, finding B2).** The round-23 underflow repair
+  in `trace_preservation_defect` was triggered by `fro == 0.0` alone, but the
+  two norms do not share a scale. Adding a representable `1e-200`
+  trace-preservation violation to an O(1) generator leaves `vec(I)^H L =
+  [1e-200, 0, 0, 0]`, whose SQUARES fall below `5e-324`, so the numerator came
+  back `0.0` while `||L||_F` stayed at 1.62 and the whole-operator rescue never
+  fired. With `tp_rtol = 0` the applicability gate then read `0.0 > 0.0` --
+  False -- and `certified_eigvals` and `certified_eig` both reported
+  `applicable=True, trace_defect=0.0` for an operator that is demonstrably not
+  trace preserving. Scaled recomputation is now triggered when EITHER nonzero
+  source expression collapses, the numerator by its OWN exponent rather than
+  the operator's. The repair remains reachable only from an exact zero, so the
+  one-directional policy of round 23 -- underflow repaired, overflow left to
+  the round-21 refusal -- is unchanged.
+- **The operator-derived zero-mode cutoff came back infinite for a finite
+  operator (PR #121, round-24 review, finding B1).** `operator_zero_tolerance`
+  formed `rtol * eps * ||L||_2` directly, and `||L||_2` overflows for an
+  operator every entry of which is representable -- a 2x2 filled with `1e308`
+  has a spectral norm of `2e308`. The returned cutoff was `inf` although the
+  quantity itself, `~4.4e295`, fits comfortably in a double. No mode satisfies
+  `|lambda| > inf`, so a consumer holding the operator discarded its entire
+  spectrum and read huge non-zero modes as stationary -- the same silent
+  acceptance the spectrum-side helper closed in round 22, one helper across.
+  The norm is now taken on a copy scaled by an exact power of two selected
+  from the largest COMPONENT (`max(|Re|, |Im|)`, because the modulus of a
+  finite complex entry can itself overflow), and a derived value that is still
+  not finite -- reachable only for an `rtol` near the top of the double range
+  -- is refused rather than returned, matching `spectral_zero_tolerance`.
 - **D16 was published from the spectrum for which D1/D3/D4 had just been
   withheld (PR #121, round-23 review, finding 13).** Where the zero-mode
   certificate is applicable but unresolved, the spectral layer reports D1, D3,

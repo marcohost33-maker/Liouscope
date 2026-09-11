@@ -41,6 +41,7 @@ def _spectral(**kw) -> SpectralResult:
         "eigenvalues": _ARR,
         "steady_state": np.zeros((1, 1), dtype=complex),
         "has_complex_pairs": False,
+        "zero_mode_certificate": {"applicable": True, "certified": True, "resolved": True},
     }
     base.update(kw)
     return SpectralResult(**base)

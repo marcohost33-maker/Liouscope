@@ -166,9 +166,9 @@ ENSEMBLE_OVERRIDE_EVIDENCE_KEY: str = "ensemble_confirmation"
 
 # Issues #112/#113 (twelfth-round review): evidence key recording whether the
 # spectral layer's structural zero-mode certificate resolved. Written by
-# ``classify_mechanism`` from ``SpectralResult.zero_mode_certificate`` when one
-# is present; absent for synthetic results that carry no certificate, so every
-# pre-existing test and serialised result is untouched. Class-INFLUENCING by
+# ``classify_mechanism`` from ``SpectralResult.zero_mode_certificate``. The key
+# is always present: missing or inapplicable certificates record 0.0 rather than
+# silently inheriting a permissive default. Class-INFLUENCING by
 # design, in the fail-closed direction only: an unresolved certificate means
 # D1/D3/D4 -- and every evidence ratio built on them -- came from a spectrum
 # the solver demonstrably could not resolve, so no mechanism claim may stand
@@ -181,11 +181,54 @@ def _apply_spectral_certificate_floor(
     verdict: str,
     tier: str,
     *,
+    certificate_applicable: bool | None = None,
     spectral_resolved: bool,
 ) -> tuple[str, str]:
-    """Insufficient-evidence floor for an unresolved spectral certificate."""
-    if not spectral_resolved:
+    """Floor missing or applicable-unresolved evidence, not inapplicable evidence.
+
+    ``certificate_applicable is None`` means no certificate was available at all:
+    the spectrum is unexamined, so publication-level classification must withhold.
+    ``False`` means the certificate explicitly declares this gate inapplicable;
+    that state must not be laundered into "resolved", but it also must not trigger
+    a gate that does not apply to the input. Legacy/matrix callers that do not
+    carry applicability remain governed by their explicit ``spectral_resolved``
+    value; the authoritative classifier always passes applicability explicitly.
+    """
+    if certificate_applicable is not False and not spectral_resolved:
         return VERDICT_UNDEFINED, TIER_EXPLORATION
+    return verdict, tier
+
+
+def _apply_unevaluable_winner_floor(
+    a_class: str,
+    verdict: str,
+    tier: str,
+    *,
+    matrix: tuple[dict[str, object], ...],
+) -> tuple[str, str]:
+    """Insufficient-evidence floor for a winner the matrix cannot evaluate.
+
+    ROUND-25 REVIEW (PR #121). The dominant class and the hypothesis matrix are
+    derived from the same evidence but reported as two independent fields, and
+    they could contradict each other. Measured case: ``kreiss = 11`` with D9
+    withheld as ``petermann_max = NaN`` leaves the F1 rung UNEVALUABLE, so no
+    rung fires and the ladder falls through to ``A12``; the matrix correctly
+    marks the A12 fallback ``UNEVALUABLE`` with an ``UNDEFINED`` claim floor
+    (a rung that could not be evaluated might have fired, so "no mechanism
+    applies" is not established) -- yet ``_pick_verdict_tier`` published
+    ``NOT_EXCLUDED``. One report then asserted a dominant class that its own
+    audit column says is unsupported.
+
+    The floor reads the matrix rather than recomputing the condition, so the
+    two cannot drift apart. It is stated over the WINNER generally, not over
+    ``A12`` specifically: a fired rung is ``SUPPORTED`` by construction, so for
+    every other winner this is a no-op (asserted in the round-27 tests), and
+    should a future rung become unevaluable-and-winning the floor already
+    covers it.
+    """
+    for entry in matrix:
+        if entry.get("a_class") == a_class and entry.get("status") == HYPOTHESIS_UNEVALUABLE:
+            return VERDICT_UNDEFINED, TIER_EXPLORATION
     return verdict, tier
 
 
@@ -1249,10 +1292,24 @@ def classify_mechanism(
     ev["maximally_mixed_steady_state"] = float(maximally_mixed)
     ev[ENSEMBLE_OVERRIDE_EVIDENCE_KEY] = float(bool(ensemble_confirmation))
     certificate = getattr(spectral, "zero_mode_certificate", None)
-    spectral_resolved = True
-    if isinstance(certificate, dict) and certificate.get("applicable"):
-        spectral_resolved = bool(certificate.get("resolved", certificate.get("certified")))
-        ev[SPECTRAL_RESOLVED_EVIDENCE_KEY] = float(spectral_resolved)
+    # Issue #126: the certificate has four semantically distinct states.
+    # Missing => unexamined and therefore withheld. Explicitly inapplicable =>
+    # no zero-mode certificate gate applies to this input, so do not floor.
+    # Applicable+unresolved => withhold. Applicable+resolved => preserve the
+    # pre-existing classification. ``certified`` is only a legacy fallback for
+    # applicable certificates that predate the explicit ``resolved`` field.
+    certificate_applicable: bool | None = None
+    spectral_resolved = False
+    if isinstance(certificate, dict):
+        certificate_applicable = bool(certificate.get("applicable"))
+        if certificate_applicable:
+            spectral_resolved = bool(
+                certificate.get("resolved", certificate.get("certified", False))
+            )
+            ev[SPECTRAL_RESOLVED_EVIDENCE_KEY] = float(spectral_resolved)
+    else:
+        # Missing evidence must be auditable as unresolved, not silently absent.
+        ev[SPECTRAL_RESOLVED_EVIDENCE_KEY] = 0.0
     a_class, f_family = _pick_a_class(ev, relaxation=relaxation)
     conf = _confidence(ev, a_class)
     verdict, tier = _pick_verdict_tier(a_class, relaxation, conf)
@@ -1264,7 +1321,17 @@ def classify_mechanism(
         ensemble_confirmation=bool(ensemble_confirmation),
     )
     verdict, tier = _apply_spectral_certificate_floor(
-        verdict, tier, spectral_resolved=spectral_resolved
+        verdict,
+        tier,
+        certificate_applicable=certificate_applicable,
+        spectral_resolved=spectral_resolved,
+    )
+    # Built once and consumed twice: the floor below reads the same object the
+    # report carries, so the published matrix and the published verdict are
+    # guaranteed to be the pair that was actually reconciled.
+    matrix = hypothesis_evidence_matrix(ev, relaxation=relaxation)
+    verdict, tier = _apply_unevaluable_winner_floor(
+        a_class, verdict, tier, matrix=matrix
     )
     return ClassificationResult(
         a_class=a_class,
@@ -1278,7 +1345,7 @@ def classify_mechanism(
         support_score=conf,
         evidence=ev,
         triggered_hypotheses=triggered_hypotheses(ev, relaxation=relaxation),
-        hypothesis_matrix=hypothesis_evidence_matrix(ev, relaxation=relaxation),
+        hypothesis_matrix=matrix,
         taxonomy_version=TAXONOMY_VERSION,
         schema_version=DIAGNOSTIC_SCHEMA_VERSION,
     )
