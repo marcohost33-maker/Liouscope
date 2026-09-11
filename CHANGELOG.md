@@ -6,6 +6,34 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Added
+- **Trace-preserving generators can be restricted to the traceless operator
+  space by an exact structural identity, with no eigenvalue-magnitude
+  threshold (issue #113).** For column-stacked operators trace preservation IS
+  `vec(I)^H L = 0`, so the traceless space `ker(vec(I)^H)` is invariant under
+  `L` and contains every eigenvector with non-zero eigenvalue.
+  `numerics.traceless.restrict_to_traceless` builds an explicit orthonormal
+  basis `B` of that kernel -- off-diagonal matrix units plus the standard
+  diagonal traceless generators, so no numerical rank routine is asked to infer
+  a subspace whose defining left-null vector is known analytically -- and
+  returns `L0 = B^H L B` together with the evidence that makes the reduction
+  auditable: `invariance_defect = ||q^H L B||`, `reconstruction_defect =
+  ||L B - B L0||`, and the two trace-preservation readings that admitted the
+  input. A degenerate stationary manifold keeps its additional traceless zero
+  modes, which a primitive that simply deletes small eigenvalues would erase.
+  This CHANGES NO REPORTED NUMBER: no diagnostic is routed through the
+  restriction yet, and the run manifest contract is unchanged.
+- **Admission to that restriction is gated on both readings of
+  `vec(I)^H L = 0` (PR #139 review).** The normwise ratio `||q^H L|| / ||L||`
+  divides one number by the norm of the whole operator, so an entry taking part
+  in no violated trace equation dilutes a violation elsewhere until the
+  quotient is round-off -- measured on the 4x4 input `L[1, 0] = 1e300`,
+  `L[0, 2] = 1`: ratio 1e-300, accepted at the default `tp_rtol`, while column
+  2's trace equation has relative error 1, and the restriction returned for it
+  carried `invariance_defect = 0.707`. The componentwise backward error of
+  issue #130 is now applied here with exactly the comparison the certified
+  eigensolver paths use, so one quantity is not measured two different ways.
+
 ### Changed
 - **The Gaussian likelihood behind AICc is evaluated in log-RSS space, and an
   exact-zero RSS is now an explicit abstention (issue #135).** This is a
@@ -35,6 +63,52 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     the change is not visible in `input_hash`.
 
 ### Fixed
+- **The trace-preservation defect overflowed on the way to a column sum that is
+  exactly zero (issue #139, P2 review).** `trace_preservation_defect` assembled
+  `vec(I)^H L` with an ordinary matrix product, which accumulates in ordinary
+  units. Measured for `d=16` with `+2.5e307` in eight trace rows of one column
+  and `-2.5e307` in the other eight: the product returned `inf+nanj`, the
+  defect came back `nan` beside a representable Frobenius norm of `1e308`, and
+  `restrict_to_traceless` refused a generator whose trace equation is exactly
+  zero. The new `numerics.norms.scaled_column_sums` sums each column, and each
+  component of it, with `math.fsum`, which is exact over the whole float64
+  range; its only failure is an intermediate that leaves the range, and that is
+  order-dependent. Only then does it fall back to two exponent bands split at
+  `2**512`, where neither band can overflow or underflow, so no addend is
+  sacrificed.
+  Three earlier review rounds took the same class one level at a time --
+  overflow between columns, a shared scale for real and imaginary parts, then
+  underflow of a small addend under a common scale -- and the third made the
+  pattern the finding: a power-of-two scale SHIFTS the representable window, it
+  does not widen it, so any addend below `max * 2**-1074` dies before the
+  accumulation starts, while a smaller scale brings the overflow back. Measured:
+  `[1e300, -1e300, 1e-300]` returned 0 instead of `1e-300`, and
+  `restrict_to_traceless(..., tp_rtol=0)` accepted a generator that is not trace
+  preserving. Vectorised summation was rejected on the same grounds, despite
+  benchmarking 2.4x to 11.9x faster: it returned 0 for a column whose exact sum
+  is 1, and ordinary summation does not round such a defect away, it deletes it.
+  Two independently rounded bands still cannot carry a residual that survives
+  only across their boundary -- `[7e307]*3 + [-7e307]*3 + [2**513] +
+  [-2**511]*4 + [1e-300]` has the exact sum `1e-300`, yet the bands are
+  `+2**513` and `-2**513 + 1e-300` and annihilate to zero. The fallback
+  therefore establishes whether either band sum was rounded and returns `nan`
+  when it was, so the trace-preservation gates REFUSE the operator instead of
+  admitting it on a number nobody can vouch for. Every value the fallback does
+  return is the exact sum. Measured: it is entered 10 times in 10280 calls
+  across the trace-related suite and abstains once; physical stiff generators
+  never reach it at all, for fast rates up to 1e12. Making it answer those
+  cases needs an accumulator that keeps Shewchuk partials across the band
+  boundary until one final rounding, which is a separate construction.
+  **CHANGES A REPORTED NUMBER.** `trace_defect` is now the correctly rounded
+  exact sum of the represented coefficients rather than an artefact of the
+  summation route, and it reaches persisted reports through the zero-mode
+  certificate. For the stiff four-level fixture it reads `1.158640e-11` instead
+  of `0.0` (2.29e-17 relative, adjudicated with `fractions.Fraction`), so
+  `test_stiff_generator_is_exactly_trace_preserving` is renamed to
+  `..._is_trace_preserving_to_rounding`: the old equality described the
+  summation route, not the generator. Certificate verdicts do not move at any
+  sane tolerance. The run manifest contract is untouched, so `input_hash` does
+  not move.
 - **The reason a confidence interval was withheld did not reach the report (PR
   #147, round-2 external review).** When the residual MLE scale is not
   representable as float64 the fit stays a valid AICc candidate and only its
