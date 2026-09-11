@@ -15,6 +15,7 @@ Reference: Geyer, "Practical Markov Chain Monte Carlo", Statistical Science
 
 from __future__ import annotations
 
+import math
 import warnings
 
 import numpy as np
@@ -100,9 +101,23 @@ def ar1_correlation(residuals: np.ndarray) -> float:
     coefficient is estimator-convention dependent, so treat it as indicative
     rather than a pinned analytic identity.
     """
-    x = np.asarray(residuals, dtype=float) - float(np.mean(residuals))
+    x = np.asarray(residuals, dtype=float)
     if x.size < 2:
         return 0.0
+    # rho is a RATIO of two quadratic forms, so it is invariant under a common
+    # rescaling of the residuals -- but the dot products that form it are not:
+    # residuals below ~1e-162 square to 0 (rho_hat = 0, and the corrected
+    # estimate collapses to its floor 1/(n-3)), and above ~1e154 they overflow
+    # to NaN (PR #134 review, measured through fit_gls_ar1 at 1e-170 / 1e160).
+    # Normalise by the exact power of two nearest the peak magnitude. Scaling
+    # by 2**k is exact in binary floating point whenever nothing under- or
+    # overflows, so every mean, product and sum below is the old one times an
+    # exact power of two and rho_hat is BIT-IDENTICAL wherever the unnormalised
+    # computation stayed in range -- the audit-pinned formula does not move.
+    peak = float(np.max(np.abs(x)))
+    if math.isfinite(peak) and peak > 0.0:
+        x = np.ldexp(x, -math.frexp(peak)[1])
+    x = x - float(np.mean(x))
     num = float(np.dot(x[:-1], x[1:]))
     den = float(np.dot(x, x))
     if den == 0.0:

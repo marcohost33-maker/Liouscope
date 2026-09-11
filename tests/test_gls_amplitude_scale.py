@@ -159,9 +159,9 @@ def test_nonfinite_rescaled_result_without_float_events_falls_back(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """The non-finite arm: a NaN Jacobian set by assignment raises no FP event."""
-    import liouscope.fitting.gls as gls_mod
+    from scipy.optimize import least_squares as real
 
-    real = gls_mod.least_squares
+
     calls = {"n": 0}
 
     def first_call_poisoned(*args, **kwargs):  # type: ignore[no-untyped-def]
@@ -171,7 +171,7 @@ def test_nonfinite_rescaled_result_without_float_events_falls_back(
             res.jac = np.full_like(res.jac, np.nan)
         return res
 
-    monkeypatch.setattr(gls_mod, "least_squares", first_call_poisoned)
+    monkeypatch.setattr("liouscope.fitting.gls.least_squares", first_call_poisoned)
     y = 1.0e-40 * np.exp(-_TRUE_RATE * _T) * (1.0 + 1.0e-3 * _NOISE)
     fit, messages = _recorded(
         fit_gls_ar1, lambda t, p: 1.0e-40 * np.exp(-p[0] * t), _T, y,
@@ -205,3 +205,55 @@ def test_finite_nonconverged_rescaled_solve_is_not_retried_raw() -> None:
     )
     assert not fit.success
     assert not any(_FALLBACK in m for m in messages), messages
+
+
+# --------------------------------------------------------------------------
+# PR #134 round 3 (Codex P1): the AR(1) rho between Cochrane-Orcutt iterations
+# was estimated from UNSCALED residuals, whose dot products underflow to 0
+# below ~1e-162 and overflow to NaN above ~1e154.
+# --------------------------------------------------------------------------
+
+
+def _ar1_curve(scale: float) -> tuple[np.ndarray, np.ndarray]:
+    t = np.linspace(0.0, 5.0, 80)
+    rng = np.random.default_rng(20260911)
+    e = np.zeros(t.size)
+    nu = rng.standard_normal(t.size)
+    for i in range(t.size):
+        e[i] = (0.6 * e[i - 1] if i else 0.0) + nu[i]
+    return t, scale * (np.exp(-_TRUE_RATE * t) + 1.0e-3 * e)
+
+
+@pytest.mark.parametrize("scale", [1.0e-170, 1.0e160])
+def test_ar1_rho_between_iterations_is_amplitude_invariant(scale: float) -> None:
+    """Amplitude-equivalent correlated curves give the same rho, rate, success.
+
+    Measured on 9a623e8: rho 0.012987 (= the corrected floor 1/(n-3), i.e. an
+    underflowed rho_hat of 0) at 1e-170, 0.44637 at 1e0, and NaN with
+    ``success=False`` at 1e160.
+    """
+
+    def fit(s: float):  # type: ignore[no-untyped-def]
+        t, y = _ar1_curve(s)
+        out, _ = _recorded(
+            fit_gls_ar1, lambda tt, p: s * p[0] * np.exp(-p[1] * tt), t, y,
+            np.array([1.0, 0.8]), n_iters=3,
+        )
+        return out
+
+    ref = fit(1.0)
+    other = fit(scale)
+    assert ref.success and np.isfinite(ref.rho_ar1) and ref.rho_ar1 > 0.3
+    assert other.success == ref.success
+    assert other.rho_ar1 == pytest.approx(ref.rho_ar1, rel=1.0e-8)
+    assert other.params[1] == pytest.approx(ref.params[1], rel=1.0e-8)
+
+
+def test_ar1_correlation_is_bit_identical_under_power_of_two_rescaling() -> None:
+    """The normalisation must not move rho where the old arithmetic was in range."""
+    from liouscope.fitting.neff import ar1_correlation
+
+    _, y = _ar1_curve(1.0)
+    base = ar1_correlation(y)
+    for k in (-900, -540, 500, 1000):
+        assert ar1_correlation(np.ldexp(y, k)) == base, k

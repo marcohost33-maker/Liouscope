@@ -87,6 +87,15 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   (`success=False`), without leaking the private exception that an earlier
   revision of this fix raised there (PR #134 review). Raw residuals, rho, sigma and
   the likelihood remain in the caller's data units.
+- **The AR(1) lag-1 autocorrelation is formed from residuals normalised by an
+  exact power of two (PR #134, round-3 review).** `ar1_correlation` took its dot
+  products on unscaled residuals, which underflow to 0 below ~1e-162 -- the
+  corrected rho then collapses to its floor `1/(n-3)` -- and overflow to NaN
+  above ~1e154. Measured through `fit_gls_ar1` with `n_iters=3` on one AR(1)
+  correlated curve: rho 0.012987 at 1e-170, 0.44637 at 1e0 and NaN with
+  `success=False` at 1e160. Scaling by `2**k` is exact, so rho is bit-identical
+  wherever the old computation stayed in range (200/200 random series between
+  1e-100 and 1e100).
 - **The trace-preservation defect overflowed on the way to a column sum that is
   exactly zero (issue #139, P2 review).** `trace_preservation_defect` assembled
   `vec(I)^H L` with an ordinary matrix product, which accumulates in ordinary

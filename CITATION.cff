@@ -140,6 +140,22 @@ abstract: >-
 # MANIFEST_SCHEMA is deliberately unchanged -- `trace_defect` is a report
 # field, not a run-manifest field, so the manifest contract is untouched and
 # `input_hash` does not move.
+# Also pending for the next cut: the GLS AR(1) fit presents the optimiser with
+# residuals divided by the curve's own scale max|y| (issue #124), so SciPy's
+# termination no longer turns the seed rate into a "converged" estimate for a
+# tiny-amplitude curve whose amplitude is not a fitted parameter; where that
+# rescaled problem leaves float64, the iteration falls back, with a
+# RuntimeWarning, to the unscaled residuals exactly as before (PR #134). The
+# lag-1 autocorrelation behind the AR(1) whitening is formed from residuals
+# normalised by an exact power of two, so it no longer underflows to its floor
+# below ~1e-162 or overflows to NaN above ~1e154; where the old computation
+# stayed in range it is bit-identical. This CHANGES NUMERICAL RESULTS and is a
+# METHODOLOGY correction: fitted rates, rho, AICc and the selected model can
+# differ for curves far from unit scale. It must NOT be described as making the
+# fit amplitude-invariant in general: a FREE amplitude parameter still returns
+# its seed rate at 1e-40, and the fallback keeps the unscaled problem's own
+# limits. MANIFEST_SCHEMA is deliberately unchanged -- none of these quantities
+# is a run-manifest field, so `input_hash` does not move.
 keywords:
   - open quantum systems
   - Lindblad
