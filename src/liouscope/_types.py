@@ -187,6 +187,17 @@ class FitResult:
     n_eff: float
     residual_ar1_rho: float
     success: bool
+    # Which residual model the GLS layer actually used, and hence what
+    # ``residual_ar1_rho`` and ``n_eff`` mean:
+    #   NaN    -- discrete AR(1) on a uniform grid; ``residual_ar1_rho`` is the
+    #             fitted lag-1 correlation, ``n_eff`` the Geyer IPS estimate.
+    #   finite -- continuous-time CAR(1) on a NON-uniform grid; the whitening
+    #             used ``exp(-theta dt_k)`` per step, ``residual_ar1_rho`` is
+    #             that correlation at the mean step (reported for continuity
+    #             only), and ``n_eff`` is the exact CAR(1) value
+    #             ``n^2 / sum_jk exp(-theta |t_j - t_k|)``.
+    # Additive + defaulted, so older callers and serialised fits stay valid.
+    residual_theta_car1: float = float("nan")
     likelihood_degenerate: bool = False
     #: True when the fit is a valid model-selection candidate -- its log-space
     #: likelihood and AICc are finite -- but the positive MLE residual scale is
@@ -223,6 +234,42 @@ class RelaxationResult:
     # uses. Additive + defaulted so older callers / serialised reports stay valid.
     beta_D_linear: float = float("nan")
     linear_fit_model: str = "none"
+    # Provenance of the time grid the whole layer was fitted on. Every fitted
+    # quantity above is conditional on that window, so recording HOW it was
+    # chosen is part of the audit trail rather than a convenience:
+    #   "caller"       -- the caller supplied t_grid explicitly
+    #   "gap_scaled"   -- default window [0, HORIZON / Delta], rate-unit invariant
+    #   "legacy_fixed" -- no usable decay scale (Delta <= 0); absolute fallback
+    # Additive + defaulted, so older callers and serialised reports stay valid.
+    t_grid_source: str = "caller"
+    t_grid_span: float = float("nan")
+    # The grid ITSELF, not merely its span. The three curves above are y-values
+    # sampled on it, and a span alone does not identify the sampling: [0, 1, 10]
+    # and [0, 9, 10] share a span of 10 while describing materially different
+    # trajectories. Without this the exported report carries ordinates with no
+    # abscissa, so a downstream consumer cannot re-fit, re-plot or audit the
+    # rates it reports. Additive + defaulted like the fields above.
+    t_grid: np.ndarray | None = None
+    # How finely this grid samples the FASTEST decaying mode, as samples per
+    # e-folding. Below ``relaxation.MIN_SAMPLES_PER_FAST_EFOLD`` that mode was
+    # stepped over rather than measured, so the reported rates describe only
+    # the slow dynamics the window resolves and an
+    # ``UnderResolvedTransientWarning`` is emitted. ``inf`` when nothing decays.
+    samples_per_fast_efolding: float = float("nan")
+    # Residual model the reported M0..M3b hierarchy was ACTUALLY whitened
+    # with -- read off the fits, not off the grid (PR #127 review):
+    #   "ar1"                uniform grid, historical discrete AR(1);
+    #   "car1"               non-uniform grid, every fit whitened with the
+    #                        continuous-time exp(-theta dt_k) per step;
+    #   "car1_fallback_ar1"  non-uniform grid, but CAR(1) theta estimation
+    #                        failed on every fit (degenerate residuals), so
+    #                        ``fit_gls_ar1`` fell back to discrete AR(1);
+    #   "car1_mixed"         non-uniform grid, some fits CAR(1), some fallen
+    #                        back -- one label cannot cover the hierarchy;
+    #   "car1_unavailable"   non-uniform grid and no fit succeeded at all.
+    # The per-fit value is ``FitResult.residual_theta_car1``. Additive +
+    # defaulted.
+    residual_model: str = "ar1"
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)

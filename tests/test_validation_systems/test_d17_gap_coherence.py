@@ -112,6 +112,16 @@ def _phantom_ladder() -> tuple[np.ndarray, np.ndarray]:
     return L, rho0
 
 
+# V5 (Jaynes-Cummings near the exceptional point) is genuinely multiscale:
+# measured r_max / Delta = 396 at g = 0.05, while a uniform 80-point window over
+# ten e-foldings of the slowest mode resolves at most ~8x separation. The
+# relaxation layer therefore discloses that the fast mode is stepped over
+# (UnderResolvedTransientWarning) -- correct signal, not a false positive, and
+# orthogonal to what these tests assert. Pinned positively in
+# tests/test_relaxation_grid_scale.py rather than merely silenced here. Filtered
+# BY MESSAGE, matching the convention above (the prefix stops before the
+# colon: pytest splits filter strings on ':' before regex-matching).
+@pytest.mark.filterwarnings("ignore:Relaxation layer")
 @pytest.mark.parametrize("label,sys", ALL_V)
 def test_v_systems_mechanism_label_golden(label, sys):
     """End-to-end a_class golden pins (Equalita #79 Befund 2). Previously absent:
@@ -123,6 +133,16 @@ def test_v_systems_mechanism_label_golden(label, sys):
     assert rep.classification.a_class == V_GOLDEN_ACLASS[label]
 
 
+# V5 (Jaynes-Cummings near the exceptional point) is genuinely multiscale:
+# measured r_max / Delta = 396 at g = 0.05, while a uniform 80-point window over
+# ten e-foldings of the slowest mode resolves at most ~8x separation. The
+# relaxation layer therefore discloses that the fast mode is stepped over
+# (UnderResolvedTransientWarning) -- correct signal, not a false positive, and
+# orthogonal to what these tests assert. Pinned positively in
+# tests/test_relaxation_grid_scale.py rather than merely silenced here. Filtered
+# BY MESSAGE, matching the convention above (the prefix stops before the
+# colon: pytest splits filter strings on ':' before regex-matching).
+@pytest.mark.filterwarnings("ignore:Relaxation layer")
 @pytest.mark.parametrize("label,sys", ALL_V)
 def test_v_systems_d17_is_dimension_coherent(label, sys):
     """D17 must equal |beta_D_linear - Delta| / Delta (the LINEAR rate), NOT the
@@ -144,6 +164,16 @@ def test_v_systems_d17_is_dimension_coherent(label, sys):
     assert ev["beta_D"] == pytest.approx(rep.relaxation.beta_D, rel=1e-9)
 
 
+# V5 (Jaynes-Cummings near the exceptional point) is genuinely multiscale:
+# measured r_max / Delta = 396 at g = 0.05, while a uniform 80-point window over
+# ten e-foldings of the slowest mode resolves at most ~8x separation. The
+# relaxation layer therefore discloses that the fast mode is stepped over
+# (UnderResolvedTransientWarning) -- correct signal, not a false positive, and
+# orthogonal to what these tests assert. Pinned positively in
+# tests/test_relaxation_grid_scale.py rather than merely silenced here. Filtered
+# BY MESSAGE, matching the convention above (the prefix stops before the
+# colon: pytest splits filter strings on ':' before regex-matching).
+@pytest.mark.filterwarnings("ignore:Relaxation layer")
 @pytest.mark.parametrize("label,sys", ALL_V)
 def test_v_systems_relative_entropy_multiplier_never_below_one(label, sys):
     """The relative-entropy metric multiplier m = beta_D / beta_D_linear is

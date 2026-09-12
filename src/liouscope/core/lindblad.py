@@ -26,7 +26,7 @@ import numpy as np
 
 from .._consts import EPS_HERMITICITY
 from ..numerics.kronecker import unvec, vec
-from ..numerics.linalg import hermiticity_defect
+from ..numerics.linalg import hermiticity_defect, overflow_safe_mean_real
 
 # Near-zero-trace threshold for the unit-2-norm null-vector candidate in
 # steady_state(). The candidate's trace is dimensionless (bounded by sqrt(d)),
@@ -55,6 +55,59 @@ class DegenerateSteadyStateError(ValueError):
             "which is physically meaningless. Pass allow_degenerate=True to "
             "obtain one (trace-normalised) representative with a RuntimeWarning."
         )
+
+
+def _canonical_generator_scales(
+    H: np.ndarray,
+    jump_ops: Sequence[np.ndarray] | None,
+    rates: Sequence[float] | None,
+    d: int,
+) -> tuple[float, float] | None:
+    """``(coherent, dissipation)`` scales of the generator in its canonical gauge.
+
+    Canonical Lindblad gauge: every jump operator traceless,
+    ``L0 = L - tr(L)/d * I``, with the Hamiltonian compensated by
+    ``H0 = H + gamma (m L^dag - conj(m) L) / 2i`` (``m = tr(L)/d``), which
+    leaves the generator unchanged. Returns ``max|H0 - shift0 I|`` and
+    ``max|sum_k gamma_k L0_k^dag L0_k| / 2``.
+
+    ``None`` means "no dissipator to consult" and makes the caller keep the
+    gauge-fixed scale of H alone -- the fail-closed reading. It is returned for
+    an empty jump list, for every input the validation in
+    :func:`build_liouvillian` refuses (so which error surfaces first is
+    unchanged), and whenever a derived scale is not finite, because an
+    infinite scale would excuse every defect there is.
+    """
+    if jump_ops is None or len(jump_ops) == 0:
+        return None
+    try:
+        ops = [np.asarray(L, dtype=complex) for L in jump_ops]
+        gammas = [1.0] * len(ops) if rates is None else [float(g) for g in rates]
+    except (TypeError, ValueError):
+        return None
+    if len(gammas) != len(ops):
+        return None
+    eye = np.eye(d, dtype=complex)
+    H0 = np.array(H, dtype=complex)
+    K: np.ndarray = np.zeros((d, d), dtype=complex)
+    with np.errstate(all="ignore"):
+        for gamma, L in zip(gammas, ops, strict=True):
+            if L.shape != (d, d) or not np.all(np.isfinite(L)):
+                return None
+            if not (np.isfinite(gamma) and gamma >= 0.0):
+                return None
+            if gamma == 0.0:
+                continue
+            m = complex(np.sum(np.diagonal(L) / d))
+            L0 = L - m * eye
+            H0 = H0 + gamma * (m * L.conj().T - np.conj(m) * L) / 2j
+            K = K + gamma * (L0.conj().T @ L0)
+        shift0 = overflow_safe_mean_real(np.diagonal(H0))
+        _, coherent = hermiticity_defect(H0 - shift0 * eye)
+        dissipation = 0.5 * float(np.max(np.abs(K))) if K.size else 0.0
+    if not (np.isfinite(coherent) and np.isfinite(dissipation)):
+        return None
+    return coherent, dissipation
 
 
 def build_liouvillian(
@@ -115,36 +168,57 @@ def build_liouvillian(
     # diagonal shift cannot change H - H^dag), while the SCALE comes from the
     # gauge-fixed traceless part.
     d_h = H.shape[0]
-    # OVERFLOW-SAFE gauge shift (round-18 review). ``np.trace(H)`` sums the
-    # diagonal BEFORE dividing, so it overflows to ``inf`` for a finite H
-    # whose entries are large -- e.g. ``1e308 * I`` in two dimensions. The
-    # finiteness gate above has already passed at that point, ``H_gauge``
-    # becomes NaN, ``scale`` becomes NaN, and ``defect > EPS * NaN`` is
-    # FALSE. The gate then accepted an H with an order-one gauge-fixed
-    # Hermiticity defect. A comparison against NaN silently answering "no
-    # violation" is the fail-open shape this layer exists to prevent.
-    #
-    # Dividing each diagonal entry first makes the shift bounded by
-    # ``max|diag(H)|``, so it cannot overflow while H itself is finite.
-    gauge_shift = float(np.sum(np.real(np.diag(H)) / d_h))
-    H_gauge = H - gauge_shift * np.eye(d_h, dtype=complex)
-    defect, _ = hermiticity_defect(H)
-    _, scale = hermiticity_defect(H_gauge)
-    # Second line of defence, independent of the arithmetic above: a scale
-    # that is not finite and positive cannot decide anything, so the gate
-    # refuses rather than comparing against it. Without this, ANY future
-    # route to a non-finite scale would silently reopen the same hole.
+    # ROUND-19 REVIEW (external, PR #127): the shift divides before summing
+    # where the direct sum overflows; see :func:`overflow_safe_mean_real`.
+    gauge_shift = overflow_safe_mean_real(np.diagonal(H))
+    eye_h = np.eye(d_h, dtype=complex)
+    with np.errstate(over="ignore", invalid="ignore"):
+        H_gauge = H - gauge_shift * eye_h
+        defect, _ = hermiticity_defect(H)
+        _, scale = hermiticity_defect(H_gauge)
+    # Non-finite scale or defect: REFUSED, as on ``main`` (PR #127 round-2
+    # review, P4). The half-scale restatement tried in round 20 accepted
+    # ``diag(1.7e308, 1.7e308, -1.7e308)`` -- and then returned a generator
+    # containing ``inf``, because a gauge-fixed diagonal that overflows means
+    # a diagonal DIFFERENCE ``H_jj - H_kk`` that overflows, and those
+    # differences are the entries of ``-i[H, .]``.
     if not np.isfinite(scale) or not np.isfinite(defect):
         raise ValueError(
             "H is finite but its gauge-fixed Hermiticity scale is not "
             f"(max|H - H^dag| = {defect}, gauge-fixed max|H| = {scale}); "
             "the Hermiticity gate cannot be evaluated, so H is refused"
         )
-    if defect > EPS_HERMITICITY * scale:
+    # PR #127 E3 RESOLUTION (cross-family review, 2026-09-12): this API
+    # accepts a Hamiltonian H, not an arbitrary effective non-Hermitian
+    # generator decomposition. Hermiticity is therefore a structural contract
+    # of the coherent component. Canonicalizing the Lindblad gauge is still
+    # useful because L -> L + c I carries a Hermitian compensation into H; the
+    # coherent reference must be measured after that compensation. Physical
+    # dissipation is reported below for diagnostics, but it MUST NOT enlarge
+    # the tolerance for a non-Hermitian Hamiltonian. If a future API accepts a
+    # general generator/effective non-Hermitian Hamiltonian, it needs a separate
+    # validator and contract rather than weakening build_liouvillian(H, ...).
+    canonical = _canonical_generator_scales(H, jump_ops, rates, d_h)
+    reference = scale
+    coherent_scale = scale
+    dissipation_scale = 0.0
+    if canonical is not None:
+        coherent_scale, dissipation_scale = canonical
+        # OPEN QUESTION (E3, cross-family review requested): whether a large
+        # PHYSICAL dissipation may excuse a Hermiticity defect of the coherent
+        # part at all. The answer changes exactly this one expression -- e.g.
+        # to ``coherent_scale`` alone -- and nothing else in the gate.
+        reference = coherent_scale
+    # Written as ``not <=`` so that a NaN defect cannot be accepted either.
+    if not defect <= EPS_HERMITICITY * reference:
         raise ValueError(
             f"H must be Hermitian within a relative {EPS_HERMITICITY:g} "
-            f"(max|H - H^dag| = {defect:.3e}, max|H| = {scale:.3e}, "
-            f"relative defect = {defect / scale if scale else float('inf'):.3e})"
+            f"of the canonical coherent Hamiltonian scale (max|H - H^dag| = {defect:.3e}, "
+            f"gauge-fixed max|H| = {scale:.3e}, canonical-gauge coherent "
+            f"scale = {coherent_scale:.3e}, dissipation scale "
+            f"max|sum gamma L0^dag L0|/2 = {dissipation_scale:.3e}, "
+            f"relative defect = "
+            f"{defect / reference if reference else float('inf'):.3e})"
         )
 
     if jump_ops is None:

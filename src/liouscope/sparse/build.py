@@ -14,6 +14,54 @@ import numpy as np
 import scipy.sparse as sp
 
 from .._consts import EPS_HERMITICITY
+from ..numerics.linalg import overflow_safe_mean_real
+
+
+def _sparse_canonical_generator_scales(
+    H_sp: sp.csr_matrix,
+    jump_ops: Sequence[np.ndarray | sp.spmatrix] | None,
+    rates: Sequence[float] | None,
+    d: int,
+) -> tuple[float, float] | None:
+    """Sparse twin of :func:`liouscope.core.lindblad._canonical_generator_scales`.
+
+    Same canonical Lindblad gauge on the sparse data arrays; ``None`` (keep
+    the gauge-fixed scale of H alone) for an empty or malformed jump list and
+    for a non-finite derived scale.
+    """
+    if jump_ops is None or len(jump_ops) == 0:
+        return None
+    try:
+        ops = [sp.csr_matrix(L, dtype=complex) for L in jump_ops]
+        gammas = [1.0] * len(ops) if rates is None else [float(g) for g in rates]
+    except (TypeError, ValueError):
+        return None
+    if len(gammas) != len(ops):
+        return None
+    eye = sp.identity(d, dtype=complex, format="csr")
+    H0 = sp.csr_matrix(H_sp, dtype=complex, copy=True)
+    K = sp.csr_matrix((d, d), dtype=complex)
+    with np.errstate(all="ignore"):
+        for gamma, L_op in zip(gammas, ops, strict=True):
+            if L_op.shape != (d, d):
+                return None
+            if L_op.nnz and not np.all(np.isfinite(L_op.data)):
+                return None
+            if not (np.isfinite(gamma) and gamma >= 0.0):
+                return None
+            if gamma == 0.0:
+                continue
+            m = complex(np.sum(L_op.diagonal() / d))
+            L0 = (L_op - eye * m).tocsr()
+            H0 = (H0 + (L_op.conj().T * m - L_op * np.conj(m)) * (gamma / 2j)).tocsr()
+            K = (K + gamma * (L0.conj().T @ L0)).tocsr()
+        shift0 = overflow_safe_mean_real(H0.diagonal())
+        H0g = (H0 - eye * shift0).tocsr()
+        coherent = float(np.max(np.abs(H0g.data))) if H0g.nnz else 0.0
+        dissipation = 0.5 * float(np.max(np.abs(K.data))) if K.nnz else 0.0
+    if not (np.isfinite(coherent) and np.isfinite(dissipation)):
+        return None
+    return coherent, dissipation
 
 
 def build_sparse_liouvillian(
@@ -50,38 +98,44 @@ def build_sparse_liouvillian(
     # review): a real identity offset is physically inert but inflates the
     # scale, loosening the gate. Subtracting the real trace part touches only
     # the diagonal, so sparsity is preserved.
-    #
-    # ROUND-22 REVIEW (PR #121). The dense twin was made overflow-safe in
-    # round 18; this path was not, and the two had to be repaired together
-    # because the whole point of these lines is parity. ``diagonal().sum()``
-    # adds the diagonal BEFORE dividing, so it returns inf for a finite H
-    # whose entries are large -- ``1.3e308 * I`` in two dimensions is enough.
-    # ``H_gauge`` then becomes NaN, ``scale`` becomes NaN, and
-    # ``defect > EPS * NaN`` is False, so the gate ACCEPTED a matrix with a
-    # Hermiticity defect of 1e290 that the dense builder rejected on the same
-    # input. Dividing each diagonal entry first bounds the shift by
-    # ``max|diag(H)|``, which cannot overflow while H itself is finite.
-    gauge_shift = float(np.sum(H_sp.diagonal().real / d))
-    H_gauge = (
-        H_sp - sp.identity(d, dtype=complex, format="csr") * gauge_shift
-    ).tocsr()
+    # ROUND-19 REVIEW (external, PR #127), mirrored: overflow-safe shift.
+    gauge_shift = overflow_safe_mean_real(H_sp.diagonal())
+    eye_d = sp.identity(d, dtype=complex, format="csr")
+    H_gauge = (H_sp - eye_d * gauge_shift).tocsr()
     scale = float(np.max(np.abs(H_gauge.data))) if H_gauge.nnz else 0.0
-    # Second line of defence, identical to the dense builder: a scale or a
-    # defect that is not finite cannot decide anything, so the gate refuses
-    # rather than comparing against it. Without this, ANY future route to a
-    # non-finite scale silently reopens the same hole -- which is exactly how
-    # this one survived round 18.
+    # Non-finite scale or defect: refused, in parity with the dense builder
+    # and with ``main`` (PR #127 round-2 review, P4).
     if not np.isfinite(scale) or not np.isfinite(defect):
         raise ValueError(
             "H is finite but its gauge-fixed Hermiticity scale is not "
             f"(max|H - H^dag| = {defect}, gauge-fixed max|H| = {scale}); "
             "the Hermiticity gate cannot be evaluated, so H is refused"
         )
-    if defect > EPS_HERMITICITY * scale:
+    # PR #127 E3 RESOLUTION: mirror the dense component contract. The
+    # Hamiltonian must be Hermitian relative to its canonical coherent scale;
+    # physical dissipation is diagnostic and cannot excuse a structural H
+    # defect. Canonical Lindblad-gauge compensation remains load-bearing.
+    canonical = _sparse_canonical_generator_scales(H_sp, jump_ops, rates, d)
+    reference = scale
+    coherent_scale = scale
+    dissipation_scale = 0.0
+    if canonical is not None:
+        coherent_scale, dissipation_scale = canonical
+        # OPEN QUESTION (E3, cross-family review requested): whether a large
+        # PHYSICAL dissipation may excuse a Hermiticity defect of the coherent
+        # part at all. The answer changes exactly this one expression -- e.g.
+        # to ``coherent_scale`` alone -- and nothing else in the gate.
+        reference = coherent_scale
+    # Written as ``not <=`` so that a NaN defect cannot be accepted either.
+    if not defect <= EPS_HERMITICITY * reference:
         raise ValueError(
             f"H must be Hermitian within a relative {EPS_HERMITICITY:g} "
-            f"(max|H - H^dag| = {defect:.3e}, max|H| = {scale:.3e}, "
-            f"relative defect = {defect / scale if scale else float('inf'):.3e})"
+            f"of the canonical coherent Hamiltonian scale (max|H - H^dag| = {defect:.3e}, "
+            f"gauge-fixed max|H| = {scale:.3e}, canonical-gauge coherent "
+            f"scale = {coherent_scale:.3e}, dissipation scale "
+            f"max|sum gamma L0^dag L0|/2 = {dissipation_scale:.3e}, "
+            f"relative defect = "
+            f"{defect / reference if reference else float('inf'):.3e})"
         )
     if jump_ops is None:
         jump_ops = []
