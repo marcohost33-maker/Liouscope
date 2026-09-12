@@ -16,11 +16,12 @@ Each rejection test is paired with a control of the same shape that must stay
 accepted, so a guard that simply refuses large inputs cannot pass: the controls
 sit one factor of a few below the overflow boundary.
 
-Expected exceptions are caught broadly and the class is checked by
-``isinstance``: without the fix the build does not raise ``ValueError`` -- it
-either returns silently or, under this suite's ``filterwarnings = error``,
-raises a NumPy ``RuntimeWarning`` -- and the test must fail at an assertion in
-both cases, not at an unexpected exception.
+Expected exceptions are caught broadly (``except Exception``) and the class is
+checked by ``isinstance``: without the fix the build does not raise
+``ValueError`` -- it either returns silently or, under this suite's
+``filterwarnings = error``, raises a NumPy ``RuntimeWarning`` -- and the test
+must fail at an ASSERTION in both cases, not at an unexpected exception and not
+at pytest's ``DID NOT RAISE`` (which is not an assertion).
 """
 
 from __future__ import annotations
@@ -55,15 +56,22 @@ def _values(L):
     return L.data if sp.issparse(L) else np.asarray(L)
 
 
+def _raised(fn, *args, **kwargs):
+    try:
+        fn(*args, **kwargs)
+    except Exception as exc:  # broad on purpose: the class is asserted below
+        return exc
+    return None
+
+
 def _assert_refused(build, H, jumps, rates=None):
     # Warnings are escalated explicitly, independent of the pytest config: a
     # refused build must surface as the builder's ValueError, not as a NumPy
     # overflow RuntimeWarning that escaped before the guard could speak.
     with warnings.catch_warnings():
         warnings.simplefilter("error")
-        with pytest.raises(Exception) as excinfo:
-            build(H, jumps, rates)
-    err = excinfo.value
+        err = _raised(build, H, jumps, rates)
+    assert err is not None, "builder accepted the input and returned a generator"
     assert isinstance(err, ValueError), (
         f"expected ValueError, got {type(err).__name__}: {err}"
     )
@@ -179,9 +187,8 @@ def test_guard_rejects_non_canonical_sparse_duplicates_that_overflow():
     )
     assert not A.has_canonical_format
     assert np.all(np.isfinite(A.data))
-    with pytest.raises(Exception) as excinfo:
-        require_finite_generator(A, builder="test")
-    assert isinstance(excinfo.value, ValueError), repr(excinfo.value)
+    err = _raised(require_finite_generator, A, builder="test")
+    assert isinstance(err, ValueError), repr(err)
     # The caller's matrix is inspected, not mutated.
     assert A.nnz == 2
     assert not A.has_canonical_format
@@ -194,9 +201,8 @@ def test_guard_rejects_coo_duplicates_that_overflow():
         (np.array([1e308, 1e308]), (np.array([1, 1]), np.array([0, 0]))),
         shape=(2, 2),
     )
-    with pytest.raises(Exception) as excinfo:
-        require_finite_generator(A, builder="test")
-    assert isinstance(excinfo.value, ValueError), repr(excinfo.value)
+    err = _raised(require_finite_generator, A, builder="test")
+    assert isinstance(err, ValueError), repr(err)
 
 
 def test_guard_accepts_finite_and_counts_non_finite_dense():
@@ -207,10 +213,9 @@ def test_guard_accepts_finite_and_counts_non_finite_dense():
     bad = np.eye(4, dtype=complex)
     bad[0, 1] = np.nan
     bad[2, 3] = np.inf
-    with pytest.raises(Exception) as excinfo:
-        require_finite_generator(bad, builder="test")
-    assert isinstance(excinfo.value, ValueError), repr(excinfo.value)
-    assert "2 of 16" in str(excinfo.value), str(excinfo.value)
+    err = _raised(require_finite_generator, bad, builder="test")
+    assert isinstance(err, ValueError), repr(err)
+    assert "2 of 16" in str(err), str(err)
 
 
 def test_sparse_builder_guard_does_not_densify(monkeypatch):
