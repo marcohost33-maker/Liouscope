@@ -165,50 +165,23 @@ def _numerically_pure_gauge_hamiltonian() -> np.ndarray:
     return h
 
 
-def test_pure_gauge_hamiltonian_is_accepted_by_both_builders() -> None:
-    """THE regression, and it must hold for the sparse twin as well.
-
-    The finding names the mirrored sparse calculation explicitly. Two
-    builders that disagree about whether the same Hamiltonian is valid is a
-    worse defect than either verdict on its own.
-    """
+def test_numerically_nonhermitian_pure_gauge_fixture_is_rejected() -> None:
+    """E3: an identity gauge term cannot hide the remaining H defect."""
     h = _numerically_pure_gauge_hamiltonian()
-
-    # The fixture must actually sit in the regime under repair.
     defect = float(np.max(np.abs(h - h.conj().T)))
     gauge = h - (np.trace(h).real / 2.0) * np.eye(2, dtype=complex)
     gauge_scale = float(np.max(np.abs(gauge)))
-    # Not merely non-zero: the SAME non-zero everywhere. A defect that varies
-    # by platform is what made this test red on four of five CI legs while
-    # the code under test was identical -- see the fixture docstring.
-    assert defect == 0.5 * float(np.finfo(float).eps), (
-        f"fixture defect is platform-dependent again: {defect!r}"
-    )
-    assert defect > 0.0
-    assert defect > 1.0e-9 * gauge_scale, (
-        "fixture no longer trips the relative gate; the finding's premise "
-        "has changed"
-    )
+    assert defect == 0.5 * float(np.finfo(float).eps)
+    assert defect > 1.0e-9 * gauge_scale
+    for builder in (build_liouvillian, build_sparse_liouvillian):
+        with pytest.raises(ValueError, match="Hermitian"):
+            builder(h, [_SIGMA_MINUS])
 
-    # Caught broadly and asserted, not crashed into. The mutation run first
-    # reported this test as "ROT DURCH ABSTURZ:ValueError -- kein Beleg":
-    # taking the fix out makes the builder raise, the test dies at the
-    # exception rather than at an assertion, and a red that comes from an
-    # uncaught throw is not evidence about WHICH condition failed.
-    for label, builder in (
-        ("dense", build_liouvillian),
-        ("sparse", build_sparse_liouvillian),
-    ):
-        outcome: object
-        try:
-            outcome = builder(h, [_SIGMA_MINUS])
-        except Exception as exc:  # the TYPE is the measurement, so catch wide
-            outcome = exc
-        assert not isinstance(outcome, BaseException), (
-            f"{label} builder rejected the exact Hamiltonian I: "
-            f"{type(outcome).__name__}: {outcome}"
-        )
-        assert outcome.shape == (4, 4)  # type: ignore[union-attr]
+
+def test_exact_identity_hamiltonian_is_still_accepted_by_both_builders() -> None:
+    h = np.eye(2, dtype=complex)
+    assert build_liouvillian(h, [_SIGMA_MINUS]).shape == (4, 4)
+    assert build_sparse_liouvillian(h, [_SIGMA_MINUS]).shape == (4, 4)
 
 
 def test_a_real_hermiticity_defect_is_still_rejected() -> None:

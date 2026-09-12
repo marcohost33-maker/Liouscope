@@ -188,31 +188,16 @@ def build_liouvillian(
             f"(max|H - H^dag| = {defect}, gauge-fixed max|H| = {scale}); "
             "the Hermiticity gate cannot be evaluated, so H is refused"
         )
-    # PR #127 -- WHAT THE TOLERANCE IS RELATIVE TO (replaces the round-18
-    # ``d * eps * |gauge_shift|`` allowance). For ``H = c*I + N`` with ``N``
-    # strictly upper triangular, EXACT arithmetic gives ``H_gauge = N`` and
-    # ``max|H - H^dag| = max|N|`` (disjoint supports), so the relative defect
-    # is 1 whatever ``c`` and ``N`` are. (In floating point that holds only
-    # where the shift is computed exactly -- e.g. the two fixtures below; for
-    # ``c = 0.1, d = 3, N = 1e-30`` the shift carries round-off and the ratio
-    # is 7.2e-14.) A gauge shift followed by a change of units maps
-    # ``I + 2**-53 e01`` (round 18: must be accepted) and
-    # ``1e308*I + 1e290 e01`` (PR #121 round 19: must be rejected) onto the
-    # same ``e01``, so no test that reads H alone and respects both symmetries
-    # can separate them. The separating information is in the dissipator.
-    #
-    # The generator is the physical object, and its only part that fails to
-    # preserve Hermiticity is ``-i[A, .]`` with ``A`` the anti-Hermitian part
-    # of H. The pair ``(H, {L_k})`` is not unique: ``L -> L + c I`` together
-    # with ``H -> H + gamma (conj(c) L - c L^dag) / 2i`` is the SAME generator
-    # (PR #127 round-2 review measured both a zero dissipator ``2**20 * I``
-    # and this Lindblad gauge excusing an order-one defect). So both scales
-    # are read in the canonical gauge -- traceless ``L0 = L - tr(L)/d I`` and
-    # the compensated ``H0`` -- where they are functions of the generator
-    # alone: ``max(max|H0_gauge|, max|sum gamma L0^dag L0| / 2)``, the two
-    # halves of ``H_eff = H0 - i K0/2``. The compensating term is Hermitian,
-    # so the defect itself is still measured on H. Without jump operators the
-    # reference is the gauge-fixed scale of H, as on ``main``.
+    # PR #127 E3 RESOLUTION (cross-family review, 2026-09-12): this API
+    # accepts a Hamiltonian H, not an arbitrary effective non-Hermitian
+    # generator decomposition. Hermiticity is therefore a structural contract
+    # of the coherent component. Canonicalizing the Lindblad gauge is still
+    # useful because L -> L + c I carries a Hermitian compensation into H; the
+    # coherent reference must be measured after that compensation. Physical
+    # dissipation is reported below for diagnostics, but it MUST NOT enlarge
+    # the tolerance for a non-Hermitian Hamiltonian. If a future API accepts a
+    # general generator/effective non-Hermitian Hamiltonian, it needs a separate
+    # validator and contract rather than weakening build_liouvillian(H, ...).
     canonical = _canonical_generator_scales(H, jump_ops, rates, d_h)
     reference = scale
     coherent_scale = scale
@@ -223,12 +208,12 @@ def build_liouvillian(
         # PHYSICAL dissipation may excuse a Hermiticity defect of the coherent
         # part at all. The answer changes exactly this one expression -- e.g.
         # to ``coherent_scale`` alone -- and nothing else in the gate.
-        reference = max(coherent_scale, dissipation_scale)
+        reference = coherent_scale
     # Written as ``not <=`` so that a NaN defect cannot be accepted either.
     if not defect <= EPS_HERMITICITY * reference:
         raise ValueError(
             f"H must be Hermitian within a relative {EPS_HERMITICITY:g} "
-            f"of the generator scale (max|H - H^dag| = {defect:.3e}, "
+            f"of the canonical coherent Hamiltonian scale (max|H - H^dag| = {defect:.3e}, "
             f"gauge-fixed max|H| = {scale:.3e}, canonical-gauge coherent "
             f"scale = {coherent_scale:.3e}, dissipation scale "
             f"max|sum gamma L0^dag L0|/2 = {dissipation_scale:.3e}, "

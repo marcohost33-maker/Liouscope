@@ -111,8 +111,10 @@ def build_sparse_liouvillian(
             f"(max|H - H^dag| = {defect}, gauge-fixed max|H| = {scale}); "
             "the Hermiticity gate cannot be evaluated, so H is refused"
         )
-    # Generator-relative tolerance in the canonical Lindblad gauge, in parity
-    # with the dense builder; see core/lindblad.py for the derivation.
+    # PR #127 E3 RESOLUTION: mirror the dense component contract. The
+    # Hamiltonian must be Hermitian relative to its canonical coherent scale;
+    # physical dissipation is diagnostic and cannot excuse a structural H
+    # defect. Canonical Lindblad-gauge compensation remains load-bearing.
     canonical = _sparse_canonical_generator_scales(H_sp, jump_ops, rates, d)
     reference = scale
     coherent_scale = scale
@@ -123,12 +125,12 @@ def build_sparse_liouvillian(
         # PHYSICAL dissipation may excuse a Hermiticity defect of the coherent
         # part at all. The answer changes exactly this one expression -- e.g.
         # to ``coherent_scale`` alone -- and nothing else in the gate.
-        reference = max(coherent_scale, dissipation_scale)
+        reference = coherent_scale
     # Written as ``not <=`` so that a NaN defect cannot be accepted either.
     if not defect <= EPS_HERMITICITY * reference:
         raise ValueError(
             f"H must be Hermitian within a relative {EPS_HERMITICITY:g} "
-            f"of the generator scale (max|H - H^dag| = {defect:.3e}, "
+            f"of the canonical coherent Hamiltonian scale (max|H - H^dag| = {defect:.3e}, "
             f"gauge-fixed max|H| = {scale:.3e}, canonical-gauge coherent "
             f"scale = {coherent_scale:.3e}, dissipation scale "
             f"max|sum gamma L0^dag L0|/2 = {dissipation_scale:.3e}, "

@@ -1,36 +1,10 @@
-"""PR #127: the Hermiticity tolerance is relative to the GENERATOR, not to H alone.
+"""PR #127 Hermiticity contract after E3 cross-family resolution.
 
-Why a third predicate was needed at all -- measured, not argued:
-
-Two review-pinned fixtures had to get OPPOSITE verdicts, and the two predicates
-on the table gave them the SAME one:
-
-* ``F1 = I + 2**-53 * e01`` with the jump operator sigma-, the numerically pure
-  gauge Hamiltonian of PR #127 round 18/19 (``tests/test_pr127_review_round19.py``),
-  which must be ACCEPTED;
-* ``F2 = 1e308 * I + 1e290 * e01`` with no jump operators, the overflow fixture
-  of PR #121 round 19/22 (``tests/test_pr121_review_round19.py``,
-  ``tests/test_pr121_review_round22.py``), which must be REJECTED.
-
-Both have the form ``c * I + N`` with ``N`` strictly upper triangular. For every
-such matrix the gauge shift is ``c`` exactly, the gauge-fixed part is ``N``, and
-``max|H - H^dag| = max|N|`` because ``N`` and ``N^dag`` have disjoint supports --
-so ``defect / gauge_scale`` is exactly 1 for both, by construction. Worse, a
-gauge shift (twelfth-round review) followed by a change of units (issue #109)
-maps BOTH onto ``e01``. Any test that reads only ``H`` and respects both
-symmetries is therefore constant on that orbit and cannot separate them: the
-gauge-fixed relative gate on ``main`` rejected both, and the round-18 allowance
-``d * eps * |gauge_shift|`` -- which breaks the gauge symmetry -- accepted both.
-
-The information that separates them is not in ``H``. It is in the dissipator:
-the physical object is the generator, whose only part that fails to preserve
-Hermiticity is ``-i[A, .]`` with ``A`` the anti-Hermitian part of ``H`` (the
-dissipator is Hermiticity preserving by construction). ``H`` and
-``K / 2 = sum_k gamma_k L_k^dag L_k / 2`` enter the generator on the same
-footing, as ``H_eff = H - i K / 2``, so the defect is now measured against
-``max(max|H_gauge|, max|K| / 2)``. That scale is gauge invariant (``K`` does
-not see ``c``), covariant under a change of units, and with no dissipation it
-IS the old gauge-fixed scale -- every purely coherent verdict is unchanged.
+The builder API accepts H as a Hamiltonian. Canonical Lindblad-gauge
+compensation remains part of the measurement, but physical dissipation
+does not relax the structural Hermiticity requirement of H. The tests
+below preserve the earlier gauge/unit/overflow discrimination while
+reversing the two fixtures that had encoded dissipation as an excuse.
 """
 
 from __future__ import annotations
@@ -113,19 +87,35 @@ def test_the_unit_defect_on_a_huge_gauge_term_is_rejected() -> None:
         assert sparse is not None and "Hermitian" in sparse, (len(jumps), sparse)
 
 
-def test_the_pure_gauge_fixture_is_accepted_because_of_its_dissipator() -> None:
-    """F1 with sigma-: accepted, and for a stated reason.
-
-    ``defect = 2**-53`` against a dissipation scale of ``1/2`` is a relative
-    defect of 2.2e-16, seven orders below the gate. The same H reappears in
-    the negative controls below with the dissipation taken away.
-    """
+def test_nonhermitian_pure_gauge_fixture_is_rejected_despite_dissipation() -> None:
+    """F1 reversed by E3: dissipation cannot make non-Hermitian H valid."""
     H = np.eye(2, dtype=complex)
     H[0, 1] = 0.5 * _EPS
     _one_orbit_premise(H)
-    assert _verdicts(H, [_SIGMA_MINUS]) == (None, None)
+    dense, sparse = _verdicts(H, [_SIGMA_MINUS])
+    assert dense is not None and "Hermitian" in dense, dense
+    assert sparse is not None and "Hermitian" in sparse, sparse
 
 
+@pytest.mark.parametrize("rate", [0.0, 1.0e-12, 1.0, 1.0e12])
+def test_dissipation_strength_cannot_move_hamiltonian_structure_verdict(
+    rate: float,
+) -> None:
+    H = np.eye(2, dtype=complex)
+    H[0, 1] = 0.5 * _EPS
+    dense, sparse = _verdicts(H, [_SIGMA_MINUS], [rate])
+    assert dense is not None and "Hermitian" in dense, (rate, dense)
+    assert sparse is not None and "Hermitian" in sparse, (rate, sparse)
+
+
+@pytest.mark.parametrize("rate", [0.0, 1.0e-12, 1.0, 1.0e12])
+def test_exactly_hermitian_hamiltonian_survives_dissipation_sweep(rate: float) -> None:
+    H = np.array([[1.0, 0.25], [0.25, -1.0]], dtype=complex)
+    assert _verdicts(H, [_SIGMA_MINUS], [rate]) == (None, None)
+
+
+# ---------------------------------------------------------------------------
+# Negative controls: dissipation never excuses a Hamiltonian defect
 # ---------------------------------------------------------------------------
 # Negative controls: the excuse is a MAGNITUDE, not the presence of a jump op
 # ---------------------------------------------------------------------------
@@ -189,18 +179,18 @@ def test_the_verdict_does_not_move_with_the_gauge(defect: float) -> None:
 
 @pytest.mark.parametrize("unit", [1.0e-6, 1.0, 1.0e6])
 def test_the_verdict_does_not_move_with_the_units(unit: float) -> None:
-    """Rescaling H and every rate by one factor is a change of units.
-
-    F1 stays accepted and F2's shape (no dissipator) stays rejected at every
-    unit; ``unit`` is a power of ten, so the pure-gauge diagonal is exact.
-    """
+    """Rescaling all rate/energy quantities cannot change H-structure validity."""
     H = unit * np.eye(2, dtype=complex)
     H[0, 1] = unit * 0.5 * _EPS
-    assert _verdicts(H, [_SIGMA_MINUS], [unit]) == (None, None)
+    dense, sparse = _verdicts(H, [_SIGMA_MINUS], [unit])
+    assert dense is not None and "Hermitian" in dense, (unit, dense)
+    assert sparse is not None and "Hermitian" in sparse, (unit, sparse)
     dense, sparse = _verdicts(H, [])
     assert dense is not None and sparse is not None
 
 
+# ---------------------------------------------------------------------------
+# Round 2 of the review: canonical Lindblad-gauge compensation remains load-bearing.
 # ---------------------------------------------------------------------------
 # Round 2 of the review: the scale must be a function of the GENERATOR.
 # ---------------------------------------------------------------------------
@@ -261,25 +251,18 @@ def test_the_verdict_does_not_move_with_the_lindblad_gauge(defect: float) -> Non
     assert all(v is not None and "Hermitian" in v for v in shifted), shifted
 
 
-@pytest.mark.parametrize(
-    ("fraction", "accepted"), [(0.75, False), (0.25, True)], ids=["above", "below"]
-)
-def test_the_half_in_the_dissipation_scale_is_load_bearing(
-    fraction: float, accepted: bool
+@pytest.mark.parametrize("fraction", [0.25, 0.75])
+def test_dissipation_scale_is_diagnostic_not_an_acceptance_reference(
+    fraction: float,
 ) -> None:
-    """``max|K|/2``, not ``max|K|``: pinned from both sides of the boundary.
-
-    ``H = I + a e01`` with unit-rate sigma-: coherent scale and defect are both
-    ``a``, the dissipation scale is ``max|sigma+ sigma-| / 2 = 1/2``, so the
-    boundary sits at ``a = EPS / 2``. ``a = 0.75 EPS`` must be refused -- a
-    scale without the half would accept it -- and ``a = 0.25 EPS`` accepted.
-    """
+    """Both sides of the former K/2 boundary are now structural H failures."""
     from liouscope._consts import EPS_HERMITICITY
 
     H = np.eye(2, dtype=complex)
     H[0, 1] = fraction * EPS_HERMITICITY
     dense, sparse = _verdicts(H, [_SIGMA_MINUS])
-    assert (dense is None, sparse is None) == (accepted, accepted), (dense, sparse)
+    assert dense is not None and "Hermitian" in dense, (fraction, dense)
+    assert sparse is not None and "Hermitian" in sparse, (fraction, sparse)
 
 
 def test_the_lindblad_gauge_with_unequal_rates_keeps_verdict_and_parity() -> None:
