@@ -18,7 +18,9 @@ jobs:
           ref: fix/127-review-hardening-2026-09-12
           fetch-depth: 1
       - name: Apply guarded hardening migration
-        run: python tools/apply_pr127_review_hardening_20260912.py
+        run: |
+          python tools/apply_pr127_review_hardening_20260912.py
+          python tools/apply_pr127_review_hardening_corrections_20260912.py
       - name: Syntax check changed Python modules
         run: |
           python -m py_compile \
@@ -51,6 +53,7 @@ jobs:
         run: |
           rm .github/workflows/pr127-review-hardening-one-shot.yml
           rm tools/apply_pr127_review_hardening_20260912.py
+          rm tools/apply_pr127_review_hardening_corrections_20260912.py
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add -A
