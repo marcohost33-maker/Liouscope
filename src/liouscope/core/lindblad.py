@@ -25,6 +25,7 @@ from typing import Literal
 import numpy as np
 
 from .._consts import EPS_HERMITICITY
+from ..numerics.generator_guard import require_finite_generator
 from ..numerics.kronecker import unvec, vec
 from ..numerics.linalg import hermiticity_defect
 
@@ -172,19 +173,29 @@ def build_liouvillian(
 
     eye = np.eye(d, dtype=complex)
 
-    # Coherent part: -i ( I (x) H - H.T (x) I )
-    L_super = -1j * (np.kron(eye, H) - np.kron(H.T, eye))
+    # Output guard (issue #152): the gates above see only the INPUT, but a
+    # finite input can assemble into a non-finite generator -- H_jj - H_kk
+    # overflows for diag(1e308, -1e308), a dissipator product for an entry of
+    # 1e200. Float warnings are silenced during assembly because an overflow
+    # can never be undone by the remaining +, -, * with finite operands
+    # (inf * 0 and inf - inf are NaN), so every one of them reaches the
+    # returned array and require_finite_generator raises the ValueError
+    # instead of a RuntimeWarning cascade.
+    with np.errstate(over="ignore", invalid="ignore"):
+        # Coherent part: -i ( I (x) H - H.T (x) I )
+        L_super = -1j * (np.kron(eye, H) - np.kron(H.T, eye))
 
-    # Dissipative part
-    for gamma, L_op in zip(rates, jump_ops, strict=True):
-        if gamma == 0.0:
-            continue
-        LdagL = L_op.conj().T @ L_op
-        L_super += gamma * (
-            np.kron(L_op.conj(), L_op)
-            - 0.5 * np.kron(eye, LdagL)
-            - 0.5 * np.kron(LdagL.T, eye)
-        )
+        # Dissipative part
+        for gamma, L_op in zip(rates, jump_ops, strict=True):
+            if gamma == 0.0:
+                continue
+            LdagL = L_op.conj().T @ L_op
+            L_super += gamma * (
+                np.kron(L_op.conj(), L_op)
+                - 0.5 * np.kron(eye, LdagL)
+                - 0.5 * np.kron(LdagL.T, eye)
+            )
+    require_finite_generator(L_super, builder="build_liouvillian")
     return L_super
 
 

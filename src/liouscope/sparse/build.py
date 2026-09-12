@@ -14,6 +14,7 @@ import numpy as np
 import scipy.sparse as sp
 
 from .._consts import EPS_HERMITICITY
+from ..numerics.generator_guard import require_finite_generator
 
 
 def build_sparse_liouvillian(
@@ -103,15 +104,24 @@ def build_sparse_liouvillian(
             raise ValueError(f"rate {g} must be non-negative")
 
     eye = sp.identity(d, dtype=complex, format="csr")
-    # Coherent part
-    L_super = -1j * (sp.kron(eye, H_sp, format="csr") - sp.kron(H_sp.T, eye, format="csr"))
-    for gamma, L_op in zip(rates, sparse_jumps, strict=True):
-        if gamma == 0.0:
-            continue
-        LdagL = (L_op.conj().T @ L_op).tocsr()
-        L_super = L_super + gamma * (
-            sp.kron(L_op.conj(), L_op, format="csr")
-            - 0.5 * sp.kron(eye, LdagL, format="csr")
-            - 0.5 * sp.kron(LdagL.T, eye, format="csr")
+    # Output guard in parity with the dense builder (issue #152): see the
+    # comment there and liouscope.numerics.generator_guard for why checking
+    # the canonical ``.data`` is exact and never densifies. SciPy prunes only
+    # results equal to zero, so an overflow is never lost as an implicit zero.
+    with np.errstate(over="ignore", invalid="ignore"):
+        # Coherent part
+        L_super = -1j * (
+            sp.kron(eye, H_sp, format="csr") - sp.kron(H_sp.T, eye, format="csr")
         )
-    return L_super.tocsr()
+        for gamma, L_op in zip(rates, sparse_jumps, strict=True):
+            if gamma == 0.0:
+                continue
+            LdagL = (L_op.conj().T @ L_op).tocsr()
+            L_super = L_super + gamma * (
+                sp.kron(L_op.conj(), L_op, format="csr")
+                - 0.5 * sp.kron(eye, LdagL, format="csr")
+                - 0.5 * sp.kron(LdagL.T, eye, format="csr")
+            )
+    L_out = L_super.tocsr()
+    require_finite_generator(L_out, builder="build_sparse_liouvillian")
+    return L_out
