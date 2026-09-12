@@ -1,0 +1,58 @@
+name: pr127-review-hardening-one-shot
+
+on:
+  push:
+    branches: ["fix/127-review-hardening-2026-09-12"]
+
+permissions:
+  contents: write
+
+jobs:
+  harden:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out exact review-hardening branch
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+        with:
+          ref: fix/127-review-hardening-2026-09-12
+          fetch-depth: 1
+      - name: Apply guarded hardening migration
+        run: python tools/apply_pr127_review_hardening_20260912.py
+      - name: Syntax check changed Python modules
+        run: |
+          python -m py_compile \
+            src/liouscope/fitting/car1.py \
+            src/liouscope/fitting/gls.py \
+            src/liouscope/fitting/bootstrap.py \
+            src/liouscope/diagnostics/relaxation.py \
+            src/liouscope/_diagnostics.py \
+            src/liouscope/_types.py \
+            src/liouscope/core/lindblad.py \
+            src/liouscope/sparse/build.py \
+            src/liouscope/numerics/linalg.py \
+            tests/test_pr127_review_hardening_20260912.py
+      - name: Install test dependencies
+        run: |
+          python -m pip install --disable-pip-version-check --upgrade pip
+          python -m pip install --disable-pip-version-check -e '.[dev,qutip]'
+      - name: Focused regression and anchor tests
+        run: |
+          pytest -q \
+            tests/test_pr127_review_hardening_20260912.py \
+            tests/test_pr127_generator_relative_hermiticity.py \
+            tests/test_pr127_review_round19.py \
+            tests/test_anchors.py
+      - name: Static checks
+        run: |
+          ruff check src tests benchmarks
+          mypy src/liouscope
+      - name: Commit tested production changes and remove one-shot machinery
+        run: |
+          rm .github/workflows/pr127-review-hardening-one-shot.yml
+          rm tools/apply_pr127_review_hardening_20260912.py
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add -A
+          git commit -m 'fix(pr127): close review hardening gaps'
+          git push origin HEAD:fix/127-review-hardening-2026-09-12
