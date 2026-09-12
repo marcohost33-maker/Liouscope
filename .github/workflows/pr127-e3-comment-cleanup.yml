@@ -1,0 +1,49 @@
+name: pr127-e3-comment-cleanup
+
+on:
+  push:
+    branches:
+      - fix/115-zweiskalen-car1
+
+permissions:
+  contents: write
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          ref: fix/115-zweiskalen-car1
+      - name: Replace stale E3 comments with resolved contract
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          old = """        # OPEN QUESTION (E3, cross-family review requested): whether a large
+          # PHYSICAL dissipation may excuse a Hermiticity defect of the coherent
+          # part at all. The answer changes exactly this one expression -- e.g.
+          # to ``coherent_scale`` alone -- and nothing else in the gate.
+"""
+          new = """        # E3 RESOLVED (cross-family review, 2026-09-12): physical
+          # dissipation is diagnostic only and cannot relax H's structural
+          # Hermiticity contract. See the PR review record and focused tests.
+"""
+          for rel in ("src/liouscope/core/lindblad.py", "src/liouscope/sparse/build.py"):
+              path = Path(rel)
+              text = path.read_text(encoding="utf-8")
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f"{rel}: expected one stale E3 block, found {count}")
+              path.write_text(text.replace(old, new, 1), encoding="utf-8")
+          PY
+      - name: Syntax-check both builders
+        run: python -m py_compile src/liouscope/core/lindblad.py src/liouscope/sparse/build.py
+      - name: Remove one-shot workflow and commit
+        run: |
+          rm .github/workflows/pr127-e3-comment-cleanup.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "docs(lindblad): mark E3 Hermiticity contract resolved"
+          git push origin HEAD:fix/115-zweiskalen-car1
