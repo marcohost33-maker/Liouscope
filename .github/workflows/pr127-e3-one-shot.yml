@@ -1,0 +1,34 @@
+name: pr127-e3-one-shot
+
+on:
+  push:
+    branches:
+      - fix/115-zweiskalen-car1
+
+permissions:
+  contents: write
+
+jobs:
+  migrate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          ref: fix/115-zweiskalen-car1
+      - name: Apply guarded E3 migration
+        run: python tools/apply_pr127_e3_resolution.py
+      - name: Run focused Hermiticity tests
+        run: |
+          python -m pip install --disable-pip-version-check -e . pytest scipy
+          python -m pytest -q \
+            tests/test_pr127_generator_relative_hermiticity.py \
+            tests/test_pr127_review_round19.py
+      - name: Remove one-shot machinery and commit
+        run: |
+          rm .github/workflows/pr127-e3-one-shot.yml
+          rm tools/apply_pr127_e3_resolution.py
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "fix(lindblad): bind H Hermiticity to coherent scale"
+          git push origin HEAD:fix/115-zweiskalen-car1
