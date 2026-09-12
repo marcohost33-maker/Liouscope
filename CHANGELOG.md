@@ -63,6 +63,27 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     the change is not visible in `input_hash`.
 
 ### Fixed
+- **Both Liouvillian builders returned a non-finite generator for finite input
+  whose assembly overflows (issue #152).** Every gate of `build_liouvillian`
+  and `build_sparse_liouvillian` checked the INPUT, none the OUTPUT. The
+  coherent part `-i[H, .]` forms the diagonal differences `H_jj - H_kk`, so
+  `H = diag(1e308, -1e308)` passed every gate and assembled into `inf`/`NaN`
+  entries; a dissipator entry of `1e200` (products `L_k^dag L_k`,
+  `L_k.conj() (x) L_k`) or a finite rate of `1e300` on a finite dissipator did
+  the same. Both builders now pass the assembled generator through the shared
+  `numerics.generator_guard.require_finite_generator` and raise `ValueError`,
+  the family of the existing non-finite input gates. The check is exact: dense
+  looks at every entry; sparse looks at `.data` of the CANONICAL form in
+  O(nnz) without densifying (SciPy prunes only results equal to zero, so an
+  overflow is never lost as an implicit zero, and finite duplicate entries
+  whose sum overflows are summed on a copy first). The assembly runs under
+  `np.errstate(over="ignore", invalid="ignore")`: an overflow cannot return
+  to a finite value through the remaining finite `+`, `-`, `*`, so the guard
+  sees every one, and callers get the `ValueError` instead of a NumPy
+  `RuntimeWarning` cascade. Inputs whose generator is representable -- e.g.
+  `diag(4e307, -4e307)`, or a dissipator entry of `1e150` -- are accepted and
+  assembled with unchanged arithmetic; only inputs that previously yielded a
+  non-finite generator now raise. The run manifest contract is untouched.
 - **The trace-preservation defect overflowed on the way to a column sum that is
   exactly zero (issue #139, P2 review).** `trace_preservation_defect` assembled
   `vec(I)^H L` with an ordinary matrix product, which accumulates in ordinary
