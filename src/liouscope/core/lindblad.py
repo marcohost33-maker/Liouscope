@@ -85,6 +85,13 @@ def build_liouvillian(
     -------
     np.ndarray
         Complex ``(d^2, d^2)`` array.
+
+    Raises
+    ------
+    ValueError
+        On invalid input, and also when finite input assembles into a
+        generator with a non-finite entry, e.g. overflowing diagonal
+        differences ``H_jj - H_kk`` (issue #152).
     """
     if order != "F":
         raise ValueError(

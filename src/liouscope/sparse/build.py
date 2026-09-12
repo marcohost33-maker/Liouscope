@@ -27,7 +27,8 @@ def build_sparse_liouvillian(
     """Sparse GKSL superoperator in column-stacking convention.
 
     Mirrors :func:`liouscope.core.lindblad.build_liouvillian` but stores the
-    result as ``scipy.sparse.csr_matrix``.
+    result as ``scipy.sparse.csr_matrix``, including its ``ValueError`` for a
+    generator whose assembly overflows to a non-finite entry (issue #152).
     """
     if order != "F":
         raise ValueError("build_sparse_liouvillian only supports order='F'")
