@@ -293,6 +293,11 @@ report.relaxation.worst_resolved_blind_interval  # largest unsampled gap while i
 report.relaxation.worst_resolved_blind_start     # where that gap begins; 0.0 with t_grid[0] > 0 = unsampled lead-in
 ```
 
+All four are NaN when the spectral layer's zero-mode certificate is applicable
+but unresolved: D1 is withheld there, and the relaxation layer then derives
+nothing — no fast scale, no resolution guard, no missed-mode identity — from
+the candidate spectrum the certificate rejected.
+
 The reported rates then describe the dynamics the window *does* resolve, and a
 caller who needs the missing component must supply a `t_grid` covering it —
 reading the resulting rates as describing *that* window.

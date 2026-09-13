@@ -259,7 +259,10 @@ class RelaxationResult:
     # ``relaxation.MIN_SAMPLES_PER_FAST_EFOLD`` that mode was stepped over
     # rather than measured, so the reported rates describe only the dynamics
     # the window resolves and an ``UnderResolvedTransientWarning`` is emitted.
-    # ``inf`` when nothing decays. The name is kept for compatibility; the
+    # ``inf`` when nothing decays; NaN when the spectral layer's zero-mode
+    # certificate was applicable but unresolved, in which case no rate was
+    # measured and nothing here is derived from the rejected candidate
+    # spectrum (PR #154 review). The name is kept for compatibility; the
     # three fields below say WHICH mode and WHICH interval the number is about.
     samples_per_fast_efolding: float = float("nan")
     # Identity of the mode behind ``samples_per_fast_efolding`` (PR #127
@@ -268,7 +271,8 @@ class RelaxationResult:
     # which that interval starts (``0.0`` with ``t_grid[0] > 0`` means an
     # unsampled lead-in). These are exactly the values the warning quotes, so
     # the persisted report can name the missed component after the warning
-    # stream is gone. NaN when nothing was measured. Additive + defaulted.
+    # stream is gone. NaN when nothing was measured, including the unresolved
+    # spectrum case above. Additive + defaulted.
     worst_resolved_rate: float = float("nan")
     worst_resolved_blind_interval: float = float("nan")
     worst_resolved_blind_start: float = float("nan")

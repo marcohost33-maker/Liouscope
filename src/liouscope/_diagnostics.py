@@ -168,6 +168,23 @@ def diagnose(
         rho_initial = np.eye(d, dtype=complex) / d
 
     spectral = compute_spectral_layer(L_super, rho_steady_state)
+    # ROUND-23 REVIEW (PR #121). The certificate's verdict has to travel with
+    # the spectrum it describes. ``spectral.eigenvalues`` were passed on
+    # unconditionally, so on an applicable-but-unresolved certificate D16 was
+    # published from exactly the candidate spectrum for which D1/D3/D4 had just
+    # been withheld as NaN. Same predicate as the spectral layer uses for
+    # D1/D3/D4 and ``has_complex_pairs``, so the whole run withholds on one
+    # condition rather than on two.
+    #
+    # ``zero_mode_certificate`` is optional on ``SpectralResult`` (synthetic
+    # callers construct one without it). No certificate is not an unresolved
+    # certificate: it is the pre-#112 state, in which D16 was always reported.
+    # Withholding there would be a refusal derived from nothing measured --
+    # the same mistake in the opposite direction.
+    _cert = spectral.zero_mode_certificate
+    _spectrum_resolved = _cert is None or not (
+        bool(_cert["applicable"]) and not bool(_cert["resolved"])
+    )
     nonnorm = compute_nonnormality_layer(L_super)
     resolvent = compute_resolvent_layer(L_super)
     relaxation = compute_relaxation_layer(
@@ -187,28 +204,15 @@ def diagnose(
         # bare ``np.linalg.eigvals``, which could repeat a primary-driver
         # failure the spectral layer had just repaired and, where it did not
         # fail, would read rates off a spectrum D1 was not certified on.
-        eigenvalues=spectral.eigenvalues,
+        # PR #154 review: the same certificate verdict gates the forwarding.
+        # An unresolved candidate spectrum is not handed over, and the layer
+        # is told so, so it neither re-solves nor names a missed mode from it.
+        eigenvalues=spectral.eigenvalues if _spectrum_resolved else None,
+        spectrum_resolved=_spectrum_resolved,
         bootstrap_B=bootstrap_B,
         seed=resolved_seed,
     )
     transient = compute_transient_layer(L_super, spectral.gap)
-    # ROUND-23 REVIEW (PR #121). The certificate's verdict has to travel with
-    # the spectrum it describes. ``spectral.eigenvalues`` were passed on
-    # unconditionally, so on an applicable-but-unresolved certificate D16 was
-    # published from exactly the candidate spectrum for which D1/D3/D4 had just
-    # been withheld as NaN. Same predicate as the spectral layer uses for
-    # D1/D3/D4 and ``has_complex_pairs``, so the whole run withholds on one
-    # condition rather than on two.
-    #
-    # ``zero_mode_certificate`` is optional on ``SpectralResult`` (synthetic
-    # callers construct one without it). No certificate is not an unresolved
-    # certificate: it is the pre-#112 state, in which D16 was always reported.
-    # Withholding there would be a refusal derived from nothing measured --
-    # the same mistake in the opposite direction.
-    _cert = spectral.zero_mode_certificate
-    _spectrum_resolved = _cert is None or not (
-        bool(_cert["applicable"]) and not bool(_cert["resolved"])
-    )
     lep = compute_lep_layer(
         L_super,
         spectral.eigenvalues,

@@ -799,6 +799,7 @@ def compute_relaxation_layer(
     t_grid: np.ndarray | None = None,
     gap: float | None = None,
     eigenvalues: np.ndarray | None = None,
+    spectrum_resolved: bool = True,
     bootstrap_B: int = 200,
     seed: int = 42,
 ) -> RelaxationResult:
@@ -823,6 +824,18 @@ def compute_relaxation_layer(
         #127). A direct caller who omits both ``gap`` and ``eigenvalues`` gets
         both from one spectral-layer call; a caller who supplies ``gap`` alone
         keeps the historical behaviour, a fresh eigensolve of ``L_super``.
+    spectrum_resolved
+        ``False`` when the spectral layer's zero-mode certificate is
+        applicable but unresolved -- the predicate under which it withholds
+        D1/D3/D4 (issues #112/#113). The candidate spectrum is then not a
+        measurement, so nothing in this layer is derived from it: no fast
+        decay scale (the default window is the documented legacy one, as the
+        NaN gap already implies), no resolution guard, no
+        ``worst_resolved_*`` identity, and no eigensolve of ``L_super`` either,
+        which would only reproduce the same rejected spectrum (PR #154 review).
+        ``samples_per_fast_efolding`` and the three ``worst_resolved_*``
+        fields are NaN in that case. A direct caller who omits ``gap`` gets
+        this flag from the same spectral-layer call as the gap.
     """
     L_super = np.asarray(L_super)
     n2 = L_super.shape[0]
@@ -847,7 +860,14 @@ def compute_relaxation_layer(
         if gap is None:
             spectral = compute_spectral_layer(L_super, rho_steady_state)
             gap = spectral.gap
-            if eigenvalues is None:
+            # Same predicate ``diagnose`` applies (ROUND-23 review, PR #121):
+            # an applicable-but-unresolved certificate makes the candidate
+            # spectrum untrustworthy; no certificate is the pre-#112 state.
+            cert = spectral.zero_mode_certificate
+            spectrum_resolved = cert is None or not (
+                bool(cert["applicable"]) and not bool(cert["resolved"])
+            )
+            if eigenvalues is None and spectrum_resolved:
                 eigenvalues = spectral.eigenvalues
         # The FAST scale comes from the spectrum, never from a guess: it is
         # ``max(-Re lambda)``, the same eigenvalues the resolution guard reads.
@@ -855,7 +875,13 @@ def compute_relaxation_layer(
         # exists, and ``default_relaxation_grid`` then keeps the uniform window
         # -- fail-closed, so an unusable spectrum degrades to the historical
         # behaviour plus its warning rather than to an invented timescale.
-        fast_rate = fastest_decay_rate(L_super, eigenvalues=eigenvalues)
+        # An UNRESOLVED spectrum is not consulted at all (PR #154 review): the
+        # NaN is the same "no usable timescale" the withheld gap carries.
+        fast_rate = (
+            fastest_decay_rate(L_super, eigenvalues=eigenvalues)
+            if spectrum_resolved
+            else float("nan")
+        )
         t_grid = default_relaxation_grid(gap, fast_rate=fast_rate)
         if not (np.isfinite(gap) and gap > 0.0):
             t_grid_source = "legacy_fixed"
@@ -883,9 +909,16 @@ def compute_relaxation_layer(
 
     # Under-resolution disclosure. Applies to the window actually used, so a
     # caller-supplied grid is checked on the same terms as the default.
-    fast_resolution, worst_rate, blind, blind_start = _resolution_detail(
-        L_super, t_grid, eigenvalues=eigenvalues
-    )
+    # PR #154 review: on an unresolved spectrum the guard has no measured
+    # rates to name a missed mode with, so it measures nothing -- NaN for the
+    # ratio and for the mode identity, and no warning that would attribute a
+    # specific rate and interval to a spectrum the certificate has rejected.
+    if spectrum_resolved:
+        fast_resolution, worst_rate, blind, blind_start = _resolution_detail(
+            L_super, t_grid, eigenvalues=eigenvalues
+        )
+    else:
+        fast_resolution = worst_rate = blind = blind_start = float("nan")
     if np.isfinite(fast_resolution) and fast_resolution < MIN_SAMPLES_PER_FAST_EFOLD:
         # Name the interval from WHERE it is, not from a size comparison: on a
         # two-scale grid the largest late step exceeds the first step while no

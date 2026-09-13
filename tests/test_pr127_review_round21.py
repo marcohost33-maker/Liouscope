@@ -305,3 +305,85 @@ def test_the_worst_mode_fields_default_to_nan_when_nothing_decays() -> None:
     assert np.isnan(rep.worst_resolved_rate)
     assert np.isnan(rep.worst_resolved_blind_interval)
     assert np.isnan(rep.worst_resolved_blind_start)
+
+
+# ---------------------------------------------------------------------------
+# PR #154 review: an unresolved certificate must not feed the relaxation layer
+# ---------------------------------------------------------------------------
+
+_STIFF_PAIRS = [(0, 3), (0, 2), (1, 0), (3, 2), (2, 1)]
+_STIFF_RATES = [7.28e-6, 3.67e-5, 1.53e-5, 1.0e8, 1.42e-5]
+
+
+def _stiff_unresolved() -> tuple[np.ndarray, np.ndarray]:
+    """Four-level classical jump network whose fast rate defeats the eigensolve.
+
+    Same construction as ``tests/test_spectral_certificate.py``; the steady
+    state is the population fixed point, passed explicitly because the
+    degenerate numerical null space would otherwise refuse the run.
+    """
+    from liouscope.numerics.linalg import certified_eigvals
+
+    d = 4
+    jumps = []
+    for to, frm in _STIFF_PAIRS:
+        j = np.zeros((d, d), dtype=complex)
+        j[to, frm] = 1.0
+        jumps.append(j)
+    L = build_liouvillian(np.zeros((d, d), dtype=complex), jumps, _STIFF_RATES)
+    k = np.zeros((d, d))
+    for (to, frm), g in zip(_STIFF_PAIRS, _STIFF_RATES, strict=True):
+        k[to, frm] += g
+        k[frm, frm] -= g
+    w, v = np.linalg.eig(k)
+    p = np.real(v[:, int(np.argmin(np.abs(w)))])
+    rho_ss = np.diag(p / p.sum()).astype(complex)
+    _ev, cert = certified_eigvals(L)
+    if cert.resolved:  # pragma: no cover - guard against future solver changes
+        pytest.skip("fixture no longer produces an unresolved spectrum")
+    return L, rho_ss
+
+
+def test_an_unresolved_spectrum_names_no_missed_mode() -> None:
+    """Measured before the gate: ``worst_resolved_rate = 1e8``, blind interval
+    ``0.127``, start ``0.0`` and ``samples_per_fast_efolding = 7.9e-8`` -- all
+    read off the candidate spectrum for which D1 had just been withheld."""
+    L, rho_ss = _stiff_unresolved()
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        rep = diagnose(L, rho_steady_state=rho_ss, bootstrap_B=5, seed=1)
+    assert np.isnan(rep.spectral.gap), "fixture premise: D1 is withheld"
+    r = rep.relaxation
+    assert r.t_grid_source == "legacy_fixed"
+    assert np.isnan(r.samples_per_fast_efolding)
+    assert np.isnan(r.worst_resolved_rate)
+    assert np.isnan(r.worst_resolved_blind_interval)
+    assert np.isnan(r.worst_resolved_blind_start)
+    assert not [w for w in caught if issubclass(w.category, UnderResolvedTransientWarning)]
+
+
+def test_an_unresolved_spectrum_is_not_resolved_again_by_the_layer(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Told the spectrum is unresolved, the layer must not launch its own solve."""
+    L, rho_ss = _stiff_unresolved()
+    calls = _count_eigvals_calls(monkeypatch)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        rep = compute_relaxation_layer(
+            L, rho_steady_state=rho_ss, gap=float("nan"), eigenvalues=None,
+            spectrum_resolved=False, bootstrap_B=5, seed=1,
+        )
+    assert [c for c in calls if c == (16, 16)] == [], calls
+    assert np.isnan(rep.worst_resolved_rate)
+
+
+def test_a_direct_caller_derives_the_certificate_verdict_itself() -> None:
+    """Omitting ``gap`` must reach the same withholding as ``diagnose()``."""
+    L, rho_ss = _stiff_unresolved()
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        rep = compute_relaxation_layer(L, rho_steady_state=rho_ss, bootstrap_B=5, seed=1)
+    assert rep.t_grid_source == "legacy_fixed"
+    assert np.isnan(rep.samples_per_fast_efolding)
+    assert np.isnan(rep.worst_resolved_rate)

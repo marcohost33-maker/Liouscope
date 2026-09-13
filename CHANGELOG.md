@@ -102,7 +102,15 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `diagnose()` forwards `SpectralResult.eigenvalues` next to the gap, and a
   direct caller who omits both gets both from one spectral-layer call. Zero
   eigensolves now run in the relaxation layer of `diagnose()`. Passing `gap`
-  alone keeps the historical fresh solve.
+  alone keeps the historical fresh solve. The forwarding is gated on the
+  certificate (PR #154 review): when the zero-mode certificate is applicable
+  but unresolved -- the predicate under which D1/D3/D4 are withheld -- the
+  candidate spectrum is not handed over and `spectrum_resolved=False` tells
+  the layer to derive nothing from it: legacy window, no resolution guard, no
+  eigensolve of its own, and `samples_per_fast_efolding` plus the three
+  `worst_resolved_*` fields NaN. Measured on the stiff four-level network at
+  fast rate `1e8`: before the gate the report named a specific missed mode
+  and interval read off exactly the spectrum D1 had just been withheld for.
 - **The persisted report could not say WHICH mode `samples_per_fast_efolding`
   described (PR #127, round-21 external review).** The value is the minimum
   over all modes, so on three separated timescales it belongs to the
