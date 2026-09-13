@@ -445,3 +445,22 @@ def test_explicit_eigenvalues_are_taken_as_the_callers_assertion() -> None:
             bootstrap_B=5, seed=1,
         )
     assert rep.worst_resolved_rate == pytest.approx(7.0)
+
+
+def test_an_affirmative_verdict_without_a_spectrum_is_refused() -> None:
+    """PR #154 review, round 3. Measured before the fix: ``t_grid`` plus
+    ``spectrum_resolved=True`` and no ``eigenvalues`` skipped the spectral
+    layer and the guard ran a bare eigensolve -- ``1e8`` again on the stiff
+    fixture. The pair is now a contract error, on any generator."""
+    L, rho0 = _two_scale(1.0e-2, 1.0)
+    with pytest.raises(ValueError, match="spectrum_resolved=True"):
+        compute_relaxation_layer(
+            L, rho_initial=rho0, t_grid=np.linspace(0.0, 10.0, 40),
+            spectrum_resolved=True, bootstrap_B=5, seed=1,
+        )
+    L, rho_ss = _stiff_unresolved()
+    with pytest.raises(ValueError, match="spectrum_resolved=True"):
+        compute_relaxation_layer(
+            L, rho_steady_state=rho_ss, t_grid=np.linspace(0.0, 10.0, 80),
+            spectrum_resolved=True, bootstrap_B=5, seed=1,
+        )

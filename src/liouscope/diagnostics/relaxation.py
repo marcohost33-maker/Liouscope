@@ -842,7 +842,11 @@ def compute_relaxation_layer(
         launched a bare eigensolve, so on a stiff generator it persisted a
         missed mode at ``1e8`` that the pipeline path had just withheld).
         ``True`` is a caller's explicit assertion that the ``eigenvalues`` it
-        passes are trustworthy; passing ``eigenvalues`` alone implies it.
+        passes are trustworthy; passing ``eigenvalues`` alone implies it, and
+        ``True`` WITHOUT ``eigenvalues`` is refused with ``ValueError`` (PR
+        #154 review, round 3): there is no spectrum the assertion could be
+        about, and silently re-solving would be the bare eigensolve this
+        contract exists to prevent.
     """
     L_super = np.asarray(L_super)
     n2 = L_super.shape[0]
@@ -866,6 +870,13 @@ def compute_relaxation_layer(
     # any of that would let the two entry points drift apart. The
     # already-computed steady state is passed through so only the spectrum is
     # recomputed.
+    if spectrum_resolved is True and eigenvalues is None:
+        raise ValueError(
+            "spectrum_resolved=True asserts that the supplied eigenvalues are "
+            "trustworthy, but no eigenvalues were supplied; pass the certified "
+            "spectrum with it, or leave spectrum_resolved=None so the layer "
+            "derives the verdict from the spectral layer itself"
+        )
     needs_verdict = eigenvalues is None and spectrum_resolved is None
     needs_gap = t_grid is None and gap is None
     if needs_verdict or needs_gap:

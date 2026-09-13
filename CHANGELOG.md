@@ -117,7 +117,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   warning. Whenever the caller supplies neither `eigenvalues` nor a
   `spectrum_resolved` verdict, the layer now runs the spectral layer once and
   reads both from it; passing `eigenvalues` alone counts as the caller's
-  assertion that they are trustworthy.
+  assertion that they are trustworthy, and `spectrum_resolved=True` without
+  `eigenvalues` is refused with `ValueError` (round 3) rather than re-solved.
 - **The persisted report could not say WHICH mode `samples_per_fast_efolding`
   described (PR #127, round-21 external review).** The value is the minimum
   over all modes, so on three separated timescales it belongs to the
