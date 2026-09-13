@@ -111,6 +111,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `worst_resolved_*` fields NaN. Measured on the stiff four-level network at
   fast rate `1e8`: before the gate the report named a specific missed mode
   and interval read off exactly the spectrum D1 had just been withheld for.
+  The gate also covers a caller-supplied `t_grid` (PR #154 review, round 2):
+  that path used to skip the spectral layer entirely, so the resolution guard
+  launched a bare eigensolve and persisted the same `1e8` mode with its
+  warning. Whenever the caller supplies neither `eigenvalues` nor a
+  `spectrum_resolved` verdict, the layer now runs the spectral layer once and
+  reads both from it; passing `eigenvalues` alone counts as the caller's
+  assertion that they are trustworthy.
 - **The persisted report could not say WHICH mode `samples_per_fast_efolding`
   described (PR #127, round-21 external review).** The value is the minimum
   over all modes, so on three separated timescales it belongs to the

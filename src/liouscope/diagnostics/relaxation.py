@@ -799,7 +799,7 @@ def compute_relaxation_layer(
     t_grid: np.ndarray | None = None,
     gap: float | None = None,
     eigenvalues: np.ndarray | None = None,
-    spectrum_resolved: bool = True,
+    spectrum_resolved: bool | None = None,
     bootstrap_B: int = 200,
     seed: int = 42,
 ) -> RelaxationResult:
@@ -834,8 +834,15 @@ def compute_relaxation_layer(
         ``worst_resolved_*`` identity, and no eigensolve of ``L_super`` either,
         which would only reproduce the same rejected spectrum (PR #154 review).
         ``samples_per_fast_efolding`` and the three ``worst_resolved_*``
-        fields are NaN in that case. A direct caller who omits ``gap`` gets
-        this flag from the same spectral-layer call as the gap.
+        fields are NaN in that case. ``None`` (the default) means "not
+        supplied": whenever this layer needs a spectrum and the caller has not
+        provided one, it runs the spectral layer itself and reads the verdict
+        from that -- also for a caller-supplied ``t_grid`` (PR #154 review,
+        round 2: the caller-grid path used to skip the certificate and
+        launched a bare eigensolve, so on a stiff generator it persisted a
+        missed mode at ``1e8`` that the pipeline path had just withheld).
+        ``True`` is a caller's explicit assertion that the ``eigenvalues`` it
+        passes are trustworthy; passing ``eigenvalues`` alone implies it.
     """
     L_super = np.asarray(L_super)
     n2 = L_super.shape[0]
@@ -845,30 +852,46 @@ def compute_relaxation_layer(
     if rho_initial is None:
         rho_initial = np.eye(d, dtype=complex) / d
 
+    # One spectral-layer call serves everything this layer needs from the
+    # spectrum: the gap for the default window, the eigenvalues for the fast
+    # scale and the resolution guard, and the certificate verdict that says
+    # whether any of it may be used. It runs when the caller supplied neither a
+    # spectrum nor a verdict (PR #154 review, round 2: a caller-supplied
+    # ``t_grid`` used to skip it and the resolution guard then launched a bare
+    # eigensolve on a spectrum nobody had certified), or when the default
+    # window needs a gap. Recomputing D1 here rather than re-deriving it keeps a
+    # direct call as unit-invariant as the full pipeline: D1 carries the
+    # certified zero-mode tolerance and the #113 ambiguity rule (an
+    # unresolvable slow spectrum yields NaN, not a fast mode), and duplicating
+    # any of that would let the two entry points drift apart. The
+    # already-computed steady state is passed through so only the spectrum is
+    # recomputed.
+    needs_verdict = eigenvalues is None and spectrum_resolved is None
+    needs_gap = t_grid is None and gap is None
+    if needs_verdict or needs_gap:
+        spectral = compute_spectral_layer(L_super, rho_steady_state)
+        if gap is None:
+            gap = spectral.gap
+        # Same predicate ``diagnose`` applies (ROUND-23 review, PR #121): an
+        # applicable-but-unresolved certificate makes the candidate spectrum
+        # untrustworthy; no certificate is the pre-#112 state.
+        cert = spectral.zero_mode_certificate
+        resolved_here = cert is None or not (
+            bool(cert["applicable"]) and not bool(cert["resolved"])
+        )
+        if spectrum_resolved is None:
+            spectrum_resolved = resolved_here
+        if eigenvalues is None and spectrum_resolved:
+            eigenvalues = spectral.eigenvalues
+    if spectrum_resolved is None:
+        # The caller passed eigenvalues without a verdict: their spectrum,
+        # their assertion.
+        spectrum_resolved = True
+
     if t_grid is not None:
         t_grid_source = "caller"
     else:
-        # Recomputing D1 here (rather than falling back to an absolute window)
-        # keeps a direct call to this function as unit-invariant as the full
-        # pipeline. It calls the spectral layer itself rather than re-deriving
-        # the gap: D1 is not simply the smallest non-zero eigenvalue but carries
-        # the certified zero-mode tolerance and the #113 ambiguity rule (an
-        # unresolvable slow spectrum yields NaN, not a fast mode). Duplicating
-        # any of that here would let the two entry points drift apart. The
-        # already-computed steady state is passed through so only the spectrum
-        # is recomputed, and a NaN gap degrades to the documented legacy window.
-        if gap is None:
-            spectral = compute_spectral_layer(L_super, rho_steady_state)
-            gap = spectral.gap
-            # Same predicate ``diagnose`` applies (ROUND-23 review, PR #121):
-            # an applicable-but-unresolved certificate makes the candidate
-            # spectrum untrustworthy; no certificate is the pre-#112 state.
-            cert = spectral.zero_mode_certificate
-            spectrum_resolved = cert is None or not (
-                bool(cert["applicable"]) and not bool(cert["resolved"])
-            )
-            if eigenvalues is None and spectrum_resolved:
-                eigenvalues = spectral.eigenvalues
+        assert gap is not None  # set above whenever t_grid is None
         # The FAST scale comes from the spectrum, never from a guess: it is
         # ``max(-Re lambda)``, the same eigenvalues the resolution guard reads.
         # ``fastest_decay_rate`` returns NaN when no finite positive rate

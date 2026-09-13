@@ -224,12 +224,13 @@ def test_a_direct_caller_without_a_gap_also_gets_one_solve(
         warnings.simplefilter("ignore")
         compute_relaxation_layer(L, rho_initial=rho0, bootstrap_B=5, seed=1)
     # ``certified_eigvals`` may take more than one route on its own; the claim
-    # is only that the relaxation layer adds NONE of its own on top.
-    calls_after_spectral = _count_eigvals_calls(monkeypatch)
+    # is only that the relaxation layer adds NONE of its own on top. One spy,
+    # two counts: a second spy would wrap the first and double-count.
+    n_layer = len([c for c in calls if c == (16, 16)])
     rho_ss = steady_state(L)
     compute_spectral_layer(L, rho_ss)
-    n_spectral = len([c for c in calls_after_spectral if c == (16, 16)])
-    assert len([c for c in calls if c == (16, 16)]) == n_spectral, (calls, n_spectral)
+    n_spectral = len([c for c in calls if c == (16, 16)]) - n_layer
+    assert n_layer == n_spectral, (calls, n_layer, n_spectral)
 
 
 def test_forwarded_eigenvalues_are_what_the_rates_are_read_from() -> None:
@@ -387,3 +388,60 @@ def test_a_direct_caller_derives_the_certificate_verdict_itself() -> None:
     assert rep.t_grid_source == "legacy_fixed"
     assert np.isnan(rep.samples_per_fast_efolding)
     assert np.isnan(rep.worst_resolved_rate)
+
+
+def test_a_caller_supplied_grid_does_not_bypass_the_certificate(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """PR #154 review, round 2. Measured before the fix: ``t_grid`` given,
+    no spectrum given -> the resolution guard ran a bare eigensolve and
+    persisted ``worst_resolved_rate ~= 1e8`` with an
+    ``UnderResolvedTransientWarning``, on the fixture whose certificate the
+    pipeline path had just declared unresolved."""
+    L, rho_ss = _stiff_unresolved()
+    calls = _count_eigvals_calls(monkeypatch)
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        rep = compute_relaxation_layer(
+            L, rho_steady_state=rho_ss, t_grid=np.linspace(0.0, 10.0, 80),
+            bootstrap_B=5, seed=1,
+        )
+    assert rep.t_grid_source == "caller"
+    assert np.isnan(rep.samples_per_fast_efolding)
+    assert np.isnan(rep.worst_resolved_rate)
+    assert np.isnan(rep.worst_resolved_blind_interval)
+    assert not [w for w in caught if issubclass(w.category, UnderResolvedTransientWarning)]
+    # The verdict came from the certified solver, not from a bare eigensolve
+    # on top of it: the layer itself adds no ``eigvals`` call.
+    n_layer = len([c for c in calls if c == (16, 16)])
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")  # the #113 ambiguity warning, by design
+        compute_spectral_layer(L, rho_ss)
+    n_spectral = len([c for c in calls if c == (16, 16)]) - n_layer
+    assert n_layer == n_spectral, (calls, n_layer, n_spectral)
+
+
+def test_a_caller_grid_on_a_healthy_generator_still_measures_resolution() -> None:
+    """Over-correction control: the certified path keeps naming the mode."""
+    L, rho0 = _two_scale(1.0e-2, 1.0)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        rep = compute_relaxation_layer(
+            L, rho_initial=rho0, t_grid=np.linspace(100.0, 101.0, 21),
+            bootstrap_B=5, seed=1,
+        )
+    assert rep.worst_resolved_rate == pytest.approx(1.01)
+    assert rep.worst_resolved_blind_interval == pytest.approx(100.0)
+
+
+def test_explicit_eigenvalues_are_taken_as_the_callers_assertion() -> None:
+    """Passing a spectrum without a verdict means the caller vouches for it."""
+    L, _ = _two_scale(1.0e-6, 1.0)
+    fake = np.array([0.0, -3.0, -7.0, -0.5])
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        rep = compute_relaxation_layer(
+            L, t_grid=np.linspace(0.0, 1.0, 11), eigenvalues=fake,
+            bootstrap_B=5, seed=1,
+        )
+    assert rep.worst_resolved_rate == pytest.approx(7.0)
