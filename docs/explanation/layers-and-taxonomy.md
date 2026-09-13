@@ -213,11 +213,13 @@ report.relaxation.t_grid_source
 report.relaxation.t_grid_span
 report.relaxation.t_grid         # the sampling, not just its extent
 report.relaxation.residual_model
-#   what the fits were ACTUALLY whitened with, not what the grid asked for:
+#   what the SUCCESSFUL fits were ACTUALLY whitened with, not what the grid
+#   asked for; a fit that failed selected no residual model and counts for none:
 #   "ar1"               uniform grid, discrete AR(1)
-#   "car1"              non-uniform grid, every fit whitened continuous-time
-#   "car1_fallback_ar1" CAR(1) theta failed on every fit -> AR(1) fallback
-#   "car1_mixed"        some fits CAR(1), some fallen back
+#   "ar1_unavailable"   uniform grid and no fit succeeded
+#   "car1"              non-uniform grid, every successful fit whitened continuous-time
+#   "car1_fallback_ar1" CAR(1) theta failed on every successful fit -> AR(1) fallback
+#   "car1_mixed"        some successful fits CAR(1), some fallen back
 #   "car1_unavailable"  non-uniform grid and no fit succeeded
 ```
 
@@ -279,10 +281,21 @@ The disclosure remains for what the two-scale grid still cannot reach:
 
 Below one sample per e-folding the layer emits an
 `UnderResolvedTransientWarning` and records
-`report.relaxation.samples_per_fast_efolding`. The reported rates then describe
-the dynamics the window *does* resolve, and a caller who needs the missing
-component must supply a `t_grid` covering it — reading the resulting rates as
-describing *that* window.
+`report.relaxation.samples_per_fast_efolding`. Despite its name that number
+belongs to the **worst-resolved** mode, which on a three-scale system is the
+intermediate one, so the report also records *which* mode and *which* interval
+it is about — the same three values the warning quotes, kept after the warning
+stream is gone:
+
+```python
+report.relaxation.worst_resolved_rate            # decay rate r of that mode
+report.relaxation.worst_resolved_blind_interval  # largest unsampled gap while it still has amplitude
+report.relaxation.worst_resolved_blind_start     # where that gap begins; 0.0 with t_grid[0] > 0 = unsampled lead-in
+```
+
+The reported rates then describe the dynamics the window *does* resolve, and a
+caller who needs the missing component must supply a `t_grid` covering it —
+reading the resulting rates as describing *that* window.
 
 This closes the time-grid unit dependence only. The `henrici_eta > 1.0` gate
 above is unaffected: `henrici_eta` is rate-dimensioned, so on an

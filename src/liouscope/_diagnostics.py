@@ -181,6 +181,13 @@ def diagnose(
         # this, a pure change of rate units L -> cL moved beta_D by >20% and
         # changed the reported A-class, on identical physics.
         gap=spectral.gap,
+        # ROUND-21 REVIEW (PR #127). The certified spectrum travels with the
+        # gap: the fast decay scale and the resolution guard read
+        # ``spectral.eigenvalues`` instead of re-solving ``L_super`` with a
+        # bare ``np.linalg.eigvals``, which could repeat a primary-driver
+        # failure the spectral layer had just repaired and, where it did not
+        # fail, would read rates off a spectrum D1 was not certified on.
+        eigenvalues=spectral.eigenvalues,
         bootstrap_B=bootstrap_B,
         seed=resolved_seed,
     )

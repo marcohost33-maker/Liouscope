@@ -152,17 +152,21 @@ abstract: >-
 # selected model matters should be re-run; per-model likelihoods are not run-
 # manifest fields, so this change is not visible in input_hash.
 # Also pending for the next cut: the Hermiticity validation of the Hamiltonian
-# measures its defect against the scale of the GENERATOR, not of H alone (PR
-# #127): max(gauge-fixed max|H0|, max|sum_k gamma_k L0_k^dag L0_k| / 2), read in
-# the canonical Lindblad gauge (traceless jump operators, compensated H0). As
-# with issue #109 this changes which inputs are ACCEPTED, not the numerics of
-# accepted ones: a numerically pure-gauge Hamiltonian with a dissipator is now
-# accepted, while an identity-dominated H such as [[1e308, 1], [0, 1e308]], a
-# null dissipator c*I and the Lindblad gauge L -> L + c*I no longer excuse a
-# Hermiticity defect. Without jump operators the verdict is main's gauge-fixed
-# one, and an H whose gauge-fixed scale is not finite is refused. It must NOT be
-# described as settling whether a large physical dissipation may excuse a
-# defect of the coherent part: that question is open (cross-family review).
+# measures its defect against the scale of the COHERENT component alone, read
+# in the canonical Lindblad gauge (PR #127, E3 settled by cross-family review
+# 2026-09-12): gauge-fixed max|H0| after the compensation H0 = H + sum_k
+# gamma_k (m_k L_k^dag - conj(m_k) L_k) / 2i that makes the jump operators
+# traceless, with the dissipation scale max|sum_k gamma_k L0_k^dag L0_k| / 2
+# reported for diagnostics only. Hermiticity is a structural property of H, so
+# physical dissipation of any strength does NOT enlarge the tolerance: a
+# numerically pure-gauge Hamiltonian such as I + 2**-53 e01 is refused with
+# or without a dissipator, exactly as an identity-dominated H such as
+# [[1e308, 1], [0, 1e308]], a null dissipator c*I and the Lindblad gauge
+# L -> L + c*I are. As with issue #109 this changes which inputs are ACCEPTED,
+# not the numerics of accepted ones. Without jump operators the verdict is
+# main's gauge-fixed one; an H whose gauge-fixed scale is not finite is
+# refused. The generator-relative reference max(coherent, dissipation) that an
+# earlier state of PR #127 documented here never shipped in a release.
 # Also pending for the next cut: trace-preserving generators can be restricted
 # to the traceless operator space by an exact structural identity rather than by
 # an eigenvalue-magnitude threshold (issue #113). For column-stacked operators

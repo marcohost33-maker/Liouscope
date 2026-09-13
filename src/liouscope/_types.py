@@ -250,25 +250,46 @@ class RelaxationResult:
     # abscissa, so a downstream consumer cannot re-fit, re-plot or audit the
     # rates it reports. Additive + defaulted like the fields above.
     t_grid: np.ndarray | None = None
-    # How finely this grid samples the FASTEST decaying mode, as samples per
-    # e-folding. Below ``relaxation.MIN_SAMPLES_PER_FAST_EFOLD`` that mode was
-    # stepped over rather than measured, so the reported rates describe only
-    # the slow dynamics the window resolves and an
-    # ``UnderResolvedTransientWarning`` is emitted. ``inf`` when nothing decays.
+    # How finely this grid samples the WORST-RESOLVED decaying mode, as samples
+    # per e-folding: the minimum over all modes of ``1 / (r * blind_r)`` (see
+    # ``relaxation._resolution_detail``). Despite the historical name this is
+    # NOT always the fastest mode -- on a grid with three or more separated
+    # timescales the least-resolved mode is typically an intermediate one that
+    # falls between the coarse late samples. Below
+    # ``relaxation.MIN_SAMPLES_PER_FAST_EFOLD`` that mode was stepped over
+    # rather than measured, so the reported rates describe only the dynamics
+    # the window resolves and an ``UnderResolvedTransientWarning`` is emitted.
+    # ``inf`` when nothing decays. The name is kept for compatibility; the
+    # three fields below say WHICH mode and WHICH interval the number is about.
     samples_per_fast_efolding: float = float("nan")
+    # Identity of the mode behind ``samples_per_fast_efolding`` (PR #127
+    # round-21 review): its decay rate ``r``, the largest interval the grid
+    # leaves unsampled while that mode still has amplitude, and the time at
+    # which that interval starts (``0.0`` with ``t_grid[0] > 0`` means an
+    # unsampled lead-in). These are exactly the values the warning quotes, so
+    # the persisted report can name the missed component after the warning
+    # stream is gone. NaN when nothing was measured. Additive + defaulted.
+    worst_resolved_rate: float = float("nan")
+    worst_resolved_blind_interval: float = float("nan")
+    worst_resolved_blind_start: float = float("nan")
     # Residual model the reported M0..M3b hierarchy was ACTUALLY whitened
-    # with -- read off the fits, not off the grid (PR #127 review):
+    # with -- read off the SUCCESSFUL fits, not off the grid (PR #127 review,
+    # rounds 17 and 21):
     #   "ar1"                uniform grid, historical discrete AR(1);
-    #   "car1"               non-uniform grid, every fit whitened with the
-    #                        continuous-time exp(-theta dt_k) per step;
+    #   "ar1_unavailable"    uniform grid and no fit succeeded at all;
+    #   "car1"               non-uniform grid, every successful fit whitened
+    #                        with the continuous-time exp(-theta dt_k) per step;
     #   "car1_fallback_ar1"  non-uniform grid, but CAR(1) theta estimation
-    #                        failed on every fit (degenerate residuals), so
-    #                        ``fit_gls_ar1`` fell back to discrete AR(1);
-    #   "car1_mixed"         non-uniform grid, some fits CAR(1), some fallen
-    #                        back -- one label cannot cover the hierarchy;
+    #                        failed on every successful fit (degenerate
+    #                        residuals), so ``fit_gls_ar1`` fell back to
+    #                        discrete AR(1);
+    #   "car1_mixed"         non-uniform grid, some successful fits CAR(1),
+    #                        some fallen back -- one label cannot cover the
+    #                        hierarchy;
     #   "car1_unavailable"   non-uniform grid and no fit succeeded at all.
-    # The per-fit value is ``FitResult.residual_theta_car1``. Additive +
-    # defaulted.
+    # A fit that returned ``success=False`` selected no residual model and
+    # contributes to no label. The per-fit value is
+    # ``FitResult.residual_theta_car1``. Additive + defaulted.
     residual_model: str = "ar1"
 
 
