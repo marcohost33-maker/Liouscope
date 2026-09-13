@@ -44,7 +44,7 @@ import scipy.sparse as sp
 
 
 def require_finite_generator(
-    L_super: np.ndarray | sp.spmatrix | sp.sparray, *, builder: str
+    L_super: np.ndarray | sp.spmatrix, *, builder: str
 ) -> None:
     """Refuse an assembled generator that contains a non-finite entry.
 
@@ -52,7 +52,10 @@ def require_finite_generator(
     ----------
     L_super
         Dense array or ``scipy.sparse`` matrix/array. Sparse input is checked
-        in O(nnz) on its canonical form and is never densified.
+        in O(nnz) on its canonical form and is never densified. Runtime sparse
+        detection deliberately uses :func:`scipy.sparse.issparse`: Liouscope
+        supports SciPy 1.10, while the public ``scipy.sparse.sparray`` base
+        class was introduced only in SciPy 1.11.
     builder
         Name of the calling builder, used in the error message.
 
@@ -61,7 +64,11 @@ def require_finite_generator(
     ValueError
         If any entry of the represented matrix is ``NaN`` or ``+/-inf``.
     """
-    if isinstance(L_super, (sp.spmatrix, sp.sparray)):
+    # Do not use ``isinstance(..., sp.sparray)`` here.  ``sparray`` became a
+    # public base class in SciPy 1.11, while pyproject.toml promises scipy>=1.10.
+    # ``issparse`` is the compatibility API and accepts both sparse matrices and
+    # sparse arrays on supported SciPy releases.
+    if sp.issparse(L_super):
         A = L_super if L_super.format in ("csr", "csc") else L_super.tocsr()
         if not A.has_canonical_format:
             if A is L_super:
