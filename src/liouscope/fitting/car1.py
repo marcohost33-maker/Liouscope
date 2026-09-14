@@ -189,7 +189,10 @@ def estimate_car1_theta(t: np.ndarray, residuals: np.ndarray) -> float:
     Returns NaN when the grid or the residuals cannot support an estimate
     (fewer than three points, a non-increasing grid, non-finite input, or a
     degenerate zero-variance series) -- fail-closed, so the caller keeps the
-    AR(1) path instead of whitening with a fabricated rate.
+    AR(1) path instead of whitening with a fabricated rate. The estimate is
+    invariant under a rescaling of the residuals: they are normalised to unit
+    maximum before the likelihood squares them, so a series whose raw sum of
+    squares would underflow float64 is not mistaken for a degenerate one.
     """
     t = np.asarray(t, dtype=float)
     r = np.asarray(residuals, dtype=float)
@@ -201,8 +204,24 @@ def estimate_car1_theta(t: np.ndarray, residuals: np.ndarray) -> float:
     if np.any(dt <= 0.0):
         return float("nan")
     centred = r - float(np.mean(r))
-    if float(np.dot(centred, centred)) <= 0.0:
+    # ROUND-21 REVIEW (external, PR #127). The degeneracy test formed
+    # ``centred . centred``, which UNDERFLOWS to exactly zero for a residual
+    # series with clear relative variation but a small amplitude: the same
+    # 40-point series that gives ``theta = 0.088`` at unit amplitude returned
+    # NaN at ``1e-170``, and ``_profile_nll`` squares the innovations directly,
+    # so its argmin had already begun drifting at ``1e-150`` (measured 4e-7
+    # relative). ``fit_gls_ar1`` then fell back to discrete AR(1), changing the
+    # whitening, N_eff, AICc and the bootstrap interval with the residual
+    # AMPLITUDE alone -- on a quantity, theta, that is independent of it.
+    # Theta IS amplitude-free: the profile likelihood at the closed-form
+    # ``s2_hat`` shifts by ``n log(c^2)`` under ``r -> c r`` and its argmin
+    # does not move. The series is therefore normalised to unit maximum before
+    # anything squares it, and degeneracy is read off the maximum, which
+    # cannot underflow where the entries themselves are representable.
+    amplitude = float(np.max(np.abs(centred)))
+    if not np.isfinite(amplitude) or amplitude <= 0.0:
         return float("nan")
+    r = r / amplitude
 
     r0, r1 = r[:-1], r[1:]
     # Search range in theta: from "essentially constant across the whole

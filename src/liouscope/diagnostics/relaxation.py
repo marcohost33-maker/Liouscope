@@ -89,27 +89,45 @@ MIN_SAMPLES_PER_FAST_EFOLD: float = 1.0
 _FAST_SEGMENT_FRAC: float = 0.5
 
 
-def decay_rates(L_super: np.ndarray) -> np.ndarray:
+def decay_rates(
+    L_super: np.ndarray, *, eigenvalues: np.ndarray | None = None
+) -> np.ndarray:
     """Distinct positive decay rates ``-Re lambda`` of the Liouvillian.
 
     Every mode of ``exp(L t)`` decays as ``exp(-r t)`` with ``r = -Re lambda``;
     the zero mode (steady state) and any numerically non-finite eigenvalue are
     dropped. Returned sorted ascending, so ``[-1]`` is the fastest rate.
     Empty when nothing decays.
+
+    ``eigenvalues``, when given, is the spectrum to read the rates from -- the
+    one the spectral layer has already computed AND certified (ROUND-21
+    REVIEW, external, PR #127). Without it this function launches a bare
+    ``np.linalg.eigvals`` on ``L_super``: on a generator where the primary
+    complex driver had failed and :func:`certified_eigvals` succeeded only
+    through its real-driver or Schur repair route, that call repeats the
+    original failure inside the relaxation layer, and where it does not fail
+    it reads rates off the rejected primary spectrum rather than the one D1
+    was certified on. Forwarding the certified spectrum makes the grid, the
+    resolution guard and D1 read ONE set of eigenvalues.
     """
-    rates = -np.real(np.linalg.eigvals(np.asarray(L_super)))
+    if eigenvalues is None:
+        eigenvalues = np.linalg.eigvals(np.asarray(L_super))
+    rates = -np.real(np.asarray(eigenvalues))
     positive = rates[np.isfinite(rates) & (rates > 0.0)]
     return np.sort(positive)
 
 
-def fastest_decay_rate(L_super: np.ndarray) -> float:
+def fastest_decay_rate(
+    L_super: np.ndarray, *, eigenvalues: np.ndarray | None = None
+) -> float:
     """``max(-Re lambda)``: the rate that sets the finest timescale to resolve.
 
     Returns NaN when no finite positive rate exists -- fail-closed, so a caller
     sizing a grid from this value falls back to its documented default instead
-    of scaling by a fabricated rate.
+    of scaling by a fabricated rate. ``eigenvalues`` is forwarded to
+    :func:`decay_rates`; see there.
     """
-    rates = decay_rates(L_super)
+    rates = decay_rates(L_super, eigenvalues=eigenvalues)
     return float(rates[-1]) if rates.size else float("nan")
 
 
@@ -306,7 +324,10 @@ class UnderResolvedTransientWarning(UserWarning):
 
 
 def _resolution_detail(
-    L_super: np.ndarray, t_grid: np.ndarray
+    L_super: np.ndarray,
+    t_grid: np.ndarray,
+    *,
+    eigenvalues: np.ndarray | None = None,
 ) -> tuple[float, float, float, float]:
     """How finely the grid samples the WORST-RESOLVED decaying mode.
 
@@ -357,7 +378,7 @@ def _resolution_detail(
     t = np.asarray(t_grid, dtype=float)
     if t.size < 2 or not np.all(np.isfinite(t)):
         return float("nan"), float("nan"), float("nan"), float("nan")
-    rates = decay_rates(L_super)
+    rates = decay_rates(L_super, eigenvalues=eigenvalues)
     if rates.size == 0:
         return float("inf"), float("nan"), float("nan"), float("nan")
 
@@ -443,15 +464,20 @@ def _resolution_detail(
     return worst, worst_rate, worst_blind, worst_start
 
 
-def samples_per_fast_efolding(L_super: np.ndarray, t_grid: np.ndarray) -> float:
+def samples_per_fast_efolding(
+    L_super: np.ndarray,
+    t_grid: np.ndarray,
+    *,
+    eigenvalues: np.ndarray | None = None,
+) -> float:
     """Samples per e-folding of the worst-resolved mode.
 
     Thin wrapper over :func:`_resolution_detail`; see its docstring. The two
     share one implementation deliberately, so the number this returns and the
     number quoted in :class:`UnderResolvedTransientWarning` can never describe
-    different intervals.
+    different intervals. ``eigenvalues`` is forwarded to :func:`decay_rates`.
     """
-    return _resolution_detail(L_super, t_grid)[0]
+    return _resolution_detail(L_super, t_grid, eigenvalues=eigenvalues)[0]
 
 
 def _evolve(L_super: np.ndarray, rho0: np.ndarray, t_grid: np.ndarray) -> np.ndarray:
@@ -772,6 +798,8 @@ def compute_relaxation_layer(
     rho_steady_state: np.ndarray | None = None,
     t_grid: np.ndarray | None = None,
     gap: float | None = None,
+    eigenvalues: np.ndarray | None = None,
+    spectrum_resolved: bool | None = None,
     bootstrap_B: int = 200,
     seed: int = 42,
 ) -> RelaxationResult:
@@ -786,6 +814,39 @@ def compute_relaxation_layer(
         the gap it has already computed; a direct caller who omits it gets the
         same value recomputed from ``L_super`` via D1, so the default window is
         rate-unit invariant either way. Ignored when ``t_grid`` is supplied.
+    eigenvalues
+        The spectrum the fast decay scale and the resolution guard read their
+        rates from. :func:`liouscope.diagnose` forwards
+        ``SpectralResult.eigenvalues`` -- the certified spectrum D1 came from
+        -- so this layer never re-solves ``L_super`` with a bare
+        ``np.linalg.eigvals`` that can repeat a primary-driver failure the
+        spectral layer had already repaired (ROUND-21 REVIEW, external, PR
+        #127). A direct caller who omits both ``gap`` and ``eigenvalues`` gets
+        both from one spectral-layer call; a caller who supplies ``gap`` alone
+        keeps the historical behaviour, a fresh eigensolve of ``L_super``.
+    spectrum_resolved
+        ``False`` when the spectral layer's zero-mode certificate is
+        applicable but unresolved -- the predicate under which it withholds
+        D1/D3/D4 (issues #112/#113). The candidate spectrum is then not a
+        measurement, so nothing in this layer is derived from it: no fast
+        decay scale (the default window is the documented legacy one, as the
+        NaN gap already implies), no resolution guard, no
+        ``worst_resolved_*`` identity, and no eigensolve of ``L_super`` either,
+        which would only reproduce the same rejected spectrum (PR #154 review).
+        ``samples_per_fast_efolding`` and the three ``worst_resolved_*``
+        fields are NaN in that case. ``None`` (the default) means "not
+        supplied": whenever this layer needs a spectrum and the caller has not
+        provided one, it runs the spectral layer itself and reads the verdict
+        from that -- also for a caller-supplied ``t_grid`` (PR #154 review,
+        round 2: the caller-grid path used to skip the certificate and
+        launched a bare eigensolve, so on a stiff generator it persisted a
+        missed mode at ``1e8`` that the pipeline path had just withheld).
+        ``True`` is a caller's explicit assertion that the ``eigenvalues`` it
+        passes are trustworthy; passing ``eigenvalues`` alone implies it, and
+        ``True`` WITHOUT ``eigenvalues`` is refused with ``ValueError`` (PR
+        #154 review, round 3): there is no spectrum the assertion could be
+        about, and silently re-solving would be the bare eigensolve this
+        contract exists to prevent.
     """
     L_super = np.asarray(L_super)
     n2 = L_super.shape[0]
@@ -795,27 +856,66 @@ def compute_relaxation_layer(
     if rho_initial is None:
         rho_initial = np.eye(d, dtype=complex) / d
 
+    # One spectral-layer call serves everything this layer needs from the
+    # spectrum: the gap for the default window, the eigenvalues for the fast
+    # scale and the resolution guard, and the certificate verdict that says
+    # whether any of it may be used. It runs when the caller supplied neither a
+    # spectrum nor a verdict (PR #154 review, round 2: a caller-supplied
+    # ``t_grid`` used to skip it and the resolution guard then launched a bare
+    # eigensolve on a spectrum nobody had certified), or when the default
+    # window needs a gap. Recomputing D1 here rather than re-deriving it keeps a
+    # direct call as unit-invariant as the full pipeline: D1 carries the
+    # certified zero-mode tolerance and the #113 ambiguity rule (an
+    # unresolvable slow spectrum yields NaN, not a fast mode), and duplicating
+    # any of that would let the two entry points drift apart. The
+    # already-computed steady state is passed through so only the spectrum is
+    # recomputed.
+    if spectrum_resolved is True and eigenvalues is None:
+        raise ValueError(
+            "spectrum_resolved=True asserts that the supplied eigenvalues are "
+            "trustworthy, but no eigenvalues were supplied; pass the certified "
+            "spectrum with it, or leave spectrum_resolved=None so the layer "
+            "derives the verdict from the spectral layer itself"
+        )
+    needs_verdict = eigenvalues is None and spectrum_resolved is None
+    needs_gap = t_grid is None and gap is None
+    if needs_verdict or needs_gap:
+        spectral = compute_spectral_layer(L_super, rho_steady_state)
+        if gap is None:
+            gap = spectral.gap
+        # Same predicate ``diagnose`` applies (ROUND-23 review, PR #121): an
+        # applicable-but-unresolved certificate makes the candidate spectrum
+        # untrustworthy; no certificate is the pre-#112 state.
+        cert = spectral.zero_mode_certificate
+        resolved_here = cert is None or not (
+            bool(cert["applicable"]) and not bool(cert["resolved"])
+        )
+        if spectrum_resolved is None:
+            spectrum_resolved = resolved_here
+        if eigenvalues is None and spectrum_resolved:
+            eigenvalues = spectral.eigenvalues
+    if spectrum_resolved is None:
+        # The caller passed eigenvalues without a verdict: their spectrum,
+        # their assertion.
+        spectrum_resolved = True
+
     if t_grid is not None:
         t_grid_source = "caller"
     else:
-        # Recomputing D1 here (rather than falling back to an absolute window)
-        # keeps a direct call to this function as unit-invariant as the full
-        # pipeline. It calls the spectral layer itself rather than re-deriving
-        # the gap: D1 is not simply the smallest non-zero eigenvalue but carries
-        # the certified zero-mode tolerance and the #113 ambiguity rule (an
-        # unresolvable slow spectrum yields NaN, not a fast mode). Duplicating
-        # any of that here would let the two entry points drift apart. The
-        # already-computed steady state is passed through so only the spectrum
-        # is recomputed, and a NaN gap degrades to the documented legacy window.
-        if gap is None:
-            gap = compute_spectral_layer(L_super, rho_steady_state).gap
+        assert gap is not None  # set above whenever t_grid is None
         # The FAST scale comes from the spectrum, never from a guess: it is
         # ``max(-Re lambda)``, the same eigenvalues the resolution guard reads.
         # ``fastest_decay_rate`` returns NaN when no finite positive rate
         # exists, and ``default_relaxation_grid`` then keeps the uniform window
         # -- fail-closed, so an unusable spectrum degrades to the historical
         # behaviour plus its warning rather than to an invented timescale.
-        fast_rate = fastest_decay_rate(L_super)
+        # An UNRESOLVED spectrum is not consulted at all (PR #154 review): the
+        # NaN is the same "no usable timescale" the withheld gap carries.
+        fast_rate = (
+            fastest_decay_rate(L_super, eigenvalues=eigenvalues)
+            if spectrum_resolved
+            else float("nan")
+        )
         t_grid = default_relaxation_grid(gap, fast_rate=fast_rate)
         if not (np.isfinite(gap) and gap > 0.0):
             t_grid_source = "legacy_fixed"
@@ -843,9 +943,16 @@ def compute_relaxation_layer(
 
     # Under-resolution disclosure. Applies to the window actually used, so a
     # caller-supplied grid is checked on the same terms as the default.
-    fast_resolution, worst_rate, blind, blind_start = _resolution_detail(
-        L_super, t_grid
-    )
+    # PR #154 review: on an unresolved spectrum the guard has no measured
+    # rates to name a missed mode with, so it measures nothing -- NaN for the
+    # ratio and for the mode identity, and no warning that would attribute a
+    # specific rate and interval to a spectrum the certificate has rejected.
+    if spectrum_resolved:
+        fast_resolution, worst_rate, blind, blind_start = _resolution_detail(
+            L_super, t_grid, eigenvalues=eigenvalues
+        )
+    else:
+        fast_resolution = worst_rate = blind = blind_start = float("nan")
     if np.isfinite(fast_resolution) and fast_resolution < MIN_SAMPLES_PER_FAST_EFOLD:
         # Name the interval from WHERE it is, not from a size comparison: on a
         # two-scale grid the largest late step exceeds the first step while no
@@ -890,10 +997,24 @@ def compute_relaxation_layer(
     # claimed a CAR(1) whitening that never took place. Individual fits can
     # also differ from one another, which one label cannot express at all.
     # Derived from the fits themselves, fail-closed: no fit, no claim.
+    #
+    # ROUND-21 REVIEW (external, PR #127): "no fit" has to mean no SUCCESSFUL
+    # fit. ``fit_gls_ar1`` returns ``success=False`` from its flat-curve guard
+    # before it selects or applies any residual model, and the entry it returns
+    # then carries ``residual_theta_car1 = NaN`` like a genuine CAR(1)
+    # fallback would. Measured on ``rho_initial == rho_steady_state`` over the
+    # two-scale grid: five unsuccessful entries, ``whitened_car1`` non-empty
+    # and all-False, label ``"car1_fallback_ar1"`` -- persisted audit metadata
+    # asserting an AR(1) whitening that never ran. Availability is therefore
+    # read off ``success`` FIRST, and the family is classified only among the
+    # fits that actually whitened something. The uniform-grid label gets the
+    # same treatment: ``"ar1"`` is a statement about what the fits did, not
+    # about the grid.
+    successful = [fr for fr in fits.values() if fr.success]
     if grid_residual_model == "ar1":
-        residual_model = "ar1"
+        residual_model = "ar1" if successful else "ar1_unavailable"
     else:
-        whitened_car1 = [np.isfinite(fr.residual_theta_car1) for fr in fits.values()]
+        whitened_car1 = [np.isfinite(fr.residual_theta_car1) for fr in successful]
         if not whitened_car1:
             residual_model = "car1_unavailable"
         elif all(whitened_car1):
@@ -987,5 +1108,14 @@ def compute_relaxation_layer(
         t_grid_span=float(t_grid[-1] - t_grid[0]),
         t_grid=t_grid.copy(),
         samples_per_fast_efolding=fast_resolution,
+        # ROUND-21 REVIEW (external, PR #127): the scalar above is the MINIMUM
+        # over modes, so on a grid with three or more separated timescales it
+        # can describe an intermediate mode, not the fastest one. Which mode and
+        # which interval it means used to live only in the warning text; once
+        # the warning stream is gone the persisted report could not say. The
+        # three values the warning is built from now travel with the number.
+        worst_resolved_rate=float(worst_rate),
+        worst_resolved_blind_interval=float(blind),
+        worst_resolved_blind_start=float(blind_start),
         residual_model=residual_model,
     )

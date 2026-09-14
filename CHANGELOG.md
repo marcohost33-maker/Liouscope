@@ -63,6 +63,71 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     the change is not visible in `input_hash`.
 
 ### Fixed
+- **`residual_model` claimed a whitening for runs in which no fit succeeded
+  (PR #127, round-21 external review).** `fit_gls_ar1` returns `success=False`
+  from its flat-curve guard before it selects or applies any residual model,
+  and the entry it returns carries `residual_theta_car1 = NaN` like a genuine
+  CAR(1) fallback would. Measured on `rho_initial == rho_steady_state` over the
+  two-scale grid: five unsuccessful fits, label `"car1_fallback_ar1"` —
+  persisted audit metadata asserting an AR(1) whitening that never ran.
+  Availability is now read off `success` first and the family classified only
+  among successful fits; that run reports `"car1_unavailable"`, and a uniform
+  grid on which no fit succeeded reports the new label `"ar1_unavailable"`
+  instead of `"ar1"`. A run whose successful fits all fell back keeps
+  `"car1_fallback_ar1"`.
+- **CAR(1) theta estimation returned NaN for residuals whose raw sum of
+  squares underflows float64, so the residual AMPLITUDE alone switched the
+  whitening (PR #127, round-21 external review).** `estimate_car1_theta`
+  tested degeneracy with `centred . centred <= 0` and `_profile_nll` squared
+  the innovations directly. Measured on one 40-point series: `theta = 0.0885`
+  at unit amplitude, a 4e-7 relative drift at `1e-150`, NaN at `1e-170` — at
+  which point `fit_gls_ar1` fell back to discrete AR(1) and changed the
+  whitening, `N_eff`, AICc and the bootstrap interval. Theta is
+  amplitude-free (the profiled likelihood shifts by `n log c^2` under
+  `r -> c r`), so the series is normalised to unit maximum before anything
+  squares it and degeneracy is read off that maximum. Existing estimates move
+  only at the estimator's own round-off floor: the profiled likelihood is
+  flat near its minimum, so the 1-ulp perturbation the normalisation adds
+  shifts the bounded argmin by ~1e-8 relative (measured 7e-8 on a 40-point
+  series), three decades below the pre-fix amplitude drift. No anchor moves.
+- **The relaxation layer re-solved the spectrum with a bare
+  `np.linalg.eigvals` after the spectral layer had certified one (PR #127,
+  round-21 external review).** `fastest_decay_rate` and the resolution guard
+  each launched their own eigensolve of `L_super` — two per run — so where the
+  primary complex driver had failed and `certified_eigvals` had succeeded only
+  through its real-driver or Schur repair route, that call could repeat the
+  original failure inside the relaxation layer, and where it did not fail it
+  read rates off the rejected primary spectrum rather than the one D1 was
+  certified on. `compute_relaxation_layer` takes `eigenvalues=`;
+  `diagnose()` forwards `SpectralResult.eigenvalues` next to the gap, and a
+  direct caller who omits both gets both from one spectral-layer call. Zero
+  eigensolves now run in the relaxation layer of `diagnose()`. Passing `gap`
+  alone keeps the historical fresh solve. The forwarding is gated on the
+  certificate (PR #154 review): when the zero-mode certificate is applicable
+  but unresolved -- the predicate under which D1/D3/D4 are withheld -- the
+  candidate spectrum is not handed over and `spectrum_resolved=False` tells
+  the layer to derive nothing from it: legacy window, no resolution guard, no
+  eigensolve of its own, and `samples_per_fast_efolding` plus the three
+  `worst_resolved_*` fields NaN. Measured on the stiff four-level network at
+  fast rate `1e8`: before the gate the report named a specific missed mode
+  and interval read off exactly the spectrum D1 had just been withheld for.
+  The gate also covers a caller-supplied `t_grid` (PR #154 review, round 2):
+  that path used to skip the spectral layer entirely, so the resolution guard
+  launched a bare eigensolve and persisted the same `1e8` mode with its
+  warning. Whenever the caller supplies neither `eigenvalues` nor a
+  `spectrum_resolved` verdict, the layer now runs the spectral layer once and
+  reads both from it; passing `eigenvalues` alone counts as the caller's
+  assertion that they are trustworthy, and `spectrum_resolved=True` without
+  `eigenvalues` is refused with `ValueError` (round 3) rather than re-solved.
+- **The persisted report could not say WHICH mode `samples_per_fast_efolding`
+  described (PR #127, round-21 external review).** The value is the minimum
+  over all modes, so on three separated timescales it belongs to the
+  intermediate mode, not the fastest one — the mode the warning names, but
+  the warning is not persisted. `RelaxationResult` now carries
+  `worst_resolved_rate`, `worst_resolved_blind_interval` and
+  `worst_resolved_blind_start`, the three values the warning is built from;
+  the field name `samples_per_fast_efolding` is kept for compatibility and its
+  documentation corrected. Additive, defaulted to NaN.
 - **The trace-preservation defect overflowed on the way to a column sum that is
   exactly zero (issue #139, P2 review).** `trace_preservation_defect` assembled
   `vec(I)^H L` with an ordinary matrix product, which accumulates in ordinary
@@ -565,40 +630,42 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   on a second path through `zero_tolerance`. See the corrected entry below.
 
 ### Fixed
-- **The Hermiticity tolerance is now relative to the generator, not to H alone
-  (PR #127).** The round-18 allowance `d * eps * |gauge_shift|` and the
-  gauge-fixed relative gate on `main` gave the same verdict to two fixtures
-  that review had pinned to opposite ones: `I + 2**-53 e01` with sigma- (must
-  be accepted) and `1e308 * I + 1e290 e01` with no jump operators (must be
-  rejected). For `H = c*I + N` with `N` strictly upper triangular, EXACT
-  arithmetic gives `defect / gauge_scale = 1`; in floating point this holds
-  only where the gauge shift is computed exactly, as it is for both fixtures
-  (counter-example with an inexact shift: `d = 3, c = 0.1, N = 1e-30` gives
-  `7.2e-14`). A gauge shift plus a change of units maps both fixtures onto
-  `e01` — so no test that reads `H` alone and respects both symmetries can
-  separate them. The defect is now
-  compared against `max(max|H_gauge|, max|sum_k gamma_k L_k^dag L_k| / 2)`, the
-  scale of `H_eff = H - iK/2`; the dissipator preserves Hermiticity by
-  construction, so the only non-preserving part of the generator is the
-  anti-Hermitian part of `H`. Both scales are read in the canonical Lindblad
-  gauge — traceless `L0 = L - tr(L)/d * I` with the Hamiltonian compensated
-  so the generator is unchanged — because `(H, L)` and
-  `(H + (c/2i)(L - L^dag), L + c*I)` are one generator: review round 2
-  measured a null dissipator `2**20 * I` and exactly this gauge excusing an
-  order-one defect, and traceless jumps alone would still have let the
-  compensating term inflate the coherent scale. The reference is therefore
-  invariant under `H -> H + c*I`, under the Lindblad gauge, and covariant
-  under a change of units. Without jump operators it is the gauge-fixed scale
-  of `H`, as on `main` (the gauge shift itself is formed by
-  `overflow_safe_mean_real`, so it can differ from `main`'s divide-first sum
-  in the last bit). A non-finite gauge-fixed scale is refused as on `main`:
-  the round-20 half-scale restatement accepted `diag(1.7e308, 1.7e308,
-  -1.7e308)` and returned a generator containing `inf`. Malformed jump lists
-  and an overflowing dissipation sum excuse nothing. Closes the residual
-  recorded below: `[[1e308, 1], [0, 1e308]]` is rejected by both builders.
-  Open (cross-family review requested): whether a large PHYSICAL dissipation
-  may excuse a coherent defect at all; the answer changes only the one
-  `max(...)` that forms the reference.
+- **The Hermiticity tolerance is relative to the coherent component of the
+  generator, read in the canonical Lindblad gauge, and physical dissipation
+  cannot enlarge it (PR #127, E3 settled by cross-family review 2026-09-12).**
+  The round-18 allowance `d * eps * |gauge_shift|` and the gauge-fixed relative
+  gate on `main` gave the same verdict to two fixtures that review had pinned
+  to opposite ones: `I + 2**-53 e01` with sigma- and `1e308 * I + 1e290 e01`
+  with no jump operators. For `H = c*I + N` with `N` strictly upper triangular,
+  EXACT arithmetic gives `defect / gauge_scale = 1`, and a gauge shift plus a
+  change of units maps both fixtures onto `e01` — so no test that reads `H`
+  alone and respects both symmetries can separate them. An intermediate state
+  of this PR resolved that by comparing the defect against
+  `max(max|H_gauge|, max|sum_k gamma_k L_k^dag L_k| / 2)`, the scale of
+  `H_eff = H - iK/2`, which accepted the first fixture on the strength of its
+  dissipator. The cross-family design review rejected that reference for an
+  API whose parameter is documented as a Hamiltonian: Hermiticity is a
+  property of `H` itself, a dissipator of any strength in any block leaves the
+  distance of `H` from the Hermitian matrices unchanged, and the impossibility
+  result means the two fixtures specify DIFFERENT properties, not that the `H`
+  gate must consult `L_k`. The defect is now compared against the coherent
+  scale alone, `max|H0_gauge|` with `H0` the Hamiltonian after the canonical
+  Lindblad-gauge compensation — still load-bearing, because `(H, L)` and
+  `(H + (c/2i)(L - L^dag), L + c*I)` are one generator and review round 2
+  measured exactly that gauge inflating the coherent scale — while the
+  dissipation scale is computed and reported in the refusal message for
+  diagnostics only. Both fixtures are refused; so are `[[1e308, 1], [0,
+  1e308]]`, a null dissipator `2**20 * I`, the Lindblad gauge with unit and
+  with unequal rates, an overflowing dissipation sum and a malformed jump list.
+  The verdict is invariant under `H -> H + c*I`, under `L -> L + c*I` and
+  under a dissipator-strength sweep from `0` to `1e12`, and covariant under a
+  change of units. Without jump operators it is the gauge-fixed scale of `H`,
+  as on `main` (the gauge shift is formed by `overflow_safe_mean_real`, so it
+  can differ from `main`'s divide-first sum in the last bit); a non-finite
+  gauge-fixed scale is refused as on `main`. A numerically pure-gauge `H` such
+  as `Q @ I @ Q^dag` therefore IS refused: it has no coherent scale to be
+  measured against, and the refusal message now says to pass its Hermitian
+  part. The generator-relative reference never shipped in a release.
 - **`neff_car1` allocated two `n x n` arrays for a scalar (PR #127, round-20
   external review).** The exact CAR(1) effective sample size formed a full
   separation matrix and a full exponential of it on every evaluation, and

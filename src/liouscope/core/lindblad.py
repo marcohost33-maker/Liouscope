@@ -218,7 +218,11 @@ def build_liouvillian(
             f"scale = {coherent_scale:.3e}, dissipation scale "
             f"max|sum gamma L0^dag L0|/2 = {dissipation_scale:.3e}, "
             f"relative defect = "
-            f"{defect / reference if reference else float('inf'):.3e})"
+            f"{defect / reference if reference else float('inf'):.3e}). "
+            "Hermiticity is a property of H alone: a physically pure-gauge H "
+            "carried only by floating-point round-off (e.g. Q @ I @ Q^dag) has no "
+            "coherent scale to be measured against; pass its Hermitian part "
+            "(H + H^dag) / 2, and note that jump operators cannot excuse the defect"
         )
 
     if jump_ops is None:

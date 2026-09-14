@@ -168,23 +168,6 @@ def diagnose(
         rho_initial = np.eye(d, dtype=complex) / d
 
     spectral = compute_spectral_layer(L_super, rho_steady_state)
-    nonnorm = compute_nonnormality_layer(L_super)
-    resolvent = compute_resolvent_layer(L_super)
-    relaxation = compute_relaxation_layer(
-        L_super,
-        rho_initial=rho_initial,
-        rho_steady_state=rho_steady_state,
-        t_grid=t_grid,
-        # D1 is already computed above; forwarding it keeps the DEFAULT
-        # relaxation window tied to the system's own relaxation time instead of
-        # an absolute one (see relaxation.default_relaxation_grid). Without
-        # this, a pure change of rate units L -> cL moved beta_D by >20% and
-        # changed the reported A-class, on identical physics.
-        gap=spectral.gap,
-        bootstrap_B=bootstrap_B,
-        seed=resolved_seed,
-    )
-    transient = compute_transient_layer(L_super, spectral.gap)
     # ROUND-23 REVIEW (PR #121). The certificate's verdict has to travel with
     # the spectrum it describes. ``spectral.eigenvalues`` were passed on
     # unconditionally, so on an applicable-but-unresolved certificate D16 was
@@ -202,6 +185,34 @@ def diagnose(
     _spectrum_resolved = _cert is None or not (
         bool(_cert["applicable"]) and not bool(_cert["resolved"])
     )
+    nonnorm = compute_nonnormality_layer(L_super)
+    resolvent = compute_resolvent_layer(L_super)
+    relaxation = compute_relaxation_layer(
+        L_super,
+        rho_initial=rho_initial,
+        rho_steady_state=rho_steady_state,
+        t_grid=t_grid,
+        # D1 is already computed above; forwarding it keeps the DEFAULT
+        # relaxation window tied to the system's own relaxation time instead of
+        # an absolute one (see relaxation.default_relaxation_grid). Without
+        # this, a pure change of rate units L -> cL moved beta_D by >20% and
+        # changed the reported A-class, on identical physics.
+        gap=spectral.gap,
+        # ROUND-21 REVIEW (PR #127). The certified spectrum travels with the
+        # gap: the fast decay scale and the resolution guard read
+        # ``spectral.eigenvalues`` instead of re-solving ``L_super`` with a
+        # bare ``np.linalg.eigvals``, which could repeat a primary-driver
+        # failure the spectral layer had just repaired and, where it did not
+        # fail, would read rates off a spectrum D1 was not certified on.
+        # PR #154 review: the same certificate verdict gates the forwarding.
+        # An unresolved candidate spectrum is not handed over, and the layer
+        # is told so, so it neither re-solves nor names a missed mode from it.
+        eigenvalues=spectral.eigenvalues if _spectrum_resolved else None,
+        spectrum_resolved=_spectrum_resolved,
+        bootstrap_B=bootstrap_B,
+        seed=resolved_seed,
+    )
+    transient = compute_transient_layer(L_super, spectral.gap)
     lep = compute_lep_layer(
         L_super,
         spectral.eigenvalues,

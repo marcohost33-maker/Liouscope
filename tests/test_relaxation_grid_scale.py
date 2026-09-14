@@ -795,10 +795,15 @@ def _stationary_case():
 def test_residual_model_does_not_claim_a_whitening_that_did_not_happen():
     """The label must come from the fits, not from the grid geometry.
 
-    Before the fix this reported the flat ``"car1"`` for a run in which the
-    CAR(1) theta estimate failed and the fits were whitened as discrete AR(1)
-    -- audit metadata asserting a property of the analysis that the analysis
-    did not have.
+    Before the round-17 fix this reported the flat ``"car1"`` for a run in
+    which no CAR(1) whitening took place -- audit metadata asserting a property
+    of the analysis that the analysis did not have.
+
+    Round 21 sharpened what "took place" means: on this fixture every fit ends
+    in the flat-curve guard with ``success=False`` BEFORE a residual model is
+    selected, so no AR(1) fallback happened either. The honest label is
+    "unavailable"; the fallback label is pinned separately, on successful fits
+    whose theta estimate failed (``test_pr127_review_round21``).
     """
     L, rho_ss, t_grid = _stationary_case()
     with warnings.catch_warnings():
@@ -808,14 +813,12 @@ def test_residual_model_does_not_claim_a_whitening_that_did_not_happen():
             t_grid=t_grid, bootstrap_B=5, seed=1,
         )
 
-    fell_back = [
-        name for name, fit in rep.fits.items()
-        if not np.isfinite(fit.residual_theta_car1)
-    ]
-    assert fell_back, "fixture no longer triggers the CAR(1) fallback"
+    assert rep.fits, "fixture produced no fit entries at all"
+    assert not any(fit.success for fit in rep.fits.values()), (
+        "fixture no longer trips the flat-curve guard"
+    )
     assert rep.residual_model != "car1"
-    expected = "car1_fallback_ar1" if len(fell_back) == len(rep.fits) else "car1_mixed"
-    assert rep.residual_model == expected, (rep.residual_model, fell_back)
+    assert rep.residual_model == "car1_unavailable", rep.residual_model
 
 
 def test_residual_model_still_reports_car1_when_every_fit_whitened_that_way():
