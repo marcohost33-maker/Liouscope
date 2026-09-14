@@ -39,6 +39,8 @@ gate of the builders raises (``"H contains non-finite entries"``,
 
 from __future__ import annotations
 
+from typing import Any
+
 import numpy as np
 import scipy.sparse as sp
 
@@ -69,9 +71,13 @@ def require_finite_generator(
     # ``issparse`` is the compatibility API and accepts both sparse matrices and
     # sparse arrays on supported SciPy releases.
     if sp.issparse(L_super):
-        A = L_super if L_super.format in ("csr", "csc") else L_super.tocsr()
+        # ``issparse`` is not a TypeGuard, so mypy keeps the ndarray arm of the
+        # union and rejects the sparse attributes below. scipy.sparse is untyped
+        # in this configuration anyway; bind the sparse branch as Any explicitly.
+        S: Any = L_super
+        A = S if S.format in ("csr", "csc") else S.tocsr()
         if not A.has_canonical_format:
-            if A is L_super:
+            if A is S:
                 A = A.copy()
             A.sum_duplicates()
         values = np.asarray(A.data)
