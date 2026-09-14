@@ -12,7 +12,6 @@ import warnings
 import numpy as np
 import pytest
 
-import liouscope.diagnostics.relaxation as relaxation_mod
 from liouscope import build_liouvillian, diagnose
 from liouscope.core.lindblad import steady_state
 from liouscope.diagnostics.relaxation import (
@@ -199,13 +198,16 @@ def test_the_relaxation_layer_does_not_resolve_a_forwarded_spectrum(
 def test_diagnose_forwards_the_certified_spectrum(monkeypatch: pytest.MonkeyPatch) -> None:
     """The pipeline must hand the relaxation layer the eigenvalues D1 came from."""
     seen: list[np.ndarray | None] = []
-    original = relaxation_mod.decay_rates
+    # ``decay_rates`` ist hier die beim Import gebundene, echte Funktion --
+    # der Patch unten ersetzt nur das Modul-Attribut, das ``compute_relaxation_layer``
+    # nachschlaegt, nicht diesen Namen. Der Spy ruft also garantiert das Original.
+    original = decay_rates
 
     def spy(L_super, *, eigenvalues=None):
         seen.append(eigenvalues)
         return original(L_super, eigenvalues=eigenvalues)
 
-    monkeypatch.setattr(relaxation_mod, "decay_rates", spy)
+    monkeypatch.setattr("liouscope.diagnostics.relaxation.decay_rates", spy)
     L, rho0 = _two_scale(1.0e-6, 1.0)
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
