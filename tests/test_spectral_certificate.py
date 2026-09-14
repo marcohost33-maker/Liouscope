@@ -971,3 +971,267 @@ def test_d11_is_nan_when_the_eigenvalues_are_unresolved() -> None:
         layer = compute_nonnormality_layer(lsup)
     assert np.isnan(layer.petermann_max)
     assert np.isnan(layer.bohr_ap_length)
+
+
+# --------------------------------------------------------------------------
+# PR #127 external review, finding 1: the certificate's PREMISE (exact trace
+# preservation) was accepted on a scale six orders of magnitude coarser than
+# its CONCLUSION (an exact zero eigenvalue).
+# --------------------------------------------------------------------------
+
+
+def _near_tp(lsup: np.ndarray, shift: float = 1.0e-11) -> np.ndarray:
+    """``L + shift * I``: trace preserving to ``1e-11``, and to nothing better.
+
+    Every eigenvalue moves by exactly ``shift``, so the operator provably has
+    NO eigenvalue inside the certificate's backward-error bound while still
+    passing the old ``1e-10`` relative trace-preservation cutoff.
+    """
+    return lsup + shift * np.eye(lsup.shape[0], dtype=complex)
+
+
+@pytest.mark.parametrize("entry", ["eigvals", "eig"])
+def test_certificate_declines_an_operator_that_is_only_approximately_tp(
+    entry: str,
+) -> None:
+    """Approximate trace preservation must not buy an EXACT-zero-mode claim.
+
+    Measured before the fix: on ``V3 + 1e-11 I`` the trace defect is 1.4e-11
+    against the old cutoff 7.9e-11, so the certificate declared itself
+    applicable; the smallest eigenvalue is then exactly 1e-11 against a bound
+    of 1.6e-13, every repair route "failed", and the spectral layer warned
+    about an eigensolve that was in fact correct.
+
+    Both entry points are checked in one parametrised test on purpose: the
+    applicability rule lived in duplicate, and a fix applied to one copy only
+    is a defect this repository has already shipped twice.
+    """
+    sm = np.array([[0, 1], [0, 0]], dtype=complex)
+    lsup = _near_tp(build_liouvillian(np.zeros((2, 2), dtype=complex), [sm], [1.0]))
+    defect, fro = trace_preservation_defect(lsup)
+    assert 0.0 < defect <= 1.0e-10 * fro, "fixture must pass the OLD cutoff"
+
+    cert = (
+        certified_eigvals(lsup)[1] if entry == "eigvals" else certified_eig(lsup)[1]
+    )
+    assert cert.applicable is False
+    assert cert.trace_defect > np.sqrt(lsup.shape[0]) * cert.bound
+
+
+@pytest.mark.parametrize("entry", ["eigvals", "eig"])
+def test_healthy_generators_keep_their_certificate(entry: str) -> None:
+    """Over-correction control: tightening must not withhold a valid claim.
+
+    A guard that declines everything "discriminates" too and is worthless.
+    Measured across 205 healthy GKSL generators the trace defect never exceeds
+    ``0.44 * eps * ||L||_F``, three orders below the new cutoff.
+    """
+    from liouscope import examples
+
+    for system in examples.all_systems():
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            cert = (
+                certified_eigvals(system.L)[1]
+                if entry == "eigvals"
+                else certified_eig(system.L)[1]
+            )
+        assert cert.applicable is True, system.name
+        assert cert.certified is True, system.name
+
+
+def test_stiff_repair_ladder_still_applies_to_the_measured_repro() -> None:
+    """The #112 fixture must keep its certificate under the tighter premise."""
+    lsup = _classical_network(STIFF_PAIRS, STIFF_RATES)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        _ev, cert = certified_eigvals(lsup)
+    assert cert.applicable is True
+    assert cert.certified is True
+
+
+# --------------------------------------------------------------------------
+# PR #127 external review, finding 3: D1 was still computed from a spectrum
+# the certificate had just declared unusable, and forwarded into the
+# relaxation grid.
+# --------------------------------------------------------------------------
+
+
+def test_d1_is_nan_when_no_repair_route_certified_the_spectrum(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An uncertified spectrum must not set D1 -- nor the relaxation window.
+
+    The repair ladder is good enough that no natural four-level fixture
+    reaches ``applicable and not certified`` (measured: fast rates 2.7e5 up to
+    1e17 all certify), so the reporting path is exercised the same way the
+    existing #112 warning test exercises it -- by patching the certificate.
+    """
+    sm = np.array([[0, 1], [0, 0]], dtype=complex)
+    lsup = build_liouvillian(np.zeros((2, 2), dtype=complex), [sm], [1.0])
+    rho_ss = np.array([[1, 0], [0, 0]], dtype=complex)
+
+    def _impossible(l_super, **_kw):
+        from liouscope.numerics.linalg import ZeroModeCertificate
+
+        return (
+            eig_nonhermitian(l_super).eigenvalues,
+            ZeroModeCertificate(
+                applicable=True, certified=False, solver="zgeev",
+                residual=1.0, bound=0.0, trace_defect=0.0,
+            ),
+        )
+
+    monkeypatch.setattr(
+        "liouscope.diagnostics.spectral.certified_eigvals", _impossible
+    )
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        result = compute_spectral_layer(lsup, rho_ss)
+    assert np.isnan(result.gap), result.gap
+
+
+def test_healthy_generator_still_reports_a_finite_d1() -> None:
+    """Over-correction control for finding 3: no blanket NaN."""
+    from liouscope import examples
+
+    for system in examples.all_systems():
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            result = compute_spectral_layer(system.L)
+        assert np.isfinite(result.gap), system.name
+        assert result.gap > 0.0, system.name
+
+
+# --------------------------------------------------------------------------
+# PR #127, round-17 external review, fifth finding: D3/D4 and the oscillation
+# flag were exported from the same spectrum for which D1 had just been
+# withheld.
+# --------------------------------------------------------------------------
+
+
+def test_unresolved_spectrum_withholds_d3_d4_and_the_oscillation_flag() -> None:
+    """D3, D4 and ``has_complex_pairs`` follow D1 into abstention.
+
+    Measured before the repair on this exact fixture (8 ambiguous in-band
+    modes, D1 already NaN): ``oscillating_gap = 0.0`` and
+    ``spectral_spread = 5.0e7`` came back as finite numbers, and
+    ``has_complex_pairs`` came back ``False``. None of the three is a neutral
+    answer -- ``0.0`` is the strongest "no oscillatory separation" verdict the
+    diagnostic can emit and ``False`` asserts the ABSENCE of the oscillation
+    that may be the very reason the spectrum is unresolved, because
+    ``zero_tol`` excludes the ambiguous in-band mode from the test.
+    """
+    fast = 1e8
+    lsup = _stiff_with_fast_rate(fast)
+    rates = [7.28e-6, 3.67e-5, 1.53e-5, fast, 1.42e-5]
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        result = compute_spectral_layer(lsup, _population_steady_state(rates))
+    cert = result.zero_mode_certificate
+    assert cert is not None
+    assert cert["applicable"] is True and cert["resolved"] is False, (
+        "fixture no longer produces an applicable-but-unresolved certificate; "
+        "the finding it pins cannot be reached from here"
+    )
+    assert np.isnan(result.gap), "precondition: D1 is already withheld"
+    assert np.isnan(result.oscillating_gap), (
+        f"D3 reported {result.oscillating_gap!r} from a spectrum the "
+        "certificate declared unresolved"
+    )
+    assert np.isnan(result.spectral_spread), (
+        f"D4 reported {result.spectral_spread!r} from a spectrum the "
+        "certificate declared unresolved"
+    )
+    assert result.has_complex_pairs is None, (
+        f"has_complex_pairs reported {result.has_complex_pairs!r}; False here "
+        "asserts the absence of oscillating modes from an unresolved spectrum"
+    )
+
+
+def test_resolved_spectrum_still_reports_finite_d3_d4() -> None:
+    """Over-correction control: no blanket withholding.
+
+    The repair must move ONLY the unresolved case. Every shipped example has a
+    resolved certificate, so D4 stays a finite measurement and the oscillation
+    flag stays a bool -- if this goes red the withholding predicate is too
+    wide. D3 is deliberately not asserted finite here: ``oscillating_mode_gap``
+    returns ``inf`` for a purely real spectrum by its own documented contract,
+    which is an answer, not an abstention.
+    """
+    from liouscope import examples
+
+    for system in examples.all_systems():
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            result = compute_spectral_layer(system.L)
+        assert isinstance(result.has_complex_pairs, bool), system.name
+        assert np.isfinite(result.spectral_spread), system.name
+        assert not np.isnan(result.oscillating_gap), system.name
+
+
+def test_withheld_oscillation_flag_reaches_the_evidence_dict_as_nan() -> None:
+    """``None`` must arrive at the classifier as its unavailable sentinel.
+
+    ``_strip_unavailable`` removes NaN entries, so the A8 rung reports
+    UNEVALUABLE instead of holding on an unanswered question. A ``float(None)``
+    would raise and a silent ``0.0`` would read as a measured "no oscillating
+    pairs" -- the two failure modes this assertion separates.
+    """
+    import math
+
+    from liouscope._types import (
+        LepResult,
+        MpembaResult,
+        NonNormalityResult,
+        RelaxationResult,
+        ResolventResult,
+        SpectralResult,
+        TransientResult,
+    )
+    from liouscope.diagnostics.classification import classify_mechanism
+
+    arr = np.zeros(1, dtype=complex)
+
+    def _classify(flag: bool | None):
+        # Local synthetic results (no cross-test import: the ``tests``
+        # directory is not an importable package on the CI runner).
+        return classify_mechanism(
+            SpectralResult(
+                gap=0.5, gns_gap=0.5, kms_gap=0.5, oscillating_gap=0.1,
+                spectral_spread=1.0, eigenvalues=arr,
+                steady_state=np.zeros((1, 1), dtype=complex),
+                has_complex_pairs=flag,
+                zero_mode_certificate={
+                    "applicable": True, "certified": True, "resolved": True
+                },
+            ),
+            NonNormalityResult(
+                henrici_eta=0.5, petermann_max=1.0, petermann_factors=arr,
+                kreiss=1.0, bohr_ap_length=1, bohr_ap_pauli_bound=0.0,
+            ),
+            RelaxationResult(
+                von_neumann_entropy=0.0, relative_entropy_curve=arr.real,
+                fidelity_curve=arr.real, entanglement_asymmetry=None, fits={},
+                aicc_model="M1", beta_D=0.5, bca_ci_beta=(0.4, 0.6),
+            ),
+            ResolventResult(
+                resolvent_peak=1.0, ridge_fwhm=1.0, pseudospectral_radius=0.5,
+                pseudospec_eps=1.0e-3,
+            ),
+            TransientResult(
+                trans_amplitude_ratio=1.0, kappa_trans=1.0,
+                numerical_abscissa=0.0,
+            ),
+            LepResult(
+                lep_proximity=1.0, gap_rate_consistency=0.01,
+                initial_state_sensitivity=0.0, lep_candidate_count=0,
+            ),
+            MpembaResult(
+                overlap_c1=0.5, expansion_alpha=1.0, is_mpemba_candidate=False,
+            ),
+        )
+
+    assert math.isnan(_classify(None).evidence["has_complex_pairs"])
+    assert _classify(False).evidence["has_complex_pairs"] == 0.0
+    assert _classify(True).evidence["has_complex_pairs"] == 1.0
