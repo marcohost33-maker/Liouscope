@@ -148,6 +148,20 @@ def test_car1_rho_reduces_to_a_single_constant_on_a_uniform_grid():
     np.testing.assert_allclose(a, a[0], rtol=1.0e-12)
 
 
+def test_car1_theta_is_invariant_to_residual_amplitude_without_recentering():
+    """Scale changes may not move theta; subtracting the sample mean would."""
+    t = np.concatenate(
+        [np.linspace(0.0, 0.1, 40, endpoint=False), np.linspace(0.1, 10.0, 40)]
+    )
+    residuals = car1_resample(np.random.default_rng(3), t, 1.0e-4, 1.0)
+    reference = estimate_car1_theta(t, residuals)
+    assert np.isfinite(reference)
+    for scale in (1.0e-170, 1.0e-100, 1.0e-20, 1.0, 1.0e100):
+        assert estimate_car1_theta(t, residuals * scale) == pytest.approx(
+            reference, rel=2.0e-6
+        )
+
+
 def test_car1_theta_maximises_the_stationary_likelihood_reported_to_aicc():
     """Theta and AICc must refer to one stationary probability model."""
     t = np.concatenate(
@@ -432,15 +446,7 @@ def _decaying_series(t: np.ndarray) -> np.ndarray:
 
 
 def test_aicc_counts_car1_rate_and_variance_on_a_non_uniform_grid():
-    """CAR(1) theta and stationary variance are both estimated and enter ``k``.
-
-    Theta is re-fitted for every candidate model and the stationary variance is
-    profiled at its MLE in the same likelihood. Because the small-sample correction
-    ``2k(k+1)/(N_eff-k-1)`` is nonlinear in ``k``, leaving it out is not a
-    constant offset: it under-penalises the higher-dimensional candidates
-    exactly when ``N_eff`` is small, which can move the selected relaxation
-    model and with it the reported A-class.
-    """
+    """CAR(1) theta and stationary variance are both estimated and enter ``k``."""
     t = np.concatenate(
         [np.linspace(0.0, 0.1, 40, endpoint=False), np.linspace(0.1, 8.0, 40)]
     )
@@ -454,22 +460,19 @@ def test_aicc_counts_car1_rate_and_variance_on_a_non_uniform_grid():
     assert np.isfinite(fit.residual_theta_car1), "fixture must fit a CAR(1) rate"
     p = int(np.asarray(fit.params).size)
     assert fit.aicc == pytest.approx(
-        aicc(fit.log_likelihood, p + 2, fit.n_eff), rel=0.0, abs=0.0
+        aicc(fit.log_likelihood, p + 2, n_obs=float(t.size)),
+        rel=0.0,
+        abs=0.0,
     )
-    # DISCRIMINATION: omitting either fitted nuisance parameter must change
-    # the small-sample correction on this fixture.
-    assert aicc(fit.log_likelihood, p + 1, fit.n_eff) != aicc(
-        fit.log_likelihood, p + 2, fit.n_eff
-    )
+    assert aicc(fit.log_likelihood, p + 1, n_obs=float(t.size)) != fit.aicc
+    # The ESS is intentionally retained as evidence but is not the AICc sample
+    # size.  This fixture must discriminate the two choices.
+    assert fit.n_eff < float(t.size)
+    assert aicc(fit.log_likelihood, p + 2, fit.n_eff) != fit.aicc
 
 
-def test_aicc_parameter_count_is_unchanged_on_a_uniform_grid():
-    """Negative control: the historical discrete-AR(1) path must not move.
-
-    ``rho`` is estimated there too, but counting it would re-rank every
-    existing uniform-grid result; that convention change is deliberately NOT
-    part of this repair (see the comment in ``_fit_with_model``).
-    """
+def test_aicc_counts_ar1_rho_and_variance_on_a_uniform_grid():
+    """Uniform AR(1) also estimates a correlation and a Gaussian scale."""
     t = np.linspace(0.0, 8.0, 80)
     assert is_uniform_grid(t)
     y = _decaying_series(t)
@@ -478,8 +481,12 @@ def test_aicc_parameter_count_is_unchanged_on_a_uniform_grid():
         warnings.simplefilter("ignore")
         fit, _ = _fit_with_model("M1", t, y)
 
-    assert not np.isfinite(fit.residual_theta_car1), "uniform grid fits no theta"
+    assert not np.isfinite(fit.residual_theta_car1), "uniform grid fits rho, not theta"
     p = int(np.asarray(fit.params).size)
     assert fit.aicc == pytest.approx(
-        aicc(fit.log_likelihood, p, fit.n_eff), rel=0.0, abs=0.0
+        aicc(fit.log_likelihood, p + 2, n_obs=float(t.size)),
+        rel=0.0,
+        abs=0.0,
     )
+    assert aicc(fit.log_likelihood, p, n_obs=float(t.size)) != fit.aicc
+    assert fit.n_eff <= float(t.size)
