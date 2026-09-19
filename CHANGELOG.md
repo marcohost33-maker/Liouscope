@@ -63,18 +63,22 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     the change is not visible in `input_hash`.
 
 ### Fixed
-- **Stacked pull requests now receive exact-head scientific CI plus a separate
-  merge-smoke (issue #159 follow-up).** The first #159 repair added `push`
-  filters for every documented agent prefix, but its verification evidence came
-  from `pull_request` runs and automation-authenticated pushes are not a reliable
-  trigger because GitHub suppresses recursive workflow events in some
-  authentication paths. CI, QuTiP and Quality Contract therefore no longer
-  restrict `pull_request` to base `main` and explicitly checkout the submitted
-  PR head SHA. The reusable Python 3.12 pilot runs on every PR base and retains
-  GitHub's synthetic merge ref as an independent integration smoke test. The
-  trigger contract enforces push-prefix coverage, unfiltered PR-base coverage,
-  exact-head checkout, and the merge-smoke. Main branch protection and workflow
-  permissions are unchanged.
+- **Stacked pull requests now carry two independent evidence planes:
+  submitted-head evidence and proposed-merge evidence (issue #159 follow-up).**
+  The first #159 repair added `push` filters for every documented agent prefix,
+  but its verification evidence came from `pull_request` runs and
+  automation-authenticated pushes are not a reliable proof surface because
+  recursive workflow events can be suppressed. CI, QuTiP and Quality Contract
+  therefore accept PRs against arbitrary base branches. Scientific CI, QuTiP
+  and the head Quality Contract explicitly bind to
+  `github.event.pull_request.head.sha`; the reusable Python pilot retains
+  GitHub's synthetic merge ref. QuTiP additionally runs the full 3.11/3.12
+  cross-check matrix on that proposed merge, and the Quality Contract runs its
+  workflow-hardening, trigger-contract and claim-safety checks on the proposed
+  merge as well. The trigger guard is adversarially tested against comment,
+  path/type-filter, fake-head-ref and fake-reusable-caller bypasses and binds
+  the merge smoke to the actual job-level reusable-workflow call. Main branch
+  protection and workflow permissions remain unchanged.
 - **Documented agent branches now receive exact-head verification (issue #159).**
   `AGENTS.md` defines `claude/**`, `codex/**` and `bot/**`, but the main CI and
   QuTiP workflows previously triggered branch pushes only for `claude/**`,
