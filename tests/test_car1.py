@@ -431,11 +431,11 @@ def _decaying_series(t: np.ndarray) -> np.ndarray:
     return np.exp(-1.0 * t) + 1.0e-3 * rng.standard_normal(t.size)
 
 
-def test_aicc_counts_the_fitted_car1_rate_on_a_non_uniform_grid():
-    """``theta`` is estimated from THIS data set, so it belongs in ``k``.
+def test_aicc_counts_car1_rate_and_variance_on_a_non_uniform_grid():
+    """CAR(1) theta and stationary variance are both estimated and enter ``k``.
 
-    It is re-fitted for every candidate model and enters that model's maximised
-    likelihood through the whitening. Because the small-sample correction
+    Theta is re-fitted for every candidate model and the stationary variance is
+    profiled at its MLE in the same likelihood. Because the small-sample correction
     ``2k(k+1)/(N_eff-k-1)`` is nonlinear in ``k``, leaving it out is not a
     constant offset: it under-penalises the higher-dimensional candidates
     exactly when ``N_eff`` is small, which can move the selected relaxation
