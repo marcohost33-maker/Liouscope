@@ -188,7 +188,15 @@ def test_car1_theta_maximises_the_stationary_likelihood_reported_to_aicc():
     )
     assert reference.success
     theta_reference = float(np.exp(float(reference.x)))
-    assert theta_hat == pytest.approx(theta_reference, rel=2.0e-6)
+    ll_hat = reported_log_likelihood(float(np.log(theta_hat)))
+    ll_reference = reported_log_likelihood(float(reference.x))
+    # The profiled likelihood is very flat around this optimum. Different
+    # bounded minimisers may return theta values a few ppm apart while being
+    # indistinguishable on the objective that AICc actually consumes. Pin the
+    # probability-model identity directly, with a loose parameter sanity check
+    # only to reject a different basin.
+    assert ll_hat == pytest.approx(ll_reference, rel=1.0e-11, abs=1.0e-10)
+    assert theta_hat == pytest.approx(theta_reference, rel=1.0e-4)
 
 # ---------------------------------------------------------------------------
 # Effective sample size against the closed form
