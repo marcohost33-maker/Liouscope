@@ -73,5 +73,5 @@ def test_extreme_finite_Lt_fails_closed_when_expm_is_nonfinite() -> None:
     grid = np.array([0.0, 1.1])
     assert np.all(np.isfinite(L * grid[-1]))
 
-    with pytest.raises(UnrepresentableTrajectoryError, match="expm returned a non-finite"):
+    with pytest.raises(UnrepresentableTrajectoryError, match="scipy.linalg.expm"):
         _evolve(L, _RHO_PLUS, grid)
