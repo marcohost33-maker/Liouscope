@@ -1047,6 +1047,7 @@ def compute_relaxation_layer(
     # Bootstrap on the winning model for beta_D
     beta_D = _beta_from_params(winner, fits[winner].params) if winner in fits else float("nan")
     bca_lo, bca_hi = beta_D, beta_D
+    interval_method: str = "unavailable"
     if winner in fits and np.isfinite(beta_D):
         winner_fn = {"M0": M0, "M1": M1, "M2": M2, "M3a": M3a, "M3b": M3b}[winner]
         try:
@@ -1057,6 +1058,10 @@ def compute_relaxation_layer(
             jk = None
             if t_grid.size <= 60:
                 jk = _jackknife(winner_fn, t_grid, rel_entropy, theta_hat, None)
+            # Issue #116: a=0 with no jackknife is bias-corrected (BC), not BCa.
+            # Keep the legacy numeric field name for compatibility, but persist
+            # the estimator that was actually computed.
+            interval_method = "BCa" if jk is not None else "BC"
             cis = bca_ci(samples, theta_hat, jackknife_estimates=jk)
             beta_idx = _beta_index(winner, fits[winner].params)
             bca_lo, bca_hi = float(cis[beta_idx, 0]), float(cis[beta_idx, 1])
@@ -1073,6 +1078,7 @@ def compute_relaxation_layer(
                 RuntimeWarning,
             )
             bca_lo, bca_hi = float("nan"), float("nan")
+            interval_method = "unavailable"
 
     try:
         ent_asym = entanglement_asymmetry(final_rho)
@@ -1102,6 +1108,7 @@ def compute_relaxation_layer(
         aicc_model=winner,
         beta_D=float(beta_D),
         bca_ci_beta=(bca_lo, bca_hi),
+        interval_method=interval_method,
         beta_D_linear=float(beta_D_linear),
         linear_fit_model=linear_fit_model,
         t_grid_source=t_grid_source,
