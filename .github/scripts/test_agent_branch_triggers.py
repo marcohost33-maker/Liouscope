@@ -73,7 +73,7 @@ class TriggerContractParserTests(unittest.TestCase):
         path = self.fixture(
             "jobs:\n"
             "  test:\n"
-            "    if: \${{ github.event_name == 'push' }}\n"
+            "    if: ${{ github.event_name == 'push' }}\n"
             "    steps:\n"
             "      - uses: actions/checkout@deadbeef\n"
             "        with:\n          persist-credentials: false\n"
