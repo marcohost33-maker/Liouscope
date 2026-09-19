@@ -63,6 +63,15 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     the change is not visible in `input_hash`.
 
 ### Fixed
+- **Bootstrap interval provenance now says BC when acceleration is absent (issue #116).**
+  The default relaxation grid has 80 points while the leave-one-out acceleration
+  jackknife is only run for grids of at most 60 points. The existing numeric
+  fallback uses `a=0`, which is a bias-corrected (BC) interval, not BCa.
+  `RelaxationResult.interval_method` now records `BC`, `BCa`, or `unavailable`;
+  the legacy `bca_ci_beta` tuple is retained for API compatibility. Public docs
+  and the quickstart now report the actual estimator. This slice changes no
+  interval endpoints; dependent-data acceleration calibration remains a
+  separate methodology gate rather than being silently assumed.
 - **`residual_model` claimed a whitening for runs in which no fit succeeded
   (PR #127, round-21 external review).** `fit_gls_ar1` returns `success=False`
   from its flat-curve guard before it selects or applies any residual model,
