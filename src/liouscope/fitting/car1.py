@@ -227,6 +227,14 @@ def estimate_car1_theta(t: np.ndarray, residuals: np.ndarray) -> float:
     # r -> c*r, so theta is scale-invariant.  Reading degeneracy from max|r|
     # also avoids the underflow that the former sum-of-squares test suffered at
     # amplitudes around 1e-170.
+    # Exact-constant residuals contain no temporal variation from which a
+    # correlation decay rate can be identified.  This guard is deliberately
+    # separate from sample-mean subtraction: we reject the degenerate series
+    # without changing the zero-mean stationary likelihood of non-constant
+    # residuals.
+    if np.all(r == r[0]):
+        return float("nan")
+
     amplitude = float(np.max(np.abs(r)))
     if not np.isfinite(amplitude) or amplitude <= 0.0:
         return float("nan")
