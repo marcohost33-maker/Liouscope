@@ -13,6 +13,8 @@ than hidden behind whichever one happens first.
 
 from __future__ import annotations
 
+from decimal import Decimal, localcontext
+
 import numpy as np
 import pytest
 
@@ -60,8 +62,18 @@ def test_zero_resolution_ratio_has_the_complete_decay_limit() -> None:
 
 
 @pytest.mark.parametrize("samples", [0.25, 1.0, 4.0, 1.0e6])
-def test_decay_fraction_matches_the_direct_formula_away_from_zero(samples: float) -> None:
-    expected = 1.0 - float(np.exp(-1.0 / samples))
+def test_decay_fraction_matches_a_high_precision_oracle(samples: float) -> None:
+    """The stable expm1 path is judged against high precision, not cancellation.
+
+    ``1 - exp(-x)`` loses significant relative precision when ``x`` is tiny;
+    that is exactly why production uses ``-expm1(-x)``. Comparing the stable
+    implementation to the lossy float64 subtraction would make the test punish
+    the numerically better answer at large samples-per-e-folding.
+    """
+    with localcontext() as ctx:
+        ctx.prec = 60
+        x = Decimal(1) / Decimal(str(samples))
+        expected = float(Decimal(1) - (-x).exp())
     assert _decay_fraction_from_resolution(samples) == pytest.approx(
         expected, rel=2.0e-15, abs=0.0
     )
