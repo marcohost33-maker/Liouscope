@@ -151,6 +151,22 @@ abstract: >-
 # interval is withheld (round-1 review of PR #147). Archived analyses whose
 # selected model matters should be re-run; per-model likelihoods are not run-
 # manifest fields, so this change is not visible in input_hash.
+# Also pending for the next cut: CAR(1) model selection on non-uniform grids
+# now fits the residual rate theta against the same stationary exact joint
+# likelihood that is reported to AICc, instead of fitting theta with a
+# conditional transition likelihood that omitted observation 0 and then
+# scoring a different likelihood that included it (PR #127 statistical review).
+# The stationary variance is profiled from that same joint likelihood, and both
+# fitted CAR(1) nuisance parameters -- theta and the stationary variance -- are
+# counted in AICc. This CHANGES METHODOLOGY and can change AICc ordering, the
+# selected M0..M3b model, the reported decay rate and downstream A-class on
+# non-uniform grids. The stationary choice matches the model simulated by
+# car1_resample, whose first residual is drawn from the stationary law. The
+# historical uniform-grid AR(1) parameter-count convention is deliberately
+# unchanged here and remains a separate decision. MANIFEST_SCHEMA is unchanged
+# because neither per-model likelihood nor its nuisance-parameter count is a
+# run-manifest field; archived analyses whose selected model matters should be
+# re-run.
 # Also pending for the next cut: the Hermiticity validation of the Hamiltonian
 # measures its defect against the scale of the COHERENT component alone, read
 # in the canonical Lindblad gauge (PR #127, E3 settled by cross-family review
