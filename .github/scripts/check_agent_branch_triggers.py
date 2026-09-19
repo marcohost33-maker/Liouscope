@@ -23,9 +23,10 @@ REQUIRED_WORKFLOWS = (
 )
 MERGE_SMOKE_WORKFLOW = ROOT / ".github" / "workflows" / "ci-reusable-pilot.yml"
 MERGE_SMOKE_CALLEE = ROOT / ".github" / "workflows" / "ci-python-local.yml"
-DUAL_EVIDENCE_WORKFLOWS = {
-    ROOT / ".github" / "workflows" / "ci-qutip.yml",
-    ROOT / ".github" / "workflows" / "quality-contract.yml",
+EVIDENCE_JOBS = {
+    "ci.yml": ("test", "test-head"),
+    "ci-qutip.yml": ("qutip-cross-check", "qutip-head-cross-check"),
+    "quality-contract.yml": ("contract", "contract-head"),
 }
 PR_HEAD_REF = "${{ github.event.pull_request.head.sha }}"
 PR_ONLY_IF = "${{ github.event_name == 'pull_request' }}"
@@ -131,6 +132,81 @@ def _checkout_ref_values(path: Path) -> list[str | None]:
         refs.append(ref_value)
     return refs
 
+def _job_specs(path: Path) -> dict[str, dict[str, object]]:
+    """Return job-level if/uses plus checkout refs, excluding scalar payload."""
+    lines = _structural_lines(path)
+    jobs: dict[str, dict[str, object]] = {}
+    current: str | None = None
+    in_jobs = False
+    for i, (_, indent, stripped) in enumerate(lines):
+        if indent == 0:
+            in_jobs = stripped == "jobs:"
+            current = None
+            continue
+        if not in_jobs:
+            continue
+        if indent == 2 and stripped.endswith(":") and not stripped.startswith("-"):
+            current = stripped[:-1]
+            jobs[current] = {"if": None, "uses": [], "refs": []}
+            continue
+        if current is None:
+            continue
+        if indent == 4 and stripped.startswith("if:"):
+            jobs[current]["if"] = stripped.split(":", 1)[1].strip()
+            continue
+        if indent == 4 and stripped.startswith("uses:"):
+            uses = jobs[current]["uses"]
+            assert isinstance(uses, list)
+            uses.append(stripped.split(":", 1)[1].strip().strip(chr(34)).strip(chr(39)))
+            continue
+        short_form = stripped.startswith("- uses: actions/checkout@")
+        named_form = stripped.startswith("uses: actions/checkout@")
+        if not (short_form or named_form):
+            continue
+        property_indent = indent + 2 if short_form else indent
+        in_with = False
+        ref_value: str | None = None
+        for _, next_indent, child in lines[i + 1 :]:
+            if next_indent < property_indent:
+                break
+            if next_indent == property_indent:
+                if child == "with:":
+                    in_with = True
+                    continue
+                in_with = False
+                if child.startswith("- "):
+                    break
+                continue
+            if in_with and next_indent > property_indent and child.startswith("ref:"):
+                ref_value = child.split(":", 1)[1].strip().strip(chr(34)).strip(chr(39))
+        refs = jobs[current]["refs"]
+        assert isinstance(refs, list)
+        refs.append(ref_value)
+    return jobs
+
+
+def _evidence_job_errors(path: Path) -> list[str]:
+    errors: list[str] = []
+    jobs = _job_specs(path)
+    required_id, head_id = EVIDENCE_JOBS[path.name]
+    required = jobs.get(required_id)
+    if required is None:
+        errors.append(f"{path.relative_to(ROOT)}: missing required merge job {required_id}")
+    else:
+        if required["if"] is not None:
+            errors.append(f"{path.relative_to(ROOT)}:{required_id}: required job must not be conditional")
+        if required["refs"] != [None]:
+            errors.append(f"{path.relative_to(ROOT)}:{required_id}: required job must have one default-ref checkout")
+    head = jobs.get(head_id)
+    if head is None:
+        errors.append(f"{path.relative_to(ROOT)}: missing exact-head job {head_id}")
+    else:
+        if head["if"] != PR_ONLY_IF:
+            errors.append(f"{path.relative_to(ROOT)}:{head_id}: exact-head job must be PR-only")
+        if head["refs"] != [PR_HEAD_REF]:
+            errors.append(f"{path.relative_to(ROOT)}:{head_id}: exact-head checkout is not bound to PR head")
+    return errors
+
 def _checks_out_exact_pr_head(path: Path) -> bool:
     """At least one checkout must bind to the submitted PR head SHA."""
     return PR_HEAD_REF in _checkout_ref_values(path)
@@ -142,18 +218,12 @@ def _also_checks_out_proposed_merge(path: Path) -> bool:
 
 
 def _job_level_uses_values(path: Path) -> list[str]:
-    """Return workflow-level job ``uses`` targets, excluding steps/comments."""
+    """Return actual job-level reusable-workflow calls."""
     values: list[str] = []
-    for line in path.read_text(encoding="utf-8").splitlines():
-        code = _yaml_code(line)
-        if not code.strip():
-            continue
-        indent = len(code) - len(code.lstrip(" "))
-        stripped = code.strip()
-        # In this repository a reusable-workflow job property is indented four
-        # spaces under its job id. Step-level uses entries are deeper/list items.
-        if indent == 4 and stripped.startswith("uses:"):
-            values.append(stripped.split(":", 1)[1].strip().strip(chr(34)).strip(chr(39)))
+    for spec in _job_specs(path).values():
+        uses = spec["uses"]
+        assert isinstance(uses, list)
+        values.extend(str(value) for value in uses)
     return values
 
 
@@ -204,16 +274,7 @@ def main() -> int:
                 "branches (no branches/branches-ignore filter), so stacked PRs "
                 "receive exact-head CI"
             )
-        if not _checks_out_exact_pr_head(path):
-            errors.append(
-                f"{path.relative_to(ROOT)}: at least one checkout must use the exact "
-                f"PR head ref {PR_HEAD_REF!r}"
-            )
-        if path in DUAL_EVIDENCE_WORKFLOWS and not _also_checks_out_proposed_merge(path):
-            errors.append(
-                f"{path.relative_to(ROOT)}: must also contain a checkout with no "
-                "with.ref so the proposed pull_request merge is exercised"
-            )
+        errors.extend(_evidence_job_errors(path))
 
     if not MERGE_SMOKE_WORKFLOW.exists():
         errors.append(
