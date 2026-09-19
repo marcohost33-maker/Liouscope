@@ -64,21 +64,21 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 - **Stacked pull requests now carry two independent evidence planes:
-  submitted-head evidence and proposed-merge evidence (issue #159 follow-up).**
-  The first #159 repair added `push` filters for every documented agent prefix,
-  but its verification evidence came from `pull_request` runs and
-  automation-authenticated pushes are not a reliable proof surface because
-  recursive workflow events can be suppressed. CI, QuTiP and Quality Contract
-  therefore accept PRs against arbitrary base branches. Scientific CI, QuTiP
-  and the head Quality Contract explicitly bind to
-  `github.event.pull_request.head.sha`; the reusable Python pilot retains
-  GitHub's synthetic merge ref. QuTiP additionally runs the full 3.11/3.12
-  cross-check matrix on that proposed merge, and the Quality Contract runs its
-  workflow-hardening, trigger-contract and claim-safety checks on the proposed
-  merge as well. The trigger guard is adversarially tested against comment,
-  path/type-filter, fake-head-ref and fake-reusable-caller bypasses and binds
-  the merge smoke to the actual job-level reusable-workflow call. Main branch
-  protection and workflow permissions remain unchanged.
+  proposed-merge evidence in the existing required contexts and submitted-head
+  evidence in additional jobs (issue #159 follow-up).** CI, QuTiP and Quality
+  Contract accept PRs against arbitrary base branches. On `pull_request`, the
+  historical required jobs deliberately retain GitHub's default synthetic merge
+  ref so branch protection still validates the proposed integration state; new
+  `*-head` jobs explicitly checkout
+  `github.event.pull_request.head.sha` to prove the submitted subject state
+  independently. The Python matrix therefore runs 3.10-3.14 on both states and
+  QuTiP runs 3.11/3.12 on both states. The workflow contract binds these
+  semantics to concrete PR-reachable, dependency-free jobs and adversarially
+  rejects path/type suppression, comments, fake ref/use strings, block-scalar
+  payloads (including indentation/chomping indicators), trigger-name
+  impersonation outside top-level `on:`, and conditional/dependency skip
+  paths. Main branch-protection context names, read-only permissions and
+  full-SHA action pinning remain unchanged.
 - **Documented agent branches now receive exact-head verification (issue #159).**
   `AGENTS.md` defines `claude/**`, `codex/**` and `bot/**`, but the main CI and
   QuTiP workflows previously triggered branch pushes only for `claude/**`,
