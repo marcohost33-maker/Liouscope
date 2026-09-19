@@ -31,7 +31,14 @@ EVIDENCE_JOBS = {
 PR_HEAD_REF = "${{ github.event.pull_request.head.sha }}"
 PR_ONLY_IF = "${{ github.event_name == 'pull_request' }}"
 TASK_PREFIX_RE = re.compile(r"`([A-Za-z0-9_-]+)/<task>`")
-BLOCK_SCALAR_RE = re.compile(r"[:=-]\\s*[|>][+-]?\\s*$")
+BLOCK_SCALAR_RE = re.compile(r"[:=-]\s*[|>][+-]?\s*$")
+
+
+def _display_path(path: Path) -> str:
+    try:
+        return str(_display_path(path))
+    except ValueError:
+        return str(path)
 
 
 def _documented_agent_prefixes() -> set[str]:
@@ -191,20 +198,20 @@ def _evidence_job_errors(path: Path) -> list[str]:
     required_id, head_id = EVIDENCE_JOBS[path.name]
     required = jobs.get(required_id)
     if required is None:
-        errors.append(f"{path.relative_to(ROOT)}: missing required merge job {required_id}")
+        errors.append(f"{_display_path(path)}: missing required merge job {required_id}")
     else:
         if required["if"] is not None:
-            errors.append(f"{path.relative_to(ROOT)}:{required_id}: required job must not be conditional")
+            errors.append(f"{_display_path(path)}:{required_id}: required job must not be conditional")
         if required["refs"] != [None]:
-            errors.append(f"{path.relative_to(ROOT)}:{required_id}: required job must have one default-ref checkout")
+            errors.append(f"{_display_path(path)}:{required_id}: required job must have one default-ref checkout")
     head = jobs.get(head_id)
     if head is None:
-        errors.append(f"{path.relative_to(ROOT)}: missing exact-head job {head_id}")
+        errors.append(f"{_display_path(path)}: missing exact-head job {head_id}")
     else:
         if head["if"] != PR_ONLY_IF:
-            errors.append(f"{path.relative_to(ROOT)}:{head_id}: exact-head job must be PR-only")
+            errors.append(f"{_display_path(path)}:{head_id}: exact-head job must be PR-only")
         if head["refs"] != [PR_HEAD_REF]:
-            errors.append(f"{path.relative_to(ROOT)}:{head_id}: exact-head checkout is not bound to PR head")
+            errors.append(f"{_display_path(path)}:{head_id}: exact-head checkout is not bound to PR head")
     return errors
 
 def _checks_out_exact_pr_head(path: Path) -> bool:
@@ -255,7 +262,7 @@ def main() -> int:
     expected = {"main", *(f"{prefix}/**" for prefix in prefixes)}
     for path in REQUIRED_WORKFLOWS:
         if not path.exists():
-            errors.append(f"required workflow missing: {path.relative_to(ROOT)}")
+            errors.append(f"required workflow missing: {_display_path(path)}")
             continue
         try:
             actual = _push_branches(path)
@@ -265,12 +272,12 @@ def main() -> int:
         missing = sorted(expected - actual)
         if missing:
             errors.append(
-                f"{path.relative_to(ROOT)}: push trigger misses documented branches: "
+                f"{_display_path(path)}: push trigger misses documented branches: "
                 + ", ".join(missing)
             )
         if not _pull_request_is_unfiltered(path):
             errors.append(
-                f"{path.relative_to(ROOT)}: pull_request must cover arbitrary base "
+                f"{_display_path(path)}: pull_request must cover arbitrary base "
                 "branches (no branches/branches-ignore filter), so stacked PRs "
                 "receive exact-head CI"
             )
