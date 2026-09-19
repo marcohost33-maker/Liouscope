@@ -210,10 +210,19 @@ def compute_spectral_layer(
     ``conditioning_audit`` attaches the issue-#117 eigenvalue-conditioning
     evidence to :attr:`SpectralResult.zero_mode_conditioning`. It is AUDIT ONLY
     -- switching it off changes no D1-D4 value, no certificate, no verdict and
-    no tier, only whether the evidence is present. It costs one additional
-    ``eig(left=True, right=True)`` on the superoperator; measured against the
-    whole layer (which already forms two Gram square roots and their inverses)
-    that is +3% at d=2, +9% at d=4 and +15% at d=8 and d=12.
+    no tier, only whether the evidence is present.
+
+    Round-3 review, on cost: fixed percentages (+3%/+9%/+15%) used to be quoted
+    here. Nothing in the repository produced them, and they were wrong -- they
+    had been measured for the extra ``eig(left=True, right=True)`` alone, which
+    is not where the audit spends its time at small ``d`` (measured 0.02 ms of a
+    0.65 ms audit at ``d = 2``; the per-mode normalisation, scale-safe norms,
+    SVD and residual loop dominate). In absolute terms that is well under a
+    millisecond there. The relative cost is not stable enough on a shared
+    machine to quote -- the same script measured the ``d = 8`` audit at 20 ms
+    and 40 ms in consecutive runs -- so the timing campaign lives in
+    ``benchmarks/issue117_zero_mode_conditioning.py`` and reports the caller's
+    own hardware instead.
     """
     L_super = np.asarray(L_super, dtype=complex)  # complex128: scipy dispatches by dtype; the double-solve contract (#108) must hold
     if rho_steady is None:

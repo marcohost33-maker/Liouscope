@@ -148,10 +148,12 @@ abstract: >-
 # residuals, the separation, the trace-preservation defect and the first-order
 # forward-error estimates those imply. It exists because a backward error does
 # NOT bound the forward eigenvalue displacement for a non-normal generator:
-# measured on the four-level fixture of the 2026-09-11 external review, a
-# 1.00e-14 perturbation moves the stationary eigenvalue to 1.00e-07, which the
-# certificate band (4.44e-13) under-predicts by 2.25e5x and the conditioning-
-# scaled estimate (5.00e-08) reproduces within a factor of two. This entry
+# measured on the 4x4 (two-level, d = 2) fixture of the 2026-09-11 external
+# review, a 1.00e-14 perturbation moves the stationary eigenvalue to 1.00e-07,
+# which the certificate band (4.44e-13) under-predicts by 2.25e5x and the
+# conditioning-scaled estimate (5.00e-08) reproduces within a factor of two.
+# (The canonical FOUR-level network referenced elsewhere in this file is a
+# different, 16x16 fixture; the two must not be conflated.) This entry
 # describes a MEASUREMENT that is available in the codebase and it must NOT be
 # described as changing any reported number: no filter, gap, certificate,
 # verdict or tier consumes it, D1-D24 are byte-identical and the run manifest

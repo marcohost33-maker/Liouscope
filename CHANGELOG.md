@@ -38,7 +38,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   BALANCED matrix and that diagonal scaling changes them, whereas `?geev`
   back-transforms its eigenvectors, so `|y^H x|` describes the operator as the
   caller wrote it. Measured on a 9x9 operator under `D A D^-1` with
-  `D = diag(1e-6 .. 1e9)`, which leaves the spectrum invariant to `5.2e-15`: the
+  `D = diag(1e-6 .. 1e9)`, which leaves the spectrum invariant to round-off
+  (below `1e-14`; the exact difference is BLAS-dependent, so it is a bound): the
   per-mode `s` range moves from `0.189..0.761` to `1.55e-15..1.18e-14`.
 
   Why the subspace figure and not a per-mode one. Per-mode `s` collapses with
@@ -73,7 +74,19 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   conditioning of `7.28e-06` beside a reported stationary eigenvalue of
   `4.08e-17`. A side length that cannot be a superoperator, and a negative
   `zero_tolerance`, are likewise refused rather than answered.
-  `benchmarks/issue117_zero_mode_conditioning.py` reproduces every figure above.
+  The two forward-error contributions are SUCCESSIVE perturbations -- from the
+  exact zero of the nearest trace-preserving operator, to that operator's
+  eigenvalue, to the one the solver returned -- so the budget is their sum, not
+  the larger of the two.
+
+  `benchmarks/issue117_zero_mode_conditioning.py` reproduces every figure above
+  and carries the timing campaign. On cost: the audit's price at small `d` is
+  NOT the extra eigensolve (measured 0.02 ms of a 0.65 ms audit at `d = 2`) but
+  its Python-level per-mode work; in absolute terms that is well under a
+  millisecond there. The relative figure is not stable enough on a shared
+  machine to quote -- the same script measured the `d = 8` audit at 20 ms and
+  40 ms in consecutive runs -- so it is measured rather than documented.
+  `compute_spectral_layer(..., conditioning_audit=False)` switches it off.
 - **Trace-preserving generators can be restricted to the traceless operator
   space by an exact structural identity, with no eigenvalue-magnitude
   threshold (issue #113).** For column-stacked operators trace preservation IS

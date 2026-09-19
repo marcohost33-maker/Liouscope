@@ -16,11 +16,12 @@ fixture from the 2026-09-11 external review of PR #127 (a leading block
 ``[[0, 1e-14], [1, 0]]`` rotated into a basis whose first vector is
 ``vec(I)/sqrt(2)``, remaining eigenvalues ``-1`` and ``-2``):
 
-===========================================  ==========
-trace-preservation defect ``||q^H L||``      1.415e-14
-certificate band ``rtol * eps * ||L||_2``    4.441e-13
-OBSERVED displacement ``min |lambda|``       1.000e-07
-===========================================  ==========
+=============================================  ==========
+raw defect ``||vec(I)^H L||``                  1.415e-14
+perturbation norm ``||q^H L||`` (``q`` unit)   1.000e-14
+certificate band ``rtol * eps * ||L||_2``      4.441e-13
+OBSERVED displacement ``min |lambda|``         1.000e-07
+=============================================  ==========
 
 The band under-predicts the displacement by 2.25e5x. The displacement is not a
 solver failure: the exact eigenvalues of that matrix ARE ``+-1e-7``, and the
@@ -57,7 +58,9 @@ reasons not to:
    WROTE IT. Measured on a 9x9 random complex matrix (d = 3, a superoperator
    side length) under the diagonal similarity ``D A D^-1`` with
    ``D = diag(1e-6 .. 1e9)`` -- which leaves the spectrum invariant to
-   ``5.2e-15`` -- the per-mode ``s`` moves from ``0.189..0.761`` to
+   round-off (below ``1e-14``; the exact difference is itself a round-off
+   quantity and differs between BLAS builds, so it is stated as a bound rather
+   than quoted) -- the per-mode ``s`` moves from ``0.189..0.761`` to
    ``1.55e-15..1.18e-14``, a factor of ~1.2e14. A certificate whose semantics
    are tied to the caller's operator must measure the caller's operator.
 
@@ -458,23 +461,34 @@ def zero_mode_conditioning(
             f"{zero_tolerance!r}"
         )
     try:
-        L = require_finite_square_2d(L_super, name="L_super")
+        validated = require_finite_square_2d(L_super, name="L_super")
     except (TypeError, ValueError):
         return ZeroModeConditioning.unavailable("input_not_finite_square")
-    L = np.asarray(L, dtype=complex)
-    # No ``n == 0`` branch: ``require_finite_square_2d`` already rejects a 0x0
-    # input, so one here would be unreachable code implying a state that cannot
-    # occur (measured: a 0x0 array comes back as "input_not_finite_square").
-    n = L.shape[0]
-    # PR #166 review, finding P2. A square side that is not ``d * d`` is not a
-    # superoperator, so ``vec(I)^H L = 0`` is not a statement about it and
-    # ``trace_preservation_defect`` returns NaN. Continuing published
-    # ``available=True`` / ``verdict="BENIGN"`` on top of a structural estimate
-    # that does not exist -- a benign-looking verdict resting on nothing.
-    dim = int(round(np.sqrt(n)))
-    if dim * dim != n:
-        return ZeroModeConditioning.unavailable("dimension_not_a_superoperator")
+    # Round-3 review. The narrowing to complex128 used to happen HERE, outside
+    # the guard. A dtype with a wider range than float64 -- ``np.longdouble``
+    # holding 1e400, which is finite and passes validation -- makes the cast
+    # emit ``RuntimeWarning: overflow encountered in cast``, and under the
+    # suite's ``filterwarnings = ["error"]`` this function RAISED instead of
+    # returning UNAVAILABLE, breaking the one contract it has. The cast is now
+    # inside the guard and its result is checked, so a value the working
+    # precision cannot hold is reported rather than thrown.
     with _quiet_arithmetic():
+        L = np.asarray(validated, dtype=complex)
+        if not bool(np.all(np.isfinite(L))):
+            return ZeroModeConditioning.unavailable("not_representable_in_complex128")
+        # No ``n == 0`` branch: ``require_finite_square_2d`` already rejects a
+        # 0x0 input, so one here would be unreachable code implying a state
+        # that cannot occur (measured: a 0x0 array comes back as
+        # "input_not_finite_square").
+        n = L.shape[0]
+        # PR #166 review. A square side that is not ``d * d`` is not a
+        # superoperator, so ``vec(I)^H L = 0`` is not a statement about it and
+        # ``trace_preservation_defect`` returns NaN. Continuing published
+        # ``available=True`` / ``verdict="BENIGN"`` on top of a structural
+        # estimate that does not exist -- a verdict resting on nothing.
+        dim = int(round(np.sqrt(n)))
+        if dim * dim != n:
+            return ZeroModeConditioning.unavailable("dimension_not_a_superoperator")
         return _measure(L, zero_tolerance, eigenvalues, dim)
 
 
@@ -570,7 +584,16 @@ def _measure(
     # exactly what this module is supposed to refuse, so it withholds instead.
     if np.isnan(structural_estimate) or np.isnan(solver_estimate):
         return ZeroModeConditioning.unavailable("forward_estimate_unavailable")
-    budget_estimate = max(structural_estimate, solver_estimate)
+    # Round-3 review. The two contributions are SUCCESSIVE perturbations -- from
+    # the exact zero of the nearest trace-preserving operator, to that
+    # operator's eigenvalue, to the one the solver returned -- so their
+    # displacement bounds add by the triangle inequality rather than being
+    # alternatives. ``max`` reported BENIGN whenever each was individually below
+    # the cutoff even though the total was not: two estimates at ``0.6 * tol``
+    # permit a displacement of ``1.2 * tol``. The sum is the conservative
+    # budget, and it is the same quantity ``displacement_explained`` measures
+    # against, so the two fields cannot disagree about what the evidence allows.
+    budget_estimate = structural_estimate + solver_estimate
     limited = bool(
         np.isfinite(tol)
         and (budget_estimate > tol or not np.isfinite(budget_estimate))
@@ -593,9 +616,7 @@ def _measure(
         explained = None
     else:
         explained = bool(
-            observed
-            <= CONDITIONING_AGREEMENT_FACTOR
-            * max(structural_estimate, solver_estimate)
+            observed <= CONDITIONING_AGREEMENT_FACTOR * budget_estimate
         )
     return ZeroModeConditioning(
         available=True,

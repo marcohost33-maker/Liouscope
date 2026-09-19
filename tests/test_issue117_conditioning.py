@@ -620,6 +620,59 @@ def test_displacement_agreement_is_true_when_the_estimates_earn_it() -> None:
     assert evidence.displacement_explained is True
 
 
+def test_a_wider_dtype_that_overflows_complex128_is_unavailable() -> None:
+    """Round-3 review: the narrowing cast must not escape the totality contract.
+
+    ``np.longdouble`` holding 1e400 is finite and passes validation, but casting
+    it to complex128 emits ``RuntimeWarning: overflow encountered in cast``.
+    Under the suite's ``filterwarnings = ["error"]`` that RAISED out of a
+    function whose whole contract is that it does not. The suite's own filter
+    makes this test the enforcement: no ``pytest.warns``, no suppression.
+    """
+    wide = np.zeros((4, 4), dtype=np.longdouble)
+    wide[0, 0] = np.longdouble("1e400")
+    wide[1, 1] = -1.0
+    assert bool(np.all(np.isfinite(wide)))  # finite in ITS OWN dtype
+
+    evidence = zero_mode_conditioning(wide)
+    assert evidence.available is False
+    assert evidence.reason == "not_representable_in_complex128"
+    assert evidence.verdict == CONDITIONING_UNAVAILABLE
+
+
+def test_the_two_forward_errors_add_rather_than_compete() -> None:
+    """Round-3 review: they are successive perturbations, so the bounds add.
+
+    From the exact zero of the nearest trace-preserving operator, to that
+    operator's eigenvalue, to the one the solver returned. Under ``max`` a pair
+    of estimates each just below the cutoff reported ``BENIGN`` while permitting
+    a total displacement above it; the budget is now the sum, and the same sum
+    is what ``displacement_explained`` measures against so the two fields cannot
+    disagree.
+    """
+    evidence = zero_mode_conditioning(_pr127_fixture(), zero_tolerance=1.0e-13)
+    assert evidence.available
+    both = (
+        evidence.structural_forward_estimate + evidence.solver_forward_estimate
+    )
+    # Each contribution is real and neither is negligible relative to the other
+    # being dropped, so summing is not a distinction without a difference.
+    assert evidence.structural_forward_estimate > 0.0
+    assert evidence.solver_forward_estimate > 0.0
+    assert both > max(
+        evidence.structural_forward_estimate, evidence.solver_forward_estimate
+    )
+    # A cutoff sitting between the larger single estimate and the sum is exactly
+    # the case ``max`` got wrong: it must read as conditioning-limited.
+    between = 0.5 * (
+        max(evidence.structural_forward_estimate, evidence.solver_forward_estimate)
+        + both
+    )
+    straddling = zero_mode_conditioning(_pr127_fixture(), zero_tolerance=between)
+    assert straddling.conditioning_limited is True
+    assert straddling.verdict == CONDITIONING_LIMITED
+
+
 def test_cluster_conditioning_fails_closed_on_unusable_vector_sets() -> None:
     """``0.0`` is the fail-closed value: it maximises every estimate built on it."""
     eye = np.eye(2, dtype=complex)

@@ -21,16 +21,21 @@ D  the canonical stiff #112 network: the NEGATIVE control -- its premise (raw
    shown to miss it, so no later change claims otherwise.
 E  physical GKSL generators across four decades of rate and drive: is there a
    false ``CONDITIONING_LIMITED`` to pay for?
+F  the timing campaign behind the overhead claim: the audit runs by default, so
+   what it costs has to be measurable here rather than asserted in a docstring.
 """
 
 from __future__ import annotations
 
 import math
+import time
+from functools import partial
 
 import numpy as np
 import scipy.linalg as sla
 
 from liouscope.core.lindblad import build_liouvillian
+from liouscope.diagnostics.spectral import compute_spectral_layer
 from liouscope.numerics.conditioning import (
     cluster_conditioning,
     eigenvalue_conditioning,
@@ -120,8 +125,17 @@ def family_b() -> None:
     scaled = scaling @ A @ np.linalg.inv(scaling)
     plain = zero_mode_conditioning(A)
     similar = zero_mode_conditioning(scaled)
-    print(f"  max |lambda(A) - lambda(D A D^-1)|    "
-          f"{np.max(np.abs(np.sort_complex(np.linalg.eigvals(A)) - np.sort_complex(np.linalg.eigvals(scaled)))):.3e}")
+    drift = float(
+        np.max(
+            np.abs(
+                np.sort_complex(np.linalg.eigvals(A))
+                - np.sort_complex(np.linalg.eigvals(scaled))
+            )
+        )
+    )
+    # Round-3 review: this is a round-off quantity and differs between BLAS
+    # builds, so the documentation states a bound and the run prints the value.
+    print(f"  spectrum drift (round-off, < 1e-14)   {drift:.3e}")
     print(f"  min s over spectrum, A                "
           f"{plain.spectrum_min_reciprocal_condition:.3e}")
     print(f"  min s over spectrum, D A D^-1         "
@@ -202,12 +216,77 @@ def family_e() -> None:
     print(f"  -> worst reciprocal condition over the family: {worst:.3f}")
 
 
+def _best_of(call, reps: int) -> float:
+    """Minimum wall time over ``reps`` runs.
+
+    The MINIMUM, not the mean, as ``timeit`` documents: process noise on a
+    shared runner only ever adds time, so the smallest observation is the one
+    closest to the cost of the work itself. Measured with the mean at three
+    repetitions this campaign produced a -70% "overhead" at d=8, which is how
+    the first, unmeasured percentages in the docstring came to look plausible.
+    """
+    best = float("inf")
+    for _ in range(reps):
+        start = time.perf_counter()
+        call()
+        best = min(best, time.perf_counter() - start)
+    return best
+
+
+def family_f(reps: int = 9) -> None:
+    _rule("F  cost of the audit, measured on THIS machine")
+    print("  Round-3 review: fixed percentages (+3%/+9%/+15%) used to sit in the")
+    print("  compute_spectral_layer docstring with nothing in the repository")
+    print("  producing them -- and they were wrong. They had been measured for")
+    print("  the extra eigensolve ALONE, which turns out not to be what the")
+    print("  audit spends its time on at small d. The campaign is committed here")
+    print("  so the figure a reader sees is their own machine's.")
+    print()
+    print(f"  {'d':>4} {'superop':>8} {'layer':>10} {'audit':>10} {'of which eig':>13} {'rel':>7}")
+    rng = np.random.default_rng(3)
+    for d in (2, 4, 8, 12):
+        H = rng.standard_normal((d, d)) + 1j * rng.standard_normal((d, d))
+        H = 0.5 * (H + H.conj().T)
+        jump = rng.standard_normal((d, d)) + 1j * rng.standard_normal((d, d))
+        L = build_liouvillian(H, [0.1 * jump])
+        values, certificate = certified_eigvals(L)
+        tol = certificate.zero_set_tolerance(values)
+        compute_spectral_layer(L, conditioning_audit=False)  # untimed warm-up
+        layer = _best_of(
+            partial(compute_spectral_layer, L, conditioning_audit=False), reps
+        )
+        audit = _best_of(
+            partial(zero_mode_conditioning, L, zero_tolerance=tol, eigenvalues=values),
+            reps,
+        )
+        eig_only = _best_of(partial(sla.eig, L, left=True, right=True), reps)
+        print(f"  {d:4d} {d * d:8d} {layer * 1e3:8.2f} ms {audit * 1e3:8.2f} ms "
+              f"{eig_only * 1e3:11.2f} ms {100.0 * audit / layer:6.0f}%")
+    print(f"  (best of {reps} runs each -- the MINIMUM, as timeit documents, since")
+    print("   runner noise only ever adds time.)")
+    print()
+    print("  Two readings that hold across runs on this machine:")
+    print("   * the extra eigensolve is NOT what the audit costs at small d")
+    print("     (0.02 ms of 0.65 ms at d=2). The per-mode work -- unit-")
+    print("     normalising each eigenvector, the scale-safe norms, the SVD and")
+    print("     the residual loop -- is Python-level and dominates there;")
+    print("   * in ABSOLUTE terms that is well under a millisecond at d=2.")
+    print()
+    print("  The relative column is NOT stable on a shared runner: the d=8 audit")
+    print("  was measured at 20 ms and 40 ms in consecutive runs of this very")
+    print("  script. Read it as an order of magnitude, re-run it for your own")
+    print("  hardware, and do not quote a single figure from one run -- which is")
+    print("  the mistake this section exists to stop repeating.")
+    print("  conditioning_audit=False switches the audit off with no other effect.")
+
+
 def main() -> None:
     family_a()
     family_b()
     family_c()
     family_d()
     family_e()
+    family_f()
     print()
     print("All figures above are AUDIT evidence. No filter, gap, verdict or tier")
     print("reads any of them (issue #117 step 2; step 4 stays open until a")
