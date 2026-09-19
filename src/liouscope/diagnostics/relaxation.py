@@ -1,5 +1,9 @@
 """Relaxation layer R: D5 VNE, D6 rel-entropy, D7 fidelity, D7b ent. asym.,
-plus the M0-M3b fit hierarchy orchestrated through AICc with N_eff.
+plus the M0-M3b fit hierarchy and residual-correlation uncertainty evidence.
+
+Model selection uses an AICc-style small-sample correction with the observed
+time-point count; N_eff is reported separately as correlation/uncertainty
+evidence and is not substituted into the model-selection denominator.
 """
 
 from __future__ import annotations
