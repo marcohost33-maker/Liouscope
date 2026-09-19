@@ -59,5 +59,57 @@ class TriggerContractParserTests(unittest.TestCase):
         self.assertEqual(contract._job_level_uses_values(path), [])
 
 
+    def test_block_scalar_cannot_impersonate_checkout(self) -> None:
+        path = self.fixture(
+            "jobs:\n  test:\n    runs-on: ubuntu-latest\n    steps:\n"
+            "      - run: |\n"
+            "          uses: actions/checkout@deadbeef\n"
+            "          with:\n"
+            f"            ref: {contract.PR_HEAD_REF}\n"
+        )
+        self.assertEqual(contract._checkout_ref_values(path), [])
+
+    def test_required_merge_job_cannot_be_replaced_by_skipped_job(self) -> None:
+        path = self.fixture(
+            "jobs:\n"
+            "  test:\n"
+            "    if: \${{ github.event_name == 'push' }}\n"
+            "    steps:\n"
+            "      - uses: actions/checkout@deadbeef\n"
+            "        with:\n          persist-credentials: false\n"
+            "  test-head:\n"
+            f"    if: {contract.PR_ONLY_IF}\n"
+            "    steps:\n"
+            "      - uses: actions/checkout@deadbeef\n"
+            f"        with:\n          ref: {contract.PR_HEAD_REF}\n"
+        )
+        old = contract.EVIDENCE_JOBS.get(path.name)
+        contract.EVIDENCE_JOBS[path.name] = ("test", "test-head")
+        self.addCleanup(
+            lambda: contract.EVIDENCE_JOBS.__setitem__(path.name, old)
+            if old is not None
+            else contract.EVIDENCE_JOBS.pop(path.name, None)
+        )
+        errors = contract._evidence_job_errors(path)
+        self.assertTrue(any("required job must not be conditional" in e for e in errors))
+
+    def test_job_parser_binds_default_and_head_checkout_to_distinct_jobs(self) -> None:
+        path = self.fixture(
+            "jobs:\n"
+            "  test:\n"
+            "    steps:\n"
+            "      - uses: actions/checkout@deadbeef\n"
+            "        with:\n          persist-credentials: false\n"
+            "  test-head:\n"
+            f"    if: {contract.PR_ONLY_IF}\n"
+            "    steps:\n"
+            "      - uses: actions/checkout@deadbeef\n"
+            f"        with:\n          ref: {contract.PR_HEAD_REF}\n"
+        )
+        specs = contract._job_specs(path)
+        self.assertEqual(specs["test"]["refs"], [None])
+        self.assertEqual(specs["test-head"]["refs"], [contract.PR_HEAD_REF])
+
+
 if __name__ == "__main__":
     unittest.main()
