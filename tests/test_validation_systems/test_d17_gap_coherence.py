@@ -23,6 +23,7 @@ import pytest
 from liouscope import diagnose
 from liouscope.core.hamiltonian import _pauli
 from liouscope.core.lindblad import build_liouvillian, steady_state
+from liouscope.diagnostics.relaxation import _fit_with_model
 from liouscope.examples import (
     v1_qutrit,
     v2_dephasing_qubit,
@@ -229,11 +230,31 @@ def test_gap_controlled_reference_reaches_a1():
     # classifier priority actually moved. Include all fitted AICc values in the
     # shape assertion: this is diagnostic evidence, not a changed expectation.
     assert rep.lep.gap_rate_consistency < 0.05
+    linear_fits = {}
+    for name in ("M0", "M1", "M2", "M3a", "M3b"):
+        fit, _ = _fit_with_model(
+            name,
+            rep.relaxation.t_grid,
+            rep.relaxation.trace_distance_curve,
+        )
+        linear_fits[name] = fit
     assert rep.relaxation.linear_fit_model in ("M0", "M1"), {
         "linear_fit_model": rep.relaxation.linear_fit_model,
         "relative_entropy_model": rep.relaxation.aicc_model,
-        "fit_aicc": {name: fit.aicc for name, fit in rep.relaxation.fits.items()},
-        "fit_success": {name: fit.success for name, fit in rep.relaxation.fits.items()},
+        "linear_aicc": {name: fit.aicc for name, fit in linear_fits.items()},
+        "linear_success": {name: fit.success for name, fit in linear_fits.items()},
+        "linear_params": {
+            name: np.asarray(fit.params, dtype=float).tolist()
+            for name, fit in linear_fits.items()
+        },
+        "linear_max_abs_residual": {
+            name: float(np.max(np.abs(fit.residuals)))
+            for name, fit in linear_fits.items()
+        },
+        "linear_rho": {
+            name: float(fit.residual_ar1_rho)
+            for name, fit in linear_fits.items()
+        },
     }
     assert cls.a_class == "A1", {
         "a_class": cls.a_class,
