@@ -7,7 +7,7 @@ on:
   pull_request:
     branches: [main]
   push:
-    branches: [main]
+    branches: [main, "claude/**", "codex/**", "bot/**"]
   workflow_dispatch:
 
 permissions: {}
@@ -29,5 +29,7 @@ jobs:
           python-version: "3.12"
       - name: Check workflow hardening
         run: python .github/scripts/check_workflow_hardening.py
+      - name: Check documented agent branch trigger coverage
+        run: python .github/scripts/check_agent_branch_triggers.py
       - name: Check documentation claim safety
         run: python .github/scripts/check_claim_safety.py
