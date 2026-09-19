@@ -104,9 +104,15 @@ def _checkout_ref_values(path: Path) -> list[str | None]:
     for i, line in enumerate(lines):
         code = _yaml_code(line)
         stripped = code.strip()
-        if not stripped.startswith("- uses: actions/checkout@"):
+        short_form = stripped.startswith("- uses: actions/checkout@")
+        named_form = stripped.startswith("uses: actions/checkout@")
+        if not (short_form or named_form):
             continue
-        step_indent = len(code) - len(code.lstrip(" "))
+        uses_indent = len(code) - len(code.lstrip(" "))
+        # ``- uses:`` is itself the list item; ``uses:`` under ``- name:`` is
+        # a peer property. In both cases this is the indentation where ``with:``
+        # must appear.
+        property_indent = uses_indent + 2 if short_form else uses_indent
         in_with = False
         ref_value: str | None = None
         for next_line in lines[i + 1 :]:
@@ -115,12 +121,18 @@ def _checkout_ref_values(path: Path) -> list[str | None]:
                 continue
             indent = len(next_code) - len(next_code.lstrip(" "))
             next_stripped = next_code.strip()
-            if indent <= step_indent:
+            if indent < property_indent:
                 break
-            if indent == step_indent + 2:
-                in_with = next_stripped == "with:"
+            if indent == property_indent:
+                if next_stripped == "with:":
+                    in_with = True
+                    continue
+                # Another peer property or the next list item ends ``with``.
+                in_with = False
+                if next_stripped.startswith("- "):
+                    break
                 continue
-            if in_with and indent >= step_indent + 4 and next_stripped.startswith("ref:"):
+            if in_with and indent > property_indent and next_stripped.startswith("ref:"):
                 ref_value = next_stripped.split(":", 1)[1].strip().strip(chr(34)).strip(chr(39))
         refs.append(ref_value)
     return refs
