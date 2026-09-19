@@ -86,17 +86,22 @@ def _pr127_fixture() -> np.ndarray:
 def family_a() -> None:
     _rule("A  PR #127 non-normal fixture: band vs conditioning-scaled estimate")
     L = _pr127_fixture()
-    defect, _scale = trace_preservation_defect(L)
+    raw_defect, _scale = trace_preservation_defect(L)
     _values, certificate = certified_eigvals(L)
     evidence = zero_mode_conditioning(
         L, zero_tolerance=certificate.bound, eigenvalues=_values
     )
     observed = evidence.observed_displacement
-    print(f"  trace-preservation defect ||q^H L||   {defect:.4e}")
+    # Round-2 review: print the quantity the estimate actually divides. The raw
+    # ``trace_preservation_defect`` is ``||vec(I)^H L||``; the perturbation norm
+    # is that over sqrt(d), so printing the raw value under a ``||q^H L||``
+    # label made the displayed division fail to reproduce its own result.
+    print(f"  raw defect ||vec(I)^H L||             {raw_defect:.4e}")
+    print(f"  perturbation norm ||q^H L||           {evidence.trace_defect:.4e}")
     print(f"  certificate band rtol*eps*||L||_2     {certificate.bound:.4e}")
     print(f"  OBSERVED displacement min|lambda|     {observed:.4e}")
     print(f"  reciprocal condition s(lambda_0)      {evidence.reciprocal_condition:.4e}")
-    print(f"  defect / s (conditioning estimate)    "
+    print(f"  ||q^H L|| / s (cond. estimate)        "
           f"{evidence.structural_forward_estimate:.4e}")
     print(f"  band under-predicts by                "
           f"{observed / certificate.bound:.3e}x")

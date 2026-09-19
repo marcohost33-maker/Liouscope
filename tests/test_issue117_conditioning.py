@@ -464,35 +464,58 @@ def _defective_superoperator(defect: float = 0.0) -> np.ndarray:
 
 
 def test_defective_pair_fails_closed_without_raising() -> None:
-    """A Jordan block has no eigenvector pair; ``s = 0`` is the honest answer."""
+    """A Jordan block has no eigenvector pair; ``s -> 0`` is the honest answer."""
     evidence = zero_mode_conditioning(_defective_superoperator(), zero_tolerance=1e-13)
     assert evidence.available
     assert evidence.cluster_size == 3
+    # The SUBSPACE figure is exactly zero: the three vectors do not span a
+    # three-dimensional invariant subspace at all.
     assert evidence.reciprocal_condition == 0.0
+    # The per-mode figure, which the scalar estimates divide by, is subnormal
+    # rather than exactly zero -- LAPACK still returns a direction.
+    assert 0.0 < evidence.per_mode_reciprocal_condition < 1.0e-200
     # Exactly trace preserving, so the STRUCTURAL estimate stays 0.0: the 0/0
     # branch reports no displacement for an exact backward error rather than
-    # inventing an infinite one.
+    # inventing one.
     assert evidence.trace_defect == 0.0
     assert evidence.structural_forward_estimate == 0.0
     # The SOLVER estimate is what is unbounded here, and the verdict must read
     # it -- a defective stationary pair is conditioning-limited even when the
     # generator is exactly trace preserving.
-    assert evidence.solver_forward_estimate == math.inf
+    assert evidence.solver_forward_estimate > 1.0
     assert evidence.conditioning_limited is True
     assert evidence.verdict == CONDITIONING_LIMITED
 
 
 def test_defective_pair_with_a_nonzero_defect_reports_unbounded_displacement() -> None:
-    """``s = 0`` with a real backward error means the location is unbounded."""
+    """A real backward error over a vanishing ``s`` means an unusable location."""
     evidence = zero_mode_conditioning(
         _defective_superoperator(defect=1.0e-12), zero_tolerance=1.0e-13
     )
     assert evidence.available
-    assert evidence.reciprocal_condition == 0.0
-    assert evidence.trace_defect == pytest.approx(1.0e-12, rel=1e-3)
-    assert evidence.structural_forward_estimate == math.inf
+    assert evidence.trace_defect == pytest.approx(1.0e-12 / math.sqrt(2.0), rel=1e-3)
+    # 1e-12 over a subnormal conditioning: enormous, and far past any tolerance
+    # a caller could sensibly supply.
+    assert evidence.structural_forward_estimate > 1.0e200
     assert evidence.conditioning_limited is True
     assert evidence.verdict == CONDITIONING_LIMITED
+
+
+def test_a_nonrepresentable_forward_estimate_withholds_the_verdict() -> None:
+    """Round-2 review: a verdict may not rest on an estimate that does not exist.
+
+    ``diag(1.3e308, 0, -1, 1.3e308)`` is finite, but its trace-defect norm is
+    not representable, so the structural estimate is NaN. Dropping it from the
+    budget left a zero solver residual to carry the verdict, and the audit
+    published ``BENIGN`` on a structural bound it did not have.
+    """
+    evidence = zero_mode_conditioning(
+        np.diag([1.3e308, 0.0, -1.0, 1.3e308]).astype(complex)
+    )
+    assert evidence.available is False
+    assert evidence.reason == "forward_estimate_unavailable"
+    assert evidence.verdict == CONDITIONING_UNAVAILABLE
+    assert json.dumps(evidence.as_dict(), allow_nan=False)
 
 
 @pytest.mark.parametrize(
@@ -545,28 +568,40 @@ def test_a_side_that_cannot_be_a_superoperator_is_unavailable(side: int) -> None
     assert evidence.verdict == CONDITIONING_UNAVAILABLE
 
 
-def test_displacement_agreement_is_not_true_by_construction() -> None:
-    """PR #166 review, finding P2: the tolerance must not answer its own question.
+def test_forward_estimates_do_not_depend_on_the_supplied_tolerance() -> None:
+    """The cutoff must not leak into quantities that are about the operator.
 
-    Cluster selection guarantees ``observed <= zero_tolerance`` for every mode
-    inside the zero set, so a budget containing the tolerance made the field
-    ``True`` whenever it was defined -- it reported the cutoff back, not the
-    evidence. Here a wide cutoff pulls the whole ``+-1e-7`` pair into the zero
-    set; the pair's invariant SUBSPACE is well conditioned (``s = 1``), so
-    neither forward estimate exceeds ``1e-14`` and a ``1e-7`` displacement is
-    honestly not accounted for. The old budget would have said ``True`` on the
-    strength of ``tol = 1e-5`` alone.
+    Two round-2 findings meet here. ``displacement_explained`` used to take the
+    tolerance into its budget, which made it true by construction for any mode
+    inside the zero set. And the scalar estimates used to divide by the SUBSPACE
+    condition number, which changes the moment a wider cutoff pulls a second
+    eigenvalue into the cluster -- for this fixture ``s_cluster`` jumps from
+    ``2e-7`` to ``1.0`` between ``tol = 1e-9`` and ``tol = 1e-6``, and the
+    estimate moved with it.
+
+    Both are now per-mode quantities, so across eight orders of magnitude of
+    cutoff -- and across the cluster-size change at ``1e-6`` -- the estimates and
+    the verdict are identical.
     """
-    evidence = zero_mode_conditioning(_pr127_fixture(), zero_tolerance=1.0e-5)
+    L = _pr127_fixture()
+    runs = [zero_mode_conditioning(L, zero_tolerance=t) for t in (1e-13, 1e-9, 1e-6, 1e-5)]
 
-    assert evidence.cluster_size == 2
-    assert evidence.observed_displacement == pytest.approx(1.0e-7, rel=1e-3)
-    assert evidence.observed_displacement < evidence.zero_tolerance
-    assert evidence.reciprocal_condition == pytest.approx(1.0, rel=1e-8)
-    assert max(
-        evidence.structural_forward_estimate, evidence.solver_forward_estimate
-    ) < 1.0e-13
-    assert evidence.displacement_explained is False
+    # The cluster really does change, so the invariant is not vacuous.
+    assert {r.cluster_size for r in runs} == {1, 2}
+    assert {round(r.reciprocal_condition, 6) for r in runs} == {0.0, 1.0}
+
+    reference = runs[0]
+    for run in runs[1:]:
+        assert run.per_mode_reciprocal_condition == pytest.approx(
+            reference.per_mode_reciprocal_condition, rel=1e-12
+        )
+        assert run.structural_forward_estimate == pytest.approx(
+            reference.structural_forward_estimate, rel=1e-12
+        )
+        assert run.solver_forward_estimate == pytest.approx(
+            reference.solver_forward_estimate, rel=1e-12
+        )
+        assert run.displacement_explained == reference.displacement_explained
 
 
 def test_displacement_agreement_is_true_when_the_estimates_earn_it() -> None:
@@ -585,16 +620,33 @@ def test_displacement_agreement_is_true_when_the_estimates_earn_it() -> None:
     assert evidence.displacement_explained is True
 
 
-def test_displacement_agreement_abstains_on_an_unavailable_estimate() -> None:
-    """``inf`` explains anything and serialises to null, so it must abstain."""
-    evidence = zero_mode_conditioning(
-        _defective_superoperator(defect=1.0e-12), zero_tolerance=1.0e-13
-    )
-    assert evidence.structural_forward_estimate == math.inf
-    assert evidence.displacement_explained is None
-    assert json.loads(json.dumps(evidence.as_dict(), allow_nan=False))[
-        "displacement_explained"
-    ] is None
+def test_cluster_conditioning_fails_closed_on_unusable_vector_sets() -> None:
+    """``0.0`` is the fail-closed value: it maximises every estimate built on it."""
+    eye = np.eye(2, dtype=complex)
+    # An empty cluster conditions nothing.
+    assert cluster_conditioning(eye, eye, np.array([], dtype=int)) == 0.0
+    # Two parallel columns do not span a two-dimensional invariant subspace.
+    parallel = np.zeros((3, 2), dtype=complex)
+    parallel[:, 0] = [1.0, 0.0, 0.0]
+    parallel[:, 1] = [1.0, 0.0, 0.0]
+    assert cluster_conditioning(parallel, parallel, np.array([0, 1])) == 0.0
+    # A column with no direction at all.
+    degenerate = np.zeros((3, 2), dtype=complex)
+    degenerate[:, 0] = [1.0, 0.0, 0.0]
+    assert cluster_conditioning(degenerate, degenerate, np.array([0, 1])) == 0.0
+
+
+def test_a_spectrum_of_a_different_size_is_a_mismatch() -> None:
+    """The accepted-spectrum guard must not be fooled by a truncated list."""
+    L = build_liouvillian(0.5 * SIGMA_X, [math.sqrt(0.6) * SIGMA_MINUS])
+    accepted, _certificate = certified_eigvals(L)
+    short = zero_mode_conditioning(L, eigenvalues=accepted[:-1])
+    assert short.available is False
+    assert short.reason == "accepted_spectrum_mismatch"
+    # A NaN in the accepted spectrum is likewise not something to agree with.
+    poisoned = np.asarray(accepted, dtype=complex).copy()
+    poisoned[0] = np.nan
+    assert zero_mode_conditioning(L, eigenvalues=poisoned).available is False
 
 
 def test_eigenvalue_conditioning_rejects_mismatched_vector_matrices() -> None:

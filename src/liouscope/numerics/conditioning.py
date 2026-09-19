@@ -54,10 +54,11 @@ reasons not to:
    ``?geev`` (what :func:`liouscope.numerics.linalg.eig_nonhermitian` uses)
    balances internally but back-transforms the eigenvectors, so ``|y^H x|``
    formed from what it returns is the conditioning of the operator AS THE CALLER
-   WROTE IT. Measured on a 6x6 random complex matrix under the diagonal
-   similarity ``D A D^-1`` with ``D = diag(1e-6 .. 1e9)`` -- which leaves the
-   spectrum exactly invariant -- the per-mode ``s`` moves from ``0.51..0.84``
-   to ``1.2e-15..3.3e-14``, a factor of 4.3e14. A certificate whose semantics
+   WROTE IT. Measured on a 9x9 random complex matrix (d = 3, a superoperator
+   side length) under the diagonal similarity ``D A D^-1`` with
+   ``D = diag(1e-6 .. 1e9)`` -- which leaves the spectrum invariant to
+   ``5.2e-15`` -- the per-mode ``s`` moves from ``0.189..0.761`` to
+   ``1.55e-15..1.18e-14``, a factor of ~1.2e14. A certificate whose semantics
    are tied to the caller's operator must measure the caller's operator.
 
 Degenerate and near-degenerate stationary manifolds
@@ -280,10 +281,12 @@ class ZeroModeConditioning:
     #: the operator exactly trace preserving.
     trace_defect: float
     #: ``max(right_residual, left_residual) / s`` -- how far the SOLVER can have
-    #: moved this eigenvalue.
+    #: moved this eigenvalue. ``s`` here is the PER-MODE figure below, not the
+    #: subspace one: this is a scalar eigenvalue's displacement.
     solver_forward_estimate: float
     #: ``trace_defect / s`` -- how far the exact zero of the nearest trace-
-    #: preserving operator can be from where the eigenvalue was found.
+    #: preserving operator can be from where the eigenvalue was found. Same
+    #: per-mode ``s`` as above.
     structural_forward_estimate: float
     #: ``min |lambda|`` actually observed.
     observed_displacement: float
@@ -441,18 +444,28 @@ def zero_mode_conditioning(
     Supply it whenever one exists: the audit then refuses rather than describe a
     spectrum the report does not contain (see :func:`_spectra_agree`).
     """
-    if zero_tolerance is not None and zero_tolerance < 0.0:
+    if zero_tolerance is not None and not (
+        np.isfinite(zero_tolerance) and zero_tolerance >= 0.0
+    ):
+        # Round-2 review. Rejecting a negative cutoff while letting NaN/inf
+        # through was the same defect in a second guise: both were silently
+        # demoted to "no cutoff supplied" and the run came back
+        # ``BENIGN`` with a null tolerance, which is the valid-looking nonsense
+        # the negative case is refused for. ``None`` remains the way to say
+        # "no cutoff".
         raise ValueError(
-            f"zero_tolerance must be non-negative, got {zero_tolerance!r}"
+            "zero_tolerance must be a finite non-negative number or None, got "
+            f"{zero_tolerance!r}"
         )
     try:
         L = require_finite_square_2d(L_super, name="L_super")
     except (TypeError, ValueError):
         return ZeroModeConditioning.unavailable("input_not_finite_square")
     L = np.asarray(L, dtype=complex)
+    # No ``n == 0`` branch: ``require_finite_square_2d`` already rejects a 0x0
+    # input, so one here would be unreachable code implying a state that cannot
+    # occur (measured: a 0x0 array comes back as "input_not_finite_square").
     n = L.shape[0]
-    if n == 0:
-        return ZeroModeConditioning.unavailable("empty_operator")
     # PR #166 review, finding P2. A square side that is not ``d * d`` is not a
     # superoperator, so ``vec(I)^H L = 0`` is not a statement about it and
     # ``trace_preservation_defect`` returns NaN. Continuing published
@@ -533,16 +546,33 @@ def _measure(
 
     stationary = int(cluster[int(np.argmin(magnitudes[cluster]))])
     observed = float(magnitudes[stationary])
-    solver_estimate = _divide_by_conditioning(max(right_res, left_res), s_cluster)
-    structural_estimate = _divide_by_conditioning(float(defect), s_cluster)
+    # Round-2 review. Both estimates are about the displacement of ONE scalar
+    # eigenvalue, so they divide by a PER-MODE condition number, never by the
+    # subspace figure ``s_cluster``. Those differ by arbitrarily much: for
+    # ``[[0, 1], [0, delta]]`` the invariant subspace is perfectly conditioned
+    # while each eigenvalue's own ``s`` is ``delta`` (measured 1e-8 at
+    # ``delta = 1e-8``), so the subspace figure understated the sensitivity by
+    # ``1/delta``. The minimum over the cluster is used rather than the selected
+    # mode's own value: inside a near-degenerate cluster it is not determined
+    # which member is "the" stationary one, and the smaller ``s`` gives the
+    # larger estimate, which is the fail-closed direction. ``s_cluster`` remains
+    # the REPORTED conditioning, because that is the honest figure for a
+    # degenerate stationary manifold (see the module docstring).
+    solver_estimate = _divide_by_conditioning(max(right_res, left_res), s_per_mode)
+    structural_estimate = _divide_by_conditioning(float(defect), s_per_mode)
 
-    budget_estimate = max(
-        (v for v in (structural_estimate, solver_estimate) if not np.isnan(v)),
-        default=float("nan"),
-    )
+    # Round-2 review. A NaN estimate used to be dropped from the budget, so the
+    # verdict was computed from whichever half survived: measured on the finite
+    # 4x4 input ``diag(1.3e308, 0, -1, 1.3e308)``, whose trace-defect norm is not
+    # representable, ``structural_forward_estimate`` serialised as null while a
+    # zero solver residual left a budget of zero and the audit published
+    # ``BENIGN``. A verdict resting on an estimate that does not exist is
+    # exactly what this module is supposed to refuse, so it withholds instead.
+    if np.isnan(structural_estimate) or np.isnan(solver_estimate):
+        return ZeroModeConditioning.unavailable("forward_estimate_unavailable")
+    budget_estimate = max(structural_estimate, solver_estimate)
     limited = bool(
         np.isfinite(tol)
-        and not np.isnan(budget_estimate)
         and (budget_estimate > tol or not np.isfinite(budget_estimate))
     )
     # PR #166 review, finding P2. ``tol`` used to enter this budget, which made

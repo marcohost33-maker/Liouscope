@@ -37,9 +37,9 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   the wrong question: `xGEEVX` documents that its condition numbers refer to the
   BALANCED matrix and that diagonal scaling changes them, whereas `?geev`
   back-transforms its eigenvectors, so `|y^H x|` describes the operator as the
-  caller wrote it. Measured under `D A D^-1` with `D = diag(1e-6 .. 1e9)`, which
-  leaves the spectrum invariant to `1.2e-14`: the minimum `s` moves from
-  `5.13e-01` to `1.19e-15`.
+  caller wrote it. Measured on a 9x9 operator under `D A D^-1` with
+  `D = diag(1e-6 .. 1e9)`, which leaves the spectrum invariant to `5.2e-15`: the
+  per-mode `s` range moves from `0.189..0.761` to `1.55e-15..1.18e-14`.
 
   Why the subspace figure and not a per-mode one. Per-mode `s` collapses with
   the splitting of a nearly degenerate pair while its invariant subspace stays
