@@ -57,9 +57,7 @@ def main() -> None:
     print(f"  M-hierarchy winner      = {report.relaxation.aicc_model}")
     print(f"  beta_D                  = {report.relaxation.beta_D:.6f}")
     print(
-        f"  BCa CI                  = "
-        f"[{report.relaxation.bca_ci_beta[0]:.6f}, {report.relaxation.bca_ci_beta[1]:.6f}]"
-    )
+        f"  Bootstrap CI ({report.relaxation.interval_method}) = "\n        f"[{report.relaxation.bca_ci_beta[0]:.6f}, {report.relaxation.bca_ci_beta[1]:.6f}]"\n    )
     if report.mpemba is not None:
         print(f"  D19 Mpemba c_1          = {report.mpemba.overlap_c1:.3e}")
         print(f"      Mpemba candidate?   = {report.mpemba.is_mpemba_candidate}")
