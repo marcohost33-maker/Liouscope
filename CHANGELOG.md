@@ -63,6 +63,16 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     the change is not visible in `input_hash`.
 
 ### Fixed
+- **Stacked pull requests now receive the required scientific CI directly (issue #159 follow-up).**
+  The first #159 repair added `push` filters for every documented agent prefix,
+  but its verification evidence came from `pull_request` runs and automation-
+  authenticated pushes are not a reliable trigger because GitHub suppresses
+  recursive workflow events in some authentication paths. CI, QuTiP and
+  Quality Contract therefore no longer restrict `pull_request` to base `main`:
+  PRs targeting intermediate branches such as `fix/115-zweiskalen-car1` run
+  the same read-only gates. The trigger contract now enforces both the agent
+  push-prefix list and unfiltered PR-base coverage. Main branch protection and
+  workflow permissions are unchanged.
 - **Documented agent branches now receive exact-head verification (issue #159).**
   `AGENTS.md` defines `claude/**`, `codex/**` and `bot/**`, but the main CI and
   QuTiP workflows previously triggered branch pushes only for `claude/**`,
