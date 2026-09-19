@@ -110,6 +110,60 @@ class TriggerContractParserTests(unittest.TestCase):
         self.assertEqual(specs["test"]["refs"], [None])
         self.assertEqual(specs["test-head"]["refs"], [contract.PR_HEAD_REF])
 
+    def test_numeric_block_scalar_indicator_cannot_impersonate_ref(self) -> None:
+        for indicator in ("|2", ">2-", "|-2", ">+2"):
+            with self.subTest(indicator=indicator):
+                path = self.fixture(
+                    "jobs:\n  test:\n    steps:\n"
+                    "      - uses: actions/checkout@deadbeef\n"
+                    "        with:\n"
+                    f"          unused: {indicator}\n"
+                    f"            ref: {contract.PR_HEAD_REF}\n"
+                )
+                self.assertEqual(contract._checkout_ref_values(path), [None])
+
+    def test_job_named_pull_request_is_not_a_trigger(self) -> None:
+        path = self.fixture(
+            "on:\n  workflow_dispatch:\n"
+            "jobs:\n  pull_request:\n    runs-on: ubuntu-latest\n"
+        )
+        self.assertFalse(contract._pull_request_is_unfiltered(path))
+
+    def test_job_named_push_is_not_a_trigger(self) -> None:
+        path = self.fixture(
+            "on:\n  workflow_dispatch:\n"
+            "jobs:\n  push:\n    runs-on: ubuntu-latest\n"
+            "    branches: [main, \"codex/**\"]\n"
+        )
+        with self.assertRaises(ValueError):
+            contract._push_branches(path)
+
+    def test_evidence_job_dependencies_are_rejected(self) -> None:
+        path = self.fixture(
+            "jobs:\n"
+            "  prerequisite:\n"
+            "    if: ${{ github.event_name == 'push' }}\n"
+            "    runs-on: ubuntu-latest\n"
+            "  test:\n"
+            "    needs: prerequisite\n"
+            "    steps:\n"
+            "      - uses: actions/checkout@deadbeef\n"
+            "  test-head:\n"
+            f"    if: {contract.PR_ONLY_IF}\n"
+            "    steps:\n"
+            "      - uses: actions/checkout@deadbeef\n"
+            f"        with:\n          ref: {contract.PR_HEAD_REF}\n"
+        )
+        old = contract.EVIDENCE_JOBS.get(path.name)
+        contract.EVIDENCE_JOBS[path.name] = ("test", "test-head")
+        self.addCleanup(
+            lambda: contract.EVIDENCE_JOBS.__setitem__(path.name, old)
+            if old is not None
+            else contract.EVIDENCE_JOBS.pop(path.name, None)
+        )
+        errors = contract._evidence_job_errors(path)
+        self.assertTrue(any("must not depend on another job" in e for e in errors))
+
 
 if __name__ == "__main__":
     unittest.main()
