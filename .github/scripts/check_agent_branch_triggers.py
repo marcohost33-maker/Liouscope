@@ -27,8 +27,10 @@ DUAL_EVIDENCE_WORKFLOWS = {
     ROOT / ".github" / "workflows" / "ci-qutip.yml",
     ROOT / ".github" / "workflows" / "quality-contract.yml",
 }
-PR_HEAD_REF = "${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}"
+PR_HEAD_REF = "${{ github.event.pull_request.head.sha }}"
+PR_ONLY_IF = "${{ github.event_name == 'pull_request' }}"
 TASK_PREFIX_RE = re.compile(r"`([A-Za-z0-9_-]+)/<task>`")
+BLOCK_SCALAR_RE = re.compile(r"[:=-]\\s*[|>][+-]?\\s*$")
 
 
 def _documented_agent_prefixes() -> set[str]:
@@ -38,6 +40,28 @@ def _documented_agent_prefixes() -> set[str]:
     # That expression is intentionally excluded: it is not one agent prefix.
     return {prefix for prefix in prefixes if "|" not in prefix}
 
+
+def _structural_lines(path: Path) -> list[tuple[int, int, str]]:
+    """Return structural YAML lines, excluding block-scalar payload."""
+    out: list[tuple[int, int, str]] = []
+    scalar_indent: int | None = None
+    for lineno, raw in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+        if not raw.strip():
+            continue
+        indent = len(raw) - len(raw.lstrip(" "))
+        if scalar_indent is not None:
+            if indent > scalar_indent:
+                continue
+            scalar_indent = None
+        code = _yaml_code(raw)
+        if not code.strip():
+            continue
+        indent = len(code) - len(code.lstrip(" "))
+        stripped = code.strip()
+        out.append((lineno, indent, stripped))
+        if BLOCK_SCALAR_RE.search(stripped):
+            scalar_indent = indent
+    return out
 
 def _push_branches(path: Path) -> set[str]:
     lines = path.read_text(encoding="utf-8").splitlines()
