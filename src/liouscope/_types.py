@@ -221,7 +221,11 @@ class RelaxationResult:
     fits: dict[str, FitResult]
     aicc_model: str                       # winning model
     beta_D: float                         # fitted exponential rate of best model
-    bca_ci_beta: tuple[float, float]      # BCa 95% CI
+    # Legacy field name retained for API compatibility. The tuple is BCa only
+    # when ``interval_method == "BCa"``; on the default 80-point grid the
+    # acceleration jackknife is not run and the numeric interval is BC.
+    bca_ci_beta: tuple[float, float]
+    interval_method: Literal["BC", "BCa", "unavailable"] = "BC"
     # F-018 (LIOU-F-018): half trace-norm distance to rho_ss along the
     # trajectory, the observable relaxation metric alongside D5/D6/D7. Optional
     # and defaulted so the field is purely additive (older callers/serialised
