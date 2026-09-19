@@ -5,6 +5,7 @@ plus the M0-M3b fit hierarchy orchestrated through AICc with N_eff.
 from __future__ import annotations
 
 import warnings
+from typing import Literal
 
 import numpy as np
 import scipy.linalg as sla
@@ -1047,7 +1048,7 @@ def compute_relaxation_layer(
     # Bootstrap on the winning model for beta_D
     beta_D = _beta_from_params(winner, fits[winner].params) if winner in fits else float("nan")
     bca_lo, bca_hi = beta_D, beta_D
-    interval_method: str = "unavailable"
+    interval_method: Literal["BC", "BCa", "unavailable"] = "unavailable"
     if winner in fits and np.isfinite(beta_D):
         winner_fn = {"M0": M0, "M1": M1, "M2": M2, "M3a": M3a, "M3b": M3b}[winner]
         try:
