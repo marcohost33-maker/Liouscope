@@ -63,6 +63,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     the change is not visible in `input_hash`.
 
 ### Fixed
+- **Under-resolution disclosure no longer crashes when a finite decay rate times the blind interval overflows (PR #127 review).** In that limit `_resolution_detail` correctly represents the sampling ratio as `0.0` samples per e-folding, but the warning formatter inverted that value again and raised `ZeroDivisionError` before the layer could return. The formatter now evaluates the mathematical limit as 100% decay across the unsampled interval and still emits `UnderResolvedTransientWarning`. A two-level equal raising/lowering fixture at rate `8.5e307` pins the path while verifying that the generator and `L*t` entries themselves remain finite.
 - **`residual_model` claimed a whitening for runs in which no fit succeeded
   (PR #127, round-21 external review).** `fit_gls_ar1` returns `success=False`
   from its flat-curve guard before it selects or applies any residual model,
