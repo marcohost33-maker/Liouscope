@@ -454,12 +454,12 @@ def test_aicc_counts_the_fitted_car1_rate_on_a_non_uniform_grid():
     assert np.isfinite(fit.residual_theta_car1), "fixture must fit a CAR(1) rate"
     p = int(np.asarray(fit.params).size)
     assert fit.aicc == pytest.approx(
-        aicc(fit.log_likelihood, p + 1, fit.n_eff), rel=0.0, abs=0.0
+        aicc(fit.log_likelihood, p + 2, fit.n_eff), rel=0.0, abs=0.0
     )
-    # DISCRIMINATION: the pre-fix count must be a DIFFERENT number here, or the
-    # assertion above would pass without the repair.
-    assert aicc(fit.log_likelihood, p, fit.n_eff) != aicc(
-        fit.log_likelihood, p + 1, fit.n_eff
+    # DISCRIMINATION: omitting either fitted nuisance parameter must change
+    # the small-sample correction on this fixture.
+    assert aicc(fit.log_likelihood, p + 1, fit.n_eff) != aicc(
+        fit.log_likelihood, p + 2, fit.n_eff
     )
 
 
