@@ -74,11 +74,15 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   conditioning of `7.28e-06` beside a reported stationary eigenvalue of
   `4.08e-17`. A side length that cannot be a superoperator, and a negative
   `zero_tolerance`, are likewise refused rather than answered.
-  The scalar forward estimates divide by the SELECTED stationary mode's own
-  reciprocal condition number, not by the subspace figure and not by the
-  minimum over the cluster: a displacement of one eigenvalue is governed by
-  that eigenvalue's own conditioning, and either alternative couples the
-  estimate to modes it has nothing to do with (measured: widening a cutoff from
+  The forward estimates divide by the conditioning of the group of modes
+  EXACTLY TIED with the selected stationary eigenvalue -- which is that
+  eigenvalue's own `|y^H x|` when it is simple, and the basis-invariant
+  `sigma_min(Y^H X)` when it is repeated. Both halves are measured: a per-mode
+  value is basis dependent for a repeated eigenvalue (rotating only the right
+  basis inside a degenerate stationary eigenspace moves it from `0.7206` to
+  `0.5408` while the subspace figure stays `0.7071`), and conversely the
+  subspace figure over the whole cluster, or the minimum over it, couples the
+  estimate to modes the stationary one has nothing to do with (measured: widening a cutoff from
   `1e-9` to `2e-5` moved the structural estimate from `1e-10` to `1.0` under the
   cluster minimum, with the selected eigenvalue unchanged). Membership of the
   zero set is read from the ACCEPTED spectrum, matched to the audit's own solve
@@ -87,6 +91,18 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   are not mispaired by a round-off-sized reordering. With no cutoff supplied,
   every mode exactly tied with the smallest is kept, so an exactly degenerate
   stationary manifold is conditioned as the subspace it is.
+
+  `displacement_explained` abstains outside the first-order perturbative
+  regime, rather than denying an attribution first-order theory cannot judge.
+  `CONDITIONING_AGREEMENT_FACTOR` is headroom on a LOCAL expansion, and no fixed
+  factor can rescue a Jordan chain: on a 16x16 companion matrix whose
+  eigenvalues satisfy exactly `lambda**16 = 1e-8`, the displacement `0.3162` is
+  entirely caused by the `1e-8` perturbation yet misses the first-order estimate
+  `0.02196` by 14.4x, and the ratio grows without bound with the chain length.
+  The regime test is measured rather than tuned: a perturbation small enough for
+  a local expansion cannot move an eigenvalue as far as its nearest neighbour,
+  so `observed >= separation` abstains. Both quantities are report fields, so a
+  reader can see why.
 
   The two forward-error contributions are SUCCESSIVE perturbations -- from the
   exact zero of the nearest trace-preserving operator, to that operator's

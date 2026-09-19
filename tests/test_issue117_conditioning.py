@@ -470,12 +470,12 @@ def test_defective_pair_fails_closed_without_raising() -> None:
     evidence = zero_mode_conditioning(_defective_superoperator(), zero_tolerance=1e-13)
     assert evidence.available
     assert evidence.cluster_size == 3
-    # The SUBSPACE figure is exactly zero: the three vectors do not span a
-    # three-dimensional invariant subspace at all.
+    # The three zero eigenvalues are exactly tied, so the divisor is the
+    # subspace figure for that group (round-5 review) -- and it is exactly zero,
+    # because the three vectors do not span a three-dimensional invariant
+    # subspace at all.
     assert evidence.reciprocal_condition == 0.0
-    # The per-mode figure, which the scalar estimates divide by, is subnormal
-    # rather than exactly zero -- LAPACK still returns a direction.
-    assert 0.0 < evidence.per_mode_reciprocal_condition < 1.0e-200
+    assert evidence.per_mode_reciprocal_condition == 0.0
     # Exactly trace preserving, so the STRUCTURAL estimate stays 0.0: the 0/0
     # branch reports no displacement for an exact backward error rather than
     # inventing one.
@@ -483,10 +483,10 @@ def test_defective_pair_fails_closed_without_raising() -> None:
     assert evidence.structural_forward_estimate == 0.0
     # The SOLVER estimate is what is unusable here, and the verdict must read
     # it -- a defective stationary pair is conditioning-limited even when the
-    # generator is exactly trace preserving. The residual over a subnormal
-    # conditioning is order one, thirteen decades past the supplied cutoff.
-    assert evidence.solver_forward_estimate >= 1.0
-    assert evidence.solver_forward_estimate > evidence.zero_tolerance
+    # generator is exactly trace preserving.
+    assert evidence.solver_forward_estimate == math.inf
+    # An unbounded estimate explains anything, so the agreement field abstains.
+    assert evidence.displacement_explained is None
     assert evidence.conditioning_limited is True
     assert evidence.verdict == CONDITIONING_LIMITED
 
@@ -498,9 +498,8 @@ def test_defective_pair_with_a_nonzero_defect_reports_unbounded_displacement() -
     )
     assert evidence.available
     assert evidence.trace_defect == pytest.approx(1.0e-12 / math.sqrt(2.0), rel=1e-3)
-    # 1e-12 over a subnormal conditioning: enormous, and far past any tolerance
-    # a caller could sensibly supply.
-    assert evidence.structural_forward_estimate > 1.0e200
+    # A real backward error over a vanishing conditioning: unbounded.
+    assert evidence.structural_forward_estimate == math.inf
     assert evidence.conditioning_limited is True
     assert evidence.verdict == CONDITIONING_LIMITED
 
@@ -773,6 +772,93 @@ def test_zero_set_membership_follows_the_accepted_spectrum() -> None:
     assert evidence.cluster_size == int(np.count_nonzero(np.abs(accepted) <= tol))
     # The reported eigenvalue is the accepted one, not the audit solve's.
     assert complex(evidence.eigenvalue) in set(np.asarray(accepted, dtype=complex))
+
+
+def test_abstains_outside_the_first_order_perturbative_regime() -> None:
+    """Round-5 review: no fixed factor can rescue a non-perturbative case.
+
+    A 16x16 companion matrix in the trace-vector basis -- subdiagonal ones and a
+    single trace-row entry ``1e-8`` -- has eigenvalues satisfying exactly
+    ``lambda**16 = 1e-8``, so ``|lambda| = 0.3162``. The displacement IS the
+    perturbation, propagated along a Jordan chain of length 16, but it scales as
+    ``eps**(1/m)`` rather than linearly, so the first-order estimate
+    (``0.02196``) misses it by 14.4x and the ratio grows without bound with the
+    chain length. Denying the attribution would be wrong; the field abstains.
+    """
+    n = 16
+    companion = np.zeros((n, n), dtype=complex)
+    for i in range(1, n):
+        companion[i, i - 1] = 1.0
+    companion[0, n - 1] = 1.0e-8
+    unitary = _basis_with_first(trace_vector(4))
+    L = unitary @ companion @ unitary.conj().T
+
+    evidence = zero_mode_conditioning(L)
+    assert evidence.available
+    # The premise: a genuine Jordan-chain displacement, not a solver artefact.
+    assert evidence.observed_displacement == pytest.approx(1e-8 ** (1 / 16), rel=1e-6)
+    # It has moved further than the distance to its neighbours, which a
+    # first-order-valid perturbation cannot do.
+    assert evidence.observed_displacement > evidence.separation
+    assert evidence.displacement_explained is None
+    # The fixed factor would have denied it, which is the wrong answer.
+    combined = (
+        evidence.structural_forward_estimate + evidence.solver_forward_estimate
+    )
+    assert evidence.observed_displacement > CONDITIONING_AGREEMENT_FACTOR * combined
+
+
+def test_a_repeated_stationary_eigenvalue_uses_a_basis_invariant_divisor() -> None:
+    """Round-5 review: a per-mode ``|y^H x|`` is basis dependent when repeated.
+
+    For a repeated eigenvalue LAPACK returns an arbitrary basis of each
+    eigenspace, and the left and right bases may be rotated independently.
+    Measured on two decoupled damped sectors, rotating only the right basis
+    inside the degenerate stationary eigenspace moves the per-mode values from
+    ``0.7206`` to ``0.5408`` while ``sigma_min(Y^H X)`` stays exactly ``0.7071`` -- so
+    a per-mode divisor would report a physical degenerate manifold as
+    conditioning-limited on LAPACK's choice of basis alone.
+    """
+    import scipy.linalg as sla
+
+    jump = np.zeros((4, 4), dtype=complex)
+    jump[0, 1] = math.sqrt(0.7)
+    jump[2, 3] = math.sqrt(0.4)
+    L = build_liouvillian(np.zeros((4, 4), dtype=complex), [jump])
+
+    values, left, right = sla.eig(L, left=True, right=True)
+    zero = np.flatnonzero(np.abs(values) <= 1.0e-10)
+    assert zero.size > 1  # the premise: genuinely repeated
+
+    per_mode = eigenvalue_conditioning(right, left)
+    invariant = cluster_conditioning(right, left, zero)
+
+    # Rotate ONLY the right basis within the degenerate eigenspace: a legal,
+    # equally valid choice that LAPACK could have returned instead.
+    angle = 0.7
+    rotation = np.array(
+        [
+            [math.cos(angle), -math.sin(angle)],
+            [math.sin(angle), math.cos(angle)],
+        ],
+        dtype=complex,
+    )
+    pair = zero[:2]
+    turned = right.copy()
+    turned[:, pair] = right[:, pair] @ rotation
+
+    assert not np.allclose(
+        eigenvalue_conditioning(turned, left)[pair], per_mode[pair], rtol=1e-3
+    )
+    assert cluster_conditioning(turned, left, zero) == pytest.approx(
+        invariant, rel=1e-10
+    )
+    # The audit divides by the invariant figure, so the manifold stays benign.
+    evidence = zero_mode_conditioning(L, zero_tolerance=1.0e-10)
+    assert evidence.per_mode_reciprocal_condition == pytest.approx(
+        invariant, rel=1e-10
+    )
+    assert evidence.verdict == CONDITIONING_BENIGN
 
 
 def test_cluster_conditioning_fails_closed_on_unusable_vector_sets() -> None:

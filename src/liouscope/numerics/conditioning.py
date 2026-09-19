@@ -308,7 +308,10 @@ class ZeroModeConditioning:
     #: defective stationary pair whose solver estimate is unbounded.
     conditioning_limited: bool
     #: Whether the observed displacement is consistent with the two estimates.
-    #: ``None`` when an estimate is not finite, never ``False`` by default.
+    #: ``None`` when an estimate is not finite, and also when the displacement
+    #: has reached the separation -- there the modes have interacted and a
+    #: first-order attribution is not meaningful, so the field abstains rather
+    #: than deny (round-5 review). Never ``False`` by default.
     displacement_explained: bool | None
     verdict: str
 
@@ -570,11 +573,23 @@ def _measure(
     # selected stationary eigenvalue at ``1e-10`` but moves
     # ``structural_forward_estimate`` from ``1e-10`` to ``1.0`` -- ten orders of
     # magnitude, contributed entirely by a near-defective pair the stationary
-    # mode has nothing to do with. The displacement of ONE eigenvalue is
-    # governed by ITS OWN condition number, and a near-degenerate partner of the
-    # stationary mode is still covered, because then that mode's own ``s`` is
-    # the small one.
-    s_scalar = float(per_mode[stationary])
+    # mode has nothing to do with.
+    #
+    # ROUND-5 REVIEW amends that to the group of modes EXACTLY TIED with the
+    # selected one, conditioned as a subspace. For a repeated eigenvalue the
+    # left and right eigenvectors LAPACK returns are an arbitrary basis of their
+    # eigenspaces and can be rotated independently, so a per-mode ``|y^H x|`` is
+    # basis dependent: measured on two decoupled damped sectors, rotating only
+    # the right basis inside the degenerate stationary eigenspace moves the
+    # per-mode values from 0.7206 to 0.5408 while ``sigma_min(Y^H X)`` stays
+    # exactly 0.7071. A physical degenerate manifold would have been reported
+    # conditioning-limited on LAPACK's choice of basis alone.
+    #
+    # One expression covers both: ``cluster_conditioning`` over a single index
+    # IS ``|y^H x|``, so a simple mode still divides by its own condition number
+    # and only a genuinely repeated one is conditioned as the subspace it is.
+    tied = cluster[reported[cluster] == reported[stationary]]
+    s_scalar = cluster_conditioning(right, left, tied)
     right_res = 0.0
     left_res = 0.0
     for j in cluster:
@@ -650,11 +665,32 @@ def _measure(
     # ``inf`` as well as ``nan``: an unbounded estimate would "explain" any
     # displacement whatsoever, and it serialises to null, so reporting ``True``
     # beside a missing number contradicts the field's own semantics.
+    # ROUND-5 REVIEW. ``CONDITIONING_AGREEMENT_FACTOR`` is headroom on a LOCAL
+    # first-order estimate, and no fixed factor can rescue it where first-order
+    # theory does not apply at all. Measured on a 16x16 companion matrix in the
+    # trace-vector basis -- subdiagonal ones and a single trace-row entry
+    # ``1e-8``, so the eigenvalues exactly satisfy ``lambda**16 = 1e-8`` -- the
+    # displacement is ``0.3162`` against a combined estimate of ``0.02196``, a
+    # ratio of 14.4 that would be reported as NOT explained even though the
+    # perturbation is the entire cause of it. The displacement there scales as
+    # ``eps**(1/m)`` along a Jordan chain of length ``m``, so the ratio grows
+    # without bound with ``m`` and calibrating the factor on an order-two
+    # fixture cannot justify it.
+    #
+    # The regime test is measured rather than tuned: a perturbation small enough
+    # for a local expansion cannot move an eigenvalue as far as its nearest
+    # neighbour. When it has, the modes have interacted and no first-order
+    # attribution is meaningful, so the field abstains instead of denying.
+    # ``observed_displacement`` and ``separation`` are both in the payload, so a
+    # reader can see why. On the fixture above ``0.3162 >= 0.1234`` and the
+    # answer becomes ``None``; on the PR #127 fixture ``1.0e-07 < 2.0e-07`` and
+    # the ordinary comparison still applies.
     explained: bool | None
     if (
         not np.isfinite(observed)
         or not np.isfinite(structural_estimate)
         or not np.isfinite(solver_estimate)
+        or (np.isfinite(separation) and observed >= separation)
     ):
         explained = None
     else:

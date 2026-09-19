@@ -236,6 +236,18 @@ LiouScope is built for paper-grade reproducibility:
   `test_manifests_byte_identical_with_source_date_epoch`).
 - **Anchor tests.** `tests/test_anchors.py` locks the numerical anchors that paper figures depend on;
   changes to physics code that move these values are caught in CI.
+- **Zero-mode conditioning evidence (audit only).** Every spectral run attaches
+  `SpectralResult.zero_mode_conditioning`: the reciprocal condition number of the stationary
+  eigenvalue's zero set, its left/right residuals, its separation, the trace-preservation defect
+  and the first-order forward-error estimates those imply. It exists because a backward error
+  does **not** bound the forward eigenvalue displacement for a non-normal generator, so it lets a
+  reader tell a failed eigensolve apart from the correctly located zero of an operator that is
+  only approximately trace preserving. **Nothing reads it** — no filter, gap, certificate, verdict
+  or tier — and it is *not* a detector for stiff eigensolver failure (issue #117). The public
+  entry point is `liouscope.numerics.zero_mode_conditioning(L, zero_tolerance=..., eigenvalues=...)`;
+  `compute_spectral_layer(..., conditioning_audit=False)` switches the extra work off with no
+  other effect on the result. `benchmarks/issue117_zero_mode_conditioning.py` reproduces the
+  measurements and times the audit on your own hardware.
 - **Paper-figure pipeline.** `figures/generate_all.py` regenerates Fig 1-3 deterministically.
 
 ---
