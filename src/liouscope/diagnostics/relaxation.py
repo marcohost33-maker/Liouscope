@@ -743,15 +743,13 @@ def _dominant_rate(t: np.ndarray, curve: np.ndarray) -> tuple[float, str]:
     # arbitrary FAILED fit's rate. Every candidate saturated == the rate is
     # unknown, which D17 already knows how to read.
     # Round-17 review, CORRECTED after the full suite. The predicate is
-    # ``success``, NOT ``isfinite(aicc)``: a non-finite AICc is not the same
-    # event as a failed fit. Measured on validation system V4 (thermal
-    # two-level), trace-distance curve: all five models converge, yet every
-    # AICc is ``inf`` because the Geyer-corrected ``n_eff`` of that smooth,
-    # strongly autocorrelated residual series is too small for the
-    # small-sample correction. Keying on finiteness withheld D17 on a system
-    # where nothing had failed. ``choose_model`` keeps its documented "all
-    # entries inf -> M0" fallback; the only thing enforced here is that the
-    # winner must come from the SUCCEEDED set.
+    # ``success``, NOT ``isfinite(aicc)``: a non-finite score is not the
+    # same event as a failed numerical fit. The model-selection sample size is
+    # now the observed grid length (PR #157), so the historical V4 case where
+    # Geyer N_eff alone drove every AICc to inf is no longer the production
+    # path. The structural rule survives: if a score is unavailable for any
+    # other reason, that must not retroactively relabel a successful fit as a
+    # failed optimisation. The winner is constrained to the SUCCEEDED set.
     selectable = {n: fr.aicc for n, fr in fits.items() if fr.success}
     if not selectable:
         return float("nan"), "none"
