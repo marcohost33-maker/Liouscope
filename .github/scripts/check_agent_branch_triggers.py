@@ -22,6 +22,7 @@ REQUIRED_WORKFLOWS = (
     ROOT / ".github" / "workflows" / "quality-contract.yml",
 )
 MERGE_SMOKE_WORKFLOW = ROOT / ".github" / "workflows" / "ci-reusable-pilot.yml"
+MERGE_SMOKE_CALLEE = ROOT / ".github" / "workflows" / "ci-python-local.yml"
 PR_HEAD_REF = "${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}"
 TASK_PREFIX_RE = re.compile(r"`([A-Za-z0-9_-]+)/<task>`")
 
@@ -63,28 +64,84 @@ def _push_branches(path: Path) -> set[str]:
     raise ValueError(f"{path}: push trigger has no branches list")
 
 
+def _yaml_code(line: str) -> str:
+    """Return the structural part of a simple repository workflow line."""
+    return line.split("#", 1)[0].rstrip()
+
+
 def _pull_request_is_unfiltered(path: Path) -> bool:
-    """Return True iff pull_request exists and has no base-branch filter."""
+    """Require default PR activity coverage with no base/path suppression."""
     lines = path.read_text(encoding="utf-8").splitlines()
     pr_index = next(
-        (i for i, line in enumerate(lines) if line.rstrip() == "  pull_request:"),
+        (
+            i
+            for i, line in enumerate(lines)
+            if _yaml_code(line).rstrip() == "  pull_request:"
+        ),
         None,
     )
     if pr_index is None:
         return False
+
+    forbidden = ("branches:", "branches-ignore:", "paths:", "paths-ignore:", "types:")
     for line in lines[pr_index + 1 :]:
-        if line and not line.startswith("    "):
+        code = _yaml_code(line)
+        if not code.strip():
+            continue
+        indent = len(code) - len(code.lstrip(" "))
+        if indent < 4:
             break
-        stripped = line.strip()
-        if stripped.startswith("branches:") or stripped.startswith("branches-ignore:"):
+        stripped = code.strip()
+        if stripped.startswith(forbidden):
             return False
     return True
 
 
+def _checkout_ref_values(path: Path) -> list[str | None]:
+    """Return with.ref for every actions/checkout step, None if absent."""
+    lines = path.read_text(encoding="utf-8").splitlines()
+    refs: list[str | None] = []
+    for i, line in enumerate(lines):
+        code = _yaml_code(line)
+        stripped = code.strip()
+        if not stripped.startswith("- uses: actions/checkout@"):
+            continue
+        step_indent = len(code) - len(code.lstrip(" "))
+        in_with = False
+        ref_value: str | None = None
+        for next_line in lines[i + 1 :]:
+            next_code = _yaml_code(next_line)
+            if not next_code.strip():
+                continue
+            indent = len(next_code) - len(next_code.lstrip(" "))
+            next_stripped = next_code.strip()
+            if indent <= step_indent:
+                break
+            if indent == step_indent + 2:
+                in_with = next_stripped == "with:"
+                continue
+            if in_with and indent >= step_indent + 4 and next_stripped.startswith("ref:"):
+                ref_value = next_stripped.split(":", 1)[1].strip().strip(chr(34)).strip(chr(39))
+        refs.append(ref_value)
+    return refs
+
+
 def _checks_out_exact_pr_head(path: Path) -> bool:
-    """Require PR jobs to checkout the submitted head SHA, not only merge ref."""
-    text = path.read_text(encoding="utf-8")
-    return f"ref: {PR_HEAD_REF}" in text
+    """Every checkout in an exact-head workflow must bind with.ref."""
+    refs = _checkout_ref_values(path)
+    return bool(refs) and all(ref == PR_HEAD_REF for ref in refs)
+
+
+def _merge_smoke_keeps_default_merge_ref() -> bool:
+    """Pilot calls known callee; its checkout must omit with.ref."""
+    if not MERGE_SMOKE_WORKFLOW.exists() or not MERGE_SMOKE_CALLEE.exists():
+        return False
+    caller = MERGE_SMOKE_WORKFLOW.read_text(encoding="utf-8")
+    if "uses: ./.github/workflows/ci-python-local.yml" not in caller:
+        return False
+    refs = _checkout_ref_values(MERGE_SMOKE_CALLEE)
+    return bool(refs) and all(ref is None for ref in refs)
+
 
 def main() -> int:
     errors: list[str] = []
@@ -132,7 +189,13 @@ def main() -> int:
     elif not _pull_request_is_unfiltered(MERGE_SMOKE_WORKFLOW):
         errors.append(
             f"{MERGE_SMOKE_WORKFLOW.relative_to(ROOT)}: merge-smoke pull_request "
-            "must cover arbitrary base branches"
+            "must cover arbitrary base branches and default PR activity types"
+        )
+    if not _merge_smoke_keeps_default_merge_ref():
+        errors.append(
+            "merge-smoke contract drifted: ci-reusable-pilot.yml must call "
+            "ci-python-local.yml and that callee actions/checkout step must "
+            "omit with.ref so the synthetic PR merge ref is exercised"
         )
 
     if errors:
