@@ -2847,9 +2847,10 @@ physics-scaling). MINOR bump per SemVer: backward-compatible API additions
 - Twenty diagnostics D1-D20 organised in six layers S/N/R/U/C/G.
 - Twelve-class mechanism taxonomy A1-A12 (`TAXONOMY_VERSION = "A1-A12-v3.1"`).
 - Fit hierarchy M0/M1/M2/M3a/M3b with Prony-seed initialisation for M3b.
-- Statistical pipeline: GLS with AR(1) residuals, N_eff via Geyer 1992 IPS
-  estimator, AICc with N_eff correction, parametric bootstrap with BCa
-  confidence intervals.
+- Statistical pipeline baseline: GLS with correlated residuals, N_eff as
+  correlation/uncertainty evidence, AICc-style model selection, and parametric
+  bootstrap intervals. Historical releases used N_eff in the AICc correction;
+  the Unreleased PR #157 methodology entry above supersedes that convention.
 - Sparse path (`liouscope.sparse`) with ARPACK shift-invert for d up to 128.
 - Run manifest with SHA-256 run-id and JSON export. Schema version 1.2.0.
 - Four lattice geometries (1D chain, 2D square, honeycomb, triangular) and
