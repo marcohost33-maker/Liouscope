@@ -224,16 +224,29 @@ def test_gap_controlled_reference_reaches_a1():
     L, rho0 = _gap_controlled_reference()
     rep = diagnose(L, rho_initial=rho0, bootstrap_B=20, seed=42)
     cls = rep.classification
-    assert cls.a_class == "A1"
+    # Establish the physical A1 preconditions BEFORE checking the ladder result,
+    # so a future failure identifies whether D17, the linear-shape fit, or the
+    # classifier priority actually moved. Include all fitted AICc values in the
+    # shape assertion: this is diagnostic evidence, not a changed expectation.
+    assert rep.lep.gap_rate_consistency < 0.05
+    assert rep.relaxation.linear_fit_model in ("M0", "M1"), {
+        "linear_fit_model": rep.relaxation.linear_fit_model,
+        "relative_entropy_model": rep.relaxation.aicc_model,
+        "fit_aicc": {name: fit.aicc for name, fit in rep.relaxation.fits.items()},
+        "fit_success": {name: fit.success for name, fit in rep.relaxation.fits.items()},
+    }
+    assert cls.a_class == "A1", {
+        "a_class": cls.a_class,
+        "f_family": cls.f_family,
+        "linear_fit_model": rep.relaxation.linear_fit_model,
+        "relative_entropy_model": rep.relaxation.aicc_model,
+        "gap_rate_consistency": rep.lep.gap_rate_consistency,
+    }
     # issue #70 A6: A1 (gap-controlled, primitive QMS) is the NO-gap-failure case
     # and maps to family "none", not F1 (Mori-Shirai overlap gap-FAILURE). This
     # does not touch the #69 dimension-coherence logic -- only the family label.
     assert cls.f_family == "none"
     assert cls.verdict == "CONFIRMED"
-    # Dimension-coherent D17 is essentially zero: the observable relaxation is a
-    # single exponential at exactly the gap.
-    assert rep.lep.gap_rate_consistency < 0.05
-    assert rep.relaxation.linear_fit_model in ("M0", "M1")
 
 
 @pytest.mark.filterwarnings(
