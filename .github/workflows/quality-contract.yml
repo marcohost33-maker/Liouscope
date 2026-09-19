@@ -1,11 +1,10 @@
 # Quality Contract Gate — claim safety + workflow hardening.
 # This is intentionally fast and dependency-free. It should be safe as a required
-# check because it runs on every PR to main and has no path filters.
+# check because it runs on every PR (including stacked PRs) and has no path filters.
 name: Quality Contract
 
 on:
   pull_request:
-    branches: [main]
   push:
     branches: [main, "claude/**", "codex/**", "bot/**"]
   workflow_dispatch:
