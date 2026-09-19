@@ -26,6 +26,7 @@ import warnings
 
 import numpy as np
 import pytest
+from scipy.optimize import minimize_scalar
 
 from liouscope.diagnostics.relaxation import _fit_with_model
 from liouscope.fitting.aicc import aicc, gaussian_log_likelihood
@@ -146,6 +147,34 @@ def test_car1_rho_reduces_to_a_single_constant_on_a_uniform_grid():
     a = car1_rho(t, 0.4)
     np.testing.assert_allclose(a, a[0], rtol=1.0e-12)
 
+
+def test_car1_theta_maximises_the_stationary_likelihood_reported_to_aicc():
+    """Theta and AICc must refer to one stationary probability model."""
+    t = np.concatenate(
+        [np.linspace(0.0, 0.1, 40, endpoint=False), np.linspace(0.1, 10.0, 40)]
+    )
+    residuals = car1_resample(np.random.default_rng(1), t, 1.0e-4, 1.0)
+
+    theta_hat = estimate_car1_theta(t, residuals)
+    assert np.isfinite(theta_hat) and theta_hat > 0.0
+
+    def reported_log_likelihood(log_theta: float) -> float:
+        theta = float(np.exp(log_theta))
+        whitened = whiten_car1(residuals, t, theta)
+        sigma = float(np.sqrt(np.mean(whitened * whitened)))
+        return gaussian_log_likelihood(whitened, sigma=sigma) + (
+            whiten_car1_log_jacobian(t, theta)
+        )
+
+    reference = minimize_scalar(
+        lambda u: -reported_log_likelihood(float(u)),
+        bounds=(float(np.log(1.0e-4)), float(np.log(1.0e-2))),
+        method="bounded",
+        options={"xatol": 1.0e-11},
+    )
+    assert reference.success
+    theta_reference = float(np.exp(float(reference.x)))
+    assert theta_hat == pytest.approx(theta_reference, rel=2.0e-6)
 
 # ---------------------------------------------------------------------------
 # Effective sample size against the closed form
