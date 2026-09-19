@@ -638,12 +638,13 @@ def _fit_with_model(
     p0 = seeds[model_name](t, y)
     fit = fit_gls_ar1(model, t, y, p0)
     # ROUND-18 REVIEW (external, PR #127). ``k`` is the number of parameters
-    # ESTIMATED from this data set, and on a non-uniform grid the CAR(1) rate
-    # ``theta`` is one of them: it is re-fitted for every candidate model and
-    # enters that model's maximised likelihood through the whitening. Counting
-    # only ``p0.size`` there is not a harmless constant offset, because the
+    # ESTIMATED from this data set. On a non-uniform grid the CAR(1) rate
+    # ``theta`` and the stationary Gaussian variance are both fitted nuisance
+    # parameters: theta is optimized for every candidate and the variance is
+    # profiled at its MLE inside that candidate's likelihood. Counting only
+    # ``p0.size`` there is not a harmless constant offset, because the
     # small-sample correction ``2k(k+1)/(N_eff-k-1)`` is NONLINEAR in ``k`` --
-    # omitting the nuisance parameter therefore under-penalises the
+    # omitting either nuisance parameter therefore under-penalises the
     # higher-dimensional candidates (M2/M3b) relative to M0/M1 exactly when
     # ``N_eff`` is small, which can move the selected relaxation model and with
     # it the reported A-class.
@@ -653,14 +654,15 @@ def _fit_with_model(
     # discrete AR(1) treatment when the CAR(1) estimate is degenerate, and no
     # parameter is estimated in that case that was not estimated before.
     #
-    # The discrete ``rho`` of the uniform path is deliberately NOT counted
-    # here. That is the historical convention (``k`` = mean-function
-    # parameters) and it is self-consistent within one selection, because
+    # The discrete ``rho`` and Gaussian scale of the uniform path are
+    # deliberately NOT counted here. That is the historical convention
+    # (``k`` = mean-function parameters) and it is self-consistent within one
+    # selection, because
     # uniformity is a property of the GRID and therefore fixed across all
     # candidates of a single comparison. Changing it would re-rank every
     # existing uniform-grid result and belongs in its own PR with its own
     # anchor evidence.
-    k = int(p0.size) + (1 if np.isfinite(fit.theta_car1) else 0)
+    k = int(p0.size) + (2 if np.isfinite(fit.theta_car1) else 0)
     # N_eff must be computed under the SAME residual model the fit whitened
     # with, or the AICc it feeds compares likelihoods from one model against a
     # sample size from another. The Geyer IPS estimator sums autocorrelations
