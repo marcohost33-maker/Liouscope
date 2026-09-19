@@ -1,12 +1,16 @@
-"""Small-sample-corrected AIC with N_eff (anchor H).
+"""Small-sample-corrected Akaike information criterion.
 
-For a model with ``k`` parameters fitted to ``n`` observations with effective
-sample size ``N_eff <= n``, the corrected AIC is
+For a model with ``k`` estimated parameters and model-selection sample size
+``n``,
 
-    AICc = -2 ln L_max + 2 k + 2 k (k + 1) / (N_eff - k - 1)
+    AICc = -2 ln L + 2 k + 2 k (k + 1) / (n - k - 1).
 
-When ``N_eff - k - 1 <= 0`` we report ``inf`` to signal that the data does
-not support the model.
+LiouScope's production GLS path passes the number of observed time points as
+``n_obs``.  Serial dependence is already represented in the AR(1)/CAR(1)
+likelihood; substituting an ESS derived from the same dependence into the AICc
+denominator would apply a second, heuristic dependence penalty.  The legacy
+third positional argument remains accepted as ``n_eff`` for API
+compatibility and for callers that deliberately define a different criterion.
 """
 
 from __future__ import annotations
@@ -19,11 +23,32 @@ import numpy as np
 from ..numerics.norms import scaled_log_sum_squares
 
 
-def aicc(log_likelihood: float, k: int, n_eff: float) -> float:
-    """Return ``AICc`` for given log-likelihood, parameter count, and N_eff."""
-    if n_eff - k - 1 <= 0:
+def aicc(
+    log_likelihood: float,
+    k: int,
+    n_eff: float | None = None,
+    *,
+    n_obs: float | None = None,
+) -> float:
+    """Return an AICc score for the supplied model-selection sample size.
+
+    ``n_obs`` is the explicit production spelling.  ``n_eff`` is retained
+    as a legacy compatibility alias; supplying both is an error because the
+    two quantities express different statistical choices.
+    """
+    if n_obs is not None and n_eff is not None:
+        raise ValueError("aicc: pass exactly one of n_obs or the legacy n_eff")
+    if n_obs is None:
+        if n_eff is None:
+            raise TypeError("aicc: missing model-selection sample size")
+        n = float(n_eff)
+    else:
+        n = float(n_obs)
+    if not math.isfinite(n) or n <= 0.0:
         return float("inf")
-    correction = 2.0 * k * (k + 1) / (n_eff - k - 1)
+    if n - k - 1 <= 0:
+        return float("inf")
+    correction = 2.0 * k * (k + 1) / (n - k - 1)
     return float(-2.0 * log_likelihood + 2.0 * k + correction)
 
 
