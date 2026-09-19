@@ -41,8 +41,7 @@ LiouScope addresses this with three deliberate choices:
 
 1. **No single number.** Every analysis returns a structured `DiagnosticReport` with the code-backed
    diagnostic set grouped by physical concept, not a scalar.
-2. **Explicit uncertainty.** Bootstrap CIs (BCa), GLS with AR(1) residuals, AICc model selection, and a
-   parametric-bootstrap pipeline are first-class — not optional add-ons.
+2. **Explicit uncertainty.** Parametric-bootstrap CIs carry their actual method (`BC` or `BCa`), alongside GLS with AR(1)/CAR(1) residuals and AICc model selection. On the default 80-point grid the acceleration jackknife is intentionally not run, so the interval is **BC**, not BCa (issue #116).
 3. **Auditable manifests.** Each run produces a SHA-256-stable JSON manifest (`MANIFEST_SCHEMA v1.5.0`)
    that captures the seed, framework/schema/taxonomy versions, Python/NumPy/SciPy versions,
    platform, solver path, quality label and a run-invariant `input_hash`. Structured ensemble
@@ -72,10 +71,7 @@ rho_0 = np.outer(plus, plus.conj())
 
 report = lp.diagnose(L, rho_initial=rho_0, bootstrap_B=100, seed=42)
 
-# A-class mechanism + 95% BCa CI on the fitted relaxation rate
-print(report.classification.a_class)         # one of "A1".."A12"
-print(report.relaxation.beta_D, "in",
-      report.relaxation.bca_ci_beta)         # (lo, hi)
+# A-class mechanism + 95% bootstrap CI on the fitted relaxation rate\nprint(report.classification.a_class)         # one of "A1".."A12"\nprint(report.relaxation.beta_D, "in",\n      report.relaxation.bca_ci_beta,         # legacy tuple name, (lo, hi)\n      report.relaxation.interval_method)     # "BC", "BCa", or "unavailable"
 
 # Every mechanism hypothesis that fired -- not just the dominant one
 for h in report.classification.triggered_hypotheses:
@@ -162,7 +158,7 @@ in this repository**; D24 ships as an opt-in module.
 | **N — Non-normality** | D8-D13 (+D8b, D10b, D11b) | Henrici departure (+ dimensionless `henrici_relative`), Petermann factors, Kreiss grid lower bound (+ scale-relative `kreiss_scaled`), Bohr-AP, resolvent peak/FWHM, pseudospectral radius (+ scale-relative radius & abscissa) | `diagnostics/nonnormality.py`, `diagnostics/resolvent.py` |
 | **T — Transient** | D14-D15 | sup-norm transient amplification, numerical-abscissa ratio | `diagnostics/transient.py` |
 | **C — Classification** | D16-D20 | LEP proximity, gap-rate consistency, initial-state sensitivity, Mpemba overlap/scaling; A1-A12 mechanism classifier on top | `diagnostics/lep.py`, `diagnostics/mpemba.py`, `diagnostics/classification.py` |
-| **U/G — Uncertainty & Governance** | U0-U2, D24 | BCa CIs, AICc model selection M0..M3b, GLS+AR(1); manifest export; Zhou mixing-time predictor (opt-in, frozen) | `fitting/`, `diagnostics/uncertainty.py`, `io/manifest.py`, `_zhou.py` |
+| **U/G — Uncertainty & Governance** | U0-U2, D24 | parametric-bootstrap CIs with explicit BC/BCa method provenance, AICc model selection M0..M3b, GLS+AR(1)/CAR(1); manifest export; Zhou mixing-time predictor (opt-in, frozen) | `fitting/`, `diagnostics/uncertainty.py`, `io/manifest.py`, `_zhou.py` |
 
 The Zhou predictor (D24) is opt-in and lives in `liouscope._zhou`; see CHANGELOG.
 Its `claim_status` is **reference-verified-bound-coarser** — the cited reference
@@ -197,7 +193,7 @@ src/liouscope/
   core/             Hamiltonians, jump operators, lattices, Lindblad superoperators
   diagnostics/      Six layers (spectral, nonnormality, relaxation, transient,
                     uncertainty, classification, mpemba, lep, resolvent)
-  fitting/          GLS+AR(1), BCa bootstrap, AICc model selection
+  fitting/          GLS+AR(1)/CAR(1), parametric bootstrap (BC/BCa), AICc model selection
   io/               Run-manifest export, seed control
   sparse/           Low-level ARPACK shift-invert helpers (not yet wired into diagnose())
   _zhou.py          Zhou universal mixing-time predictor (opt-in, D24)
