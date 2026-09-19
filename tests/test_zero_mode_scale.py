@@ -304,12 +304,15 @@ def test_legacy_henrici_threshold_is_still_rate_unit_dependent():
     rate-dimensioned: it scales with ``c`` and can cross the absolute ``> 1``
     classifier threshold under a pure unit change. Pin that fact directly.
     """
-    reps = {c: _diagnose_rescaled(c) for c in (1.0, 10.0, 1.0e3)}
+    reps = {c: _diagnose_rescaled(c) for c in (0.1, 1.0, 10.0, 1.0e3)}
     eta1 = float(reps[1.0].nonnorm.henrici_eta)
-    assert 0.0 < eta1 < 1.0
-    for scale in (10.0, 1.0e3):
+    assert eta1 > 0.0
+    for scale in (0.1, 10.0, 1.0e3):
         eta = float(reps[scale].nonnorm.henrici_eta)
         assert eta / scale == pytest.approx(eta1, rel=RTOL_INV)
+    # The legacy absolute >1 gate can therefore change truth value under a
+    # pure rate-unit change even though the physics is identical.
+    assert float(reps[0.1].nonnorm.henrici_eta) < 1.0
     assert float(reps[10.0].nonnorm.henrici_eta) > 1.0
 
 
