@@ -119,6 +119,7 @@ from dataclasses import dataclass
 
 import numpy as np
 import scipy.linalg as sla
+from scipy.optimize import linear_sum_assignment
 
 from .._consts import CONDITIONING_AGREEMENT_FACTOR, ZERO_MODE_EPS_FACTOR
 from .linalg import require_finite_square_2d, trace_preservation_defect
@@ -268,8 +269,12 @@ class ZeroModeConditioning:
     cluster_size: int
     #: ``sigma_min(Y^H X)`` over the zero set -- the reported conditioning.
     reciprocal_condition: float
-    #: Smallest PER-MODE ``|y^H x|`` inside the zero set. Evidence only: it
-    #: collapses on a benign near-degenerate manifold (module docstring).
+    #: The SELECTED stationary mode's own ``|y^H x|``. This is the divisor of
+    #: the two forward estimates below, so a reader can reproduce them. It is
+    #: deliberately not the minimum over the cluster: a displacement of one
+    #: eigenvalue is governed by that eigenvalue's own conditioning, and using
+    #: the cluster minimum coupled the estimate to unrelated in-cutoff modes
+    #: (round-4 review).
     per_mode_reciprocal_condition: float
     #: Smallest per-mode ``|y^H x|`` over the WHOLE spectrum.
     spectrum_min_reciprocal_condition: float
@@ -383,40 +388,45 @@ def _divide_by_conditioning(numerator: float, s: float) -> float:
     return float(numerator / s)
 
 
-def _spectra_agree(audit: np.ndarray, accepted: np.ndarray) -> bool:
-    """Whether the audit's own solve reproduced the spectrum being reported.
+def _match_spectra(
+    audit: np.ndarray, accepted: np.ndarray
+) -> tuple[np.ndarray, float] | None:
+    """Pair two spectra mode for mode, returning ``(perm, worst_distance)``.
 
-    PR #166 review, finding P2. The audit runs its own ``?geev`` to obtain the
-    left/right pair it needs, but :func:`..linalg.certified_eigvals` may have
-    REPAIRED the spectrum through a different LAPACK route. Measured on the
-    canonical stiff #112 network: the certificate accepts ``dgeev-real`` with a
-    stationary eigenvalue at ``4.08e-17``, while a raw ``zgeev`` on the same
-    operator returns the spurious ``7.28e-06`` that issue #112 exists to reject.
-    Conditioning evidence computed from the second describes a spectrum the
-    report does not contain, which is worse than no evidence.
+    ``perm[i]`` is the index in ``accepted`` matched to ``audit[i]``.
 
-    The comparison is on the numbers, not on the solver name, so a future repair
-    route that happens to reproduce the spectrum still yields usable evidence.
-    Both are sorted lexicographically, which keeps a degenerate cluster
-    together, and compared against the library's own "indistinguishable at
-    double precision" band ``ZERO_MODE_EPS_FACTOR * eps * max|lambda|`` (issue
-    #108) rather than a tolerance invented here. A false disagreement only
-    withholds an audit; a false agreement publishes the wrong spectrum's
-    conditioning, so the strict direction is the safe one.
+    Round-4 review. This used to sort both spectra lexicographically by
+    ``(real, imag)``, which does not pair the same modes when a round-off-sized
+    real perturbation reorders them. Measured: the audit spectrum ``[i, -i]``
+    against an accepted ``[i - 1e-14, -i + 1e-14]`` -- the same two modes, well
+    inside the agreement band -- sorted into opposite orders, so the comparison
+    paired ``i`` with ``-i``, measured a distance of 2, and threw away the
+    conditioning evidence for a spectrum it should have accepted.
+
+    A minimum-cost assignment on the distance matrix is permutation invariant by
+    construction, so the pairing no longer depends on an ordering convention.
+    ``scipy.optimize.linear_sum_assignment`` is the same primitive
+    :mod:`.linalg` already uses to pair eigenvalues (``_injective_pairing``).
     """
     if audit.size != accepted.size:
-        return False
+        return None
     if audit.size == 0:
-        return True
+        return np.empty(0, dtype=int), 0.0
+    cost = np.abs(audit[:, None] - accepted[None, :])
+    if not np.all(np.isfinite(cost)):
+        return None
+    rows, cols = linear_sum_assignment(cost)
+    perm = np.empty(audit.size, dtype=int)
+    perm[rows] = cols
+    return perm, float(cost[rows, cols].max())
+
+
+def _agreement_band(audit: np.ndarray, accepted: np.ndarray) -> float:
+    """The library's own "indistinguishable at double precision" band (#108)."""
     scale = max(float(np.abs(audit).max()), float(np.abs(accepted).max()))
-    if not np.isfinite(scale):
-        return False
-    if scale == 0.0:
-        return True
-    band = ZERO_MODE_EPS_FACTOR * float(np.finfo(float).eps) * scale
-    order_a = np.lexsort((np.imag(audit), np.real(audit)))
-    order_b = np.lexsort((np.imag(accepted), np.real(accepted)))
-    return bool(np.all(np.abs(audit[order_a] - accepted[order_b]) <= band))
+    if not np.isfinite(scale) or scale == 0.0:
+        return 0.0
+    return ZERO_MODE_EPS_FACTOR * float(np.finfo(float).eps) * scale
 
 
 def zero_mode_conditioning(
@@ -506,13 +516,30 @@ def _measure(
     values = np.asarray(values)
     if values.size == 0 or not np.all(np.isfinite(values)):
         return ZeroModeConditioning.unavailable("nonfinite_spectrum")
+    # Round-4 review, two findings that share one mechanism. The audit's own
+    # solve decides which modes it CAN condition, but the report filters the
+    # ACCEPTED spectrum, so membership of the zero set has to be read off that
+    # one. Measured: an audit mode at ``1e-6`` against an accepted ``1e-6 -
+    # 1e-13`` at a cutoff of ``1e-6 - 5e-14`` agrees comfortably, yet the
+    # accepted zero set holds two modes where the audit's holds one, and the
+    # evidence reported ``cluster_size=1`` for a two-mode zero set. The
+    # assignment below pairs the two spectra mode for mode and is then used for
+    # BOTH the agreement test and the membership decision.
+    magnitudes = np.abs(values)
+    reported = values
     if accepted is not None:
         accepted = np.asarray(accepted).ravel()
-        if not np.all(np.isfinite(accepted)) or not _spectra_agree(values, accepted):
+        if not np.all(np.isfinite(accepted)):
             return ZeroModeConditioning.unavailable("accepted_spectrum_mismatch")
+        matched = _match_spectra(values, accepted)
+        if matched is None or matched[1] > _agreement_band(values, accepted):
+            return ZeroModeConditioning.unavailable("accepted_spectrum_mismatch")
+        # Aligned to audit index, so ``reported[j]`` is the eigenvalue the
+        # report carries for the pair whose vectors sit at audit column ``j``.
+        reported = accepted[matched[0]]
+        magnitudes = np.abs(reported)
 
     per_mode = eigenvalue_conditioning(right, left)
-    magnitudes = np.abs(values)
     tol = (
         float(zero_tolerance)
         if zero_tolerance is not None and np.isfinite(zero_tolerance)
@@ -521,14 +548,33 @@ def _measure(
     if np.isfinite(tol) and bool(np.any(magnitudes <= tol)):
         cluster = np.flatnonzero(magnitudes <= tol)
     else:
-        # No supplied cutoff, or none of the spectrum falls inside it: the
-        # CANDIDATE stationary mode is the smallest one. Reporting on it is the
-        # point -- that is exactly the case in which a reader needs to know
-        # whether its distance from zero is explained by conditioning.
-        cluster = np.asarray([int(np.argmin(magnitudes))], dtype=int)
+        # Round-4 review. This used to take the single smallest mode, which
+        # contradicted the advertised zero-SET conditioning on an exactly
+        # degenerate stationary manifold: two-level pure dephasing has spectrum
+        # ``[0, 0, -2, -2]`` and the default call reported ``cluster_size=1``,
+        # conditioning one arbitrary vector of a two-dimensional stationary
+        # subspace. Every mode exactly tied with the smallest is kept instead.
+        # Exact ties need no invented threshold; anything looser would be a
+        # second zero-mode tolerance competing with the certificate's, which is
+        # the one thing #108 and #113 exist to prevent.
+        cluster = np.flatnonzero(magnitudes == magnitudes.min())
 
     s_cluster = cluster_conditioning(right, left, cluster)
-    s_per_mode = float(per_mode[cluster].min())
+    stationary = int(cluster[int(np.argmin(magnitudes[cluster]))])
+    # Round-4 review. Round 2 replaced the subspace figure here with the MINIMUM
+    # per-mode value over the cluster, on a fail-closed argument. That was
+    # wrong: it made the selected eigenvalue's estimate depend on unrelated
+    # modes that happen to fall inside the caller's cutoff. Measured on a 4x4
+    # whose trace-basis blocks are ``1e-10``, ``[[1e-5, 1], [0, 1.00001e-5]]``
+    # and ``-1``, widening the cutoff from ``1e-9`` to ``2e-5`` leaves the
+    # selected stationary eigenvalue at ``1e-10`` but moves
+    # ``structural_forward_estimate`` from ``1e-10`` to ``1.0`` -- ten orders of
+    # magnitude, contributed entirely by a near-defective pair the stationary
+    # mode has nothing to do with. The displacement of ONE eigenvalue is
+    # governed by ITS OWN condition number, and a near-degenerate partner of the
+    # stationary mode is still covered, because then that mode's own ``s`` is
+    # the small one.
+    s_scalar = float(per_mode[stationary])
     right_res = 0.0
     left_res = 0.0
     for j in cluster:
@@ -543,7 +589,7 @@ def _measure(
             )
     outside = np.setdiff1d(np.arange(values.size), cluster, assume_unique=False)
     separation = (
-        float(np.min(np.abs(values[outside][:, None] - values[cluster][None, :])))
+        float(np.min(np.abs(reported[outside][:, None] - reported[cluster][None, :])))
         if outside.size
         else float("inf")
     )
@@ -558,22 +604,19 @@ def _measure(
     raw_defect, _scale = trace_preservation_defect(L)
     defect = raw_defect / np.sqrt(float(dim))
 
-    stationary = int(cluster[int(np.argmin(magnitudes[cluster]))])
     observed = float(magnitudes[stationary])
-    # Round-2 review. Both estimates are about the displacement of ONE scalar
-    # eigenvalue, so they divide by a PER-MODE condition number, never by the
-    # subspace figure ``s_cluster``. Those differ by arbitrarily much: for
+    # Round-2 review, amended in round 4. Both estimates are about the
+    # displacement of ONE scalar eigenvalue, so they divide by a PER-MODE
+    # condition number, never by the subspace figure ``s_cluster``: for
     # ``[[0, 1], [0, delta]]`` the invariant subspace is perfectly conditioned
     # while each eigenvalue's own ``s`` is ``delta`` (measured 1e-8 at
     # ``delta = 1e-8``), so the subspace figure understated the sensitivity by
-    # ``1/delta``. The minimum over the cluster is used rather than the selected
-    # mode's own value: inside a near-degenerate cluster it is not determined
-    # which member is "the" stationary one, and the smaller ``s`` gives the
-    # larger estimate, which is the fail-closed direction. ``s_cluster`` remains
-    # the REPORTED conditioning, because that is the honest figure for a
-    # degenerate stationary manifold (see the module docstring).
-    solver_estimate = _divide_by_conditioning(max(right_res, left_res), s_per_mode)
-    structural_estimate = _divide_by_conditioning(float(defect), s_per_mode)
+    # ``1/delta``. The divisor is the SELECTED mode's own value -- see
+    # ``s_scalar`` above for why the cluster minimum, tried in round 2, was
+    # wrong. ``s_cluster`` remains the REPORTED conditioning, because that is
+    # the honest figure for a degenerate stationary manifold.
+    solver_estimate = _divide_by_conditioning(max(right_res, left_res), s_scalar)
+    structural_estimate = _divide_by_conditioning(float(defect), s_scalar)
 
     # Round-2 review. A NaN estimate used to be dropped from the budget, so the
     # verdict was computed from whichever half survived: measured on the finite
@@ -621,10 +664,10 @@ def _measure(
     return ZeroModeConditioning(
         available=True,
         reason="ok",
-        eigenvalue=complex(values[stationary]),
+        eigenvalue=complex(reported[stationary]),
         cluster_size=int(cluster.size),
         reciprocal_condition=s_cluster,
-        per_mode_reciprocal_condition=s_per_mode,
+        per_mode_reciprocal_condition=s_scalar,
         spectrum_min_reciprocal_condition=float(per_mode.min()),
         right_residual=float(right_res),
         left_residual=float(left_res),

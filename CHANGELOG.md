@@ -74,6 +74,20 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   conditioning of `7.28e-06` beside a reported stationary eigenvalue of
   `4.08e-17`. A side length that cannot be a superoperator, and a negative
   `zero_tolerance`, are likewise refused rather than answered.
+  The scalar forward estimates divide by the SELECTED stationary mode's own
+  reciprocal condition number, not by the subspace figure and not by the
+  minimum over the cluster: a displacement of one eigenvalue is governed by
+  that eigenvalue's own conditioning, and either alternative couples the
+  estimate to modes it has nothing to do with (measured: widening a cutoff from
+  `1e-9` to `2e-5` moved the structural estimate from `1e-10` to `1.0` under the
+  cluster minimum, with the selected eigenvalue unchanged). Membership of the
+  zero set is read from the ACCEPTED spectrum, matched to the audit's own solve
+  by a minimum-cost assignment rather than a lexicographic sort, so the evidence
+  conditions the set the report filtered and two numerically identical spectra
+  are not mispaired by a round-off-sized reordering. With no cutoff supplied,
+  every mode exactly tied with the smallest is kept, so an exactly degenerate
+  stationary manifold is conditioned as the subspace it is.
+
   The two forward-error contributions are SUCCESSIVE perturbations -- from the
   exact zero of the nearest trace-preserving operator, to that operator's
   eigenvalue, to the one the solver returned -- so the budget is their sum, not

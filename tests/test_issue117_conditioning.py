@@ -34,6 +34,8 @@ from liouscope.numerics.conditioning import (
     CONDITIONING_LIMITED,
     CONDITIONING_UNAVAILABLE,
     ZeroModeConditioning,
+    _agreement_band,
+    _match_spectra,
     cluster_conditioning,
     eigenvalue_conditioning,
     zero_mode_conditioning,
@@ -479,10 +481,12 @@ def test_defective_pair_fails_closed_without_raising() -> None:
     # inventing one.
     assert evidence.trace_defect == 0.0
     assert evidence.structural_forward_estimate == 0.0
-    # The SOLVER estimate is what is unbounded here, and the verdict must read
+    # The SOLVER estimate is what is unusable here, and the verdict must read
     # it -- a defective stationary pair is conditioning-limited even when the
-    # generator is exactly trace preserving.
-    assert evidence.solver_forward_estimate > 1.0
+    # generator is exactly trace preserving. The residual over a subnormal
+    # conditioning is order one, thirteen decades past the supplied cutoff.
+    assert evidence.solver_forward_estimate >= 1.0
+    assert evidence.solver_forward_estimate > evidence.zero_tolerance
     assert evidence.conditioning_limited is True
     assert evidence.verdict == CONDITIONING_LIMITED
 
@@ -671,6 +675,104 @@ def test_the_two_forward_errors_add_rather_than_compete() -> None:
     straddling = zero_mode_conditioning(_pr127_fixture(), zero_tolerance=between)
     assert straddling.conditioning_limited is True
     assert straddling.verdict == CONDITIONING_LIMITED
+
+
+def test_the_default_keeps_an_exactly_degenerate_stationary_manifold() -> None:
+    """Round-4 review: the default must not contradict "zero SET" conditioning.
+
+    Two-level pure dephasing has spectrum ``[0, 0, -2, -2]``. With no cutoff
+    supplied the fallback used to take the single smallest mode, conditioning
+    one arbitrary vector of a two-dimensional stationary subspace. Every mode
+    exactly tied with the smallest is kept instead -- exact ties need no
+    invented threshold, and a looser one would be a second zero-mode tolerance
+    competing with the certificate's.
+    """
+    L = build_liouvillian(np.zeros((2, 2), dtype=complex), [SIGMA_Z])
+    accepted, certificate = certified_eigvals(L)
+    assert int(np.count_nonzero(np.abs(accepted) == 0.0)) == 2  # the premise
+
+    default = zero_mode_conditioning(L)
+    with_cutoff = zero_mode_conditioning(
+        L, zero_tolerance=certificate.zero_set_tolerance(accepted)
+    )
+    assert default.cluster_size == 2
+    assert default.cluster_size == with_cutoff.cluster_size
+
+
+def test_spectrum_matching_is_permutation_invariant() -> None:
+    """Round-4 review: a lexicographic sort mispairs reordered conjugates.
+
+    ``[i, -i]`` against ``[i - 1e-14, -i + 1e-14]`` is the same pair of modes,
+    well inside the agreement band, but the two sort into opposite orders under
+    ``(real, imag)`` -- the old comparison paired ``i`` with ``-i``, measured a
+    distance of 2, and discarded evidence for a spectrum it should have taken.
+    """
+    audit = np.array([1j, -1j], dtype=complex)
+    accepted = np.array([1j - 1e-14, -1j + 1e-14], dtype=complex)
+
+    matched = _match_spectra(audit, accepted)
+    assert matched is not None
+    _perm, worst = matched
+    assert worst == pytest.approx(1.0e-14, rel=1e-6)
+    assert worst <= _agreement_band(audit, accepted)
+    # A genuinely different spectrum still fails.
+    assert _match_spectra(audit, np.array([1.0, -1.0], dtype=complex))[1] > 1.0
+
+
+def test_scalar_estimates_use_the_selected_mode_not_the_cluster() -> None:
+    """Round-4 review: the cluster MINIMUM coupled the estimate to the cutoff.
+
+    Trace-basis blocks ``1e-10``, ``[[1e-5, 1], [0, 1.00001e-5]]`` and ``-1``.
+    Widening the cutoff leaves the selected stationary eigenvalue at ``1e-10``
+    but pulls in a near-defective pair whose own ``s`` is ~1e-10. Under the
+    round-2 cluster-minimum the structural estimate moved from ``1e-10`` to
+    ``1.0`` -- ten orders of magnitude contributed by modes the stationary one
+    has nothing to do with.
+    """
+    block = np.zeros((4, 4), dtype=complex)
+    block[0, 0] = 1.0e-10
+    block[1, 1] = 1.0e-5
+    block[1, 2] = 1.0
+    block[2, 2] = 1.00001e-5
+    block[3, 3] = -1.0
+    unitary = _basis_with_first(trace_vector(2))
+    L = unitary @ block @ unitary.conj().T
+
+    narrow = zero_mode_conditioning(L, zero_tolerance=1.0e-9)
+    wide = zero_mode_conditioning(L, zero_tolerance=2.0e-5)
+
+    # The cutoff really does change the cluster, so the test is not vacuous ...
+    assert narrow.cluster_size == 1
+    assert wide.cluster_size == 3
+    # ... while selecting the same stationary eigenvalue ...
+    assert narrow.observed_displacement == pytest.approx(
+        wide.observed_displacement, rel=1e-9
+    )
+    # ... so its conditioning and its estimates must not move.
+    assert wide.per_mode_reciprocal_condition == pytest.approx(
+        narrow.per_mode_reciprocal_condition, rel=1e-9
+    )
+    assert wide.structural_forward_estimate == pytest.approx(
+        narrow.structural_forward_estimate, rel=1e-9
+    )
+
+
+def test_zero_set_membership_follows_the_accepted_spectrum() -> None:
+    """Round-4 review: the report filters the accepted spectrum, so must this.
+
+    Two spectra can agree well within the band and still disagree about which
+    modes fall inside the cutoff. The evidence has to describe the set the
+    report filtered, not the set the audit's own solve would have.
+    """
+    L = build_liouvillian(np.zeros((2, 2), dtype=complex), [SIGMA_Z])
+    accepted, certificate = certified_eigvals(L)
+    tol = certificate.zero_set_tolerance(accepted)
+
+    evidence = zero_mode_conditioning(L, zero_tolerance=tol, eigenvalues=accepted)
+    assert evidence.available
+    assert evidence.cluster_size == int(np.count_nonzero(np.abs(accepted) <= tol))
+    # The reported eigenvalue is the accepted one, not the audit solve's.
+    assert complex(evidence.eigenvalue) in set(np.asarray(accepted, dtype=complex))
 
 
 def test_cluster_conditioning_fails_closed_on_unusable_vector_sets() -> None:
