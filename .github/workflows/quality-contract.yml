@@ -35,3 +35,29 @@ jobs:
         run: python .github/scripts/check_agent_branch_triggers.py
       - name: Check documentation claim safety
         run: python .github/scripts/check_claim_safety.py
+
+
+  # Governance integration evidence: run the same contract against the proposed
+  # PR merge so independently valid base/head changes cannot interact unseen.
+  contract-merge:
+    if: ${{ github.event_name == 'pull_request' }}
+    name: quality contract (merge)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout proposed merge
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803  # v6.1.0
+        with:
+          persist-credentials: false
+          # Deliberately no ref: use GitHub's synthetic pull_request merge ref.
+      - name: Set up Python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # v6.2.0
+        with:
+          python-version: "3.12"
+      - name: Check workflow hardening
+        run: python .github/scripts/check_workflow_hardening.py
+      - name: Check documented agent branch trigger coverage
+        run: python .github/scripts/check_agent_branch_triggers.py
+      - name: Check documentation claim safety
+        run: python .github/scripts/check_claim_safety.py
