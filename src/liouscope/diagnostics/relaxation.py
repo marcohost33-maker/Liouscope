@@ -526,8 +526,9 @@ def _evolve(L_super: np.ndarray, rho0: np.ndarray, t_grid: np.ndarray) -> np.nda
         if not np.all(np.isfinite(scaled)):
             raise UnrepresentableTrajectoryError(
                 "relaxation trajectory: L*t contains non-finite entries at "
-                f"t={float(t):.6g}; rescale the generator/time units or supply "
-                "a numerically representable grid"
+                f"t={float(t):.6g}; supply a numerically representable grid or "
+                "use a propagation method designed for this extreme regime. "
+                "A pure rate/time unit rescaling does not help because L*t is invariant."
             )
         try:
             # NumPy errstate does not govern warnings emitted by SciPy's
@@ -541,20 +542,25 @@ def _evolve(L_super: np.ndarray, rho0: np.ndarray, t_grid: np.ndarray) -> np.nda
         except (RuntimeWarning, OverflowError, ValueError, np.linalg.LinAlgError) as exc:
             raise UnrepresentableTrajectoryError(
                 "relaxation trajectory: scipy.linalg.expm could not represent "
-                f"a finite propagator at t={float(t):.6g}; rescale rate/time units"
+                f"a finite propagator at t={float(t):.6g}; use a different "
+                "time window or a structure/action-based propagation method. "
+                "Pure unit rescaling leaves L*t unchanged."
             ) from exc
         if not np.all(np.isfinite(propagator)):
             raise UnrepresentableTrajectoryError(
                 "relaxation trajectory: scipy.linalg.expm returned a non-finite "
                 f"propagator at t={float(t):.6g} although L*t is finite; this "
                 "extreme dynamic range is not representable reliably in the "
-                "current float64 propagation path. Rescale rate/time units."
+                "current float64 dense-expm path. Use a different time window "
+                "or a structure/action-based propagation method; pure unit "
+                "rescaling leaves L*t unchanged."
             )
         rho_vec_t = propagator @ rho_vec0
         if not np.all(np.isfinite(rho_vec_t)):
             raise UnrepresentableTrajectoryError(
                 "relaxation trajectory: the propagated state became non-finite "
-                f"at t={float(t):.6g}; rescale rate/time units"
+                f"at t={float(t):.6g}; change the numerical propagation/window "
+                "rather than only the rate/time units"
             )
         traj[k] = unvec(rho_vec_t, d=d)
     return traj
