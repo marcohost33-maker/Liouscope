@@ -637,44 +637,33 @@ def _fit_with_model(
     model = fns[model_name]
     p0 = seeds[model_name](t, y)
     fit = fit_gls_ar1(model, t, y, p0)
-    # ROUND-18 REVIEW (external, PR #127). ``k`` is the number of parameters
-    # ESTIMATED from this data set. On a non-uniform grid the CAR(1) rate
-    # ``theta`` and the stationary Gaussian variance are both fitted nuisance
-    # parameters: theta is optimized for every candidate and the variance is
-    # profiled at its MLE inside that candidate's likelihood. Counting only
-    # ``p0.size`` there is not a harmless constant offset, because the
-    # small-sample correction ``2k(k+1)/(N_eff-k-1)`` is NONLINEAR in ``k`` --
-    # omitting either nuisance parameter therefore under-penalises the
-    # higher-dimensional candidates (M2/M3b) relative to M0/M1 exactly when
-    # ``N_eff`` is small, which can move the selected relaxation model and with
-    # it the reported A-class.
+    # PR #157 statistical-consistency repair.  AIC/AICc parameter counting is
+    # about parameters estimated from THIS data set, not only the deterministic
+    # mean curve.  Every successful GLS candidate estimates two residual-model
+    # nuisance parameters:
     #
-    # The predicate is ``isfinite(theta_car1)``, i.e. "was theta actually
-    # fitted", not "is the grid non-uniform": ``fit_gls_ar1`` falls back to the
-    # discrete AR(1) treatment when the CAR(1) estimate is degenerate, and no
-    # parameter is estimated in that case that was not estimated before.
+    # * uniform/fallback AR(1): rho plus Gaussian innovation variance;
+    # * non-uniform CAR(1): theta plus stationary Gaussian variance.
     #
-    # The discrete ``rho`` and Gaussian scale of the uniform path are
-    # deliberately NOT counted here. That is the historical convention
-    # (``k`` = mean-function parameters) and it is self-consistent within one
-    # selection, because
-    # uniformity is a property of the GRID and therefore fixed across all
-    # candidates of a single comparison. Changing it would re-rank every
-    # existing uniform-grid result and belongs in its own PR with its own
-    # anchor evidence.
-    k = int(p0.size) + (2 if np.isfinite(fit.theta_car1) else 0)
-    # N_eff must be computed under the SAME residual model the fit whitened
-    # with, or the AICc it feeds compares likelihoods from one model against a
-    # sample size from another. The Geyer IPS estimator sums autocorrelations
-    # indexed by LAG; on a grid whose step varies, lag 1 is not a fixed time
-    # separation, so the sequence it sums is not an autocorrelation function.
-    # The CAR(1) form is exact there and reduces to the same double sum on a
-    # uniform grid. Fail-closed: if it cannot be formed, fall back to Geyer.
+    # The historical k=p convention omitted both on the uniform path and one on
+    # the CAR(1) path.  That is not a harmless constant offset under AICc,
+    # because the small-sample correction is nonlinear in k.
+    k = int(p0.size) + 2
+    # Keep N_eff as diagnostic/uncertainty evidence under the residual model,
+    # but do NOT feed it into model-selection AICc.  The joint Gaussian
+    # likelihood already models the serial covariance.  Hurvich-Tsai derive
+    # small-sample AIC corrections for autoregressive time-series models using
+    # the observed/predictable sample count; replacing that count by an ESS
+    # applies an additional, heuristic dependence penalty on top of the
+    # covariance likelihood.  The score therefore uses the number of observed
+    # time points.  N_eff remains persisted because it is still useful for
+    # uncertainty diagnostics and for auditing correlation strength.
     n_eff = float("nan")
     if np.isfinite(fit.theta_car1):
         n_eff = neff_car1(t, fit.theta_car1)
     if not np.isfinite(n_eff):
         n_eff = estimate_neff_geyer(fit.residuals)
+    aicc_n_obs = float(t.size)
     # Round-17 review (PR #121). ``fit_gls_ar1`` flips ``success`` when the
     # final model evaluation ended inside the magnitude guards -- convergence
     # for the wrong reason, the plateau where every derivative is exactly
@@ -690,7 +679,7 @@ def _fit_with_model(
     # drops non-finite entries, so ``inf`` is the existing vocabulary for
     # "not a candidate"; the fit itself stays in ``fits`` so the report still
     # shows that the model was tried and why it lost.
-    aic = aicc(fit.log_likelihood, k, n_eff) if fit.success else float("inf")
+    aic = aicc(fit.log_likelihood, k, n_obs=aicc_n_obs) if fit.success else float("inf")
     fit_result = FitResult(
         model=model_name,
         params=fit.params,
