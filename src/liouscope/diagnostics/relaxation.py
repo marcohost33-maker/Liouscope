@@ -144,6 +144,18 @@ class UnrepresentableRelaxationWindowError(ValueError):
     """
 
 
+class UnrepresentableTrajectoryError(RuntimeError):
+    """The requested propagation cannot be represented reliably in float64.
+
+    This is distinct from an unrepresentable GRID: the times and ``L*t`` may
+    all be finite while the matrix-exponential algorithm still produces a
+    non-finite propagator at an extreme dynamic range. Returning that trajectory
+    would launder a numerical failure into downstream entropy, fitting and
+    confidence calculations, so the relaxation layer fails closed and asks the
+    caller to rescale the rate/time units.
+    """
+
+
 def default_relaxation_grid(
     gap: float,
     *,
@@ -480,17 +492,59 @@ def samples_per_fast_efolding(
     return _resolution_detail(L_super, t_grid, eigenvalues=eigenvalues)[0]
 
 
+def _decay_fraction_from_resolution(samples_per_efolding: float) -> float:
+    """Fraction decayed across the blind interval from its sampling ratio.
+
+    ``samples_per_efolding = 1 / (rate * blind_interval)``.  When the
+    denominator overflows float64 the representable ratio is exactly 0.0; the
+    physical limit is then complete decay, not a division-by-zero error.
+    ``expm1`` preserves accuracy in the opposite, well-resolved limit.
+    """
+    s = float(samples_per_efolding)
+    if s == 0.0:
+        return 1.0
+    return -float(np.expm1(-1.0 / s))
+
+
 def _evolve(L_super: np.ndarray, rho0: np.ndarray, t_grid: np.ndarray) -> np.ndarray:
-    """Propagate ``rho(t) = expm(L t) rho_0`` and return the trajectory."""
+    """Propagate ``rho(t) = expm(L t) rho_0`` and return the trajectory.
+
+    Fail closed if the requested propagation leaves the representable/numerical
+    range.  A finite input matrix does not imply that scaling-and-squaring can
+    return a finite matrix exponential at an arbitrarily large dimensionless
+    time ``||L t||``.
+    """
     rho_vec0 = vec(rho0)
     d = rho0.shape[0]
     traj = np.empty((t_grid.size, d, d), dtype=complex)
     for k, t in enumerate(t_grid):
         if t == 0.0:
             traj[k] = rho0
-        else:
-            rho_vec_t = sla.expm(L_super * t) @ rho_vec0
-            traj[k] = unvec(rho_vec_t, d=d)
+            continue
+        with np.errstate(over="ignore", invalid="ignore", under="ignore"):
+            scaled = np.asarray(L_super * t)
+        if not np.all(np.isfinite(scaled)):
+            raise UnrepresentableTrajectoryError(
+                "relaxation trajectory: L*t contains non-finite entries at "
+                f"t={float(t):.6g}; rescale the generator/time units or supply "
+                "a numerically representable grid"
+            )
+        with np.errstate(over="ignore", invalid="ignore", under="ignore"):
+            propagator = sla.expm(scaled)
+        if not np.all(np.isfinite(propagator)):
+            raise UnrepresentableTrajectoryError(
+                "relaxation trajectory: scipy.linalg.expm returned a non-finite "
+                f"propagator at t={float(t):.6g} although L*t is finite; this "
+                "extreme dynamic range is not representable reliably in the "
+                "current float64 propagation path. Rescale rate/time units."
+            )
+        rho_vec_t = propagator @ rho_vec0
+        if not np.all(np.isfinite(rho_vec_t)):
+            raise UnrepresentableTrajectoryError(
+                "relaxation trajectory: the propagated state became non-finite "
+                f"at t={float(t):.6g}; rescale rate/time units"
+            )
+        traj[k] = unvec(rho_vec_t, d=d)
     return traj
 
 
@@ -962,17 +1016,7 @@ def compute_relaxation_layer(
             if blind_start == 0.0 and float(t_grid[0]) > 0.0
             else f"sample interval starting at t={blind_start:.4g}"
         )
-        # fast_resolution is 1 / (rate * blind_interval). The product can
-        # overflow even when both factors and the Liouvillian are finite, in
-        # which case the reciprocal is exactly 0.0 in float64. Dividing by
-        # that representation to format a warning must not turn a valid
-        # diagnostic into a ZeroDivisionError. The mathematical limit is
-        # complete decay across the blind interval.
-        decay_fraction = (
-            1.0
-            if fast_resolution == 0.0
-            else -float(np.expm1(-1.0 / fast_resolution))
-        )
+        decay_fraction = _decay_fraction_from_resolution(fast_resolution)
         warnings.warn(
             f"Relaxation layer: the mode at rate {worst_rate:.4g} decays by "
             f"{100.0 * decay_fraction:.1f}% across the "
