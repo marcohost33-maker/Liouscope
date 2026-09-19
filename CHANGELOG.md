@@ -63,6 +63,15 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     the change is not visible in `input_hash`.
 
 ### Fixed
+- **Both Liouvillian builders now fail closed when finite inputs assemble
+  into a non-finite generator (issue #152).** The input gates cannot see
+  overflowing diagonal Hamiltonian differences, dissipator products, or a
+  finite rate multiplying a finite dissipator beyond float64. Dense output is
+  checked entry-by-entry; sparse output is checked on canonical stored data
+  without densifying, including duplicate-entry overflow. Assembly warnings are
+  contained and replaced by the same `ValueError` family as other
+  non-representable inputs. Large but representable controls remain accepted;
+  the run-manifest contract is unchanged.
 - **Stacked pull requests now carry two independent evidence planes:
   proposed-merge evidence in the existing required contexts and submitted-head
   evidence in additional jobs (issue #159 follow-up).** CI, QuTiP and Quality
