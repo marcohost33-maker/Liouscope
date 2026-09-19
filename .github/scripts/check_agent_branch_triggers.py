@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
-"""Keep documented agent branch prefixes and CI push triggers in sync.
+"""Keep documented agent branches and stacked-PR CI coverage in sync.
 
 AGENTS.md is the repository single source of truth for agent branch prefixes.
-The required scientific/quality workflows must run on every one of those
-prefixes so stacked agent PRs can obtain exact-head evidence even when their
-base is not ``main``.
+Required scientific/quality workflows must cover those prefixes on ordinary
+pushes AND must accept pull requests to arbitrary base branches. The latter is
+the reliable path for stacked PR verification: automation-authenticated pushes
+may legitimately suppress recursive GitHub Actions events.
 """
 
 from __future__ import annotations
@@ -60,6 +61,24 @@ def _push_branches(path: Path) -> set[str]:
     raise ValueError(f"{path}: push trigger has no branches list")
 
 
+def _pull_request_is_unfiltered(path: Path) -> bool:
+    """Return True iff pull_request exists and has no base-branch filter."""
+    lines = path.read_text(encoding="utf-8").splitlines()
+    pr_index = next(
+        (i for i, line in enumerate(lines) if line.rstrip() == "  pull_request:"),
+        None,
+    )
+    if pr_index is None:
+        return False
+    for line in lines[pr_index + 1 :]:
+        if line and not line.startswith("    "):
+            break
+        stripped = line.strip()
+        if stripped.startswith("branches:") or stripped.startswith("branches-ignore:"):
+            return False
+    return True
+
+
 def main() -> int:
     errors: list[str] = []
     if not AGENTS.exists():
@@ -86,6 +105,12 @@ def main() -> int:
                 f"{path.relative_to(ROOT)}: push trigger misses documented branches: "
                 + ", ".join(missing)
             )
+        if not _pull_request_is_unfiltered(path):
+            errors.append(
+                f"{path.relative_to(ROOT)}: pull_request must cover arbitrary base "
+                "branches (no branches/branches-ignore filter), so stacked PRs "
+                "receive exact-head CI"
+            )
 
     if errors:
         print("Agent branch trigger contract failed:", file=sys.stderr)
@@ -96,7 +121,7 @@ def main() -> int:
     patterns = ", ".join(sorted(expected))
     print(
         f"Agent branch trigger contract passed for {len(REQUIRED_WORKFLOWS)} "
-        f"workflows: {patterns}"
+        f"workflows with unfiltered stacked-PR coverage: {patterns}"
     )
     return 0
 
