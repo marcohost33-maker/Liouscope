@@ -19,8 +19,17 @@ from liouscope.fitting.neff import (
 from liouscope.fitting.prony import prony_seed
 
 
-def test_aicc_inf_when_neff_too_small():
-    assert np.isinf(aicc(-10.0, 5, 4.0))
+def test_aicc_inf_when_sample_size_too_small():
+    assert np.isinf(aicc(-10.0, 5, n_obs=4.0))
+
+
+def test_aicc_legacy_sample_size_alias_remains_compatible():
+    assert aicc(-10.0, 2, 80.0) == aicc(-10.0, 2, n_obs=80.0)
+
+
+def test_aicc_rejects_two_conflicting_sample_sizes():
+    with pytest.raises(ValueError, match="exactly one"):
+        aicc(-10.0, 2, 40.0, n_obs=80.0)
 
 
 def test_choose_model_picks_smallest_finite():
