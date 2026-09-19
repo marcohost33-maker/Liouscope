@@ -201,8 +201,9 @@ def estimate_car1_theta(t: np.ndarray, residuals: np.ndarray) -> float:
     degenerate zero-variance series) -- fail-closed, so the caller keeps the
     AR(1) path instead of whitening with a fabricated rate. The estimate is
     invariant under a rescaling of the residuals: they are normalised to unit
-    maximum before the likelihood squares them, so a series whose raw sum of
-    squares would underflow float64 is not mistaken for a degenerate one.
+    maximum without recentering, so the estimator keeps the same zero-mean
+    stationary likelihood that the GLS layer reports while avoiding raw
+    sum-of-squares underflow.
     """
     t = np.asarray(t, dtype=float)
     r = np.asarray(residuals, dtype=float)
@@ -213,22 +214,20 @@ def estimate_car1_theta(t: np.ndarray, residuals: np.ndarray) -> float:
     dt = np.diff(t)
     if np.any(dt <= 0.0):
         return float("nan")
-    centred = r - float(np.mean(r))
-    # ROUND-21 REVIEW (external, PR #127). The degeneracy test formed
-    # ``centred . centred``, which UNDERFLOWS to exactly zero for a residual
-    # series with clear relative variation but a small amplitude: the same
-    # 40-point series that gives ``theta = 0.088`` at unit amplitude returned
-    # NaN at ``1e-170``, and ``_profile_nll`` squares the innovations directly,
-    # so its argmin had already begun drifting at ``1e-150`` (measured 4e-7
-    # relative). ``fit_gls_ar1`` then fell back to discrete AR(1), changing the
-    # whitening, N_eff, AICc and the bootstrap interval with the residual
-    # AMPLITUDE alone -- on a quantity, theta, that is independent of it.
-    # Theta IS amplitude-free: the profile likelihood at the closed-form
-    # ``s2_hat`` shifts by ``n log(c^2)`` under ``r -> c r`` and its argmin
-    # does not move. The series is therefore normalised to unit maximum before
-    # anything squares it, and degeneracy is read off the maximum, which
-    # cannot underflow where the entries themselves are representable.
-    amplitude = float(np.max(np.abs(centred)))
+    # PR #157 review: do NOT centre the residual series here.  The fitted
+    # stochastic model is zero-mean AROUND the deterministic mean function, so
+    # subtracting the sample mean changes the probability model and therefore
+    # changes the theta that maximises the stationary likelihood.  Measured on
+    # exact stationary CAR(1) paths from this module, centring displaced the
+    # optimum by factors from O(10) to O(10^3-10^4); pure amplitude
+    # normalisation reproduced the raw-likelihood optimum to round-off.
+    #
+    # The normalisation itself is legitimate and important: the profiled
+    # likelihood changes only by a theta-independent n*log(c^2) term under
+    # r -> c*r, so theta is scale-invariant.  Reading degeneracy from max|r|
+    # also avoids the underflow that the former sum-of-squares test suffered at
+    # amplitudes around 1e-170.
+    amplitude = float(np.max(np.abs(r)))
     if not np.isfinite(amplitude) or amplitude <= 0.0:
         return float("nan")
     r = r / amplitude
