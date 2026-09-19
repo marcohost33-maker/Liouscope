@@ -31,6 +31,8 @@ jobs:
           python-version: "3.12"
       - name: Check workflow hardening
         run: python .github/scripts/check_workflow_hardening.py
+      - name: Test trigger-contract parser adversarially
+        run: python .github/scripts/test_agent_branch_triggers.py
       - name: Check documented agent branch trigger coverage
         run: python .github/scripts/check_agent_branch_triggers.py
       - name: Check documentation claim safety
@@ -57,6 +59,8 @@ jobs:
           python-version: "3.12"
       - name: Check workflow hardening
         run: python .github/scripts/check_workflow_hardening.py
+      - name: Test trigger-contract parser adversarially
+        run: python .github/scripts/test_agent_branch_triggers.py
       - name: Check documented agent branch trigger coverage
         run: python .github/scripts/check_agent_branch_triggers.py
       - name: Check documentation claim safety
