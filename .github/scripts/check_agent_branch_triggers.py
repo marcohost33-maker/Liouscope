@@ -23,6 +23,10 @@ REQUIRED_WORKFLOWS = (
 )
 MERGE_SMOKE_WORKFLOW = ROOT / ".github" / "workflows" / "ci-reusable-pilot.yml"
 MERGE_SMOKE_CALLEE = ROOT / ".github" / "workflows" / "ci-python-local.yml"
+DUAL_EVIDENCE_WORKFLOWS = {
+    ROOT / ".github" / "workflows" / "ci-qutip.yml",
+    ROOT / ".github" / "workflows" / "quality-contract.yml",
+}
 PR_HEAD_REF = "${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}"
 TASK_PREFIX_RE = re.compile(r"`([A-Za-z0-9_-]+)/<task>`")
 
@@ -139,19 +143,43 @@ def _checkout_ref_values(path: Path) -> list[str | None]:
 
 
 def _checks_out_exact_pr_head(path: Path) -> bool:
-    """Every checkout in an exact-head workflow must bind with.ref."""
-    refs = _checkout_ref_values(path)
-    return bool(refs) and all(ref == PR_HEAD_REF for ref in refs)
+    """At least one checkout must bind to the submitted PR head SHA."""
+    return PR_HEAD_REF in _checkout_ref_values(path)
+
+
+def _also_checks_out_proposed_merge(path: Path) -> bool:
+    """At least one checkout must deliberately retain GitHub PR merge semantics."""
+    return None in _checkout_ref_values(path)
+
+
+def _job_level_uses_values(path: Path) -> list[str]:
+    """Return workflow-level job ``uses`` targets, excluding steps/comments."""
+    values: list[str] = []
+    for line in path.read_text(encoding="utf-8").splitlines():
+        code = _yaml_code(line)
+        if not code.strip():
+            continue
+        indent = len(code) - len(code.lstrip(" "))
+        stripped = code.strip()
+        # In this repository a reusable-workflow job property is indented four
+        # spaces under its job id. Step-level uses entries are deeper/list items.
+        if indent == 4 and stripped.startswith("uses:"):
+            values.append(stripped.split(":", 1)[1].strip().strip(chr(34)).strip(chr(39)))
+    return values
 
 
 def _merge_smoke_keeps_default_merge_ref() -> bool:
-    """Pilot calls known callee; its checkout must omit with.ref."""
-    if not MERGE_SMOKE_WORKFLOW.exists() or not MERGE_SMOKE_CALLEE.exists():
+    """Bind merge-smoke verification to the local workflow actually invoked."""
+    if not MERGE_SMOKE_WORKFLOW.exists():
         return False
-    caller = MERGE_SMOKE_WORKFLOW.read_text(encoding="utf-8")
-    if "uses: ./.github/workflows/ci-python-local.yml" not in caller:
+    targets = _job_level_uses_values(MERGE_SMOKE_WORKFLOW)
+    expected = "./.github/workflows/ci-python-local.yml"
+    if targets.count(expected) != 1 or len(targets) != 1:
         return False
-    refs = _checkout_ref_values(MERGE_SMOKE_CALLEE)
+    callee = ROOT / expected.removeprefix("./")
+    if callee != MERGE_SMOKE_CALLEE or not callee.exists():
+        return False
+    refs = _checkout_ref_values(callee)
     return bool(refs) and all(ref is None for ref in refs)
 
 
@@ -189,9 +217,13 @@ def main() -> int:
             )
         if not _checks_out_exact_pr_head(path):
             errors.append(
-                f"{path.relative_to(ROOT)}: checkout must use the exact PR head ref "
-                f"{PR_HEAD_REF!r}; GitHub's default pull_request checkout is the "
-                "synthetic merge commit"
+                f"{path.relative_to(ROOT)}: at least one checkout must use the exact "
+                f"PR head ref {PR_HEAD_REF!r}"
+            )
+        if path in DUAL_EVIDENCE_WORKFLOWS and not _also_checks_out_proposed_merge(path):
+            errors.append(
+                f"{path.relative_to(ROOT)}: must also contain a checkout with no "
+                "with.ref so the proposed pull_request merge is exercised"
             )
 
     if not MERGE_SMOKE_WORKFLOW.exists():
@@ -219,7 +251,7 @@ def main() -> int:
     patterns = ", ".join(sorted(expected))
     print(
         f"Agent branch trigger contract passed for {len(REQUIRED_WORKFLOWS)} "
-        f"exact-head workflows plus merge-smoke coverage: {patterns}"
+        f"exact-head plus required merge-integration coverage: {patterns}"
     )
     return 0
 
