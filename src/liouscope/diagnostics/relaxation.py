@@ -962,9 +962,20 @@ def compute_relaxation_layer(
             if blind_start == 0.0 and float(t_grid[0]) > 0.0
             else f"sample interval starting at t={blind_start:.4g}"
         )
+        # fast_resolution is 1 / (rate * blind_interval). The product can
+        # overflow even when both factors and the Liouvillian are finite, in
+        # which case the reciprocal is exactly 0.0 in float64. Dividing by
+        # that representation to format a warning must not turn a valid
+        # diagnostic into a ZeroDivisionError. The mathematical limit is
+        # complete decay across the blind interval.
+        decay_fraction = (
+            1.0
+            if fast_resolution == 0.0
+            else -float(np.expm1(-1.0 / fast_resolution))
+        )
         warnings.warn(
             f"Relaxation layer: the mode at rate {worst_rate:.4g} decays by "
-            f"{100.0 * (1.0 - np.exp(-1.0 / fast_resolution)):.1f}% across the "
+            f"{100.0 * decay_fraction:.1f}% across the "
             f"largest gap the grid leaves before it ({span_kind} = "
             f"{blind:.4g}, {fast_resolution:.3g} samples per e-folding), so it "
             "is stepped over rather than measured. The reported rates describe "
