@@ -529,8 +529,20 @@ def _evolve(L_super: np.ndarray, rho0: np.ndarray, t_grid: np.ndarray) -> np.nda
                 f"t={float(t):.6g}; rescale the generator/time units or supply "
                 "a numerically representable grid"
             )
-        with np.errstate(over="ignore", invalid="ignore", under="ignore"):
-            propagator = sla.expm(scaled)
+        try:
+            # NumPy errstate does not govern warnings emitted by SciPy's
+            # scaling-and-squaring implementation.  Convert those numerical
+            # warnings into the same domain error so pytest's warnings-as-errors
+            # policy and ordinary callers see one deterministic failure mode.
+            with warnings.catch_warnings():
+                warnings.filterwarnings("error", category=RuntimeWarning)
+                with np.errstate(over="ignore", invalid="ignore", under="ignore"):
+                    propagator = sla.expm(scaled)
+        except (RuntimeWarning, OverflowError, ValueError, np.linalg.LinAlgError) as exc:
+            raise UnrepresentableTrajectoryError(
+                "relaxation trajectory: scipy.linalg.expm could not represent "
+                f"a finite propagator at t={float(t):.6g}; rescale rate/time units"
+            ) from exc
         if not np.all(np.isfinite(propagator)):
             raise UnrepresentableTrajectoryError(
                 "relaxation trajectory: scipy.linalg.expm returned a non-finite "
