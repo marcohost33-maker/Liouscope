@@ -185,3 +185,89 @@ def test_bootstrap_failure_yields_nan_ci_not_zero_width():
             result = compute_relaxation_layer(L, rho_initial=rho0, bootstrap_B=10, seed=1)
     lo, hi = result.bca_ci_beta
     assert np.isnan(lo) and np.isnan(hi)
+    assert result.interval_method == "unavailable"
+
+
+def test_bootstrap_interval_method_reports_bc_without_acceleration():
+    """Default 80-point path must say BC, not the legacy BCa label."""
+    from unittest import mock
+
+    from liouscope.diagnostics.relaxation import compute_relaxation_layer
+
+    lower = np.array([[0, 1], [0, 0]], dtype=complex)
+    L = build_liouvillian(np.zeros((2, 2), dtype=complex), [lower], [0.4])
+    plus = np.array([1, 1], dtype=complex) / np.sqrt(2)
+    rho0 = np.outer(plus, plus.conj())
+
+    def fake_bootstrap(model, t, y, p0, **kwargs):
+        p = np.asarray(p0, dtype=float)
+        return np.tile(p, (8, 1)), p
+
+    def fake_ci(samples, theta_hat, **kwargs):
+        p = np.asarray(theta_hat, dtype=float)
+        return np.column_stack([p * 0.9, p * 1.1])
+
+    with (
+        mock.patch(
+            "liouscope.diagnostics.relaxation.parametric_bootstrap",
+            side_effect=fake_bootstrap,
+        ),
+        mock.patch(
+            "liouscope.diagnostics.relaxation._jackknife",
+            side_effect=AssertionError("default n=80 must not run acceleration jackknife"),
+        ),
+        mock.patch(
+            "liouscope.diagnostics.relaxation.bca_ci",
+            side_effect=fake_ci,
+        ),
+    ):
+        result = compute_relaxation_layer(L, rho_initial=rho0, seed=1)
+
+    assert result.t_grid.size == 80
+    assert result.interval_method == "BC"
+
+
+def test_bootstrap_interval_method_reports_bca_when_jackknife_runs():
+    """A supplied short grid that executes acceleration must say BCa."""
+    from unittest import mock
+
+    from liouscope.diagnostics.relaxation import compute_relaxation_layer
+
+    lower = np.array([[0, 1], [0, 0]], dtype=complex)
+    L = build_liouvillian(np.zeros((2, 2), dtype=complex), [lower], [0.4])
+    plus = np.array([1, 1], dtype=complex) / np.sqrt(2)
+    rho0 = np.outer(plus, plus.conj())
+    t_grid = np.linspace(0.0, 10.0, 40)
+
+    def fake_bootstrap(model, t, y, p0, **kwargs):
+        p = np.asarray(p0, dtype=float)
+        return np.tile(p, (8, 1)), p
+
+    def fake_jackknife(model, t, y, theta_hat, bounds):
+        p = np.asarray(theta_hat, dtype=float)
+        return np.tile(p, (t.size, 1))
+
+    def fake_ci(samples, theta_hat, *, jackknife_estimates=None, **kwargs):
+        assert jackknife_estimates is not None
+        p = np.asarray(theta_hat, dtype=float)
+        return np.column_stack([p * 0.9, p * 1.1])
+
+    with (
+        mock.patch(
+            "liouscope.diagnostics.relaxation.parametric_bootstrap",
+            side_effect=fake_bootstrap,
+        ),
+        mock.patch(
+            "liouscope.diagnostics.relaxation._jackknife",
+            side_effect=fake_jackknife,
+        ),
+        mock.patch(
+            "liouscope.diagnostics.relaxation.bca_ci",
+            side_effect=fake_ci,
+        ),
+    ):
+        result = compute_relaxation_layer(
+            L, rho_initial=rho0, t_grid=t_grid, seed=1
+        )
+
+    assert result.interval_method == "BCa"
