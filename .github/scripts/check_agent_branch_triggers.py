@@ -31,12 +31,12 @@ EVIDENCE_JOBS = {
 PR_HEAD_REF = "${{ github.event.pull_request.head.sha }}"
 PR_ONLY_IF = "${{ github.event_name == 'pull_request' }}"
 TASK_PREFIX_RE = re.compile(r"`([A-Za-z0-9_-]+)/<task>`")
-BLOCK_SCALAR_RE = re.compile(r"[:=-]\s*[|>][+-]?\s*$")
+BLOCK_SCALAR_RE = re.compile(r"[:=-]\s*[|>](?:[1-9][+-]?|[+-][1-9]?|)\s*$")
 
 
 def _display_path(path: Path) -> str:
     try:
-        return str(_display_path(path))
+        return str(path.relative_to(ROOT))
     except ValueError:
         return str(path)
 
@@ -71,8 +71,21 @@ def _structural_lines(path: Path) -> list[tuple[int, int, str]]:
             scalar_indent = indent
     return out
 
-def _push_branches(path: Path) -> set[str]:
+def _on_block_lines(path: Path) -> list[tuple[int, int, str]]:
+    """Return only children of the top-level on mapping."""
     lines = _structural_lines(path)
+    for i, (_, indent, stripped) in enumerate(lines):
+        if indent == 0 and stripped == "on:":
+            out: list[tuple[int, int, str]] = []
+            for item in lines[i + 1 :]:
+                if item[1] == 0:
+                    break
+                out.append(item)
+            return out
+    return []
+
+def _push_branches(path: Path) -> set[str]:
+    lines = _on_block_lines(path)
     for i, (_, indent, stripped) in enumerate(lines):
         if indent == 2 and stripped == "push:":
             for _, child_indent, child in lines[i + 1 :]:
@@ -90,7 +103,7 @@ def _push_branches(path: Path) -> set[str]:
                         if item.strip()
                     }
             raise ValueError(f"{path}: push trigger has no branches list")
-    raise ValueError(f"{path}: missing top-level push trigger")
+    raise ValueError(f"{path}: missing top-level on.push trigger")
 
 def _yaml_code(line: str) -> str:
     """Return the structural part of a simple repository workflow line."""
@@ -98,8 +111,8 @@ def _yaml_code(line: str) -> str:
 
 
 def _pull_request_is_unfiltered(path: Path) -> bool:
-    """Require default PR activity coverage with no base/path suppression."""
-    lines = _structural_lines(path)
+    """Require top-level on.pull_request with no suppression filters."""
+    lines = _on_block_lines(path)
     forbidden = ("branches:", "branches-ignore:", "paths:", "paths-ignore:", "types:")
     for i, (_, indent, stripped) in enumerate(lines):
         if indent == 2 and stripped == "pull_request:":
@@ -154,12 +167,15 @@ def _job_specs(path: Path) -> dict[str, dict[str, object]]:
             continue
         if indent == 2 and stripped.endswith(":") and not stripped.startswith("-"):
             current = stripped[:-1]
-            jobs[current] = {"if": None, "uses": [], "refs": []}
+            jobs[current] = {"if": None, "needs": None, "uses": [], "refs": []}
             continue
         if current is None:
             continue
         if indent == 4 and stripped.startswith("if:"):
             jobs[current]["if"] = stripped.split(":", 1)[1].strip()
+            continue
+        if indent == 4 and stripped.startswith("needs:"):
+            jobs[current]["needs"] = stripped.split(":", 1)[1].strip()
             continue
         if indent == 4 and stripped.startswith("uses:"):
             uses = jobs[current]["uses"]
@@ -202,6 +218,8 @@ def _evidence_job_errors(path: Path) -> list[str]:
     else:
         if required["if"] is not None:
             errors.append(f"{_display_path(path)}:{required_id}: required job must not be conditional")
+        if required["needs"] is not None:
+            errors.append(f"{_display_path(path)}:{required_id}: required job must not depend on another job")
         if required["refs"] != [None]:
             errors.append(f"{_display_path(path)}:{required_id}: required job must have one default-ref checkout")
     head = jobs.get(head_id)
@@ -210,6 +228,8 @@ def _evidence_job_errors(path: Path) -> list[str]:
     else:
         if head["if"] != PR_ONLY_IF:
             errors.append(f"{_display_path(path)}:{head_id}: exact-head job must be PR-only")
+        if head["needs"] is not None:
+            errors.append(f"{_display_path(path)}:{head_id}: exact-head job must not depend on another job")
         if head["refs"] != [PR_HEAD_REF]:
             errors.append(f"{_display_path(path)}:{head_id}: exact-head checkout is not bound to PR head")
     return errors
