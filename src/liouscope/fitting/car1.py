@@ -139,26 +139,36 @@ def whiten_car1_log_jacobian(t: np.ndarray, theta: float) -> float:
 def _profile_nll(
     theta: float, dt: np.ndarray, r0: np.ndarray, r1: np.ndarray
 ) -> float:
-    """Negative log-likelihood of the CAR(1) step, profiled over ``s^2``.
+    """Stationary exact CAR(1) negative log-likelihood, profiled over ``s^2``.
 
-    ``-2 log L = (n-1) log s2_hat + sum_k log(1 - a_k^2) + const`` after
-    substituting the closed-form maximiser
-    ``s2_hat = mean_k[(r_k - a_k r_{k-1})^2 / (1 - a_k^2)]``.
+    The fitted residual process and :func:`car1_resample` are stationary, so
+    observation 0 belongs to the likelihood instead of being conditioned away.
+    With ``w_0 = r_0`` and standardized transition innovations ``w_k``,
+    profiling the stationary variance gives
+
+    ``-2 log L = n log s2_hat + sum_k log(1 - a_k^2) + const``,
+
+    where ``s2_hat = (r_0^2 + sum_k w_k^2) / n``. This is the same joint
+    likelihood that :func:`liouscope.fitting.gls.fit_gls_ar1` reports to
+    AICc, so the CAR(1) rate is optimized against the objective AICc consumes.
     """
     a = np.exp(-theta * dt)
     var = np.maximum(1.0 - a * a, _VAR_FLOOR)
     innov = r1 - a * r0
-    s2 = float(np.mean(innov * innov / var))
+    scaled_ss = float(r0[0] * r0[0] + np.sum(innov * innov / var))
+    n = int(dt.size + 1)
+    s2 = scaled_ss / float(n)
     if not np.isfinite(s2) or s2 <= 0.0:
         return float("inf")
-    return float(dt.size * np.log(s2) + np.sum(np.log(var)))
+    return float(n * np.log(s2) + np.sum(np.log(var)))
 
 
 def estimate_car1_theta(t: np.ndarray, residuals: np.ndarray) -> float:
-    """Conditional-MLE relaxation rate ``theta`` of a CAR(1) residual series.
+    """Stationary exact-MLE relaxation rate ``theta`` of a CAR(1) residual series.
 
-    Maximises the exact one-step Gaussian likelihood over ``theta`` with the
-    stationary variance profiled out (see :func:`_profile_nll`). A coarse
+    Maximises the same stationary joint Gaussian likelihood that the GLS layer
+    reports to AICc, with the stationary variance profiled out (see
+    :func:`_profile_nll`). A coarse
     logarithmic sweep locates the basin before the bounded refinement: the
     search interval spans the whole range of steps present in the grid -- on a
     two-scale grid that is many decades -- and a bare local solver seeded at
