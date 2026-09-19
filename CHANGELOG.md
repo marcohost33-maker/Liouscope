@@ -24,10 +24,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   certificate band cannot say whether a stationary eigenvalue away from zero is
   a failed eigensolve or the correctly located zero of an operator that is only
   approximately trace preserving. Measured on the 4x4 fixture from the
-  2026-09-11 external review of PR #127: trace defect `1.4146e-14`, certificate
+  2026-09-11 external review of PR #127: perturbation norm `||q^H L|| =
+  1.0000e-14` (the raw `||vec(I)^H L||` over `sqrt(d)`, which is the
+  minimum-norm correction that makes the operator trace preserving), certificate
   band `4.4409e-13`, observed displacement `1.0000e-07` -- the band
-  under-predicts by `2.25e5x`, while `defect / s` with `s = 2.0e-07` gives
-  `7.07e-08`, off by `1.41x`.
+  under-predicts by `2.25e5x`, while `||q^H L|| / s` with `s = 2.0e-07` gives
+  `5.00e-08`, off by a factor of two.
 
   Why `|y^H x|` and not LAPACK `RCONDE`, as issue #117 proposed. First, it is
   unreachable: SciPy wraps no `?geevx` (measured on 1.17.1 --
@@ -47,16 +49,30 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   has exactly that shape and is physical, so a per-mode gate would withhold on a
   healthy generator.
 
-  What it does NOT catch, pinned by a negative-control test so no later change
-  can quietly claim otherwise: the stiff #112 deflation failure is invisible to
-  conditioning. Across rate spreads `1e8..1e15` every per-mode `s` stays at
-  `0.707`, i.e. the solver reports a wrong spectrum as well conditioned.
-  Conditioning is therefore ADDITIVE to the structural certificate, which is
-  also why this change promotes it to no gate; issue #117 step 4 stays open
-  until a certified-yet-misconditioned generator is exhibited. Across sixteen
-  physical GKSL generators (`gamma` and `omega` each over four decades) the
-  worst reciprocal condition is `0.707` and no run is reported as
+  What it does NOT catch, pinned by a negative-control test whose premise is
+  established first: the stiff #112 deflation failure is invisible to
+  conditioning. On the canonical four-level network raw `zgeev` loses the zero
+  mode -- `7.28e-06` against a certificate band of `8.48e-08`, repaired by
+  `dgeev-real` to `4.08e-17` -- and conditioning that wrong spectrum gives
+  `s = 0.29` for the stationary mode and `0.040` at worst, i.e. condition
+  numbers between 1 and 25. That range independently reproduces the 2026-08-25
+  measurement already recorded in `linalg.py`. Conditioning is therefore
+  ADDITIVE to the structural certificate, which is also why this change promotes
+  it to no gate; issue #117 step 4 stays open until a
+  certified-yet-misconditioned generator is exhibited. Across sixteen physical
+  GKSL generators (`gamma` and `omega` each over four decades) the worst
+  reciprocal condition is `0.707` and no run is reported as
   conditioning-limited, so the evidence costs no false alarm.
+
+  For the same reason the audit refuses to describe a spectrum it did not
+  reproduce. `zero_mode_conditioning(..., eigenvalues=...)` compares its own
+  solve against the spectrum the caller will report and returns
+  `available=False, reason="accepted_spectrum_mismatch"` when they disagree,
+  because `certified_eigvals` may have repaired through a different LAPACK
+  route: on that same network the audit would otherwise have published the
+  conditioning of `7.28e-06` beside a reported stationary eigenvalue of
+  `4.08e-17`. A side length that cannot be a superoperator, and a negative
+  `zero_tolerance`, are likewise refused rather than answered.
   `benchmarks/issue117_zero_mode_conditioning.py` reproduces every figure above.
 - **Trace-preserving generators can be restricted to the traceless operator
   space by an exact structural identity, with no eigenvalue-magnitude

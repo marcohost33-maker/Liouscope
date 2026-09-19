@@ -16,8 +16,9 @@ A  the non-normal 4x4 fixture from the 2026-09-11 external review of PR #127:
 B  a diagonal similarity that leaves the spectrum invariant: whose operator is
    being conditioned, the caller's or a balanced surrogate's?
 C  near-degenerate clusters: per-mode ``s`` against the subspace ``sigma_min``.
-D  the stiff #112 family: the NEGATIVE control -- conditioning must be shown to
-   miss this, so no later change claims otherwise.
+D  the canonical stiff #112 network: the NEGATIVE control -- its premise (raw
+   zgeev really loses the zero mode) is established first, then conditioning is
+   shown to miss it, so no later change claims otherwise.
 E  physical GKSL generators across four decades of rate and drive: is there a
    false ``CONDITIONING_LIMITED`` to pay for?
 """
@@ -35,12 +36,30 @@ from liouscope.numerics.conditioning import (
     eigenvalue_conditioning,
     zero_mode_conditioning,
 )
-from liouscope.numerics.linalg import certified_eigvals, trace_preservation_defect
+from liouscope.numerics.linalg import (
+    certified_eigvals,
+    eig_nonhermitian,
+    trace_preservation_defect,
+)
 from liouscope.numerics.traceless import trace_vector
 
 SIGMA_MINUS = np.array([[0.0, 1.0], [0.0, 0.0]], dtype=complex)
 SIGMA_Z = np.array([[1.0, 0.0], [0.0, -1.0]], dtype=complex)
 SIGMA_X = np.array([[0.0, 1.0], [1.0, 0.0]], dtype=complex)
+
+# The canonical #112 repro (tests/test_spectral_certificate.py): raw zgeev
+# loses the zero mode here and the certificate repairs via dgeev-real.
+STIFF_PAIRS = [(0, 3), (0, 2), (1, 0), (3, 2), (2, 1)]
+STIFF_RATES = [7.28e-6, 3.67e-5, 1.53e-5, 2.70e5, 1.42e-5]
+
+
+def _classical_network(pairs, rates, d=4):
+    jumps = []
+    for to, frm in pairs:
+        jump = np.zeros((d, d), dtype=complex)
+        jump[to, frm] = 1.0
+        jumps.append(jump)
+    return build_liouvillian(np.zeros((d, d), dtype=complex), jumps, rates)
 
 
 def _rule(title: str) -> None:
@@ -69,7 +88,9 @@ def family_a() -> None:
     L = _pr127_fixture()
     defect, _scale = trace_preservation_defect(L)
     _values, certificate = certified_eigvals(L)
-    evidence = zero_mode_conditioning(L, zero_tolerance=certificate.bound)
+    evidence = zero_mode_conditioning(
+        L, zero_tolerance=certificate.bound, eigenvalues=_values
+    )
     observed = evidence.observed_displacement
     print(f"  trace-preservation defect ||q^H L||   {defect:.4e}")
     print(f"  certificate band rtol*eps*||L||_2     {certificate.bound:.4e}")
@@ -87,8 +108,10 @@ def family_a() -> None:
 def family_b() -> None:
     _rule("B  diagonal similarity: spectrum invariant, conditioning is not")
     rng = np.random.default_rng(7)
-    A = rng.standard_normal((6, 6)) + 1j * rng.standard_normal((6, 6))
-    scaling = np.diag(np.float64([1e-6, 1e-3, 1.0, 1e3, 1e6, 1e9]))
+    A = rng.standard_normal((9, 9)) + 1j * rng.standard_normal((9, 9))
+    scaling = np.diag(
+        np.float64([1e-6, 1e-4, 1e-2, 1.0, 1e2, 1e4, 1e6, 1e8, 1e9])
+    )
     scaled = scaling @ A @ np.linalg.inv(scaling)
     plain = zero_mode_conditioning(A)
     similar = zero_mode_conditioning(scaled)
@@ -119,19 +142,36 @@ def family_c() -> None:
 
 
 def family_d() -> None:
-    _rule("D  NEGATIVE CONTROL: the stiff #112 family is benign to conditioning")
-    print(f"  {'rate spread':>12} {'min|lambda|':>13} {'min s (all modes)':>19} {'verdict':>20}")
-    for spread in (1e8, 1e11, 1e13, 1e15):
-        L = build_liouvillian(
-            np.zeros((2, 2), dtype=complex),
-            [math.sqrt(spread) * SIGMA_MINUS, SIGMA_Z],
-        )
-        evidence = zero_mode_conditioning(L)
-        print(f"  {spread:12.0e} {evidence.observed_displacement:13.3e} "
-              f"{evidence.spectrum_min_reciprocal_condition:19.3f} {evidence.verdict:>20}")
-    print("  -> the Ahues-Tisseur deflation destroys the slow spectrum before")
-    print("     any conditioning estimate can see it. Conditioning is ADDITIVE")
-    print("     to the structural certificate, never a replacement.")
+    _rule("D  NEGATIVE CONTROL: the canonical stiff #112 network")
+    L = _classical_network(STIFF_PAIRS, STIFF_RATES)
+    raw = eig_nonhermitian(np.asarray(L, dtype=complex)).eigenvalues
+    accepted, certificate = certified_eigvals(L)
+    print("  PREMISE -- the raw solve must actually fail, or there is nothing to miss:")
+    print(f"    raw zgeev min|lambda|      {float(np.abs(raw).min()):.4e}")
+    print(f"    certificate band           {certificate.bound:.4e}")
+    print(f"    zero mode lost by zgeev?   {float(np.abs(raw).min()) > certificate.bound}")
+    print(f"    accepted route             {certificate.solver}, "
+          f"min|lambda| {float(np.abs(accepted).min()):.4e}")
+    evidence = zero_mode_conditioning(L)
+    print("  CONTROL -- what conditioning says about that WRONG spectrum:")
+    print(f"    conditioned eigenvalue     {evidence.observed_displacement:.4e}")
+    print(f"    s(lambda_0)                {evidence.reciprocal_condition:.4f}")
+    print(f"    worst s over the spectrum  {evidence.spectrum_min_reciprocal_condition:.4f}"
+          f"  (condition number "
+          f"{1.0 / evidence.spectrum_min_reciprocal_condition:.1f})")
+    print("    -> condition numbers 1-25: the wrong spectrum is WELL conditioned,")
+    print("       the same range recorded in linalg.py on 2026-08-25. The")
+    print("       Ahues-Tisseur deflation destroys the slow spectrum before any")
+    print("       conditioning estimate can see it.")
+    guarded = zero_mode_conditioning(
+        L,
+        zero_tolerance=certificate.zero_set_tolerance(accepted),
+        eigenvalues=accepted,
+    )
+    print(f"  GUARD -- with the accepted spectrum handed in: available="
+          f"{guarded.available}, reason={guarded.reason!r}")
+    print("       the audit refuses rather than describe a spectrum the report")
+    print("       does not contain (PR #166 review).")
 
 
 def family_e() -> None:
@@ -146,7 +186,9 @@ def family_e() -> None:
             )
             values, certificate = certified_eigvals(L)
             evidence = zero_mode_conditioning(
-                L, zero_tolerance=certificate.zero_set_tolerance(values)
+                L,
+                zero_tolerance=certificate.zero_set_tolerance(values),
+                eigenvalues=values,
             )
             ratio = float(np.linalg.norm(L, 2) / max(np.abs(values).max(), 1e-300))
             worst = min(worst, evidence.reciprocal_condition)

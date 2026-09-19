@@ -32,9 +32,12 @@ of that eigenvalue. First-order perturbation theory for a simple eigenvalue
     ``|lambda(L + E) - lambda| <= ||E||_2 / s(lambda) + O(||E||^2)``,
     ``s(lambda) = |y^H x|``  in ``(0, 1]``,
 
-so ``s`` is the reciprocal eigenvalue condition number. On the fixture above
-``s = 2.000e-07`` and ``defect / s = 7.07e-08`` -- the observed 1.00e-07, within
-a factor 1.41. That is the quantity this module reports.
+so ``s`` is the reciprocal eigenvalue condition number. The perturbation ``E``
+in question is the minimum-norm correction that makes ``L`` trace preserving,
+``E = -q (q^H L)`` with ``q`` a UNIT vector, so ``||E||_2 = ||q^H L||_2`` -- the
+raw defect above divided by ``sqrt(d)``. On that fixture ``s = 2.000e-07`` and
+``||E|| / s = 5.00e-08`` against the observed ``1.00e-07``, a factor of 2. That
+is the quantity this module reports.
 
 Why ``|y^H x|`` and not LAPACK ``RCONDE``
 -----------------------------------------
@@ -85,14 +88,22 @@ as evidence, never as the verdict.
 
 What this instrument does NOT catch
 -----------------------------------
-The stiff deflation failure of issue #112 is invisible to conditioning: on the
-two-level family with rate spread 1e8..1e15 the per-mode ``s`` of EVERY mode
-stays at 0.707 (measured), i.e. the solver reports a wrong spectrum as perfectly
-well conditioned, because the information was destroyed by the Ahues-Tisseur
-deflation before any conditioning estimate could see it. This matches the
-2026-08-25 measurement recorded in ``linalg.py`` (condition numbers 1-25 on the
-wrong spectrum). Conditioning evidence is therefore ADDITIVE to the structural
-certificate and no substitute for it -- which is also why it changes no filter.
+The stiff deflation failure of issue #112 is invisible to conditioning. On the
+canonical four-level network (``tests/test_spectral_certificate.py``) raw
+``zgeev`` loses the zero mode -- it returns ``7.28e-06`` against a certificate
+band of ``8.48e-08``, and ``dgeev-real`` repairs it to ``4.08e-17``. Conditioning
+that WRONG spectrum gives ``s = 0.29`` for the stationary mode and ``0.040`` at
+worst over the whole spurious spectrum, i.e. condition numbers between 1 and 25:
+the solver reports a wrong answer as well conditioned, because the information
+was destroyed by the Ahues-Tisseur deflation before any conditioning estimate
+could see it. That range independently reproduces the 2026-08-25 measurement
+already recorded in ``linalg.py``. Conditioning evidence is therefore ADDITIVE to
+the structural certificate and no substitute for it -- which is also why it
+changes no filter.
+
+For the same reason the audit refuses to describe a spectrum it did not
+reproduce: pass the accepted ``eigenvalues`` and a repaired spectrum yields
+``available=False`` rather than the raw solve's conditioning (PR #166 review).
 """
 
 from __future__ import annotations
@@ -105,7 +116,7 @@ from dataclasses import dataclass
 import numpy as np
 import scipy.linalg as sla
 
-from .._consts import CONDITIONING_AGREEMENT_FACTOR
+from .._consts import CONDITIONING_AGREEMENT_FACTOR, ZERO_MODE_EPS_FACTOR
 from .linalg import require_finite_square_2d, trace_preservation_defect
 from .norms import scaled_euclidean_norm
 
@@ -264,7 +275,9 @@ class ZeroModeConditioning:
     left_residual: float
     #: Distance from the zero set to the nearest eigenvalue outside it.
     separation: float
-    #: ``||vec(I)^H L|| / sqrt(d)``: the structural backward error.
+    #: ``||q^H L|| = ||vec(I)^H L|| / sqrt(d)`` with ``q`` the UNIT trace
+    #: vector: the norm of the minimum-norm perturbation that would make
+    #: the operator exactly trace preserving.
     trace_defect: float
     #: ``max(right_residual, left_residual) / s`` -- how far the SOLVER can have
     #: moved this eigenvalue.
@@ -364,38 +377,99 @@ def _divide_by_conditioning(numerator: float, s: float) -> float:
     return float(numerator / s)
 
 
+def _spectra_agree(audit: np.ndarray, accepted: np.ndarray) -> bool:
+    """Whether the audit's own solve reproduced the spectrum being reported.
+
+    PR #166 review, finding P2. The audit runs its own ``?geev`` to obtain the
+    left/right pair it needs, but :func:`..linalg.certified_eigvals` may have
+    REPAIRED the spectrum through a different LAPACK route. Measured on the
+    canonical stiff #112 network: the certificate accepts ``dgeev-real`` with a
+    stationary eigenvalue at ``4.08e-17``, while a raw ``zgeev`` on the same
+    operator returns the spurious ``7.28e-06`` that issue #112 exists to reject.
+    Conditioning evidence computed from the second describes a spectrum the
+    report does not contain, which is worse than no evidence.
+
+    The comparison is on the numbers, not on the solver name, so a future repair
+    route that happens to reproduce the spectrum still yields usable evidence.
+    Both are sorted lexicographically, which keeps a degenerate cluster
+    together, and compared against the library's own "indistinguishable at
+    double precision" band ``ZERO_MODE_EPS_FACTOR * eps * max|lambda|`` (issue
+    #108) rather than a tolerance invented here. A false disagreement only
+    withholds an audit; a false agreement publishes the wrong spectrum's
+    conditioning, so the strict direction is the safe one.
+    """
+    if audit.size != accepted.size:
+        return False
+    if audit.size == 0:
+        return True
+    scale = max(float(np.abs(audit).max()), float(np.abs(accepted).max()))
+    if not np.isfinite(scale):
+        return False
+    if scale == 0.0:
+        return True
+    band = ZERO_MODE_EPS_FACTOR * float(np.finfo(float).eps) * scale
+    order_a = np.lexsort((np.imag(audit), np.real(audit)))
+    order_b = np.lexsort((np.imag(accepted), np.real(accepted)))
+    return bool(np.all(np.abs(audit[order_a] - accepted[order_b]) <= band))
+
+
 def zero_mode_conditioning(
     L_super: np.ndarray,
     *,
     zero_tolerance: float | None = None,
+    eigenvalues: np.ndarray | None = None,
 ) -> ZeroModeConditioning:
     """Measure the conditioning of the stationary mode of ``L_super``.
 
     AUDIT ONLY: the return value is evidence attached to a report, never a
-    threshold. The function is total on finite square input -- an eigensolve
-    that fails comes back as :meth:`ZeroModeConditioning.unavailable`, not as an
-    exception, because an audit that can abort the analysis it audits is a
-    liability rather than evidence.
+    threshold. The function is total on the OPERATOR argument -- unusable input
+    and a failed eigensolve come back as
+    :meth:`ZeroModeConditioning.unavailable`, not as an exception, because an
+    audit that can abort the analysis it audits is a liability rather than
+    evidence. A malformed KEYWORD is a caller contract violation and does raise,
+    as in :func:`eigenvalue_conditioning`.
 
     ``zero_tolerance`` is the cutoff the layer's own filters apply, supplied so
     the report can state whether the conditioning-scaled displacement fits
-    inside it. When it is omitted the comparison degrades to
-    ``conditioning_limited=False`` and ``displacement_explained=None``; nothing
-    downstream depends on either.
+    inside it. It must be non-negative: a negative cutoff admits no eigenvalue
+    to the zero set at all and then labels even an exact, well-conditioned zero
+    mode ``CONDITIONING_LIMITED``, which is valid-looking nonsense. When it is
+    omitted the comparison degrades to ``conditioning_limited=False`` and
+    ``displacement_explained=None``; nothing downstream depends on either.
+
+    ``eigenvalues`` is the spectrum the caller is actually going to report.
+    Supply it whenever one exists: the audit then refuses rather than describe a
+    spectrum the report does not contain (see :func:`_spectra_agree`).
     """
+    if zero_tolerance is not None and zero_tolerance < 0.0:
+        raise ValueError(
+            f"zero_tolerance must be non-negative, got {zero_tolerance!r}"
+        )
     try:
         L = require_finite_square_2d(L_super, name="L_super")
     except (TypeError, ValueError):
         return ZeroModeConditioning.unavailable("input_not_finite_square")
     L = np.asarray(L, dtype=complex)
-    if L.shape[0] == 0:
+    n = L.shape[0]
+    if n == 0:
         return ZeroModeConditioning.unavailable("empty_operator")
+    # PR #166 review, finding P2. A square side that is not ``d * d`` is not a
+    # superoperator, so ``vec(I)^H L = 0`` is not a statement about it and
+    # ``trace_preservation_defect`` returns NaN. Continuing published
+    # ``available=True`` / ``verdict="BENIGN"`` on top of a structural estimate
+    # that does not exist -- a benign-looking verdict resting on nothing.
+    dim = int(round(np.sqrt(n)))
+    if dim * dim != n:
+        return ZeroModeConditioning.unavailable("dimension_not_a_superoperator")
     with _quiet_arithmetic():
-        return _measure(L, zero_tolerance)
+        return _measure(L, zero_tolerance, eigenvalues, dim)
 
 
 def _measure(
-    L: np.ndarray, zero_tolerance: float | None
+    L: np.ndarray,
+    zero_tolerance: float | None,
+    accepted: np.ndarray | None,
+    dim: int,
 ) -> ZeroModeConditioning:
     """The measurement itself, always called inside :func:`_quiet_arithmetic`."""
     try:
@@ -405,6 +479,10 @@ def _measure(
     values = np.asarray(values)
     if values.size == 0 or not np.all(np.isfinite(values)):
         return ZeroModeConditioning.unavailable("nonfinite_spectrum")
+    if accepted is not None:
+        accepted = np.asarray(accepted).ravel()
+        if not np.all(np.isfinite(accepted)) or not _spectra_agree(values, accepted):
+            return ZeroModeConditioning.unavailable("accepted_spectrum_mismatch")
 
     per_mode = eigenvalue_conditioning(right, left)
     magnitudes = np.abs(values)
@@ -442,7 +520,16 @@ def _measure(
         if outside.size
         else float("inf")
     )
-    defect, _scale = trace_preservation_defect(L)
+    # PR #166 review, finding P2. ``trace_preservation_defect`` returns
+    # ``||vec(I)^H L||`` with an UNNORMALISED ``vec(I)``, while the perturbation
+    # this bound is about is the minimum-norm correction ``E = -q (q^H L)`` that
+    # makes ``L`` trace preserving, with ``q = vec(I)/sqrt(d)`` a UNIT vector.
+    # Since ``||E||_2 = ||q^H L||_2 = ||vec(I)^H L|| / sqrt(d)``, dividing the
+    # raw defect by ``s`` inflated every structural estimate by ``sqrt(d)`` --
+    # on the PR #127 fixture 7.07e-08 where the perturbation argument gives
+    # 5.00e-08 -- and could flip the two report booleans near their thresholds.
+    raw_defect, _scale = trace_preservation_defect(L)
+    defect = raw_defect / np.sqrt(float(dim))
 
     stationary = int(cluster[int(np.argmin(magnitudes[cluster]))])
     observed = float(magnitudes[stationary])
@@ -458,12 +545,28 @@ def _measure(
         and not np.isnan(budget_estimate)
         and (budget_estimate > tol or not np.isfinite(budget_estimate))
     )
+    # PR #166 review, finding P2. ``tol`` used to enter this budget, which made
+    # the answer tautological: cluster selection already guarantees
+    # ``observed <= tol`` for every eigenvalue in the zero set, so the field
+    # said "explained" on evidence it had not consulted. It now reads ONLY the
+    # two forward estimates -- the quantities that actually claim to explain the
+    # displacement -- and abstains when either is unavailable. Abstention covers
+    # ``inf`` as well as ``nan``: an unbounded estimate would "explain" any
+    # displacement whatsoever, and it serialises to null, so reporting ``True``
+    # beside a missing number contradicts the field's own semantics.
     explained: bool | None
-    budget = [v for v in (tol, solver_estimate, structural_estimate) if np.isfinite(v)]
-    if not budget or not np.isfinite(observed):
+    if (
+        not np.isfinite(observed)
+        or not np.isfinite(structural_estimate)
+        or not np.isfinite(solver_estimate)
+    ):
         explained = None
     else:
-        explained = bool(observed <= CONDITIONING_AGREEMENT_FACTOR * max(budget))
+        explained = bool(
+            observed
+            <= CONDITIONING_AGREEMENT_FACTOR
+            * max(structural_estimate, solver_estimate)
+        )
     return ZeroModeConditioning(
         available=True,
         reason="ok",

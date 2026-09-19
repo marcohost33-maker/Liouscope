@@ -38,12 +38,31 @@ from liouscope.numerics.conditioning import (
     eigenvalue_conditioning,
     zero_mode_conditioning,
 )
-from liouscope.numerics.linalg import certified_eigvals, trace_preservation_defect
+from liouscope.numerics.linalg import (
+    certified_eigvals,
+    eig_nonhermitian,
+    trace_preservation_defect,
+)
 from liouscope.numerics.traceless import trace_vector
 
 SIGMA_MINUS = np.array([[0.0, 1.0], [0.0, 0.0]], dtype=complex)
 SIGMA_Z = np.array([[1.0, 0.0], [0.0, -1.0]], dtype=complex)
 SIGMA_X = np.array([[0.0, 1.0], [1.0, 0.0]], dtype=complex)
+
+# The canonical #112 repro, copied from tests/test_spectral_certificate.py: a
+# four-level classical jump network with a ~1e10 rate spread on which raw
+# zgeev LOSES the zero mode and the certificate repairs via dgeev-real.
+STIFF_PAIRS = [(0, 3), (0, 2), (1, 0), (3, 2), (2, 1)]
+STIFF_RATES = [7.28e-6, 3.67e-5, 1.53e-5, 2.70e5, 1.42e-5]
+
+
+def _classical_network(pairs, rates, d=4):
+    jumps = []
+    for to, frm in pairs:
+        jump = np.zeros((d, d), dtype=complex)
+        jump[to, frm] = 1.0
+        jumps.append(jump)
+    return build_liouvillian(np.zeros((d, d), dtype=complex), jumps, rates)
 
 
 def _basis_with_first(q: np.ndarray) -> np.ndarray:
@@ -53,6 +72,22 @@ def _basis_with_first(q: np.ndarray) -> np.ndarray:
     basis, _ = np.linalg.qr(seed)
     phase = np.vdot(basis[:, 0], q)
     return np.asarray(basis * (phase / abs(phase)), dtype=complex)
+
+
+def _shifted_pr127_fixture() -> np.ndarray:
+    """A well-conditioned operator whose stationary mode is far from zero.
+
+    ``s`` is O(1) and the trace defect is tiny, so neither forward estimate can
+    account for a stationary eigenvalue at 1e-3: the honest answer is that the
+    displacement is NOT explained by conditioning.
+    """
+    block = np.zeros((4, 4), dtype=complex)
+    block[0, 0] = 1.0e-3
+    block[1, 1] = -1.0
+    block[2, 2] = -2.0
+    block[3, 3] = -3.0
+    unitary = _basis_with_first(trace_vector(2))
+    return unitary @ block @ unitary.conj().T
 
 
 def _pr127_fixture() -> np.ndarray:
@@ -83,6 +118,8 @@ def test_pr127_fixture_band_under_predicts_the_displacement() -> None:
     defect, _scale = trace_preservation_defect(L)
     _values, certificate = certified_eigvals(L)
 
+    # ``trace_preservation_defect`` is the UNNORMALISED ||vec(I)^H L||; the
+    # evidence divides it by sqrt(d) to get the perturbation norm.
     assert defect == pytest.approx(1.4145e-14, rel=1e-3)
     assert certificate.bound == pytest.approx(4.4409e-13, rel=1e-3)
     # Observed displacement of the stationary eigenvalue.
@@ -101,7 +138,11 @@ def test_conditioning_scaled_estimate_explains_the_pr127_displacement() -> None:
     assert evidence.available
     assert evidence.reciprocal_condition == pytest.approx(2.0e-7, rel=1e-3)
     assert evidence.observed_displacement == pytest.approx(1.0e-7, rel=1e-3)
-    # First order, so agreement is up to a constant -- measured 1.41x.
+    # The perturbation is the minimum-norm correction ||q^H L|| with q a UNIT
+    # vector, i.e. the raw defect over sqrt(d) (PR #166 review). d = 2 here.
+    assert evidence.trace_defect == pytest.approx(1.0e-14, rel=1e-3)
+    assert evidence.structural_forward_estimate == pytest.approx(5.0e-8, rel=1e-3)
+    # First order, so agreement is up to a constant -- measured 2.0x.
     ratio = evidence.observed_displacement / evidence.structural_forward_estimate
     assert 1.0 <= ratio <= CONDITIONING_AGREEMENT_FACTOR
     # And the certificate's own band is nowhere near.
@@ -178,8 +219,12 @@ def test_conditioning_is_a_property_of_the_operator_as_written() -> None:
     condition numbers ``xGEEVX`` would have reported instead.
     """
     rng = np.random.default_rng(7)
-    A = rng.standard_normal((6, 6)) + 1j * rng.standard_normal((6, 6))
-    scaling = np.diag(np.float64([1e-6, 1e-3, 1.0, 1e3, 1e6, 1e9]))
+    # 9x9 = d=3: ``zero_mode_conditioning`` refuses a side length that cannot be
+    # a superoperator, because ``vec(I)^H L = 0`` says nothing about one.
+    A = rng.standard_normal((9, 9)) + 1j * rng.standard_normal((9, 9))
+    scaling = np.diag(
+        np.float64([1e-6, 1e-4, 1e-2, 1.0, 1e2, 1e4, 1e6, 1e8, 1e9])
+    )
     scaled = scaling @ A @ np.linalg.inv(scaling)
 
     plain = zero_mode_conditioning(A)
@@ -240,23 +285,107 @@ def test_conditioning_is_invariant_under_a_change_of_rate_units(factor: float) -
 # --------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize("spread", [1.0e8, 1.0e11, 1.0e13, 1.0e15])
-def test_stiff_112_family_is_benign_to_conditioning(spread: float) -> None:
-    """Pinned so no later change claims conditioning catches the #112 failure.
+def test_the_stiff_112_network_really_loses_its_zero_mode() -> None:
+    """Premise of the negative control below, established before it is used.
 
-    The Ahues-Tisseur deflation destroys the slow spectrum before any
-    conditioning estimate can see it, so the WRONG answer is reported as
-    perfectly well conditioned. Measured: every per-mode ``s`` stays at 0.707
-    across four decades of rate spread.
+    PR #166 review: the first version of that control used a two-level family on
+    which raw zgeev keeps an exact ``0.0`` zero mode at every rate spread. There
+    was no wrong spectrum for conditioning to miss, so the control asserted
+    nothing. The canonical #112 network does fail, and this test says so before
+    anything is concluded from it.
+    """
+    L = _classical_network(STIFF_PAIRS, STIFF_RATES)
+    raw = eig_nonhermitian(np.asarray(L, dtype=complex)).eigenvalues
+    _accepted, certificate = certified_eigvals(L)
+
+    raw_min = float(np.abs(raw).min())
+    assert raw_min == pytest.approx(7.28e-6, rel=1e-3)
+    assert raw_min > certificate.bound          # the zero mode is genuinely lost
+    assert certificate.solver == "dgeev-real"   # and a different route repaired it
+    assert float(np.abs(_accepted).min()) < certificate.bound
+
+
+def test_the_lost_zero_mode_is_not_visible_as_ill_conditioning() -> None:
+    """The negative control proper: conditioning cannot catch the #112 failure.
+
+    Run deliberately WITHOUT the accepted spectrum, so the audit conditions the
+    wrong spectrum -- the question being exactly what conditioning would have
+    said about it. The answer is "well conditioned": the stationary mode's
+    reciprocal condition number is 0.29 and the worst over the whole spurious
+    spectrum is 0.040, i.e. condition numbers between 1 and 25. That is the same
+    range already recorded in ``numerics/linalg.py`` from the 2026-08-25
+    measurement, reached here independently.
+
+    Pinned so no later change can start claiming conditioning detects #112.
+    """
+    L = _classical_network(STIFF_PAIRS, STIFF_RATES)
+    evidence = zero_mode_conditioning(L)
+
+    assert evidence.available
+    # It is the SPURIOUS eigenvalue that is being conditioned.
+    assert evidence.observed_displacement == pytest.approx(7.28e-6, rel=1e-3)
+    # ... and nothing about its conditioning gives the failure away.
+    assert evidence.reciprocal_condition > 0.25
+    assert evidence.spectrum_min_reciprocal_condition > 0.04
+    assert 1.0 / evidence.spectrum_min_reciprocal_condition < 25.0
+
+
+def test_audit_withholds_rather_than_condition_a_repaired_spectrum() -> None:
+    """The evidence must describe the eigenvalues in the same result.
+
+    PR #166 review, finding P2. ``certified_eigvals`` repairs this generator
+    through ``dgeev-real``; the audit's own ``?geev`` would otherwise report the
+    conditioning of the spurious ``7.28e-6`` mode against a result whose
+    stationary eigenvalue is ``4.08e-17``.
+    """
+    L = _classical_network(STIFF_PAIRS, STIFF_RATES)
+    accepted, certificate = certified_eigvals(L)
+    evidence = zero_mode_conditioning(
+        L,
+        zero_tolerance=certificate.zero_set_tolerance(accepted),
+        eigenvalues=accepted,
+    )
+    assert evidence.available is False
+    assert evidence.reason == "accepted_spectrum_mismatch"
+    assert evidence.verdict == CONDITIONING_UNAVAILABLE
+
+
+def test_an_unrepaired_spectrum_still_yields_evidence() -> None:
+    """The control for the guard above: it must not withhold on healthy input."""
+    L = build_liouvillian(0.5 * SIGMA_X, [math.sqrt(0.6) * SIGMA_MINUS])
+    accepted, certificate = certified_eigvals(L)
+    assert certificate.solver == "zgeev"
+    evidence = zero_mode_conditioning(
+        L,
+        zero_tolerance=certificate.zero_set_tolerance(accepted),
+        eigenvalues=accepted,
+    )
+    assert evidence.available is True
+    assert evidence.verdict == CONDITIONING_BENIGN
+
+
+@pytest.mark.parametrize("spread", [1.0e8, 1.0e11, 1.0e13, 1.0e15])
+def test_stiff_but_correctly_solved_generators_are_not_flagged(spread: float) -> None:
+    """No false alarm from stiffness alone when the solver copes.
+
+    This is a no-false-alarm check, NOT a #112 control: on this family raw zgeev
+    keeps an exact zero mode at every spread (asserted, since that is the very
+    assumption the first version of this file got wrong).
     """
     L = build_liouvillian(
         np.zeros((2, 2), dtype=complex),
         [math.sqrt(spread) * SIGMA_MINUS, SIGMA_Z],
     )
-    evidence = zero_mode_conditioning(L)
+    accepted, certificate = certified_eigvals(L)
+    assert float(np.abs(accepted).min()) == 0.0  # nothing was lost here
+    evidence = zero_mode_conditioning(
+        L,
+        zero_tolerance=certificate.zero_set_tolerance(accepted),
+        eigenvalues=accepted,
+    )
     assert evidence.available
     assert evidence.spectrum_min_reciprocal_condition > 0.5
-    assert evidence.verdict == CONDITIONING_BENIGN
+    assert evidence.conditioning_limited is False
 
 
 @pytest.mark.parametrize("gamma", [1.0e0, 1.0e3, 1.0e6, 1.0e9])
@@ -271,10 +400,14 @@ def test_physical_gksl_generators_are_never_conditioning_limited(
     )
     _values, certificate = certified_eigvals(L)
     evidence = zero_mode_conditioning(
-        L, zero_tolerance=certificate.zero_set_tolerance(_values)
+        L,
+        zero_tolerance=certificate.zero_set_tolerance(_values),
+        eigenvalues=_values,
     )
+    assert evidence.available
     assert evidence.reciprocal_condition > 0.5
     assert evidence.conditioning_limited is False
+    assert evidence.displacement_explained is True
 
 
 # --------------------------------------------------------------------------
@@ -305,7 +438,7 @@ def test_report_view_is_json_serialisable() -> None:
         zero_mode_conditioning(_pr127_fixture()).as_dict(),
         ZeroModeConditioning.unavailable("eigensolve_failed").as_dict(),
         # A defective pair drives the estimates to inf; they must still dump.
-        zero_mode_conditioning(np.array([[0.0, 1.0], [0.0, 0.0]])).as_dict(),
+        zero_mode_conditioning(_defective_superoperator()).as_dict(),
     ]
     for payload in payloads:
         text = json.dumps(payload, allow_nan=False)
@@ -378,6 +511,90 @@ def test_audit_never_raises_on_unusable_input(bad: np.ndarray) -> None:
     assert evidence.verdict == CONDITIONING_UNAVAILABLE
     assert evidence.reason != "ok"
     assert json.dumps(evidence.as_dict(), allow_nan=False)
+
+
+def test_negative_zero_tolerance_is_rejected() -> None:
+    """PR #166 review, finding P2.
+
+    A negative cutoff admits no eigenvalue to the zero set, after which the
+    ``budget > tol`` comparison labels even an exact, well-conditioned zero mode
+    ``CONDITIONING_LIMITED``. Valid-looking nonsense out of an exported public
+    function is worse than an error, so it is a caller contract violation --
+    unlike unusable OPERATOR input, which still comes back as UNAVAILABLE.
+    """
+    L = build_liouvillian(0.5 * SIGMA_X, [math.sqrt(0.6) * SIGMA_MINUS])
+    with pytest.raises(ValueError, match="non-negative"):
+        zero_mode_conditioning(L, zero_tolerance=-1.0)
+    # Zero is a legitimate cutoff and must not be swept up with it.
+    assert zero_mode_conditioning(L, zero_tolerance=0.0).available
+
+
+@pytest.mark.parametrize("side", [2, 3, 6, 7])
+def test_a_side_that_cannot_be_a_superoperator_is_unavailable(side: int) -> None:
+    """PR #166 review, finding P2.
+
+    ``vec(I)^H L = 0`` is not a statement about a matrix whose side is not
+    ``d*d``, so ``trace_preservation_defect`` is NaN there. Publishing
+    ``available=True`` / ``BENIGN`` on top of that would rest a benign verdict
+    on a structural estimate that does not exist.
+    """
+    rng = np.random.default_rng(side)
+    evidence = zero_mode_conditioning(rng.standard_normal((side, side)))
+    assert evidence.available is False
+    assert evidence.reason == "dimension_not_a_superoperator"
+    assert evidence.verdict == CONDITIONING_UNAVAILABLE
+
+
+def test_displacement_agreement_is_not_true_by_construction() -> None:
+    """PR #166 review, finding P2: the tolerance must not answer its own question.
+
+    Cluster selection guarantees ``observed <= zero_tolerance`` for every mode
+    inside the zero set, so a budget containing the tolerance made the field
+    ``True`` whenever it was defined -- it reported the cutoff back, not the
+    evidence. Here a wide cutoff pulls the whole ``+-1e-7`` pair into the zero
+    set; the pair's invariant SUBSPACE is well conditioned (``s = 1``), so
+    neither forward estimate exceeds ``1e-14`` and a ``1e-7`` displacement is
+    honestly not accounted for. The old budget would have said ``True`` on the
+    strength of ``tol = 1e-5`` alone.
+    """
+    evidence = zero_mode_conditioning(_pr127_fixture(), zero_tolerance=1.0e-5)
+
+    assert evidence.cluster_size == 2
+    assert evidence.observed_displacement == pytest.approx(1.0e-7, rel=1e-3)
+    assert evidence.observed_displacement < evidence.zero_tolerance
+    assert evidence.reciprocal_condition == pytest.approx(1.0, rel=1e-8)
+    assert max(
+        evidence.structural_forward_estimate, evidence.solver_forward_estimate
+    ) < 1.0e-13
+    assert evidence.displacement_explained is False
+
+
+def test_displacement_agreement_is_true_when_the_estimates_earn_it() -> None:
+    """The positive control: a displacement a forward estimate does account for.
+
+    The operator is well conditioned (``s = 1``) but violates trace preservation
+    by ``1e-3``, and its stationary eigenvalue sits exactly that far from zero.
+    The structural estimate carries the whole distance, so ``True`` here is
+    earned by the evidence and not by the cutoff.
+    """
+    evidence = zero_mode_conditioning(_shifted_pr127_fixture(), zero_tolerance=1.0e-2)
+
+    assert evidence.reciprocal_condition == pytest.approx(1.0, rel=1e-8)
+    assert evidence.observed_displacement == pytest.approx(1.0e-3, rel=1e-6)
+    assert evidence.structural_forward_estimate == pytest.approx(1.0e-3, rel=1e-6)
+    assert evidence.displacement_explained is True
+
+
+def test_displacement_agreement_abstains_on_an_unavailable_estimate() -> None:
+    """``inf`` explains anything and serialises to null, so it must abstain."""
+    evidence = zero_mode_conditioning(
+        _defective_superoperator(defect=1.0e-12), zero_tolerance=1.0e-13
+    )
+    assert evidence.structural_forward_estimate == math.inf
+    assert evidence.displacement_explained is None
+    assert json.loads(json.dumps(evidence.as_dict(), allow_nan=False))[
+        "displacement_explained"
+    ] is None
 
 
 def test_eigenvalue_conditioning_rejects_mismatched_vector_matrices() -> None:

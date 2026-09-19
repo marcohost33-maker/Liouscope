@@ -364,8 +364,20 @@ def compute_spectral_layer(
     # for a reader of the report; it deliberately does not act on them, because
     # on the stiff #112 family the conditioning of the wrong spectrum is benign
     # and no certified-yet-misconditioned case is known (issue #117 step 4).
+    #
+    # PR #166 REVIEW, finding P2: the accepted ``eigenvalues`` are handed in.
+    # The audit runs its own ``?geev`` for the left/right pair, but
+    # ``certified_eigvals`` above may have REPAIRED the spectrum through a
+    # different LAPACK route -- measured on the canonical stiff #112 network,
+    # ``dgeev-real`` is accepted with a stationary eigenvalue at ``4.08e-17``
+    # while a raw ``zgeev`` returns the spurious ``7.28e-06`` that issue #112
+    # exists to reject. Without this argument the audit described that second
+    # spectrum and reported ``CONDITIONING_LIMITED`` about eigenvalues this
+    # result does not contain. It now withholds instead.
     conditioning = (
-        zero_mode_conditioning(L_super, zero_tolerance=zero_tol).as_dict()
+        zero_mode_conditioning(
+            L_super, zero_tolerance=zero_tol, eigenvalues=eigenvalues
+        ).as_dict()
         if conditioning_audit
         else None
     )
