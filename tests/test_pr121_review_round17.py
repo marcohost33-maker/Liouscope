@@ -638,13 +638,13 @@ def test_certificate_field_documents_its_classifier_effect() -> None:
 
 
 def test_a_successful_fit_with_a_non_finite_aicc_stays_selectable(monkeypatch) -> None:
-    """A non-finite AICc is not a failed fit -- the V4 near-miss.
+    """A non-finite model-selection score is not the same as a failed fit.
 
-    Measured on validation system V4 (thermal two-level), trace-distance
-    curve: all five models converge, and all five AICc values are ``inf``
-    because the Geyer-corrected ``n_eff`` of that smooth residual series is
-    too small for the small-sample correction. A selection rule keyed on
-    finiteness withholds D17 on a system where nothing failed.
+    The historical motivating case was an N_eff-driven AICc overflow on V4.
+    PR #157 no longer uses N_eff as the production AICc sample size, but the
+    state distinction remains load-bearing: any future unavailable/non-finite
+    score must not retroactively relabel a numerically successful fit as a
+    failed optimisation.
     """
     from liouscope.diagnostics import relaxation as rx
 

@@ -35,6 +35,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   eigensolver paths use, so one quantity is not measured two different ways.
 
 ### Changed
+- **Residual-correlation model selection has been made internally consistent across AR(1) and CAR(1) paths (PR #127 statistical review).** On non-uniform grids, `estimate_car1_theta` previously maximized a conditional and sample-centered transition objective while `fit_gls_ar1` reported an uncentered stationary joint likelihood to AICc. Theta is now optimized against the same zero-mean stationary residual model that is scored and resampled; amplitude normalization remains but sample-mean subtraction is removed because it changes the likelihood and was measured to displace the optimum by factors from O(10) to O(10^3-10^4) on exact CAR(1) paths. Model-selection parameter counting now includes two residual nuisance parameters on both paths: AR(1) rho plus Gaussian variance, or CAR(1) theta plus stationary variance. The AICc small-sample denominator now uses the observed time-point count; `N_eff` remains reported as correlation/uncertainty evidence but is no longer substituted into an already covariance-aware likelihood criterion. This is a METHODOLOGY change and can move AICc ordering, selected M0..M3b model, reported rates and downstream A-class on both uniform and non-uniform grids. The fit is still a finite-iteration feasible-GLS procedure rather than a proof of globally maximized joint likelihood, so this change must not be described as a final exact-AICc calibration; that remaining gate is tracked separately. Archived analyses whose model selection matters should be re-run. The run-manifest schema is unchanged.
 - **The Gaussian likelihood behind AICc is evaluated in log-RSS space, and an
   exact-zero RSS is now an explicit abstention (issue #135).** This is a
   METHODOLOGY change with user-visible consequences: it can reorder AICc,
@@ -2846,9 +2847,10 @@ physics-scaling). MINOR bump per SemVer: backward-compatible API additions
 - Twenty diagnostics D1-D20 organised in six layers S/N/R/U/C/G.
 - Twelve-class mechanism taxonomy A1-A12 (`TAXONOMY_VERSION = "A1-A12-v3.1"`).
 - Fit hierarchy M0/M1/M2/M3a/M3b with Prony-seed initialisation for M3b.
-- Statistical pipeline: GLS with AR(1) residuals, N_eff via Geyer 1992 IPS
-  estimator, AICc with N_eff correction, parametric bootstrap with BCa
-  confidence intervals.
+- Statistical pipeline baseline: GLS with correlated residuals, N_eff as
+  correlation/uncertainty evidence, AICc-style model selection, and parametric
+  bootstrap intervals. Historical releases used N_eff in the AICc correction;
+  the Unreleased PR #157 methodology entry above supersedes that convention.
 - Sparse path (`liouscope.sparse`) with ARPACK shift-invert for d up to 128.
 - Run manifest with SHA-256 run-id and JSON export. Schema version 1.2.0.
 - Four lattice geometries (1D chain, 2D square, honeycomb, triangular) and

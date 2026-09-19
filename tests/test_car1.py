@@ -26,6 +26,7 @@ import warnings
 
 import numpy as np
 import pytest
+from scipy.optimize import minimize_scalar
 
 from liouscope.diagnostics.relaxation import _fit_with_model
 from liouscope.fitting.aicc import aicc, gaussian_log_likelihood
@@ -146,6 +147,56 @@ def test_car1_rho_reduces_to_a_single_constant_on_a_uniform_grid():
     a = car1_rho(t, 0.4)
     np.testing.assert_allclose(a, a[0], rtol=1.0e-12)
 
+
+def test_car1_theta_is_invariant_to_residual_amplitude_without_recentering():
+    """Scale changes may not move theta; subtracting the sample mean would."""
+    t = np.concatenate(
+        [np.linspace(0.0, 0.1, 40, endpoint=False), np.linspace(0.1, 10.0, 40)]
+    )
+    residuals = car1_resample(np.random.default_rng(3), t, 1.0e-4, 1.0)
+    reference = estimate_car1_theta(t, residuals)
+    assert np.isfinite(reference)
+    for scale in (1.0e-170, 1.0e-100, 1.0e-20, 1.0, 1.0e100):
+        assert estimate_car1_theta(t, residuals * scale) == pytest.approx(
+            reference, rel=2.0e-6
+        )
+
+
+def test_car1_theta_maximises_the_stationary_likelihood_reported_to_aicc():
+    """Theta and AICc must refer to one stationary probability model."""
+    t = np.concatenate(
+        [np.linspace(0.0, 0.1, 40, endpoint=False), np.linspace(0.1, 10.0, 40)]
+    )
+    residuals = car1_resample(np.random.default_rng(1), t, 1.0e-4, 1.0)
+
+    theta_hat = estimate_car1_theta(t, residuals)
+    assert np.isfinite(theta_hat) and theta_hat > 0.0
+
+    def reported_log_likelihood(log_theta: float) -> float:
+        theta = float(np.exp(log_theta))
+        whitened = whiten_car1(residuals, t, theta)
+        sigma = float(np.sqrt(np.mean(whitened * whitened)))
+        return gaussian_log_likelihood(whitened, sigma=sigma) + (
+            whiten_car1_log_jacobian(t, theta)
+        )
+
+    reference = minimize_scalar(
+        lambda u: -reported_log_likelihood(float(u)),
+        bounds=(float(np.log(1.0e-4)), float(np.log(1.0e-2))),
+        method="bounded",
+        options={"xatol": 1.0e-11},
+    )
+    assert reference.success
+    theta_reference = float(np.exp(float(reference.x)))
+    ll_hat = reported_log_likelihood(float(np.log(theta_hat)))
+    ll_reference = reported_log_likelihood(float(reference.x))
+    # The profiled likelihood is very flat around this optimum. Different
+    # bounded minimisers may return theta values a few ppm apart while being
+    # indistinguishable on the objective that AICc actually consumes. Pin the
+    # probability-model identity directly, with a loose parameter sanity check
+    # only to reject a different basin.
+    assert ll_hat == pytest.approx(ll_reference, rel=1.0e-11, abs=1.0e-10)
+    assert theta_hat == pytest.approx(theta_reference, rel=1.0e-4)
 
 # ---------------------------------------------------------------------------
 # Effective sample size against the closed form
@@ -402,45 +453,43 @@ def _decaying_series(t: np.ndarray) -> np.ndarray:
     return np.exp(-1.0 * t) + 1.0e-3 * rng.standard_normal(t.size)
 
 
-def test_aicc_counts_the_fitted_car1_rate_on_a_non_uniform_grid():
-    """``theta`` is estimated from THIS data set, so it belongs in ``k``.
+def test_aicc_counts_car1_rate_and_variance_on_a_non_uniform_grid(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """CAR(1) nuisance count and AICc sample-size choice are independent.
 
-    It is re-fitted for every candidate model and enters that model's maximised
-    likelihood through the whitening. Because the small-sample correction
-    ``2k(k+1)/(N_eff-k-1)`` is nonlinear in ``k``, leaving it out is not a
-    constant offset: it under-penalises the higher-dimensional candidates
-    exactly when ``N_eff`` is small, which can move the selected relaxation
-    model and with it the reported A-class.
+    The fitted theta on this otherwise simple fixture can be so fast that the
+    exact CAR(1) ESS rounds to n, which makes ESS-vs-n a vacuous discriminator.
+    Force a materially smaller diagnostic ESS while leaving the likelihood and
+    observed sample count untouched; production AICc must still use n_obs.
     """
+    import liouscope.diagnostics.relaxation as rx
+
     t = np.concatenate(
         [np.linspace(0.0, 0.1, 40, endpoint=False), np.linspace(0.1, 8.0, 40)]
     )
     assert not is_uniform_grid(t), "fixture must exercise the CAR(1) path"
     y = _decaying_series(t)
+    monkeypatch.setattr(rx, "neff_car1", lambda _t, _theta: float(t.size) / 2.0)
 
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
         fit, _ = _fit_with_model("M1", t, y)
 
     assert np.isfinite(fit.residual_theta_car1), "fixture must fit a CAR(1) rate"
+    assert fit.n_eff == pytest.approx(float(t.size) / 2.0)
     p = int(np.asarray(fit.params).size)
     assert fit.aicc == pytest.approx(
-        aicc(fit.log_likelihood, p + 1, fit.n_eff), rel=0.0, abs=0.0
+        aicc(fit.log_likelihood, p + 2, n_obs=float(t.size)),
+        rel=0.0,
+        abs=0.0,
     )
-    # DISCRIMINATION: the pre-fix count must be a DIFFERENT number here, or the
-    # assertion above would pass without the repair.
-    assert aicc(fit.log_likelihood, p, fit.n_eff) != aicc(
-        fit.log_likelihood, p + 1, fit.n_eff
-    )
+    assert aicc(fit.log_likelihood, p + 1, n_obs=float(t.size)) != fit.aicc
+    assert aicc(fit.log_likelihood, p + 2, fit.n_eff) != fit.aicc
 
 
-def test_aicc_parameter_count_is_unchanged_on_a_uniform_grid():
-    """Negative control: the historical discrete-AR(1) path must not move.
-
-    ``rho`` is estimated there too, but counting it would re-rank every
-    existing uniform-grid result; that convention change is deliberately NOT
-    part of this repair (see the comment in ``_fit_with_model``).
-    """
+def test_aicc_counts_ar1_rho_and_variance_on_a_uniform_grid():
+    """Uniform AR(1) also estimates a correlation and a Gaussian scale."""
     t = np.linspace(0.0, 8.0, 80)
     assert is_uniform_grid(t)
     y = _decaying_series(t)
@@ -449,8 +498,12 @@ def test_aicc_parameter_count_is_unchanged_on_a_uniform_grid():
         warnings.simplefilter("ignore")
         fit, _ = _fit_with_model("M1", t, y)
 
-    assert not np.isfinite(fit.residual_theta_car1), "uniform grid fits no theta"
+    assert not np.isfinite(fit.residual_theta_car1), "uniform grid fits rho, not theta"
     p = int(np.asarray(fit.params).size)
     assert fit.aicc == pytest.approx(
-        aicc(fit.log_likelihood, p, fit.n_eff), rel=0.0, abs=0.0
+        aicc(fit.log_likelihood, p + 2, n_obs=float(t.size)),
+        rel=0.0,
+        abs=0.0,
     )
+    assert aicc(fit.log_likelihood, p, n_obs=float(t.size)) != fit.aicc
+    assert fit.n_eff <= float(t.size)

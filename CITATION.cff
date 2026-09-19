@@ -151,6 +151,25 @@ abstract: >-
 # interval is withheld (round-1 review of PR #147). Archived analyses whose
 # selected model matters should be re-run; per-model likelihoods are not run-
 # manifest fields, so this change is not visible in input_hash.
+# Also pending for the next cut: residual-correlation model selection has been
+# made internally consistent across AR(1) and CAR(1) paths (PR #127 statistical
+# review). On non-uniform grids the CAR(1) rate theta now maximises the same
+# zero-mean stationary joint residual likelihood that is reported and resampled;
+# the former sample-mean subtraction changed that probability model and was
+# measured to move the optimum by factors from O(10) to O(10^3-10^4) on exact
+# stationary CAR(1) paths. Both residual-model nuisance parameters are counted
+# in model-selection k on both paths: rho/theta plus the Gaussian variance.
+# The AICc small-sample denominator uses the observed time-point count rather
+# than N_eff because the serial covariance is already represented in the joint
+# likelihood; N_eff remains an audit/uncertainty diagnostic. This CHANGES
+# METHODOLOGY and can move model ordering, the reported decay rate and downstream
+# A-class on uniform and non-uniform grids. It must NOT be described as a final
+# exact-AICc calibration: fit_gls_ar1 still performs a finite number of feasible
+# GLS alternations and therefore does not yet certify a globally maximised joint
+# likelihood. That joint-ML/calibration gate is tracked separately. The
+# MANIFEST_SCHEMA is unchanged because per-model likelihood details and AICc
+# sample-size convention are not run-manifest fields; archived analyses whose
+# selected model matters should be re-run.
 # Also pending for the next cut: the Hermiticity validation of the Hamiltonian
 # measures its defect against the scale of the COHERENT component alone, read
 # in the canonical Lindblad gauge (PR #127, E3 settled by cross-family review
