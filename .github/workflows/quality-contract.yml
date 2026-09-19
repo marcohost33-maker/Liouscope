@@ -22,9 +22,7 @@ jobs:
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803  # v6.1.0
         with:
           persist-credentials: false
-          # Scientific PR evidence must describe the submitted head itself.
-          # The reusable pilot separately exercises GitHub's synthetic merge ref.
-          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+          # Required quality context intentionally validates the proposed merge.
       - name: Set up Python
         uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # v6.2.0
         with:
@@ -39,20 +37,20 @@ jobs:
         run: python .github/scripts/check_claim_safety.py
 
 
-  # Governance integration evidence: run the same contract against the proposed
-  # PR merge so independently valid base/head changes cannot interact unseen.
-  contract-merge:
+  # Subject evidence: run the same governance contract on the submitted head.
+  # The required `quality contract` job above remains merge-boundary evidence.
+  contract-head:
     if: ${{ github.event_name == 'pull_request' }}
-    name: quality contract (merge)
+    name: quality contract (head)
     runs-on: ubuntu-latest
     permissions:
       contents: read
     steps:
-      - name: Checkout proposed merge
+      - name: Checkout submitted head
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803  # v6.1.0
         with:
           persist-credentials: false
-          # Deliberately no ref: use GitHub's synthetic pull_request merge ref.
+          ref: ${{ github.event.pull_request.head.sha }}
       - name: Set up Python
         uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # v6.2.0
         with:
