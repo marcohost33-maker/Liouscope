@@ -85,6 +85,17 @@ ZERO_MODE_AMBIGUITY_FACTOR: Final[float] = 3.0e1
 # marginal-but-usable and the clearly broken; the failure direction is
 # fail-closed (withhold), never a wrong value.
 VECTOR_RESIDUAL_REL_MAX: Final[float] = 1.0e-1
+# Issue #117, AUDIT ONLY. Headroom on the first-order forward-error estimate
+# ``backward_error / s(lambda)`` before the observed displacement of the
+# stationary eigenvalue is reported as NOT explained by conditioning. The
+# estimate is first order in ``||E||``, so the true displacement carries an
+# O(||E||^2) term and an unknown constant; measured on the non-normal 4x4
+# fixture of the 2026-09-11 PR #127 review the ratio observed/estimated is
+# 1.41. A factor of ten keeps ~7x headroom above that while still separating it
+# from the 2.25e5x by which the certificate band under-predicts the same
+# displacement. Nothing downstream reads this: it decides one boolean in the
+# report (``displacement_explained``), never a filter, a gap or a verdict.
+CONDITIONING_AGREEMENT_FACTOR: Final[float] = 1.0e1
 EPS_HERMITICITY: Final[float] = 1.0e-9
 EPS_TRACE: Final[float] = 1.0e-10
 # Tight numerical detector for the exact maximally mixed state I/d. It is not a

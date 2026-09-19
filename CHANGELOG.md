@@ -7,6 +7,57 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Added
+- **Eigenvalue-conditioning evidence for the stationary mode, AUDIT ONLY
+  (issue #117).** `numerics.conditioning` measures the reciprocal condition
+  number of the zero set -- `sigma_min(Y^H X)` over orthonormal bases of the
+  left and right invariant subspaces, which reduces to `|y^H x|` for a simple
+  eigenvalue -- together with the left/right residuals, the separation, the
+  trace-preservation defect and the two first-order forward-error estimates
+  those imply. `SpectralResult.zero_mode_conditioning` carries it into the
+  report; `compute_spectral_layer(..., conditioning_audit=False)` switches it
+  off. CHANGES NO REPORTED NUMBER: no filter, gap, certificate, verdict or tier
+  reads any of it, and the run-manifest contract is unchanged (additive field
+  with a default).
+
+  Why a second instrument. For a NON-NORMAL generator a backward error does not
+  bound the forward eigenvalue displacement by the same number, so the
+  certificate band cannot say whether a stationary eigenvalue away from zero is
+  a failed eigensolve or the correctly located zero of an operator that is only
+  approximately trace preserving. Measured on the 4x4 fixture from the
+  2026-09-11 external review of PR #127: trace defect `1.4146e-14`, certificate
+  band `4.4409e-13`, observed displacement `1.0000e-07` -- the band
+  under-predicts by `2.25e5x`, while `defect / s` with `s = 2.0e-07` gives
+  `7.07e-08`, off by `1.41x`.
+
+  Why `|y^H x|` and not LAPACK `RCONDE`, as issue #117 proposed. First, it is
+  unreachable: SciPy wraps no `?geevx` (measured on 1.17.1 --
+  `scipy.linalg.lapack.zgeevx` raises `AttributeError`). Second, it would answer
+  the wrong question: `xGEEVX` documents that its condition numbers refer to the
+  BALANCED matrix and that diagonal scaling changes them, whereas `?geev`
+  back-transforms its eigenvectors, so `|y^H x|` describes the operator as the
+  caller wrote it. Measured under `D A D^-1` with `D = diag(1e-6 .. 1e9)`, which
+  leaves the spectrum invariant to `1.2e-14`: the minimum `s` moves from
+  `5.13e-01` to `1.19e-15`.
+
+  Why the subspace figure and not a per-mode one. Per-mode `s` collapses with
+  the splitting of a nearly degenerate pair while its invariant subspace stays
+  perfectly conditioned (measured on `[[0,1,0],[0,delta,0],[0,0,-1]]`: `s` falls
+  `1e-2 -> 1e-14` as `delta` does, `sigma_min(Y^H X) = 1.000` throughout). A
+  degenerate stationary manifold -- a conserved quantity or symmetry sector --
+  has exactly that shape and is physical, so a per-mode gate would withhold on a
+  healthy generator.
+
+  What it does NOT catch, pinned by a negative-control test so no later change
+  can quietly claim otherwise: the stiff #112 deflation failure is invisible to
+  conditioning. Across rate spreads `1e8..1e15` every per-mode `s` stays at
+  `0.707`, i.e. the solver reports a wrong spectrum as well conditioned.
+  Conditioning is therefore ADDITIVE to the structural certificate, which is
+  also why this change promotes it to no gate; issue #117 step 4 stays open
+  until a certified-yet-misconditioned generator is exhibited. Across sixteen
+  physical GKSL generators (`gamma` and `omega` each over four decades) the
+  worst reciprocal condition is `0.707` and no run is reported as
+  conditioning-limited, so the evidence costs no false alarm.
+  `benchmarks/issue117_zero_mode_conditioning.py` reproduces every figure above.
 - **Trace-preserving generators can be restricted to the traceless operator
   space by an exact structural identity, with no eigenvalue-magnitude
   threshold (issue #113).** For column-stacked operators trace preservation IS
