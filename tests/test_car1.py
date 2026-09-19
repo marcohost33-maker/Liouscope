@@ -445,19 +445,31 @@ def _decaying_series(t: np.ndarray) -> np.ndarray:
     return np.exp(-1.0 * t) + 1.0e-3 * rng.standard_normal(t.size)
 
 
-def test_aicc_counts_car1_rate_and_variance_on_a_non_uniform_grid():
-    """CAR(1) theta and stationary variance are both estimated and enter ``k``."""
+def test_aicc_counts_car1_rate_and_variance_on_a_non_uniform_grid(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """CAR(1) nuisance count and AICc sample-size choice are independent.
+
+    The fitted theta on this otherwise simple fixture can be so fast that the
+    exact CAR(1) ESS rounds to n, which makes ESS-vs-n a vacuous discriminator.
+    Force a materially smaller diagnostic ESS while leaving the likelihood and
+    observed sample count untouched; production AICc must still use n_obs.
+    """
+    import liouscope.diagnostics.relaxation as rx
+
     t = np.concatenate(
         [np.linspace(0.0, 0.1, 40, endpoint=False), np.linspace(0.1, 8.0, 40)]
     )
     assert not is_uniform_grid(t), "fixture must exercise the CAR(1) path"
     y = _decaying_series(t)
+    monkeypatch.setattr(rx, "neff_car1", lambda _t, _theta: float(t.size) / 2.0)
 
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
         fit, _ = _fit_with_model("M1", t, y)
 
     assert np.isfinite(fit.residual_theta_car1), "fixture must fit a CAR(1) rate"
+    assert fit.n_eff == pytest.approx(float(t.size) / 2.0)
     p = int(np.asarray(fit.params).size)
     assert fit.aicc == pytest.approx(
         aicc(fit.log_likelihood, p + 2, n_obs=float(t.size)),
@@ -465,9 +477,6 @@ def test_aicc_counts_car1_rate_and_variance_on_a_non_uniform_grid():
         abs=0.0,
     )
     assert aicc(fit.log_likelihood, p + 1, n_obs=float(t.size)) != fit.aicc
-    # The ESS is intentionally retained as evidence but is not the AICc sample
-    # size.  This fixture must discriminate the two choices.
-    assert fit.n_eff < float(t.size)
     assert aicc(fit.log_likelihood, p + 2, fit.n_eff) != fit.aicc
 
 
