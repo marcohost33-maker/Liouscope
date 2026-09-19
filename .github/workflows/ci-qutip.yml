@@ -37,9 +37,7 @@ jobs:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803  # v6.1.0
         with:
           persist-credentials: false
-          # Scientific PR evidence must describe the submitted head itself.
-          # The reusable pilot separately exercises GitHub's synthetic merge ref.
-          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+          # Required context: proposed PR merge on pull_request.
       - name: Set up Python ${{ matrix.python-version }}
         uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # v6.2.0
         with:
@@ -68,11 +66,11 @@ jobs:
         run: pytest -m qutip -v
 
 
-  # Integration evidence: exercise the proposed PR merge, not only the submitted
-  # head. This catches base/head interactions in the optional QuTiP surface.
-  qutip-merge-cross-check:
+  # Subject evidence: exercise the submitted head independently of the proposed
+  # merge. The required qutip-cross-check job above retains merge semantics.
+  qutip-head-cross-check:
     if: ${{ github.event_name == 'pull_request' }}
-    name: qutip merge cross-check (${{ matrix.python-version }})
+    name: qutip head cross-check (${{ matrix.python-version }})
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -84,8 +82,8 @@ jobs:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803  # v6.1.0
         with:
           persist-credentials: false
-          # Deliberately omit ref: pull_request defaults to GitHub's synthetic
-          # merge ref, complementary to qutip-cross-check's exact-head evidence.
+          # Additional subject evidence, independent of base-branch integration.
+          ref: ${{ github.event.pull_request.head.sha }}
       - name: Set up Python ${{ matrix.python-version }}
         uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # v6.2.0
         with:
@@ -104,5 +102,5 @@ jobs:
             echo "::error::Expected >=3 qutip cross-check tests, collected $COUNT"
             exit 1
           fi
-      - name: Run QuTiP cross-checks on proposed merge
+      - name: Run QuTiP cross-checks on submitted head
         run: pytest -m qutip -v
