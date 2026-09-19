@@ -21,6 +21,8 @@ REQUIRED_WORKFLOWS = (
     ROOT / ".github" / "workflows" / "ci-qutip.yml",
     ROOT / ".github" / "workflows" / "quality-contract.yml",
 )
+MERGE_SMOKE_WORKFLOW = ROOT / ".github" / "workflows" / "ci-reusable-pilot.yml"
+PR_HEAD_REF = "${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}"
 TASK_PREFIX_RE = re.compile(r"`([A-Za-z0-9_-]+)/<task>`")
 
 
@@ -79,6 +81,11 @@ def _pull_request_is_unfiltered(path: Path) -> bool:
     return True
 
 
+def _checks_out_exact_pr_head(path: Path) -> bool:
+    """Require PR jobs to checkout the submitted head SHA, not only merge ref."""
+    text = path.read_text(encoding="utf-8")
+    return f"ref: {PR_HEAD_REF}" in text
+
 def main() -> int:
     errors: list[str] = []
     if not AGENTS.exists():
@@ -111,6 +118,22 @@ def main() -> int:
                 "branches (no branches/branches-ignore filter), so stacked PRs "
                 "receive exact-head CI"
             )
+        if not _checks_out_exact_pr_head(path):
+            errors.append(
+                f"{path.relative_to(ROOT)}: checkout must use the exact PR head ref "
+                f"{PR_HEAD_REF!r}; GitHub's default pull_request checkout is the "
+                "synthetic merge commit"
+            )
+
+    if not MERGE_SMOKE_WORKFLOW.exists():
+        errors.append(
+            f"merge-smoke workflow missing: {MERGE_SMOKE_WORKFLOW.relative_to(ROOT)}"
+        )
+    elif not _pull_request_is_unfiltered(MERGE_SMOKE_WORKFLOW):
+        errors.append(
+            f"{MERGE_SMOKE_WORKFLOW.relative_to(ROOT)}: merge-smoke pull_request "
+            "must cover arbitrary base branches"
+        )
 
     if errors:
         print("Agent branch trigger contract failed:", file=sys.stderr)
@@ -121,7 +144,7 @@ def main() -> int:
     patterns = ", ".join(sorted(expected))
     print(
         f"Agent branch trigger contract passed for {len(REQUIRED_WORKFLOWS)} "
-        f"workflows with unfiltered stacked-PR coverage: {patterns}"
+        f"exact-head workflows plus merge-smoke coverage: {patterns}"
     )
     return 0
 
