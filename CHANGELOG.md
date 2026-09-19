@@ -63,6 +63,15 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     the change is not visible in `input_hash`.
 
 ### Fixed
+- **Documented agent branches now receive exact-head verification (issue #159).**
+  `AGENTS.md` defines `claude/**`, `codex/**` and `bot/**`, but the main CI and
+  QuTiP workflows previously triggered branch pushes only for `claude/**`,
+  while Quality Contract triggered no agent branch pushes at all. Stacked Codex
+  PRs whose base was not `main` could therefore have zero required workflow
+  evidence indefinitely. CI, QuTiP and Quality Contract now cover every
+  documented agent prefix, and `.github/scripts/check_agent_branch_triggers.py`
+  reads those prefixes from `AGENTS.md` and fails the quality gate if workflow
+  trigger coverage drifts again. Main branch-protection semantics are unchanged.
 - **The trace-preservation defect overflowed on the way to a column sum that is
   exactly zero (issue #139, P2 review).** `trace_preservation_defect` assembled
   `vec(I)^H L` with an ordinary matrix product, which accumulates in ordinary
