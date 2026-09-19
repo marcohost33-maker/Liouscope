@@ -193,11 +193,7 @@ def bca_ci(
     alpha: float = 0.05,
     jackknife_estimates: np.ndarray | None = None,
 ) -> np.ndarray:
-    """Bias-corrected-and-accelerated bootstrap CI.
-
-    Returns ``(p, 2)`` array of ``(lo, hi)`` per parameter at level
-    ``1 - alpha``.
-    """
+    """Bias-corrected bootstrap CI, accelerated when jackknife data are supplied.\n\n    With ``jackknife_estimates`` this is BCa. Without them the acceleration is\n    exactly ``a=0`` and the method reduces to bias-corrected (BC), not BCa\n    (issue #116). The caller must report which path was used.\n\n    Returns ``(p, 2)`` array of ``(lo, hi)`` per parameter at level\n    ``1 - alpha``.\n    """
     samples = np.asarray(samples, dtype=float)
     theta_hat = np.asarray(theta_hat, dtype=float)
     B, p = samples.shape
