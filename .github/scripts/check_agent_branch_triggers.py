@@ -64,33 +64,25 @@ def _structural_lines(path: Path) -> list[tuple[int, int, str]]:
     return out
 
 def _push_branches(path: Path) -> set[str]:
-    lines = path.read_text(encoding="utf-8").splitlines()
-    push_index = next(
-        (i for i, line in enumerate(lines) if line.rstrip() == "  push:"),
-        None,
-    )
-    if push_index is None:
-        raise ValueError(f"{path}: missing top-level push trigger")
-
-    for line in lines[push_index + 1 :]:
-        if line and not line.startswith("    "):
-            break
-        stripped = line.strip()
-        if not stripped.startswith("branches:"):
-            continue
-        raw = stripped.split(":", 1)[1].strip()
-        if not (raw.startswith("[") and raw.endswith("]")):
-            raise ValueError(
-                f"{path}: agent-trigger contract expects inline branches list, got {raw!r}"
-            )
-        items = []
-        for item in raw[1:-1].split(","):
-            value = item.strip().strip('"').strip("'")
-            if value:
-                items.append(value)
-        return set(items)
-    raise ValueError(f"{path}: push trigger has no branches list")
-
+    lines = _structural_lines(path)
+    for i, (_, indent, stripped) in enumerate(lines):
+        if indent == 2 and stripped == "push:":
+            for _, child_indent, child in lines[i + 1 :]:
+                if child_indent <= 2:
+                    break
+                if child_indent == 4 and child.startswith("branches:"):
+                    raw = child.split(":", 1)[1].strip()
+                    if not (raw.startswith("[") and raw.endswith("]")):
+                        raise ValueError(
+                            f"{path}: contract expects inline push branches list"
+                        )
+                    return {
+                        item.strip().strip(chr(34)).strip(chr(39))
+                        for item in raw[1:-1].split(",")
+                        if item.strip()
+                    }
+            raise ValueError(f"{path}: push trigger has no branches list")
+    raise ValueError(f"{path}: missing top-level push trigger")
 
 def _yaml_code(line: str) -> str:
     """Return the structural part of a simple repository workflow line."""
@@ -99,72 +91,45 @@ def _yaml_code(line: str) -> str:
 
 def _pull_request_is_unfiltered(path: Path) -> bool:
     """Require default PR activity coverage with no base/path suppression."""
-    lines = path.read_text(encoding="utf-8").splitlines()
-    pr_index = next(
-        (
-            i
-            for i, line in enumerate(lines)
-            if _yaml_code(line).rstrip() == "  pull_request:"
-        ),
-        None,
-    )
-    if pr_index is None:
-        return False
-
+    lines = _structural_lines(path)
     forbidden = ("branches:", "branches-ignore:", "paths:", "paths-ignore:", "types:")
-    for line in lines[pr_index + 1 :]:
-        code = _yaml_code(line)
-        if not code.strip():
-            continue
-        indent = len(code) - len(code.lstrip(" "))
-        if indent < 4:
-            break
-        stripped = code.strip()
-        if stripped.startswith(forbidden):
-            return False
-    return True
-
+    for i, (_, indent, stripped) in enumerate(lines):
+        if indent == 2 and stripped == "pull_request:":
+            for _, child_indent, child in lines[i + 1 :]:
+                if child_indent <= 2:
+                    break
+                if child_indent >= 4 and child.startswith(forbidden):
+                    return False
+            return True
+    return False
 
 def _checkout_ref_values(path: Path) -> list[str | None]:
-    """Return with.ref for every actions/checkout step, None if absent."""
-    lines = path.read_text(encoding="utf-8").splitlines()
+    """Return with.ref for every structural actions/checkout step."""
+    lines = _structural_lines(path)
     refs: list[str | None] = []
-    for i, line in enumerate(lines):
-        code = _yaml_code(line)
-        stripped = code.strip()
+    for i, (_, uses_indent, stripped) in enumerate(lines):
         short_form = stripped.startswith("- uses: actions/checkout@")
         named_form = stripped.startswith("uses: actions/checkout@")
         if not (short_form or named_form):
             continue
-        uses_indent = len(code) - len(code.lstrip(" "))
-        # ``- uses:`` is itself the list item; ``uses:`` under ``- name:`` is
-        # a peer property. In both cases this is the indentation where ``with:``
-        # must appear.
         property_indent = uses_indent + 2 if short_form else uses_indent
         in_with = False
         ref_value: str | None = None
-        for next_line in lines[i + 1 :]:
-            next_code = _yaml_code(next_line)
-            if not next_code.strip():
-                continue
-            indent = len(next_code) - len(next_code.lstrip(" "))
-            next_stripped = next_code.strip()
-            if indent < property_indent:
+        for _, next_indent, child in lines[i + 1 :]:
+            if next_indent < property_indent:
                 break
-            if indent == property_indent:
-                if next_stripped == "with:":
+            if next_indent == property_indent:
+                if child == "with:":
                     in_with = True
                     continue
-                # Another peer property or the next list item ends ``with``.
                 in_with = False
-                if next_stripped.startswith("- "):
+                if child.startswith("- "):
                     break
                 continue
-            if in_with and indent > property_indent and next_stripped.startswith("ref:"):
-                ref_value = next_stripped.split(":", 1)[1].strip().strip(chr(34)).strip(chr(39))
+            if in_with and next_indent > property_indent and child.startswith("ref:"):
+                ref_value = child.split(":", 1)[1].strip().strip(chr(34)).strip(chr(39))
         refs.append(ref_value)
     return refs
-
 
 def _checks_out_exact_pr_head(path: Path) -> bool:
     """At least one checkout must bind to the submitted PR head SHA."""
