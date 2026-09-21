@@ -7,6 +7,172 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Added
+- **Eigenvalue-conditioning evidence for the stationary mode, AUDIT ONLY
+  (issue #117).** `numerics.conditioning` measures the reciprocal condition
+  number of the zero set -- `sigma_min(Y^H X)` over orthonormal bases of the
+  left and right invariant subspaces, which reduces to `|y^H x|` for a simple
+  eigenvalue -- together with the left/right residuals, the separation, the
+  trace-preservation defect and the two first-order forward-error estimates
+  those imply. `SpectralResult.zero_mode_conditioning` carries it into the
+  report; `compute_spectral_layer(..., conditioning_audit=False)` switches it
+  off. CHANGES NO REPORTED NUMBER: no filter, gap, certificate, verdict or tier
+  reads any of it, and the run-manifest contract is unchanged (additive field
+  with a default).
+
+  Why a second instrument. For a NON-NORMAL generator a backward error does not
+  bound the forward eigenvalue displacement by the same number, so the
+  certificate band cannot say whether a stationary eigenvalue away from zero is
+  a failed eigensolve or the correctly located zero of an operator that is only
+  approximately trace preserving. Measured on the 4x4 fixture from the
+  2026-09-11 external review of PR #127: perturbation norm `||q^H L|| =
+  1.0000e-14` (the raw `||vec(I)^H L||` over `sqrt(d)`, which is the
+  minimum-norm correction that makes the operator trace preserving), certificate
+  band `4.4409e-13`, observed displacement `1.0000e-07` -- the band
+  under-predicts by `2.25e5x`, while `||q^H L|| / s` with `s = 2.0e-07` gives
+  `5.00e-08`, off by a factor of two.
+
+  Why `|y^H x|` and not LAPACK `RCONDE`, as issue #117 proposed. First, it is
+  unreachable: SciPy wraps no `?geevx` (measured on 1.17.1 --
+  `scipy.linalg.lapack.zgeevx` raises `AttributeError`). Second, it would answer
+  the wrong question: `xGEEVX` documents that its condition numbers refer to the
+  BALANCED matrix and that diagonal scaling changes them, whereas `?geev`
+  back-transforms its eigenvectors, so `|y^H x|` describes the operator as the
+  caller wrote it. Measured on a 9x9 operator under `D A D^-1` with
+  `D = diag(1e-6 .. 1e9)`, which leaves the spectrum invariant to round-off
+  (below `1e-14`; the exact difference is BLAS-dependent, so it is a bound): the
+  per-mode `s` range moves from `0.189..0.761` to `1.55e-15..1.18e-14`.
+
+  Why the subspace figure and not a per-mode one. Per-mode `s` collapses with
+  the splitting of a nearly degenerate pair while its invariant subspace stays
+  perfectly conditioned (measured on `[[0,1,0],[0,delta,0],[0,0,-1]]`: `s` falls
+  `1e-2 -> 1e-14` as `delta` does, `sigma_min(Y^H X) = 1.000` throughout). A
+  degenerate stationary manifold -- a conserved quantity or symmetry sector --
+  has exactly that shape and is physical, so a per-mode gate would withhold on a
+  healthy generator.
+
+  What it does NOT catch, pinned by a negative-control test whose premise is
+  established first: the stiff #112 deflation failure is invisible to
+  conditioning. On the canonical four-level network raw `zgeev` loses the zero
+  mode -- `7.28e-06` against a certificate band of `8.48e-08`, repaired by
+  `dgeev-real` to `4.08e-17` -- and conditioning that wrong spectrum gives
+  `s = 0.29` for the stationary mode and `0.040` at worst, i.e. condition
+  numbers between 1 and 25. That range independently reproduces the 2026-08-25
+  measurement already recorded in `linalg.py`. Conditioning is therefore
+  ADDITIVE to the structural certificate, which is also why this change promotes
+  it to no gate; issue #117 step 4 stays open until a
+  certified-yet-misconditioned generator is exhibited. Across sixteen physical
+  GKSL generators (`gamma` and `omega` each over four decades) the worst
+  reciprocal condition is `0.707` and no run is reported as
+  conditioning-limited, so the evidence costs no false alarm.
+
+  For the same reason the audit refuses to describe a spectrum it did not
+  reproduce. `zero_mode_conditioning(..., eigenvalues=...)` compares its own
+  solve against the spectrum the caller will report and returns
+  `available=False, reason="accepted_spectrum_mismatch"` when they disagree,
+  because `certified_eigvals` may have repaired through a different LAPACK
+  route: on that same network the audit would otherwise have published the
+  conditioning of `7.28e-06` beside a reported stationary eigenvalue of
+  `4.08e-17`. A side length that cannot be a superoperator, and a negative
+  `zero_tolerance`, are likewise refused rather than answered.
+  The forward estimates divide by the conditioning of the group of modes the
+  arithmetic does not SEPARATE from the selected stationary eigenvalue --
+  which is that eigenvalue's own `|y^H x|` when it is cleanly simple, and the
+  basis-invariant `sigma_min(Y^H X)` when it is repeated or unresolved. Both halves are measured: a per-mode
+  value is basis dependent for a repeated eigenvalue (rotating only the right
+  basis inside a degenerate stationary eigenspace moves it from `0.7206` to
+  `0.5408` while the subspace figure stays `0.7071`), and conversely the
+  subspace figure over the whole cluster, or the minimum over it, couples the
+  estimate to modes the stationary one has nothing to do with (measured: widening a cutoff from
+  `1e-9` to `2e-5` moved the structural estimate from `1e-10` to `1.0` under the
+  cluster minimum, with the selected eigenvalue unchanged). Membership of the
+  zero set is read from the ACCEPTED spectrum, matched to the audit's own solve
+  by a minimum-cost assignment rather than a lexicographic sort, so the evidence
+  conditions the set the report filtered and two numerically identical spectra
+  are not mispaired by a round-off-sized reordering. With no cutoff supplied,
+  every mode the arithmetic cannot separate from the smallest is kept, so a
+  degenerate stationary manifold is conditioned as the subspace it is.
+
+  Grouping is by the round-off band #108 already defines,
+  `ZERO_MODE_EPS_FACTOR * eps * max|lambda|`, not by exact eigenvalue
+  equality and not by the backward error. Exact equality holds only when
+  LAPACK happens to return bit-identical values, which it does not for the
+  same generator written in a rotated basis: measured on the two-sector
+  fixture under a unitary similarity -- which cannot change any conditioning
+  figure -- the zero set comes back spread by `2.9e-16`, the exact-tie group
+  collapses to one mode, and both the reported `reciprocal_condition` and the
+  divisor read `0.102562` against the operator's `0.707107`. The backward
+  error was the first candidate for the band and is wrong for a reason this
+  module has to respect: at `c = 1e200` the eigendecomposition degrades, the
+  relative residual rises to `1.0`, and a residual-scaled grouping merged the
+  whole spectrum -- breaking the `s(cL) = s(L)` invariance #108 and #130
+  require. The round-off band is scale covariant by construction.
+
+  `right_residual`, `left_residual` and `separation` are scoped to that same
+  group rather than to the whole cutoff cluster, so the numerator and the
+  divisor of `solver_forward_estimate` describe the same modes; previously an
+  unrelated in-cutoff mode's backward error entered an estimate that names the
+  selected eigenvalue, and a mode the cutoff admitted while the arithmetic
+  resolved it was neither conditioned nor counted as a neighbour -- measured on
+  a 4x4 with eigenvalues `[1e-6, 2e-6, -1, -2]` at `zero_tolerance=3e-6`, which
+  reported a separation of `1.000001` while the selected mode's neighbour sits
+  `1e-6` away, exactly its own structural budget.
+
+  KNOWN LIMITATION, recorded in the module docstring and tracked as #168: for a
+  DEFECTIVE repeated stationary eigenvalue no figure derived from an eigenvector
+  decomposition is basis invariant, because the decomposition does not exist.
+  Measured on a 2x2 Jordan block at zero, exactly trace preserving, re-expressed
+  by a unitary fixing `q`: `reciprocal_condition` moves `0.000000 -> 1.000000`
+  and the verdict `CONDITIONING_LIMITED -> BENIGN` for the same operator. The
+  evidence is audit-only, so nothing reads it, but it is not to be trusted on a
+  defective stationary manifold until #168 is closed.
+
+  Spectrum agreement accepts a pairing the minimum-TOTAL-cost assignment misses.
+  The caller rejects on the largest paired distance while the assignment
+  minimises the sum, and those are different optima: a sum-minimising pairing
+  can put one pair outside the band where another perfect matching keeps every
+  pair inside it. The min-sum pairing is still preferred when it fits; only when
+  it does not is feasibility decided by minimising the NUMBER of over-band
+  pairs, which is zero exactly when a within-band perfect matching exists.
+
+  The audit is total against wider numeric dtypes on both inputs. A finite
+  `np.clongdouble` accepted spectrum built a `float128` cost matrix and raised
+  `TypeError` out of `linear_sum_assignment`; it is now narrowed and rechecked
+  inside the protected block. A `zero_tolerance` finite only in a wider dtype
+  (`np.longdouble("1e400")`) passed the public gate, became `inf` in float64 and
+  was silently demoted to "no cutoff supplied"; the cutoff is now validated as
+  narrowed, so it is refused instead.
+
+  `displacement_explained` abstains outside the first-order perturbative
+  regime, rather than denying an attribution first-order theory cannot judge.
+  It abstains on the PERTURBATION as well as on the outcome: a combined
+  estimate that reaches the separation invalidates the local expansion
+  however small the displacement it happens to produce (measured on
+  `diag(1e-6, -1, -2, -3)` at a cutoff of `1e-5`: displacement `1e-06`
+  against a separation of `1.000001`, and a trace correction of `2.1213`
+  that has to be attributed).
+  `CONDITIONING_AGREEMENT_FACTOR` is headroom on a LOCAL expansion, and no fixed
+  factor can rescue a Jordan chain: on a 16x16 companion matrix whose
+  eigenvalues satisfy exactly `lambda**16 = 1e-8`, the displacement `0.3162` is
+  entirely caused by the `1e-8` perturbation yet misses the first-order estimate
+  `0.02196` by 14.4x, and the ratio grows without bound with the chain length.
+  The regime test is measured rather than tuned: a perturbation small enough for
+  a local expansion cannot move an eigenvalue as far as its nearest neighbour,
+  so `observed >= separation` abstains. Both quantities are report fields, so a
+  reader can see why.
+
+  The two forward-error contributions are SUCCESSIVE perturbations -- from the
+  exact zero of the nearest trace-preserving operator, to that operator's
+  eigenvalue, to the one the solver returned -- so the budget is their sum, not
+  the larger of the two.
+
+  `benchmarks/issue117_zero_mode_conditioning.py` reproduces every figure above
+  and carries the timing campaign. On cost: the audit's price at small `d` is
+  NOT the extra eigensolve (measured 0.02 ms of a 0.65 ms audit at `d = 2`) but
+  its Python-level per-mode work; in absolute terms that is well under a
+  millisecond there. The relative figure is not stable enough on a shared
+  machine to quote -- the same script measured the `d = 8` audit at 20 ms and
+  40 ms in consecutive runs -- so it is measured rather than documented.
+  `compute_spectral_layer(..., conditioning_audit=False)` switches it off.
 - **Trace-preserving generators can be restricted to the traceless operator
   space by an exact structural identity, with no eigenvalue-magnitude
   threshold (issue #113).** For column-stacked operators trace preservation IS

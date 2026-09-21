@@ -25,6 +25,7 @@ from .._consts import EPS_GAP
 from .._types import SpectralResult
 from ..core.lindblad import steady_state
 from ..numerics.adjoint import gram_adjoint, symmetrised_liouvillian
+from ..numerics.conditioning import zero_mode_conditioning
 from ..numerics.linalg import certified_eigvals
 from ..numerics.scale import spectral_zero_tolerance
 
@@ -201,8 +202,28 @@ def spectral_spread(
 def compute_spectral_layer(
     L_super: np.ndarray,
     rho_steady: np.ndarray | None = None,
+    *,
+    conditioning_audit: bool = True,
 ) -> SpectralResult:
-    """Run all spectral diagnostics D1-D4."""
+    """Run all spectral diagnostics D1-D4.
+
+    ``conditioning_audit`` attaches the issue-#117 eigenvalue-conditioning
+    evidence to :attr:`SpectralResult.zero_mode_conditioning`. It is AUDIT ONLY
+    -- switching it off changes no D1-D4 value, no certificate, no verdict and
+    no tier, only whether the evidence is present.
+
+    Round-3 review, on cost: fixed percentages (+3%/+9%/+15%) used to be quoted
+    here. Nothing in the repository produced them, and they were wrong -- they
+    had been measured for the extra ``eig(left=True, right=True)`` alone, which
+    is not where the audit spends its time at small ``d`` (measured 0.02 ms of a
+    0.65 ms audit at ``d = 2``; the per-mode normalisation, scale-safe norms,
+    SVD and residual loop dominate). In absolute terms that is well under a
+    millisecond there. The relative cost is not stable enough on a shared
+    machine to quote -- the same script measured the ``d = 8`` audit at 20 ms
+    and 40 ms in consecutive runs -- so the timing campaign lives in
+    ``benchmarks/issue117_zero_mode_conditioning.py`` and reports the caller's
+    own hardware instead.
+    """
     L_super = np.asarray(L_super, dtype=complex)  # complex128: scipy dispatches by dtype; the double-solve contract (#108) must hold
     if rho_steady is None:
         rho_steady = steady_state(L_super)
@@ -342,6 +363,33 @@ def compute_spectral_layer(
         # because ``zero_tol`` excludes exactly that mode from the test.
         # ``None`` says the question was not answered.
         has_complex = None
+    # Issue #117, AUDIT ONLY and therefore placed AFTER every diagnostic above
+    # is already decided: no value computed here can reach D1-D4. A
+    # backward error does not bound the forward eigenvalue displacement for a
+    # non-normal generator, so the certificate's band cannot say whether a
+    # stationary eigenvalue sitting away from zero is a failed eigensolve or
+    # the correctly located zero of an operator that is only approximately
+    # trace preserving. The conditioning evidence separates those two readings
+    # for a reader of the report; it deliberately does not act on them, because
+    # on the stiff #112 family the conditioning of the wrong spectrum is benign
+    # and no certified-yet-misconditioned case is known (issue #117 step 4).
+    #
+    # PR #166 REVIEW, finding P2: the accepted ``eigenvalues`` are handed in.
+    # The audit runs its own ``?geev`` for the left/right pair, but
+    # ``certified_eigvals`` above may have REPAIRED the spectrum through a
+    # different LAPACK route -- measured on the canonical stiff #112 network,
+    # ``dgeev-real`` is accepted with a stationary eigenvalue at ``4.08e-17``
+    # while a raw ``zgeev`` returns the spurious ``7.28e-06`` that issue #112
+    # exists to reject. Without this argument the audit described that second
+    # spectrum and reported ``CONDITIONING_LIMITED`` about eigenvalues this
+    # result does not contain. It now withholds instead.
+    conditioning = (
+        zero_mode_conditioning(
+            L_super, zero_tolerance=zero_tol, eigenvalues=eigenvalues
+        ).as_dict()
+        if conditioning_audit
+        else None
+    )
     # Sort by real part descending so [0] is the steady state.
     order = np.argsort(-np.real(eigenvalues))
     return SpectralResult(
@@ -354,6 +402,7 @@ def compute_spectral_layer(
         steady_state=np.asarray(rho_steady),
         has_complex_pairs=has_complex,
         zero_mode_certificate=certificate.as_dict(),
+        zero_mode_conditioning=conditioning,
     )
 
 

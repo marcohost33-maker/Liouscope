@@ -68,6 +68,28 @@ class SpectralResult:
     # Optional with a default so the run-manifest contract is unchanged
     # (additive field).
     zero_mode_certificate: dict[str, object] | None = None
+    # Issue #117, AUDIT ONLY -- the deliberate opposite of the field above.
+    # Eigenvalue-conditioning evidence for the stationary mode: the reciprocal
+    # condition number of the zero set, the residuals, and the first-order
+    # forward-error estimates those imply. NOTHING reads it: no filter, no gap,
+    # no verdict, no tier. It exists because a backward error does not bound a
+    # forward eigenvalue displacement for a NON-NORMAL generator (measured on
+    # the PR #127 fixture: 1.4e-14 defect, 1.0e-7 displacement), so a reader of
+    # a report otherwise cannot tell a failed eigensolve from a correctly
+    # located eigenvalue of an approximately trace-preserving operator.
+    #
+    # Deliberately NOT promoted to a gate in this change: on the canonical
+    # stiff #112 network the conditioning of the WRONG spectrum is benign
+    # (measured s = 0.29 for the spurious stationary mode it selects, 0.040 at
+    # worst over that spectrum -- condition numbers between 1 and 25), so
+    # conditioning cannot replace the structural certificate, and no case is yet
+    # known in which the certificate certifies while conditioning would have
+    # withheld. The separate ``0.707`` figure quoted in the changelog is the
+    # worst case over the sixteen PHYSICAL GKSL generators, a different
+    # measurement. See ``numerics.conditioning`` and issue #117 step 4.
+    # Optional with a default so the run-manifest contract is unchanged
+    # (additive field).
+    zero_mode_conditioning: dict[str, object] | None = None
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)

@@ -140,6 +140,30 @@ abstract: >-
 # MANIFEST_SCHEMA is deliberately unchanged -- `trace_defect` is a report
 # field, not a run-manifest field, so the manifest contract is untouched and
 # `input_hash` does not move.
+# Also pending for the next cut: the spectral layer records AUDIT-ONLY
+# eigenvalue-conditioning evidence for the stationary mode (issue #117). The
+# reciprocal condition number of the zero set -- sigma_min(Y^H X) over
+# orthonormal bases of the left and right invariant subspaces, which reduces to
+# |y^H x| for a simple eigenvalue -- is reported alongside the left/right
+# residuals, the separation, the trace-preservation defect and the first-order
+# forward-error estimates those imply. It exists because a backward error does
+# NOT bound the forward eigenvalue displacement for a non-normal generator:
+# measured on the 4x4 (two-level, d = 2) fixture of the 2026-09-11 external
+# review, a 1.00e-14 perturbation moves the stationary eigenvalue to 1.00e-07,
+# which the certificate band (4.44e-13) under-predicts by 2.25e5x and the
+# conditioning-scaled estimate (5.00e-08) reproduces within a factor of two.
+# (The canonical FOUR-level network referenced elsewhere in this file is a
+# different, 16x16 fixture; the two must not be conflated.) This entry
+# describes a MEASUREMENT that is available in the codebase and it must NOT be
+# described as changing any reported number: no filter, gap, certificate,
+# verdict or tier consumes it, D1-D24 are byte-identical and the run manifest
+# contract is untouched (MANIFEST_SCHEMA deliberately unchanged; the evidence is
+# a report field, so `input_hash` does not move). It must also NOT be described
+# as detecting stiff eigensolver failure: on the canonical #112 network the
+# deflated, WRONG spectrum carries condition numbers between 1 and 25, so
+# conditioning is additive to the structural certificate and no substitute for
+# it. When a diagnostic is gated on this evidence, THAT change is the one that
+# must be described as a correction.
 keywords:
   - open quantum systems
   - Lindblad
