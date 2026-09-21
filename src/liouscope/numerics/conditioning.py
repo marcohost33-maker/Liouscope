@@ -286,7 +286,10 @@ class ZeroModeConditioning:
     right_residual: float
     #: ``max ||L^H y - conj(lambda) y||`` over the unresolved group, unit ``y``.
     left_residual: float
-    #: Distance from the zero set to the nearest eigenvalue outside it.
+    #: Distance from the conditioned group to the nearest eigenvalue outside
+    #: it -- the group the estimates above describe, not the caller's cutoff
+    #: cluster, so that a mode the cutoff admits but the arithmetic resolves
+    #: still counts as a neighbour (round-7 review).
     separation: float
     #: ``||q^H L|| = ||vec(I)^H L|| / sqrt(d)`` with ``q`` the UNIT trace
     #: vector: the norm of the minimum-norm perturbation that would make
@@ -695,9 +698,23 @@ def _measure(
     # number is not a property of what it names.
     right_res = max((residuals[int(j)][0] for j in tied), default=0.0)
     left_res = max((residuals[int(j)][1] for j in tied), default=0.0)
-    outside = np.setdiff1d(np.arange(values.size), cluster, assume_unique=False)
+    # ROUND-7 REVIEW, the completion of the round-6 change. This measured the
+    # distance from the CUTOFF CLUSTER to its complement, while everything above
+    # now conditions ``tied``. A mode the caller's cutoff admits but the
+    # arithmetic RESOLVES from the selected one is then neither conditioned nor
+    # counted as a neighbour -- so it drops out of the locality test even though
+    # it is exactly the eigenvalue that test exists to notice. Measured on a
+    # valid 4x4 in the unit-trace basis with eigenvalues
+    # ``[1e-6, 2e-6, -1, -2]`` at ``zero_tolerance=3e-6``: the reported
+    # separation was ``1.000001`` while the selected mode's nearest neighbour
+    # sits ``1e-6`` away, exactly its own structural budget, and
+    # ``displacement_explained`` said ``True`` where the module's own criterion
+    # demands abstention. The separation is therefore measured from ``tied`` to
+    # its complement in the WHOLE spectrum, the same group the estimates and the
+    # residuals describe.
+    outside = np.setdiff1d(np.arange(values.size), tied, assume_unique=False)
     separation = (
-        float(np.min(np.abs(reported[outside][:, None] - reported[cluster][None, :])))
+        float(np.min(np.abs(reported[outside][:, None] - reported[tied][None, :])))
         if outside.size
         else float("inf")
     )

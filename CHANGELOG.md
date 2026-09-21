@@ -107,11 +107,15 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   whole spectrum -- breaking the `s(cL) = s(L)` invariance #108 and #130
   require. The round-off band is scale covariant by construction.
 
-  `right_residual` and `left_residual` are scoped to that same group rather
-  than to the whole cutoff cluster, so the numerator and the divisor of
-  `solver_forward_estimate` describe the same modes; previously an unrelated
-  in-cutoff mode's backward error entered an estimate that names the selected
-  eigenvalue.
+  `right_residual`, `left_residual` and `separation` are scoped to that same
+  group rather than to the whole cutoff cluster, so the numerator and the
+  divisor of `solver_forward_estimate` describe the same modes; previously an
+  unrelated in-cutoff mode's backward error entered an estimate that names the
+  selected eigenvalue, and a mode the cutoff admitted while the arithmetic
+  resolved it was neither conditioned nor counted as a neighbour -- measured on
+  a 4x4 with eigenvalues `[1e-6, 2e-6, -1, -2]` at `zero_tolerance=3e-6`, which
+  reported a separation of `1.000001` while the selected mode's neighbour sits
+  `1e-6` away, exactly its own structural budget.
 
   `displacement_explained` abstains outside the first-order perturbative
   regime, rather than denying an attribution first-order theory cannot judge.

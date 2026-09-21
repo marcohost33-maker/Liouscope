@@ -1063,3 +1063,37 @@ def test_a_zero_generator_groups_its_whole_spectrum() -> None:
     assert evidence.reciprocal_condition == pytest.approx(1.0, rel=1e-12)
     assert evidence.trace_defect == 0.0
     assert evidence.verdict == CONDITIONING_BENIGN
+
+
+def test_separation_counts_a_resolved_neighbour_inside_the_cutoff() -> None:
+    """Round-7 review: the separation must describe the group being conditioned.
+
+    Round 6 moved the estimates and the residuals onto ``tied`` -- the modes the
+    arithmetic cannot separate from the selected one -- but left the separation
+    measured from the caller's whole cutoff cluster to its complement. A mode
+    the cutoff admits while the arithmetic RESOLVES it is then neither
+    conditioned nor counted as a neighbour, so it vanishes from the
+    first-order-regime test that exists to notice exactly such a mode.
+
+    Here the selected eigenvalue's nearest neighbour is `2e-6`, `1e-6` away and
+    inside the cutoff, which is precisely its own structural budget: the
+    module's own criterion demands abstention, and the inflated separation of
+    `1.000001` hid that.
+    """
+    basis = _basis_with_first(trace_vector(2))
+    spectrum = np.diag([1.0e-6, 2.0e-6, -1.0, -2.0]).astype(complex)
+    system = basis @ spectrum @ basis.conj().T
+
+    evidence = zero_mode_conditioning(system, zero_tolerance=3.0e-6)
+    assert evidence.available
+    # PREMISE: the cutoff admits the neighbour, and the arithmetic RESOLVES it,
+    # so it is not part of the conditioned group.
+    assert evidence.cluster_size == 2
+    assert evidence.eigenvalue == pytest.approx(1.0e-6, rel=1e-9)
+    # The property under test: the neighbour still counts as a neighbour.
+    assert evidence.separation == pytest.approx(1.0e-6, rel=1e-6)
+    budget = (
+        evidence.structural_forward_estimate + evidence.solver_forward_estimate
+    )
+    assert budget >= evidence.separation
+    assert evidence.displacement_explained is None
