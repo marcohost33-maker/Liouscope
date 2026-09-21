@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
-"""Keep documented agent branch prefixes and CI push triggers in sync.
+"""Keep documented agent branches and stacked-PR CI coverage in sync.
 
 AGENTS.md is the repository single source of truth for agent branch prefixes.
-The required scientific/quality workflows must run on every one of those
-prefixes so stacked agent PRs can obtain exact-head evidence even when their
-base is not ``main``.
+Required scientific/quality workflows must cover those prefixes on ordinary
+pushes AND must accept pull requests to arbitrary base branches. The latter is
+the reliable path for stacked PR verification: automation-authenticated pushes
+may legitimately suppress recursive GitHub Actions events.
 """
 
 from __future__ import annotations
@@ -20,7 +21,24 @@ REQUIRED_WORKFLOWS = (
     ROOT / ".github" / "workflows" / "ci-qutip.yml",
     ROOT / ".github" / "workflows" / "quality-contract.yml",
 )
+MERGE_SMOKE_WORKFLOW = ROOT / ".github" / "workflows" / "ci-reusable-pilot.yml"
+MERGE_SMOKE_CALLEE = ROOT / ".github" / "workflows" / "ci-python-local.yml"
+EVIDENCE_JOBS = {
+    "ci.yml": ("test", "test-head"),
+    "ci-qutip.yml": ("qutip-cross-check", "qutip-head-cross-check"),
+    "quality-contract.yml": ("contract", "contract-head"),
+}
+PR_HEAD_REF = "${{ github.event.pull_request.head.sha }}"
+PR_ONLY_IF = "${{ github.event_name == 'pull_request' }}"
 TASK_PREFIX_RE = re.compile(r"`([A-Za-z0-9_-]+)/<task>`")
+BLOCK_SCALAR_RE = re.compile(r"[:=-]\s*[|>](?:[1-9][+-]?|[+-][1-9]?|)\s*$")
+
+
+def _display_path(path: Path) -> str:
+    try:
+        return str(path.relative_to(ROOT))
+    except ValueError:
+        return str(path)
 
 
 def _documented_agent_prefixes() -> set[str]:
@@ -31,33 +49,224 @@ def _documented_agent_prefixes() -> set[str]:
     return {prefix for prefix in prefixes if "|" not in prefix}
 
 
-def _push_branches(path: Path) -> set[str]:
-    lines = path.read_text(encoding="utf-8").splitlines()
-    push_index = next(
-        (i for i, line in enumerate(lines) if line.rstrip() == "  push:"),
-        None,
-    )
-    if push_index is None:
-        raise ValueError(f"{path}: missing top-level push trigger")
-
-    for line in lines[push_index + 1 :]:
-        if line and not line.startswith("    "):
-            break
-        stripped = line.strip()
-        if not stripped.startswith("branches:"):
+def _structural_lines(path: Path) -> list[tuple[int, int, str]]:
+    """Return structural YAML lines, excluding block-scalar payload."""
+    out: list[tuple[int, int, str]] = []
+    scalar_indent: int | None = None
+    for lineno, raw in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+        if not raw.strip():
             continue
-        raw = stripped.split(":", 1)[1].strip()
-        if not (raw.startswith("[") and raw.endswith("]")):
-            raise ValueError(
-                f"{path}: agent-trigger contract expects inline branches list, got {raw!r}"
-            )
-        items = []
-        for item in raw[1:-1].split(","):
-            value = item.strip().strip('"').strip("'")
-            if value:
-                items.append(value)
-        return set(items)
-    raise ValueError(f"{path}: push trigger has no branches list")
+        indent = len(raw) - len(raw.lstrip(" "))
+        if scalar_indent is not None:
+            if indent > scalar_indent:
+                continue
+            scalar_indent = None
+        code = _yaml_code(raw)
+        if not code.strip():
+            continue
+        indent = len(code) - len(code.lstrip(" "))
+        stripped = code.strip()
+        out.append((lineno, indent, stripped))
+        if BLOCK_SCALAR_RE.search(stripped):
+            scalar_indent = indent
+    return out
+
+def _on_block_lines(path: Path) -> list[tuple[int, int, str]]:
+    """Return only children of the top-level on mapping."""
+    lines = _structural_lines(path)
+    for i, (_, indent, stripped) in enumerate(lines):
+        if indent == 0 and stripped == "on:":
+            out: list[tuple[int, int, str]] = []
+            for item in lines[i + 1 :]:
+                if item[1] == 0:
+                    break
+                out.append(item)
+            return out
+    return []
+
+def _push_branches(path: Path) -> set[str]:
+    lines = _on_block_lines(path)
+    for i, (_, indent, stripped) in enumerate(lines):
+        if indent == 2 and stripped == "push:":
+            for _, child_indent, child in lines[i + 1 :]:
+                if child_indent <= 2:
+                    break
+                if child_indent == 4 and child.startswith("branches:"):
+                    raw = child.split(":", 1)[1].strip()
+                    if not (raw.startswith("[") and raw.endswith("]")):
+                        raise ValueError(
+                            f"{path}: contract expects inline push branches list"
+                        )
+                    return {
+                        item.strip().strip(chr(34)).strip(chr(39))
+                        for item in raw[1:-1].split(",")
+                        if item.strip()
+                    }
+            raise ValueError(f"{path}: push trigger has no branches list")
+    raise ValueError(f"{path}: missing top-level on.push trigger")
+
+def _yaml_code(line: str) -> str:
+    """Return the structural part of a simple repository workflow line."""
+    return line.split("#", 1)[0].rstrip()
+
+
+def _pull_request_is_unfiltered(path: Path) -> bool:
+    """Require top-level on.pull_request with no suppression filters."""
+    lines = _on_block_lines(path)
+    forbidden = ("branches:", "branches-ignore:", "paths:", "paths-ignore:", "types:")
+    for i, (_, indent, stripped) in enumerate(lines):
+        if indent == 2 and stripped == "pull_request:":
+            for _, child_indent, child in lines[i + 1 :]:
+                if child_indent <= 2:
+                    break
+                if child_indent >= 4 and child.startswith(forbidden):
+                    return False
+            return True
+    return False
+
+def _checkout_ref_values(path: Path) -> list[str | None]:
+    """Return with.ref for every structural actions/checkout step."""
+    lines = _structural_lines(path)
+    refs: list[str | None] = []
+    for i, (_, uses_indent, stripped) in enumerate(lines):
+        short_form = stripped.startswith("- uses: actions/checkout@")
+        named_form = stripped.startswith("uses: actions/checkout@")
+        if not (short_form or named_form):
+            continue
+        property_indent = uses_indent + 2 if short_form else uses_indent
+        in_with = False
+        ref_value: str | None = None
+        for _, next_indent, child in lines[i + 1 :]:
+            if next_indent < property_indent:
+                break
+            if next_indent == property_indent:
+                if child == "with:":
+                    in_with = True
+                    continue
+                in_with = False
+                if child.startswith("- "):
+                    break
+                continue
+            if in_with and next_indent > property_indent and child.startswith("ref:"):
+                ref_value = child.split(":", 1)[1].strip().strip(chr(34)).strip(chr(39))
+        refs.append(ref_value)
+    return refs
+
+def _job_specs(path: Path) -> dict[str, dict[str, object]]:
+    """Return job-level if/uses plus checkout refs, excluding scalar payload."""
+    lines = _structural_lines(path)
+    jobs: dict[str, dict[str, object]] = {}
+    current: str | None = None
+    in_jobs = False
+    for i, (_, indent, stripped) in enumerate(lines):
+        if indent == 0:
+            in_jobs = stripped == "jobs:"
+            current = None
+            continue
+        if not in_jobs:
+            continue
+        if indent == 2 and stripped.endswith(":") and not stripped.startswith("-"):
+            current = stripped[:-1]
+            jobs[current] = {"if": None, "needs": None, "uses": [], "refs": []}
+            continue
+        if current is None:
+            continue
+        if indent == 4 and stripped.startswith("if:"):
+            jobs[current]["if"] = stripped.split(":", 1)[1].strip()
+            continue
+        if indent == 4 and stripped.startswith("needs:"):
+            jobs[current]["needs"] = stripped.split(":", 1)[1].strip()
+            continue
+        if indent == 4 and stripped.startswith("uses:"):
+            uses = jobs[current]["uses"]
+            assert isinstance(uses, list)
+            uses.append(stripped.split(":", 1)[1].strip().strip(chr(34)).strip(chr(39)))
+            continue
+        short_form = stripped.startswith("- uses: actions/checkout@")
+        named_form = stripped.startswith("uses: actions/checkout@")
+        if not (short_form or named_form):
+            continue
+        property_indent = indent + 2 if short_form else indent
+        in_with = False
+        ref_value: str | None = None
+        for _, next_indent, child in lines[i + 1 :]:
+            if next_indent < property_indent:
+                break
+            if next_indent == property_indent:
+                if child == "with:":
+                    in_with = True
+                    continue
+                in_with = False
+                if child.startswith("- "):
+                    break
+                continue
+            if in_with and next_indent > property_indent and child.startswith("ref:"):
+                ref_value = child.split(":", 1)[1].strip().strip(chr(34)).strip(chr(39))
+        refs = jobs[current]["refs"]
+        assert isinstance(refs, list)
+        refs.append(ref_value)
+    return jobs
+
+
+def _evidence_job_errors(path: Path) -> list[str]:
+    errors: list[str] = []
+    jobs = _job_specs(path)
+    required_id, head_id = EVIDENCE_JOBS[path.name]
+    required = jobs.get(required_id)
+    if required is None:
+        errors.append(f"{_display_path(path)}: missing required merge job {required_id}")
+    else:
+        if required["if"] is not None:
+            errors.append(f"{_display_path(path)}:{required_id}: required job must not be conditional")
+        if required["needs"] is not None:
+            errors.append(f"{_display_path(path)}:{required_id}: required job must not depend on another job")
+        if required["refs"] != [None]:
+            errors.append(f"{_display_path(path)}:{required_id}: required job must have one default-ref checkout")
+    head = jobs.get(head_id)
+    if head is None:
+        errors.append(f"{_display_path(path)}: missing exact-head job {head_id}")
+    else:
+        if head["if"] != PR_ONLY_IF:
+            errors.append(f"{_display_path(path)}:{head_id}: exact-head job must be PR-only")
+        if head["needs"] is not None:
+            errors.append(f"{_display_path(path)}:{head_id}: exact-head job must not depend on another job")
+        if head["refs"] != [PR_HEAD_REF]:
+            errors.append(f"{_display_path(path)}:{head_id}: exact-head checkout is not bound to PR head")
+    return errors
+
+def _checks_out_exact_pr_head(path: Path) -> bool:
+    """At least one checkout must bind to the submitted PR head SHA."""
+    return PR_HEAD_REF in _checkout_ref_values(path)
+
+
+def _also_checks_out_proposed_merge(path: Path) -> bool:
+    """At least one checkout must deliberately retain GitHub PR merge semantics."""
+    return None in _checkout_ref_values(path)
+
+
+def _job_level_uses_values(path: Path) -> list[str]:
+    """Return actual job-level reusable-workflow calls."""
+    values: list[str] = []
+    for spec in _job_specs(path).values():
+        uses = spec["uses"]
+        assert isinstance(uses, list)
+        values.extend(str(value) for value in uses)
+    return values
+
+
+def _merge_smoke_keeps_default_merge_ref() -> bool:
+    """Bind merge-smoke verification to the local workflow actually invoked."""
+    if not MERGE_SMOKE_WORKFLOW.exists():
+        return False
+    targets = _job_level_uses_values(MERGE_SMOKE_WORKFLOW)
+    expected = "./.github/workflows/ci-python-local.yml"
+    if targets.count(expected) != 1 or len(targets) != 1:
+        return False
+    callee = ROOT / expected.removeprefix("./")
+    if callee != MERGE_SMOKE_CALLEE or not callee.exists():
+        return False
+    refs = _checkout_ref_values(callee)
+    return bool(refs) and all(ref is None for ref in refs)
 
 
 def main() -> int:
@@ -73,7 +282,7 @@ def main() -> int:
     expected = {"main", *(f"{prefix}/**" for prefix in prefixes)}
     for path in REQUIRED_WORKFLOWS:
         if not path.exists():
-            errors.append(f"required workflow missing: {path.relative_to(ROOT)}")
+            errors.append(f"required workflow missing: {_display_path(path)}")
             continue
         try:
             actual = _push_branches(path)
@@ -83,9 +292,32 @@ def main() -> int:
         missing = sorted(expected - actual)
         if missing:
             errors.append(
-                f"{path.relative_to(ROOT)}: push trigger misses documented branches: "
+                f"{_display_path(path)}: push trigger misses documented branches: "
                 + ", ".join(missing)
             )
+        if not _pull_request_is_unfiltered(path):
+            errors.append(
+                f"{_display_path(path)}: pull_request must cover arbitrary base "
+                "branches (no branches/branches-ignore filter), so stacked PRs "
+                "receive exact-head CI"
+            )
+        errors.extend(_evidence_job_errors(path))
+
+    if not MERGE_SMOKE_WORKFLOW.exists():
+        errors.append(
+            f"merge-smoke workflow missing: {MERGE_SMOKE_WORKFLOW.relative_to(ROOT)}"
+        )
+    elif not _pull_request_is_unfiltered(MERGE_SMOKE_WORKFLOW):
+        errors.append(
+            f"{MERGE_SMOKE_WORKFLOW.relative_to(ROOT)}: merge-smoke pull_request "
+            "must cover arbitrary base branches and default PR activity types"
+        )
+    if not _merge_smoke_keeps_default_merge_ref():
+        errors.append(
+            "merge-smoke contract drifted: ci-reusable-pilot.yml must call "
+            "ci-python-local.yml and that callee actions/checkout step must "
+            "omit with.ref so the synthetic PR merge ref is exercised"
+        )
 
     if errors:
         print("Agent branch trigger contract failed:", file=sys.stderr)
@@ -96,7 +328,7 @@ def main() -> int:
     patterns = ", ".join(sorted(expected))
     print(
         f"Agent branch trigger contract passed for {len(REQUIRED_WORKFLOWS)} "
-        f"workflows: {patterns}"
+        f"exact-head plus required merge-integration coverage: {patterns}"
     )
     return 0
 
