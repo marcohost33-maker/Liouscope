@@ -117,6 +117,15 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   reported a separation of `1.000001` while the selected mode's neighbour sits
   `1e-6` away, exactly its own structural budget.
 
+  KNOWN LIMITATION, recorded in the module docstring and tracked as #168: for a
+  DEFECTIVE repeated stationary eigenvalue no figure derived from an eigenvector
+  decomposition is basis invariant, because the decomposition does not exist.
+  Measured on a 2x2 Jordan block at zero, exactly trace preserving, re-expressed
+  by a unitary fixing `q`: `reciprocal_condition` moves `0.000000 -> 1.000000`
+  and the verdict `CONDITIONING_LIMITED -> BENIGN` for the same operator. The
+  evidence is audit-only, so nothing reads it, but it is not to be trusted on a
+  defective stationary manifold until #168 is closed.
+
   Spectrum agreement accepts a pairing the minimum-TOTAL-cost assignment misses.
   The caller rejects on the largest paired distance while the assignment
   minimises the sum, and those are different optima: a sum-minimising pairing

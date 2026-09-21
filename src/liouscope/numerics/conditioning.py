@@ -90,6 +90,43 @@ right invariant subspaces of the whole zero set (Stewart-Sun), which reduces to
 ``|y^H x|`` for a simple eigenvalue. The per-mode minimum is kept alongside it
 as evidence, never as the verdict.
 
+KNOWN LIMITATION: a DEFECTIVE repeated stationary eigenvalue (issue #168)
+-------------------------------------------------------------------------
+Everything above assumes the zero set has an eigenspace of its own dimension.
+A DEFECTIVE repeated eigenvalue does not, and then no figure derived from an
+eigenvector decomposition is basis invariant, because the decomposition itself
+does not exist -- ``?geev`` returns an arbitrary nearby diagonalisable
+perturbation. Measured on a 2x2 Jordan block at zero in the trace-vector basis,
+exactly trace preserving, re-expressed by a unitary that fixes ``q`` -- the same
+operator in a different orthonormal basis, so every figure here must be
+invariant under it:
+
+===================  ================  ======================  ====================
+basis                zero-set spread   ``reciprocal_condition``  verdict
+===================  ================  ======================  ====================
+as formed            0                 0.000000                CONDITIONING_LIMITED
+unitary re-expressed 2.88e-08          1.000000                BENIGN
+===================  ================  ======================  ====================
+
+The split is 64931x the round-off band that groups modes below, so the group
+falls apart; ``sigma_min`` of the normalised right eigenvectors is ``2.0e-292``
+and ``2.0e-08`` in the two bases, i.e. neither spans a genuine two-dimensional
+eigenspace. Note this INVERTS the reading above: for a defective eigenvalue the
+per-mode value is the stable one (``0.0`` and ``3e-08``, both correctly about
+zero) and the SUBSPACE figure is the artifact, manufactured by orthonormalising
+two nearly parallel vectors.
+
+No proximity threshold separates the two regimes: the defective split is
+numerically indistinguishable from the genuine ``delta = 1e-8`` split of
+``[[0, 1], [0, delta]]`` above, which must NOT be merged. The fix is to compute
+cluster conditioning from a reordered Schur decomposition -- the spectral
+projector of an eigenvalue group is well defined where its eigenvectors are not
+-- which replaces the eigenvector path this module is built on. Issue #168.
+
+This is AUDIT-ONLY evidence, so the flip reaches no filter, gap, certificate,
+verdict or tier; a reader of a report on a defective stationary manifold must
+not trust these fields until #168 is closed.
+
 What this instrument does NOT catch
 -----------------------------------
 The stiff deflation failure of issue #112 is invisible to conditioning. On the
