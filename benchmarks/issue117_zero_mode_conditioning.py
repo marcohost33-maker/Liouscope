@@ -37,6 +37,7 @@ import scipy.linalg as sla
 from liouscope.core.lindblad import build_liouvillian
 from liouscope.diagnostics.spectral import compute_spectral_layer
 from liouscope.numerics.conditioning import (
+    _agreement_band,
     cluster_conditioning,
     eigenvalue_conditioning,
     zero_mode_conditioning,
@@ -280,6 +281,47 @@ def family_f(reps: int = 9) -> None:
     print("  conditioning_audit=False switches the audit off with no other effect.")
 
 
+def family_g() -> None:
+    _rule("G  ROUND 6: the reported conditioning under a unitary change of basis")
+    jump = np.zeros((4, 4), dtype=complex)
+    jump[0, 1] = math.sqrt(0.7)
+    jump[2, 3] = math.sqrt(0.4)
+    plain = build_liouvillian(np.zeros((4, 4), dtype=complex), [jump])
+
+    generator = np.random.default_rng(3)
+    unitary, _r = np.linalg.qr(
+        generator.standard_normal((16, 16)) + 1j * generator.standard_normal((16, 16))
+    )
+    rotated = unitary @ plain @ unitary.conj().T
+
+    spectrum = sla.eig(rotated, left=False, right=False)
+    zero = spectrum[np.abs(spectrum) <= 1e-8]
+    spread = float(np.max(np.abs(zero[:, None] - zero[None, :])))
+    print("  The SAME generator, written in a rotated orthonormal basis. A")
+    print("  unitary similarity changes no conditioning figure, so both rows")
+    print("  below must agree; the rotation only stops the degenerate zero set")
+    print("  from coming back exactly tied.")
+    print(f"  zero-set spread after rotation       {spread:.4e}")
+    print(f"  round-off band (#108) for this scale {_agreement_band(spectrum, spectrum):.4e}")
+    print(f"  {'basis':>10} {'cluster':>9} {'sigma_min(Y^H X)':>18} {'divisor':>12}")
+    for label, operator in (("as formed", plain), ("rotated", rotated)):
+        for tol in (None, 1e-8):
+            evidence = zero_mode_conditioning(operator, zero_tolerance=tol)
+            name = f"{label}/{'default' if tol is None else 'cutoff'}"
+            print(
+                f"  {name:>18} {evidence.cluster_size:>4}"
+                f" {evidence.reciprocal_condition:18.6f}"
+                f" {evidence.per_mode_reciprocal_condition:12.6f}"
+            )
+    print("  -> grouping by EXACT eigenvalue equality (rounds 4-5) reported")
+    print("     0.102562 for the rotated operator against 0.707107 for the same")
+    print("     physical generator: a 6.9x inflation of both forward estimates")
+    print("     from the choice of basis alone. Grouping by the #108 round-off")
+    print("     band restores the invariance. The band, not the backward error:")
+    print("     a residual-scaled grouping broke s(cL) = s(L) at c = 1e200,")
+    print("     where the decomposition itself degrades.")
+
+
 def main() -> None:
     family_a()
     family_b()
@@ -287,6 +329,7 @@ def main() -> None:
     family_d()
     family_e()
     family_f()
+    family_g()
     print()
     print("All figures above are AUDIT evidence. No filter, gap, verdict or tier")
     print("reads any of them (issue #117 step 2; step 4 stays open until a")

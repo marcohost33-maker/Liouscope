@@ -269,18 +269,22 @@ class ZeroModeConditioning:
     cluster_size: int
     #: ``sigma_min(Y^H X)`` over the zero set -- the reported conditioning.
     reciprocal_condition: float
-    #: The SELECTED stationary mode's own ``|y^H x|``. This is the divisor of
-    #: the two forward estimates below, so a reader can reproduce them. It is
-    #: deliberately not the minimum over the cluster: a displacement of one
-    #: eigenvalue is governed by that eigenvalue's own conditioning, and using
-    #: the cluster minimum coupled the estimate to unrelated in-cutoff modes
-    #: (round-4 review).
+    #: Conditioning of the group of modes the decomposition does NOT resolve
+    #: from the selected stationary one -- its own ``|y^H x|`` when that mode is
+    #: cleanly simple, and ``sigma_min(Y^H X)`` over the unresolved group
+    #: otherwise. This is the divisor of the two forward estimates below, so a
+    #: reader can reproduce them. It is deliberately neither the minimum over
+    #: the cluster (which coupled the estimate to unrelated in-cutoff modes --
+    #: round-4 review) nor a bare per-mode value (which is not a property of the
+    #: operator across a repeated or unresolved eigenvalue -- rounds 5 and 6).
     per_mode_reciprocal_condition: float
     #: Smallest per-mode ``|y^H x|`` over the WHOLE spectrum.
     spectrum_min_reciprocal_condition: float
-    #: ``max ||L x - lambda x||`` over the zero set, unit ``x``.
+    #: ``max ||L x - lambda x||`` over the unresolved group, unit ``x``. Scoped
+    #: to the same group as the divisor above, so that the quotient below is a
+    #: statement about one eigenvalue rather than about the caller's cutoff.
     right_residual: float
-    #: ``max ||L^H y - conj(lambda) y||`` over the zero set, unit ``y``.
+    #: ``max ||L^H y - conj(lambda) y||`` over the unresolved group, unit ``y``.
     left_residual: float
     #: Distance from the zero set to the nearest eigenvalue outside it.
     separation: float
@@ -543,6 +547,36 @@ def _measure(
         magnitudes = np.abs(reported)
 
     per_mode = eigenvalue_conditioning(right, left)
+    # ROUND-6 REVIEW. Modes are grouped by whether the arithmetic SEPARATES
+    # them, using the library's own "indistinguishable at double precision"
+    # band (#108) -- the same ``ZERO_MODE_EPS_FACTOR * eps * max|lambda|`` that
+    # :func:`_agreement_band` already applies between two spectra, applied here
+    # within one.
+    #
+    # The backward error (the residuals below) was the first candidate for this
+    # and is WRONG, for a reason this module is required to care about: a
+    # residual is not scale invariant in the way a conditioning figure must be.
+    # Measured on the packaged two-level generator at ``c = 1e200``, where the
+    # eigendecomposition itself degrades, the relative residual rises from
+    # ``1e-16`` to ``1.0`` and a residual-scaled grouping merged the entire
+    # spectrum -- moving the reported ``reciprocal_condition`` from ``0.8833``
+    # to ``1.0`` for the same operator in different rate units, which is exactly
+    # the invariance ``s(cL) = s(L)`` that #108 and #130 require of every
+    # threshold here. The round-off band is scale covariant by construction: gap
+    # and band scale together with ``c``.
+    band = _agreement_band(reported, reported)
+
+    def _unresolved_from(anchor: int, candidates: np.ndarray) -> np.ndarray:
+        """Those candidates the arithmetic cannot separate from ``anchor``."""
+        return np.asarray(
+            [
+                int(j)
+                for j in candidates
+                if abs(reported[int(j)] - reported[anchor]) <= band
+            ],
+            dtype=np.intp,
+        )
+
     tol = (
         float(zero_tolerance)
         if zero_tolerance is not None and np.isfinite(zero_tolerance)
@@ -556,11 +590,31 @@ def _measure(
         # degenerate stationary manifold: two-level pure dephasing has spectrum
         # ``[0, 0, -2, -2]`` and the default call reported ``cluster_size=1``,
         # conditioning one arbitrary vector of a two-dimensional stationary
-        # subspace. Every mode exactly tied with the smallest is kept instead.
-        # Exact ties need no invented threshold; anything looser would be a
-        # second zero-mode tolerance competing with the certificate's, which is
-        # the one thing #108 and #113 exist to prevent.
-        cluster = np.flatnonzero(magnitudes == magnitudes.min())
+        # subspace. Every mode the solve cannot separate from the smallest is
+        # kept instead.
+        #
+        # ROUND-6 REVIEW. That rule was exact equality of the eigenvalues, and
+        # the round-6 finding against the ``tied`` group applies here with more
+        # force, because on this path the headline ``reciprocal_condition`` is
+        # wrong too and this is the exported function's DEFAULT. Measured on the
+        # round-5 two-sector fixture under a unitary change of basis -- the same
+        # physical generator, so every conditioning figure must be invariant --
+        # the default call reported ``0.1026`` against the operator's
+        # ``0.7071``, because the rotation splits the exactly degenerate
+        # manifold by ``2.9e-16`` -- against a #108 round-off band of ``1.6e-13`` --
+        # and exact equality no longer sees it.
+        #
+        # This is not the "invented threshold" #108 and #113 prohibit. That
+        # prohibition is against a second zero-mode MAGNITUDE cutoff competing
+        # with the certificate's; no magnitude cutoff is introduced here. The
+        # test is between computed eigenvalues, it is the band #108 already
+        # defines for that question, and it reduces to the old rule whenever the
+        # spectrum is exactly tied.
+        cluster = _unresolved_from(
+            int(np.argmin(magnitudes)), np.arange(values.size, dtype=np.intp)
+        )
+        if cluster.size == 0:  # pragma: no cover - anchor is always its own member
+            cluster = np.flatnonzero(magnitudes == magnitudes.min())
 
     s_cluster = cluster_conditioning(right, left, cluster)
     stationary = int(cluster[int(np.argmin(magnitudes[cluster]))])
@@ -588,20 +642,59 @@ def _measure(
     # One expression covers both: ``cluster_conditioning`` over a single index
     # IS ``|y^H x|``, so a simple mode still divides by its own condition number
     # and only a genuinely repeated one is conditioned as the subspace it is.
-    tied = cluster[reported[cluster] == reported[stationary]]
+    #
+    # ROUND-6 REVIEW. Round 5 grouped by EXACT eigenvalue equality, which
+    # recognises a repeated mode only when LAPACK happens to return bit-
+    # identical values. It does not for a generator written in a rotated basis.
+    # Measured on the two-sector fixture of the round-5 test under a UNITARY
+    # change of basis -- the same physical generator, so every conditioning
+    # figure must be invariant -- the zero set's four eigenvalues come back
+    # spread over ``2.9e-16`` instead of exactly tied, the exact-tie group
+    # collapses to one mode, and the divisor becomes ``0.1026`` where the
+    # operator's actual value is ``0.7071``: a 6.9x inflation of both forward
+    # estimates, from the choice of basis alone.
+    #
+    # Modes are therefore grouped by whether the decomposition RESOLVES them,
+    # using the backward error it already measured: two computed eigenvalues
+    # closer than the sum of their own residuals are not separated by the data.
+    # This invents no threshold -- the residuals are measurements of this very
+    # solve, and the test reduces to exact equality when they vanish (the
+    # unrotated fixture still groups all four). It deliberately does NOT merge a
+    # split LARGER than the backward error: such a split is a property of the
+    # operator, not of the arithmetic, and the per-mode value is then a genuine
+    # -- if ill-conditioned -- figure, with ``reciprocal_condition`` beside it
+    # for a reader to compare against.
+    tied = _unresolved_from(stationary, cluster)
     s_scalar = cluster_conditioning(right, left, tied)
-    right_res = 0.0
-    left_res = 0.0
+    residuals: dict[int, tuple[float, float]] = {}
     for j in cluster:
         x = _unit(right[:, j])
         y = _unit(left[:, j])
-        if x is not None:
-            right_res = max(right_res, scaled_euclidean_norm(L @ x - values[j] * x))
-        if y is not None:
-            left_res = max(
-                left_res,
-                scaled_euclidean_norm(L.conj().T @ y - np.conj(values[j]) * y),
-            )
+        # An unusable eigenvector leaves the mode's backward error unmeasured.
+        # ``inf`` is the fail-closed reading, and it reaches the estimates only
+        # through the maxima below.
+        residuals[int(j)] = (
+            scaled_euclidean_norm(L @ x - values[j] * x)
+            if x is not None
+            else float("inf"),
+            scaled_euclidean_norm(L.conj().T @ y - np.conj(values[j]) * y)
+            if y is not None
+            else float("inf"),
+        )
+    # ROUND-6 REVIEW. These maxima used to run over the whole cutoff cluster
+    # while the divisor below is the conditioning of the TIED group only, so an
+    # unrelated in-cutoff mode's residual entered an estimate that claims to
+    # bound the displacement of the selected eigenvalue. That is the same
+    # cutoff coupling round 4 removed from the structural estimate, in the other
+    # numerator: measured on ``diag(1e-12, M, -1)`` with ``M`` a 2x2 block of
+    # eigenvalues ``+-1e-10``, the selected mode's eigenvector is exact
+    # (residual 0.0) yet widening the cutoff from ``1e-11`` to ``1e-9`` moves
+    # ``solver_forward_estimate`` off zero, contributed entirely by modes the
+    # selected eigenvalue has nothing to do with. The magnitudes there are
+    # round-off, so no verdict flips on that fixture -- the defect is that the
+    # number is not a property of what it names.
+    right_res = max((residuals[int(j)][0] for j in tied), default=0.0)
+    left_res = max((residuals[int(j)][1] for j in tied), default=0.0)
     outside = np.setdiff1d(np.arange(values.size), cluster, assume_unique=False)
     separation = (
         float(np.min(np.abs(reported[outside][:, None] - reported[cluster][None, :])))
@@ -685,12 +778,29 @@ def _measure(
     # reader can see why. On the fixture above ``0.3162 >= 0.1234`` and the
     # answer becomes ``None``; on the PR #127 fixture ``1.0e-07 < 2.0e-07`` and
     # the ordinary comparison still applies.
+    #
+    # ROUND-6 REVIEW. That test read only the OUTCOME. Locality is a property of
+    # the PERTURBATION, and a perturbation larger than the separation invalidates
+    # the expansion however small the displacement it happens to produce.
+    # Measured on ``diag(1e-6, -1, -2, -3)`` at ``zero_tolerance=1e-5``: the
+    # observed displacement is ``1e-06`` against a separation of ``1.000001``,
+    # so the outcome test passes, while the trace correction that has to be
+    # attributed is ``2.1213`` -- twice the distance to the next eigenvalue. The
+    # field reported ``True``, an attribution first-order theory cannot support.
+    # Both readings are kept: they fail in different directions, the outcome
+    # test catching modes that demonstrably interacted (the companion matrix
+    # above, whose estimate is small) and the estimate test catching a
+    # perturbation too large to expand around (this fixture, whose displacement
+    # is small).
     explained: bool | None
     if (
         not np.isfinite(observed)
         or not np.isfinite(structural_estimate)
         or not np.isfinite(solver_estimate)
-        or (np.isfinite(separation) and observed >= separation)
+        or (
+            np.isfinite(separation)
+            and (observed >= separation or budget_estimate >= separation)
+        )
     ):
         explained = None
     else:

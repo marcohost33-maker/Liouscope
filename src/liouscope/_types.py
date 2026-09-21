@@ -78,12 +78,15 @@ class SpectralResult:
     # a report otherwise cannot tell a failed eigensolve from a correctly
     # located eigenvalue of an approximately trace-preserving operator.
     #
-    # Deliberately NOT promoted to a gate in this change: on the stiff #112
-    # family the conditioning of the WRONG spectrum is benign (measured
-    # s = 0.707 for every mode), so conditioning cannot replace the structural
-    # certificate, and no case is yet known in which the certificate certifies
-    # while conditioning would have withheld. See
-    # ``numerics.conditioning`` and issue #117 step 4.
+    # Deliberately NOT promoted to a gate in this change: on the canonical
+    # stiff #112 network the conditioning of the WRONG spectrum is benign
+    # (measured s = 0.29 for the spurious stationary mode it selects, 0.040 at
+    # worst over that spectrum -- condition numbers between 1 and 25), so
+    # conditioning cannot replace the structural certificate, and no case is yet
+    # known in which the certificate certifies while conditioning would have
+    # withheld. The separate ``0.707`` figure quoted in the changelog is the
+    # worst case over the sixteen PHYSICAL GKSL generators, a different
+    # measurement. See ``numerics.conditioning`` and issue #117 step 4.
     # Optional with a default so the run-manifest contract is unchanged
     # (additive field).
     zero_mode_conditioning: dict[str, object] | None = None

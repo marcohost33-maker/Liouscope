@@ -144,9 +144,15 @@ def test_conditioning_scaled_estimate_explains_the_pr127_displacement() -> None:
     # vector, i.e. the raw defect over sqrt(d) (PR #166 review). d = 2 here.
     assert evidence.trace_defect == pytest.approx(1.0e-14, rel=1e-3)
     assert evidence.structural_forward_estimate == pytest.approx(5.0e-8, rel=1e-3)
-    # First order, so agreement is up to a constant -- measured 2.0x.
+    # First order, so agreement is up to a constant -- measured 2.0x. Pinned
+    # exactly, because this ratio IS the calibration of
+    # ``CONDITIONING_AGREEMENT_FACTOR``: the round-6 review found that comment
+    # still quoting the pre-normalisation 1.41 and claiming 7x headroom two
+    # rounds after the estimate changed. The headroom the factor actually buys
+    # is 5x, and a change to either number now has to come past this assertion.
     ratio = evidence.observed_displacement / evidence.structural_forward_estimate
-    assert 1.0 <= ratio <= CONDITIONING_AGREEMENT_FACTOR
+    assert ratio == pytest.approx(2.0, rel=1e-3)
+    assert CONDITIONING_AGREEMENT_FACTOR / ratio == pytest.approx(5.0, rel=1e-3)
     # And the certificate's own band is nowhere near.
     _values, certificate = certified_eigvals(L)
     assert evidence.structural_forward_estimate / certificate.bound > 1.0e4
@@ -893,3 +899,167 @@ def test_a_spectrum_of_a_different_size_is_a_mismatch() -> None:
 def test_eigenvalue_conditioning_rejects_mismatched_vector_matrices() -> None:
     with pytest.raises(ValueError, match="equally shaped"):
         eigenvalue_conditioning(np.eye(3, dtype=complex), np.eye(2, dtype=complex))
+
+
+# --------------------------------------------------------------------------
+# Round-6 review
+# --------------------------------------------------------------------------
+
+
+def test_the_divisor_survives_a_unitary_change_of_basis() -> None:
+    """Round-6 review: an exact tie is not how a repeated mode announces itself.
+
+    The round-5 fix grouped modes by exact eigenvalue equality, which holds only
+    when LAPACK happens to return bit-identical values. Writing the SAME
+    physical generator in a rotated orthonormal basis is a unitary similarity:
+    it cannot change ``|y^H x|`` or ``sigma_min(Y^H X)`` for any mode, so every
+    conditioning figure the audit reports must be invariant under it. It was
+    not. The rotated zero set comes back spread by ``2.9e-16`` of round-off
+    instead of exactly tied -- well inside the ``1.6e-13`` band #108 already
+    calls indistinguishable -- the exact-tie group collapses to a single
+    mode, and the divisor reported ``0.1026`` where the operator's value is
+    ``0.7071``: a 6.9x inflation of both forward estimates, caused by the
+    choice of basis alone.
+
+    The premise is asserted before the conclusion: if the rotation ever stopped
+    splitting the manifold this test would pass without testing anything.
+    """
+    import scipy.linalg as sla
+
+    jump = np.zeros((4, 4), dtype=complex)
+    jump[0, 1] = math.sqrt(0.7)
+    jump[2, 3] = math.sqrt(0.4)
+    plain = build_liouvillian(np.zeros((4, 4), dtype=complex), [jump])
+
+    generator = np.random.default_rng(3)
+    unitary, _r = np.linalg.qr(
+        generator.standard_normal((16, 16)) + 1j * generator.standard_normal((16, 16))
+    )
+    rotated = unitary @ plain @ unitary.conj().T
+    assert np.allclose(unitary @ unitary.conj().T, np.eye(16), atol=1e-12)
+
+    # PREMISE 1: the unrotated manifold is exactly degenerate.
+    flat = sla.eig(plain, left=False, right=False)
+    assert np.flatnonzero(np.abs(flat) <= 1.0e-8).size > 1
+    # PREMISE 2: the rotation splits it, so exact-tie grouping cannot see it.
+    turned = sla.eig(rotated, left=False, right=False)
+    zero = turned[np.abs(turned) <= 1.0e-8]
+    assert zero.size > 1
+    spread = float(np.max(np.abs(zero[:, None] - zero[None, :])))
+    assert 0.0 < spread < 1.0e-14
+
+    reference = zero_mode_conditioning(plain, zero_tolerance=1.0e-8)
+    measured = zero_mode_conditioning(rotated, zero_tolerance=1.0e-8)
+    assert reference.available and measured.available
+    assert reference.per_mode_reciprocal_condition == pytest.approx(0.7071, rel=1e-3)
+    # The property under test: the divisor is a property of the operator.
+    assert measured.per_mode_reciprocal_condition == pytest.approx(
+        reference.per_mode_reciprocal_condition, rel=1e-6
+    )
+    assert measured.reciprocal_condition == pytest.approx(
+        reference.reciprocal_condition, rel=1e-6
+    )
+
+
+def test_a_split_larger_than_the_backward_error_stays_two_modes() -> None:
+    """The other direction: grouping must not swallow a genuine splitting.
+
+    Round 2 established that the subspace figure understates the sensitivity of
+    a genuinely simple eigenvalue by ``1/delta``. The round-6 grouping is by
+    RESOLVABILITY, not by proximity, so a split the decomposition resolves --
+    orders of magnitude above the residuals that measure its backward error --
+    must leave the two modes separate and the per-mode value in force.
+    """
+    delta = 1.0e-8
+    system = np.zeros((4, 4), dtype=complex)
+    system[0, 0] = 0.0
+    system[0, 1] = 1.0
+    system[1, 1] = delta
+    system[2, 2] = -1.0
+    system[3, 3] = -2.0
+
+    evidence = zero_mode_conditioning(system, zero_tolerance=1.0e-6)
+    assert evidence.available
+    # PREMISE: both small modes are inside the cutoff, and the backward error
+    # is far below their separation, so they ARE resolved.
+    assert evidence.cluster_size == 2
+    assert max(evidence.right_residual, evidence.left_residual) < delta / 1.0e3
+    # So the divisor stays the per-mode figure, which is ~delta -- not the
+    # perfectly conditioned subspace figure.
+    assert evidence.per_mode_reciprocal_condition == pytest.approx(delta, rel=1e-3)
+    assert evidence.reciprocal_condition == pytest.approx(1.0, rel=1e-6)
+
+
+def test_the_solver_estimate_ignores_unrelated_in_cutoff_residuals() -> None:
+    """Round-6 review: numerator and divisor must describe the same modes.
+
+    ``right_residual`` / ``left_residual`` were maxima over the whole cutoff
+    cluster while the divisor is the conditioning of the selected mode's group,
+    so an unrelated in-cutoff mode's backward error entered an estimate that
+    claims to bound the displacement of the selected eigenvalue -- the same
+    cutoff coupling round 4 removed from the structural estimate, in the other
+    numerator. Here the selected mode's eigenvector is a coordinate axis, so its
+    residual is exactly zero and the estimate must be exactly zero at every
+    cutoff.
+    """
+    system = np.zeros((4, 4), dtype=complex)
+    system[0, 0] = 1.0e-12                  # selected; an exact eigenvector
+    system[1, 2] = 1.0e6                    # a block with eigenvalues +-1e-10
+    system[2, 1] = (1.0e-10) ** 2 / 1.0e6
+    system[3, 3] = -1.0
+
+    narrow = zero_mode_conditioning(system, zero_tolerance=1.0e-11)
+    wide = zero_mode_conditioning(system, zero_tolerance=1.0e-9)
+    assert narrow.available and wide.available
+    # PREMISE: the cutoff genuinely admits more modes, and the selected
+    # eigenvalue is untouched by that.
+    assert narrow.cluster_size == 1
+    assert wide.cluster_size > narrow.cluster_size
+    assert wide.eigenvalue == narrow.eigenvalue
+    # The property under test.
+    assert wide.right_residual == narrow.right_residual == 0.0
+    assert wide.left_residual == narrow.left_residual == 0.0
+    assert wide.solver_forward_estimate == narrow.solver_forward_estimate == 0.0
+
+
+def test_displacement_abstains_when_the_perturbation_exceeds_the_separation() -> None:
+    """Round-6 review: locality is a property of the perturbation, not the outcome.
+
+    The round-5 regime test compared the OBSERVED displacement against the
+    separation. A perturbation larger than the separation invalidates the local
+    expansion however small the displacement it happens to produce, and this
+    fixture is that case: the observed displacement is ``1e-06`` against a
+    separation of ``1.000001`` -- the outcome test passes -- while the trace
+    correction that has to be attributed is ``2.1213``, twice the distance to
+    the next eigenvalue. The field reported ``True``.
+    """
+    system = np.diag([1.0e-6, -1.0, -2.0, -3.0]).astype(complex)
+    evidence = zero_mode_conditioning(system, zero_tolerance=1.0e-5)
+
+    assert evidence.available
+    budget = (
+        evidence.structural_forward_estimate + evidence.solver_forward_estimate
+    )
+    # PREMISE: the OUTCOME test alone would pass here ...
+    assert evidence.observed_displacement < evidence.separation
+    # ... while the perturbation is larger than the separation.
+    assert budget > evidence.separation
+    assert evidence.structural_forward_estimate == pytest.approx(2.1213, rel=1e-3)
+    # The property under test.
+    assert evidence.displacement_explained is None
+
+
+def test_a_zero_generator_groups_its_whole_spectrum() -> None:
+    """The round-off band degenerates to exact equality when the scale is zero.
+
+    ``_agreement_band`` returns ``0.0`` for a spectrum whose largest magnitude
+    is zero, so the round-6 grouping falls back to exact equality -- which is
+    the right answer here, since every eigenvalue genuinely IS the same one.
+    """
+    evidence = zero_mode_conditioning(np.zeros((4, 4), dtype=complex))
+
+    assert evidence.available
+    assert evidence.cluster_size == 4
+    assert evidence.reciprocal_condition == pytest.approx(1.0, rel=1e-12)
+    assert evidence.trace_defect == 0.0
+    assert evidence.verdict == CONDITIONING_BENIGN

@@ -74,10 +74,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   conditioning of `7.28e-06` beside a reported stationary eigenvalue of
   `4.08e-17`. A side length that cannot be a superoperator, and a negative
   `zero_tolerance`, are likewise refused rather than answered.
-  The forward estimates divide by the conditioning of the group of modes
-  EXACTLY TIED with the selected stationary eigenvalue -- which is that
-  eigenvalue's own `|y^H x|` when it is simple, and the basis-invariant
-  `sigma_min(Y^H X)` when it is repeated. Both halves are measured: a per-mode
+  The forward estimates divide by the conditioning of the group of modes the
+  arithmetic does not SEPARATE from the selected stationary eigenvalue --
+  which is that eigenvalue's own `|y^H x|` when it is cleanly simple, and the
+  basis-invariant `sigma_min(Y^H X)` when it is repeated or unresolved. Both halves are measured: a per-mode
   value is basis dependent for a repeated eigenvalue (rotating only the right
   basis inside a degenerate stationary eigenspace moves it from `0.7206` to
   `0.5408` while the subspace figure stays `0.7071`), and conversely the
@@ -89,11 +89,38 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   by a minimum-cost assignment rather than a lexicographic sort, so the evidence
   conditions the set the report filtered and two numerically identical spectra
   are not mispaired by a round-off-sized reordering. With no cutoff supplied,
-  every mode exactly tied with the smallest is kept, so an exactly degenerate
-  stationary manifold is conditioned as the subspace it is.
+  every mode the arithmetic cannot separate from the smallest is kept, so a
+  degenerate stationary manifold is conditioned as the subspace it is.
+
+  Grouping is by the round-off band #108 already defines,
+  `ZERO_MODE_EPS_FACTOR * eps * max|lambda|`, not by exact eigenvalue
+  equality and not by the backward error. Exact equality holds only when
+  LAPACK happens to return bit-identical values, which it does not for the
+  same generator written in a rotated basis: measured on the two-sector
+  fixture under a unitary similarity -- which cannot change any conditioning
+  figure -- the zero set comes back spread by `2.9e-16`, the exact-tie group
+  collapses to one mode, and both the reported `reciprocal_condition` and the
+  divisor read `0.102562` against the operator's `0.707107`. The backward
+  error was the first candidate for the band and is wrong for a reason this
+  module has to respect: at `c = 1e200` the eigendecomposition degrades, the
+  relative residual rises to `1.0`, and a residual-scaled grouping merged the
+  whole spectrum -- breaking the `s(cL) = s(L)` invariance #108 and #130
+  require. The round-off band is scale covariant by construction.
+
+  `right_residual` and `left_residual` are scoped to that same group rather
+  than to the whole cutoff cluster, so the numerator and the divisor of
+  `solver_forward_estimate` describe the same modes; previously an unrelated
+  in-cutoff mode's backward error entered an estimate that names the selected
+  eigenvalue.
 
   `displacement_explained` abstains outside the first-order perturbative
   regime, rather than denying an attribution first-order theory cannot judge.
+  It abstains on the PERTURBATION as well as on the outcome: a combined
+  estimate that reaches the separation invalidates the local expansion
+  however small the displacement it happens to produce (measured on
+  `diag(1e-6, -1, -2, -3)` at a cutoff of `1e-5`: displacement `1e-06`
+  against a separation of `1.000001`, and a trace correction of `2.1213`
+  that has to be attributed).
   `CONDITIONING_AGREEMENT_FACTOR` is headroom on a LOCAL expansion, and no fixed
   factor can rescue a Jordan chain: on a 16x16 companion matrix whose
   eigenvalues satisfy exactly `lambda**16 = 1e-8`, the displacement `0.3162` is
