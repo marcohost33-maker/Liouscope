@@ -117,6 +117,22 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   reported a separation of `1.000001` while the selected mode's neighbour sits
   `1e-6` away, exactly its own structural budget.
 
+  Spectrum agreement accepts a pairing the minimum-TOTAL-cost assignment misses.
+  The caller rejects on the largest paired distance while the assignment
+  minimises the sum, and those are different optima: a sum-minimising pairing
+  can put one pair outside the band where another perfect matching keeps every
+  pair inside it. The min-sum pairing is still preferred when it fits; only when
+  it does not is feasibility decided by minimising the NUMBER of over-band
+  pairs, which is zero exactly when a within-band perfect matching exists.
+
+  The audit is total against wider numeric dtypes on both inputs. A finite
+  `np.clongdouble` accepted spectrum built a `float128` cost matrix and raised
+  `TypeError` out of `linear_sum_assignment`; it is now narrowed and rechecked
+  inside the protected block. A `zero_tolerance` finite only in a wider dtype
+  (`np.longdouble("1e400")`) passed the public gate, became `inf` in float64 and
+  was silently demoted to "no cutoff supplied"; the cutoff is now validated as
+  narrowed, so it is refused instead.
+
   `displacement_explained` abstains outside the first-order perturbative
   regime, rather than denying an attribution first-order theory cannot judge.
   It abstains on the PERTURBATION as well as on the outcome: a combined

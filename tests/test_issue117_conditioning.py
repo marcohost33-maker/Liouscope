@@ -715,13 +715,56 @@ def test_spectrum_matching_is_permutation_invariant() -> None:
     audit = np.array([1j, -1j], dtype=complex)
     accepted = np.array([1j - 1e-14, -1j + 1e-14], dtype=complex)
 
-    matched = _match_spectra(audit, accepted)
+    band = _agreement_band(audit, accepted)
+    matched = _match_spectra(audit, accepted, band)
     assert matched is not None
     _perm, worst = matched
     assert worst == pytest.approx(1.0e-14, rel=1e-6)
-    assert worst <= _agreement_band(audit, accepted)
-    # A genuinely different spectrum still fails.
-    assert _match_spectra(audit, np.array([1.0, -1.0], dtype=complex))[1] > 1.0
+    assert worst <= band
+    # A genuinely different spectrum still fails -- now by returning None,
+    # because no perfect matching inside the band exists at all.
+    other = np.array([1.0, -1.0], dtype=complex)
+    assert _match_spectra(audit, other, _agreement_band(audit, other)) is None
+
+
+def test_spectrum_matching_accepts_a_within_band_pairing_the_sum_misses() -> None:
+    """Round-8 review: min-total-cost is not min-largest-distance.
+
+    The caller rejects on the LARGEST paired distance while the assignment
+    minimises the TOTAL, and those are different optima. Here the sum-minimising
+    pairing puts one distance outside the band while another permutation keeps
+    every pair inside it, so the spectra agree mode for mode and were rejected
+    anyway.
+    """
+    import itertools
+
+    from scipy.optimize import linear_sum_assignment
+
+    audit = np.array(
+        [-2.325 - 0.7323j, -0.2188 - 0.5443j, -1.2459 - 0.3163j], dtype=complex
+    )
+    accepted = np.array(
+        [0.4116 + 1.3665j, 1.0425 - 0.6652j, -0.1285 + 0.3515j], dtype=complex
+    )
+    cost = np.abs(audit[:, None] - accepted[None, :])
+
+    rows, cols = linear_sum_assignment(cost)
+    sum_worst = float(cost[rows, cols].max())
+    max_worst = min(
+        max(cost[i, perm[i]] for i in range(3))
+        for perm in itertools.permutations(range(3))
+    )
+    # PREMISE: the two optima genuinely differ on this instance.
+    assert max_worst < sum_worst
+    band = 0.5 * (sum_worst + max_worst)
+    assert max_worst <= band < sum_worst
+
+    matched = _match_spectra(audit, accepted, band)
+    assert matched is not None
+    assert matched[1] <= band
+    # And a band below BOTH optima still rejects, so the fallback has not
+    # turned the agreement test into a rubber stamp.
+    assert _match_spectra(audit, accepted, 0.5 * max_worst) is None
 
 
 def test_scalar_estimates_use_the_selected_mode_not_the_cluster() -> None:
@@ -1097,3 +1140,59 @@ def test_separation_counts_a_resolved_neighbour_inside_the_cutoff() -> None:
     )
     assert budget >= evidence.separation
     assert evidence.displacement_explained is None
+
+
+def test_a_wider_dtype_accepted_spectrum_does_not_raise() -> None:
+    """Round-8 review: the accepted spectrum arrives in the caller's dtype.
+
+    A finite ``np.clongdouble`` spectrum built a ``float128`` cost matrix and
+    ``linear_sum_assignment`` raised ``TypeError``, out of an audit whose whole
+    contract is that the operator side never raises.
+    """
+    system = np.diag([0.0, -1.0, -2.0, -3.0]).astype(complex)
+    wide = np.array([0.0, -1.0, -2.0, -3.0], dtype=np.clongdouble)
+
+    evidence = zero_mode_conditioning(system, eigenvalues=wide)
+    assert evidence.available
+    assert evidence.reason == "ok"
+    # It agrees with the same spectrum supplied at working precision.
+    narrow = zero_mode_conditioning(
+        system, eigenvalues=np.array([0.0, -1.0, -2.0, -3.0], dtype=complex)
+    )
+    assert evidence.reciprocal_condition == pytest.approx(narrow.reciprocal_condition)
+
+
+def test_a_tolerance_that_is_finite_only_in_a_wider_dtype_is_refused() -> None:
+    """Round-8 review: validate the cutoff AS NARROWED, not as supplied.
+
+    ``np.longdouble("1e400")`` is finite in its own dtype and passed the public
+    gate, then became ``inf`` in float64 and was silently demoted to "no cutoff
+    supplied" -- ``cluster_size=1`` and ``BENIGN`` where a 1e400 cutoff admits
+    the whole spectrum. That is the valid-looking nonsense the non-finite case
+    is refused for, reached through the dtype.
+    """
+    system = np.diag([0.0, -1.0, -2.0, -3.0]).astype(complex)
+
+    with pytest.raises(ValueError, match="finite non-negative"):
+        zero_mode_conditioning(system, zero_tolerance=np.longdouble("1e400"))
+    # A wide dtype that IS representable keeps working.
+    wide = zero_mode_conditioning(system, zero_tolerance=np.longdouble("1e-8"))
+    plain = zero_mode_conditioning(system, zero_tolerance=1.0e-8)
+    assert wide.cluster_size == plain.cluster_size
+    assert wide.zero_tolerance == plain.zero_tolerance
+
+
+def test_the_default_call_still_answers_displacement_explained() -> None:
+    """Round-8 review: the documented default contract was wrong, not the code.
+
+    The docstring promised ``displacement_explained=None`` when the cutoff is
+    omitted. It is not: the field compares the observed displacement against the
+    forward estimates and the separation, and none of those involves the cutoff.
+    Only ``conditioning_limited`` degrades, because only it reads ``tol``.
+    """
+    evidence = zero_mode_conditioning(_pr127_fixture())
+
+    assert evidence.available
+    assert math.isnan(evidence.zero_tolerance)
+    assert evidence.conditioning_limited is False
+    assert evidence.displacement_explained is True

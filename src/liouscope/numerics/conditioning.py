@@ -307,11 +307,14 @@ class ZeroModeConditioning:
     observed_displacement: float
     #: The cutoff the layer's filters apply, for comparison only.
     zero_tolerance: float
-    #: ``max(structural, solver) forward estimate > zero_tolerance``: the
+    #: ``structural + solver forward estimate > zero_tolerance``: the
     #: conditioning-scaled displacement budget does not fit inside the cutoff
     #: the layer's filters apply, so the zero mode cannot be pinned that
-    #: closely. Reading BOTH estimates is deliberate: an exactly trace-
-    #: preserving generator has ``structural = 0`` and can still carry a
+    #: closely. The two estimates are SUMMED, not maximised: they are
+    #: successive perturbations, so their displacement bounds add (round-3
+    #: review; under ``max`` two estimates at ``0.6 * tol`` reported benign
+    #: while permitting ``1.2 * tol``). Reading both is deliberate: an exactly
+    #: trace-preserving generator has ``structural = 0`` and can still carry a
     #: defective stationary pair whose solver estimate is unbounded.
     conditioning_limited: bool
     #: Whether the observed displacement is consistent with the two estimates.
@@ -399,7 +402,7 @@ def _divide_by_conditioning(numerator: float, s: float) -> float:
 
 
 def _match_spectra(
-    audit: np.ndarray, accepted: np.ndarray
+    audit: np.ndarray, accepted: np.ndarray, band: float
 ) -> tuple[np.ndarray, float] | None:
     """Pair two spectra mode for mode, returning ``(perm, worst_distance)``.
 
@@ -417,6 +420,17 @@ def _match_spectra(
     construction, so the pairing no longer depends on an ordering convention.
     ``scipy.optimize.linear_sum_assignment`` is the same primitive
     :mod:`.linalg` already uses to pair eigenvalues (``_injective_pairing``).
+
+    ROUND-8 REVIEW. That assignment minimises the TOTAL distance while the
+    caller rejects on the LARGEST one, and the two optima are different
+    problems: with a band of 1.71 the sum-minimising pairing can have distances
+    ``(0.52, 1.95, 0.48)``, total 2.95, while another permutation has
+    ``(0.52, 1.50, 1.26)``, total 3.28 and every pair inside the band. The
+    first is chosen and the spectrum rejected although the two agree mode for
+    mode. The min-sum pairing is still preferred when it fits -- it is the best
+    pairing available -- and only when it does not is feasibility decided
+    separately, by minimising the NUMBER of over-band pairs: a perfect matching
+    within the band exists exactly when that minimum is zero.
     """
     if audit.size != accepted.size:
         return None
@@ -426,9 +440,20 @@ def _match_spectra(
     if not np.all(np.isfinite(cost)):
         return None
     rows, cols = linear_sum_assignment(cost)
+    worst = float(cost[rows, cols].max())
+    if worst > band:
+        # 0/1 costs, so the optimum counts the over-band pairs a perfect
+        # matching cannot avoid. Zero means one exists entirely inside the band;
+        # every pair in it then agrees to within round-off, so which of them the
+        # solver returns cannot matter to membership.
+        over = (cost > band).astype(float)
+        rows, cols = linear_sum_assignment(over)
+        if over[rows, cols].any():
+            return None
+        worst = float(cost[rows, cols].max())
     perm = np.empty(audit.size, dtype=int)
     perm[rows] = cols
-    return perm, float(cost[rows, cols].max())
+    return perm, worst
 
 
 def _agreement_band(audit: np.ndarray, accepted: np.ndarray) -> float:
@@ -460,13 +485,33 @@ def zero_mode_conditioning(
     inside it. It must be non-negative: a negative cutoff admits no eigenvalue
     to the zero set at all and then labels even an exact, well-conditioned zero
     mode ``CONDITIONING_LIMITED``, which is valid-looking nonsense. When it is
-    omitted the comparison degrades to ``conditioning_limited=False`` and
-    ``displacement_explained=None``; nothing downstream depends on either.
+    omitted, ``conditioning_limited`` degrades to ``False`` -- there is no
+    cutoff for the budget to fail to fit inside. ``displacement_explained``
+    does NOT degrade with it: it compares the observed displacement against the
+    forward estimates and the separation, none of which involves the cutoff, so
+    it still answers (round-8 review; this contract previously promised ``None``
+    here while the committed PR #127 fixture returns ``True`` from a default
+    call). Nothing downstream depends on either.
 
     ``eigenvalues`` is the spectrum the caller is actually going to report.
     Supply it whenever one exists: the audit then refuses rather than describe a
     spectrum the report does not contain (see :func:`_spectra_agree`).
     """
+    # ROUND-8 REVIEW. The check runs on the value AS NARROWED to the working
+    # precision, not as supplied: ``np.longdouble("1e400")`` is finite in its
+    # own dtype, passed this gate, then became ``inf`` in float64 and was
+    # silently demoted to "no cutoff supplied" -- ``cluster_size=1`` and
+    # ``BENIGN`` where a 1e400 cutoff admits the whole spectrum. That is the
+    # same valid-looking nonsense the negative and non-finite cases are refused
+    # for, reached through the dtype instead.
+    if zero_tolerance is not None:
+        try:
+            zero_tolerance = float(zero_tolerance)
+        except (TypeError, ValueError, OverflowError) as exc:
+            raise ValueError(
+                "zero_tolerance must be a finite non-negative number or None, got "
+                f"{zero_tolerance!r}"
+            ) from exc
     if zero_tolerance is not None and not (
         np.isfinite(zero_tolerance) and zero_tolerance >= 0.0
     ):
@@ -538,11 +583,19 @@ def _measure(
     magnitudes = np.abs(values)
     reported = values
     if accepted is not None:
-        accepted = np.asarray(accepted).ravel()
+        # ROUND-8 REVIEW. The accepted spectrum arrives in the CALLER's dtype.
+        # A finite ``np.clongdouble`` spectrum built a ``float128`` cost matrix
+        # and ``linear_sum_assignment`` raised ``TypeError: Cannot cast array
+        # data from dtype('float128')`` -- an exception out of an audit whose
+        # contract is that it never raises on the operator side. It is narrowed
+        # to the working precision here, inside the protected block, and
+        # rechecked: a value that only becomes non-finite in float64 cannot be
+        # matched against a float64 spectrum either.
+        accepted = np.asarray(accepted).ravel().astype(complex, copy=False)
         if not np.all(np.isfinite(accepted)):
             return ZeroModeConditioning.unavailable("accepted_spectrum_mismatch")
-        matched = _match_spectra(values, accepted)
-        if matched is None or matched[1] > _agreement_band(values, accepted):
+        matched = _match_spectra(values, accepted, _agreement_band(values, accepted))
+        if matched is None:
             return ZeroModeConditioning.unavailable("accepted_spectrum_mismatch")
         # Aligned to audit index, so ``reported[j]`` is the eigenvalue the
         # report carries for the pair whose vectors sit at audit column ``j``.
