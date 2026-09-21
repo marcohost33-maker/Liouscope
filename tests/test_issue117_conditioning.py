@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import json
 import math
+import warnings
 
 import numpy as np
 import pytest
@@ -1196,3 +1197,55 @@ def test_the_default_call_still_answers_displacement_explained() -> None:
     assert math.isnan(evidence.zero_tolerance)
     assert evidence.conditioning_limited is False
     assert evidence.displacement_explained is True
+
+
+def test_spectrum_matching_tolerates_an_overflowing_unused_distance() -> None:
+    """Round-9 review: one non-finite edge must not reject the whole matrix.
+
+    Two finite eigenvalues of opposite sign near the top of the range overflow
+    when subtracted, and that entry need not be one the matching uses. Here the
+    spectra are IDENTICAL -- the diagonal matching has distance zero -- while
+    both off-diagonal distances are ``inf``.
+    """
+    spectrum = np.array([1e308, -1e308], dtype=complex)
+    # The subtraction overflows, which production code only ever does inside
+    # ``_quiet_arithmetic``; this test calls the helper directly, so it has to
+    # provide the same shelter or the repo's warnings-as-errors config fires.
+    with warnings.catch_warnings(), np.errstate(all="ignore"):
+        warnings.simplefilter("ignore", RuntimeWarning)
+        cost = np.abs(spectrum[:, None] - spectrum[None, :])
+        # PREMISE: the unused edges overflow and the used ones are exact.
+        assert not np.isfinite(cost).all()
+        assert cost[0, 0] == 0.0 and cost[1, 1] == 0.0
+
+        band = _agreement_band(spectrum, spectrum)
+        matched = _match_spectra(spectrum, spectrum, band)
+    assert matched is not None
+    perm, worst = matched
+    assert worst == 0.0
+    assert list(perm) == [0, 1]
+
+
+def test_an_empty_cutoff_still_reports_the_nearest_mode() -> None:
+    """Round-9 review asked this to withhold. It must not -- it is THE case.
+
+    On the #127 fixture the certificate band is ``4.44e-13`` while the
+    stationary eigenvalue sits at ``1e-7``, so a cutoff set to that band admits
+    no eigenvalue at all. Explaining why the mode is out there is the entire
+    reason this audit exists, so the nearest-mode fallback covers an empty
+    cutoff as well as an absent one. Pinned here in its own right, so a later
+    change cannot withhold it without confronting the contract.
+    """
+    L = _pr127_fixture()
+    _values, certificate = certified_eigvals(L)
+    evidence = zero_mode_conditioning(L, zero_tolerance=certificate.bound)
+
+    # PREMISE: the supplied cutoff genuinely admits nothing.
+    spectrum = eig_nonhermitian(L).eigenvalues
+    assert not np.any(np.abs(spectrum) <= certificate.bound)
+    # The audit still answers, and names the mode it is describing.
+    assert evidence.available
+    assert evidence.cluster_size >= 1
+    assert evidence.observed_displacement == pytest.approx(1.0e-7, rel=1e-3)
+    assert evidence.zero_tolerance == pytest.approx(certificate.bound)
+    assert evidence.verdict == CONDITIONING_LIMITED

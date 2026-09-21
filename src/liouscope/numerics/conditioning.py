@@ -474,18 +474,30 @@ def _match_spectra(
     if audit.size == 0:
         return np.empty(0, dtype=int), 0.0
     cost = np.abs(audit[:, None] - accepted[None, :])
-    if not np.all(np.isfinite(cost)):
-        return None
-    rows, cols = linear_sum_assignment(cost)
-    worst = float(cost[rows, cols].max())
+    # ROUND-9 REVIEW. Rejecting the whole matrix when ANY entry is non-finite
+    # throws away matchings that exist exactly: two finite eigenvalues of
+    # opposite sign near the top of the range overflow when subtracted, and that
+    # entry need not be one the matching uses. A non-finite distance is simply
+    # an over-band edge, which the feasibility pass below already handles; only
+    # the edges actually chosen have to be finite, and they are, because they
+    # are inside the band. (Defensive: I could not construct an input that
+    # reaches it, because ``?geev`` garbles a spectrum of that range long before
+    # the subtraction overflows -- see the PR thread.)
+    usable = np.isfinite(cost)
+    inside = usable & (cost <= band)
+    if usable.all():
+        rows, cols = linear_sum_assignment(cost)
+        worst = float(cost[rows, cols].max())
+    else:
+        rows = cols = np.empty(0, dtype=int)
+        worst = float("inf")
     if worst > band:
         # 0/1 costs, so the optimum counts the over-band pairs a perfect
         # matching cannot avoid. Zero means one exists entirely inside the band;
         # every pair in it then agrees to within round-off, so which of them the
         # solver returns cannot matter to membership.
-        over = (cost > band).astype(float)
-        rows, cols = linear_sum_assignment(over)
-        if over[rows, cols].any():
+        rows, cols = linear_sum_assignment((~inside).astype(float))
+        if not inside[rows, cols].all():
             return None
         worst = float(cost[rows, cols].max())
     perm = np.empty(audit.size, dtype=int)
@@ -685,6 +697,19 @@ def _measure(
         # conditioning one arbitrary vector of a two-dimensional stationary
         # subspace. Every mode the solve cannot separate from the smallest is
         # kept instead.
+        #
+        # ROUND-9 REVIEW asked for this branch to withhold when a FINITE cutoff
+        # admits no eigenvalue, on the grounds that the evidence then describes
+        # modes the report did not classify as zero. It must not: that case is
+        # this PR's central one. On the #127 fixture the certificate band is
+        # ``4.44e-13`` and the stationary eigenvalue sits at ``1e-7``, so the
+        # cutoff is empty by construction, and explaining WHY the mode is out
+        # there is the whole reason the audit exists. Withholding turned
+        # ``test_pr127_fixture_is_reported_conditioning_limited`` red. The
+        # fallback is therefore deliberate for an empty cutoff as well as for no
+        # cutoff, and a reader should read ``cluster_size`` against
+        # ``zero_tolerance``: when no eigenvalue is within the cutoff, the group
+        # below is the nearest one, not a filtered zero set.
         #
         # ROUND-6 REVIEW. That rule was exact equality of the eigenvalues, and
         # the round-6 finding against the ``tied`` group applies here with more
