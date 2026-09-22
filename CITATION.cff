@@ -122,8 +122,10 @@ abstract: >-
 # through it, THAT change is the one that must be described as a correction.
 # Also pending for the next cut: the trace-preservation defect vec(I)^H L is
 # accumulated with exact per-column summation, falling back on overflow to an
-# exponent-banded accumulation that reports an unmeasurable result as such
-# rather than as zero, instead of an ordinary matrix product (#139). This CHANGES A REPORTED
+# exact fixed-point accumulator in units of 2**-1074 that rounds once (#151; it
+# replaced an exponent-banded fallback that could only abstain, reporting nan,
+# on a residual surviving across its band boundary), instead of an ordinary
+# matrix product (#139). This CHANGES A REPORTED
 # NUMBER and is a correction, not an addition: the ordinary product could leave
 # the float64 range on the way to a column sum that is exactly zero -- measured
 # for d=16 with eight coefficients +2.5e307 and eight -2.5e307 in one column,
@@ -139,7 +141,18 @@ abstract: >-
 # overflow-proof in general: only the trace-equation accumulation was changed.
 # MANIFEST_SCHEMA is deliberately unchanged -- `trace_defect` is a report
 # field, not a run-manifest field, so the manifest contract is untouched and
-# `input_hash` does not move.
+# `input_hash` does not move. The #151 fallback is reached only by columns whose
+# ordinary exact summation overflows; physical generators do not reach it, so
+# it moves no reported number of theirs.
+# Also pending for the next cut: the traceless restriction ENFORCES its own
+# audit numbers as a postcondition (#150) instead of only reporting them. With
+# B an orthonormal basis of ker(q^H), ||q^H L B|| <= ||q^H L|| (a projection)
+# and L B - B (B^H L B) = q (q^H L B) (because I - B B^H = q q^H), so the
+# invariance and reconstruction defects are fixed by the admitted trace defect
+# up to rounding; the restriction fails closed when either exceeds that by more
+# than reduction_rtol * (eps * ||L||_F + d**3 * 2**-1074), reduction_rtol
+# defaulting to the existing ZERO_MODE_EPS_FACTOR. Like the restriction itself
+# this moves no reported number: no diagnostic consumes it yet.
 keywords:
   - open quantum systems
   - Lindblad
