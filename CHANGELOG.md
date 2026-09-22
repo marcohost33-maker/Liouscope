@@ -121,7 +121,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   zero. Fault injection shows both gates bite: a basis spanning the trace
   direction instead of a traceless one is refused as "not invariant", a basis
   scaled by 1.2 as a projection-bound violation, and NaN/inf readings refuse
-  rather than compare false. The applied bound is recorded on the result as
+  rather than compare false -- finiteness of every reading and of both
+  limits is checked explicitly before any comparison, because a
+  ``not (x <= bound)`` form admits an infinite reading against a limit that
+  has itself overflowed to ``inf`` (PR #169 review, Codex P2). The applied bound is recorded on the result as
   `TracelessRestriction.reduction_tolerance` (a new trailing field with
   default `0.0`, the value for `d = 1`), so an admission is auditable against
   the numbers it admitted. No diagnostic consumes the restriction yet, so no

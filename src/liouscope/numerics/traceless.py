@@ -132,19 +132,47 @@ def _require_invariant_reduction(
        is either rounding or a subspace that is not invariant.
 
     ``projection_bound`` is ``||q^H L||`` and ``arithmetic`` the rounding
-    either computed number may carry. Each comparison is written as
-    ``not (x <= bound)`` so that a NaN or infinite reading -- including one
-    propagated from a non-finite entry of the reduced operator -- refuses
-    instead of comparing false.
+    either computed number may carry. Every reading and both limits are
+    required to be finite BEFORE anything is compared. A NaN reading would
+    compare false and a ``not (x <= bound)`` form catches that, but it does
+    not catch an infinite reading against a limit that has itself overflowed
+    to ``inf`` -- ``inf <= inf`` is true (PR #169 review, Codex P2:
+    ``invariance_defect=inf, projection_bound=1e308, arithmetic=1e308``
+    passed). A reading that is not finite, including one propagated from a
+    non-finite entry of the reduced operator, and a limit that admits
+    everything are therefore refused by name instead of compared.
     """
-    if not (invariance_defect <= projection_bound + arithmetic):
+    readings = {
+        "invariance_defect": invariance_defect,
+        "reconstruction_defect": reconstruction_defect,
+        "projection_bound": projection_bound,
+        "arithmetic": arithmetic,
+    }
+    for name, value in readings.items():
+        if not math.isfinite(value):
+            raise ValueError(
+                f"the traceless restriction's {name} is not representable as "
+                f"finite float64 ({name}={value}); refused rather than compared"
+            )
+    projection_limit = projection_bound + arithmetic
+    reconstruction_limit = invariance_defect + arithmetic
+    if not (math.isfinite(projection_limit) and math.isfinite(reconstruction_limit)):
+        # Same rule as the arithmetic bound itself: a limit that is not
+        # finite admits everything, so it is refused rather than compared.
+        raise ValueError(
+            "a reduction limit of the traceless restriction overflows float64 "
+            f"(projection_limit={projection_limit}, "
+            f"reconstruction_limit={reconstruction_limit}); no reading could "
+            "fail it, so the restriction is refused"
+        )
+    if invariance_defect > projection_limit:
         raise ValueError(
             "the traceless restriction violates its projection bound: "
             f"invariance_defect={invariance_defect:.6e} exceeds "
             f"||q^H L||={projection_bound:.6e} by more than the arithmetic "
             f"bound {arithmetic:.6e}"
         )
-    if not (reconstruction_defect <= invariance_defect + arithmetic):
+    if reconstruction_defect > reconstruction_limit:
         raise ValueError(
             "the traceless subspace is not invariant under L_super within "
             f"rounding: reconstruction_defect={reconstruction_defect:.6e}, "

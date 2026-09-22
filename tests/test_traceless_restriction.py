@@ -662,26 +662,59 @@ def test_a_reduction_bound_that_overflows_is_refused_not_trusted() -> None:
 
 
 @pytest.mark.parametrize(
-    ("invariance", "reconstruction", "bound"),
+    ("invariance", "reconstruction", "bound", "arithmetic"),
     [
-        (math.nan, 0.0, 1.0),
-        (0.0, math.nan, 1.0),
-        (0.0, math.inf, 1.0),
-        (math.inf, math.inf, 1.0),
-        (0.0, 0.0, math.nan),
+        (math.nan, 0.0, 1.0, 1.0),
+        (0.0, math.nan, 1.0, 1.0),
+        (0.0, math.inf, 1.0, 1.0),
+        (math.inf, math.inf, 1.0, 1.0),
+        (0.0, 0.0, math.nan, 1.0),
+        (0.0, 0.0, 1.0, math.inf),
+        # PR #169 review (Codex P2): an infinite reading against a limit that
+        # has itself overflowed -- ``inf <= inf`` is true, and this passed.
+        (math.inf, math.inf, 1.0e308, 1.0e308),
+        (1.0, math.inf, 1.0e308, 1.0e308),
     ],
 )
 def test_a_non_finite_reading_refuses_instead_of_comparing_false(
-    invariance: float, reconstruction: float, bound: float
+    invariance: float, reconstruction: float, bound: float, arithmetic: float
 ) -> None:
-    """``x > bound`` is False for NaN; the gate must not read that as a pass."""
-    with pytest.raises(ValueError):
+    """A reading that is not a finite number is refused by name, never compared.
+
+    ``x > bound`` is False for NaN, and ``not (x <= bound)`` catches that --
+    but not an infinite ``x`` against a bound that overflowed to ``inf``.
+    Finiteness is therefore checked explicitly before any comparison.
+    """
+    with pytest.raises(Exception, match="not representable") as exc:
         _require_invariant_reduction(
             invariance_defect=invariance,
             reconstruction_defect=reconstruction,
             projection_bound=bound,
-            arithmetic=1.0,
+            arithmetic=arithmetic,
         )
+    assert isinstance(exc.value, ValueError), (
+        f"expected ValueError, got {type(exc.value).__name__}: {exc.value}"
+    )
+
+
+def test_a_limit_that_overflows_is_refused_even_for_finite_readings() -> None:
+    """Finite readings, finite inputs, and still no verdict: the limit is ``inf``.
+
+    ``1e308 + 1e308`` overflows, so ``projection_bound + arithmetic`` admits
+    every reading. That is the same situation ``operator_zero_tolerance``
+    refuses for its own threshold, and it is refused here for the same
+    reason: an unusable limit is not a pass.
+    """
+    with pytest.raises(Exception, match="overflows") as exc:
+        _require_invariant_reduction(
+            invariance_defect=1.0,
+            reconstruction_defect=1.0,
+            projection_bound=1.0e308,
+            arithmetic=1.0e308,
+        )
+    assert isinstance(exc.value, ValueError), (
+        f"expected ValueError, got {type(exc.value).__name__}: {exc.value}"
+    )
 
 
 def test_the_postcondition_admits_its_own_boundary() -> None:
