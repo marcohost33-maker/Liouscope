@@ -88,6 +88,33 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   whole range. Physical generators never reach this path (unchanged
   `test_a_legitimate_stiff_generator_never_reaches_the_band_fallback`), so no
   reported number moves and the run manifest contract is untouched.
+- **`restrict_to_traceless` now enforces the audit numbers it used to only
+  report (issue #150).** `invariance_defect` and `reconstruction_defect` were
+  documented as "should be at round-off" and read by no gate. They are not free
+  quantities: with `B` an orthonormal basis of `ker(q^H)`, `||q^H L B|| <=
+  ||q^H L||` (a projection cannot outgrow its vector) and `L B - B (B^H L B) =
+  q (q^H L B)` (because `I - B B^H = q q^H`), so the reconstruction defect
+  EQUALS the invariance defect in exact arithmetic and both are fixed by the
+  trace defect the admission gates already bound. The new postcondition checks
+  exactly these two identities, up to the rounding of forming them --
+  `reduction_rtol * (eps * ||L||_F + d**3 * 2**-1074)`, the standard model
+  with its gradual-underflow term -- and fails closed otherwise; no second,
+  slightly different trace threshold is introduced. `reduction_rtol` is a new
+  keyword defaulting to the existing `ZERO_MODE_EPS_FACTOR` (1e3), not a newly
+  calibrated number. Measured: across random GKSL generators with `d <= 16`
+  over rate scales 1e-300..1e300, and with `d` up to 32 at scales 1e-300, 1
+  and 1e300, both identities hold to at most `0.9 * eps * ||L||_F`, with no
+  loss of margin as `d` grows; the issue's own fixture (`1e300 - 1e300 + 1` in one trace
+  equation) is ADMITTED, its reconstruction defect being `1.34 * eps *
+  ||L||_F` -- rounding, not a non-invariant subspace -- and the same gate
+  refuses it once `reduction_rtol` is set below that measured excess. The
+  underflow term is needed: a legal `d = 2` generator at scale 1e-318 carries a
+  reconstruction defect of whole subnormals while `eps * ||L||_F` underflows to
+  zero. Fault injection shows both gates bite: a basis spanning the trace
+  direction instead of a traceless one is refused as "not invariant", a basis
+  scaled by 1.2 as a projection-bound violation, and NaN/inf readings refuse
+  rather than compare false. No diagnostic consumes the restriction yet, so no
+  reported number moves and the run manifest contract is untouched.
 - **Stacked pull requests now carry two independent evidence planes:
   proposed-merge evidence in the existing required contexts and submitted-head
   evidence in additional jobs (issue #159 follow-up).** CI, QuTiP and Quality
