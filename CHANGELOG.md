@@ -63,6 +63,31 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     the change is not visible in `input_hash`.
 
 ### Fixed
+- **The overflow fallback of `scaled_column_sums` now answers exactly instead
+  of abstaining (issue #151).** When `math.fsum` overflows on an intermediate,
+  the column used to be split into two exponent bands at `2**512`, each rounded
+  on its own, and the interim fix made that fallback return `nan` whenever a
+  band had lost a residual it could not carry across the boundary.
+  `_fixed_point_sum` replaces the bands with a long (Kulisch-style) fixed-point
+  accumulator: every finite float64 is an integer multiple of `2**-1074`, so
+  the sum is one exact Python integer and is rounded to float64 exactly once,
+  ties to even. That rounding is done in integer arithmetic rather than by
+  `int / int`, whose small-int fast path double-rounds on x87 hardware
+  (python/cpython#142449). `fsum` remains the fast path and every input it can
+  sum is answered bit for bit as before; the accumulator agrees with it on all
+  3000 differential cases, 30% of them exact ties. Measured on 20000 columns
+  forced into the fallback (adversarial tails spanning the whole exponent
+  range): the band fallback abstained on 13172 and was never wrong; the
+  accumulator abstains on none and is exact on all. The motivating column
+  `[7e307]*3 + [-7e307]*3 + [2**513] + [-2**511]*4 + [1e-300]` now sums to
+  `1e-300`, so the 144x144 operator built from it is refused at `tp_rtol=0` by
+  the trace-preservation gate for its true defect and ADMITTED at the default
+  tolerance, where the interim fix refused it at every tolerance as "not
+  representable". The two tests that pinned the abstention contract are
+  replaced by the stronger one: no abstention, correctly rounded, over the
+  whole range. Physical generators never reach this path (unchanged
+  `test_a_legitimate_stiff_generator_never_reaches_the_band_fallback`), so no
+  reported number moves and the run manifest contract is untouched.
 - **Stacked pull requests now carry two independent evidence planes:
   proposed-merge evidence in the existing required contexts and submitted-head
   evidence in additional jobs (issue #159 follow-up).** CI, QuTiP and Quality

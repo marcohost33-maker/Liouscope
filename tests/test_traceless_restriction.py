@@ -389,32 +389,63 @@ def test_a_defect_far_below_the_dominant_scale_is_still_refused() -> None:
     )
 
 
-def test_a_cross_band_residual_is_refused_rather_than_admitted() -> None:
-    """#139, fifth round: unmeasurable must not read as trace preserving.
+def _cross_band_residual() -> np.ndarray:
+    """A finite 144x144 operator whose column-0 trace defect is exactly 1e-300.
 
-    These twelve coefficients form the trace equation of a finite 144x144
-    operator whose exact defect is 1e-300. While the two exponent bands were
-    rounded independently the defect read 0.0 and ``tp_rtol=0`` -- the
-    strictest request there is -- ACCEPTED the operator. The evidence is now
-    reported as not representable, so the existing fail-closed channel refuses
-    it.
+    Its twelve trace coefficients overflow ``math.fsum`` and, split at the old
+    band boundary ``2**512``, lose the 1e-300 to one band's own rounding.
     """
     column = [7e307] * 3 + [-7e307] * 3 + [2.0**513] + [-(2.0**511)] * 4 + [1e-300]
     d = 12
     n = d * d
     L_super = np.zeros((n, n), dtype=complex)
     trace_rows = np.arange(0, n, d + 1, dtype=int)
-    for row, value in zip(trace_rows, column, strict=False):
-        L_super[row, 0] = value
+    assert trace_rows.size == len(column)
+    L_super[trace_rows, 0] = column
 
     assert np.all(np.isfinite(L_super))
     assert float(sum(Fraction(v) for v in column)) == 1.0e-300
+    return L_super
 
-    with pytest.raises(Exception, match="not representable") as exc:
+
+def test_a_cross_band_residual_is_refused_for_its_exact_size() -> None:
+    """#139 fifth round, then #151: refused, and for the right reason.
+
+    While the two exponent bands were rounded independently the defect read
+    0.0 and ``tp_rtol=0`` -- the strictest request there is -- ACCEPTED this
+    operator. The interim fix refused it as "not representable", which was
+    safe but did not say what was wrong. The exact accumulator measures the
+    defect itself, so the refusal now comes from the trace-preservation gate
+    reading the true number.
+    """
+    L_super = _cross_band_residual()
+
+    defect, _ = trace_preservation_defect(L_super)
+    assert defect == 1.0e-300
+
+    with pytest.raises(Exception, match="not trace preserving") as exc:
         restrict_to_traceless(L_super, tp_rtol=0.0)
     assert isinstance(exc.value, ValueError), (
         f"expected ValueError, got {type(exc.value).__name__}: {exc.value}"
     )
+
+
+def test_the_same_cross_band_residual_is_admitted_within_tolerance() -> None:
+    """#151: the abstention's cost, measured on the case that paid it.
+
+    A defect of 1e-300 on an operator of norm 1.7e308 is a relative violation
+    of order 1e-608 -- invisible at double precision and far inside the default
+    ``tp_rtol``. The interim fix could not measure it and so refused the
+    operator at EVERY tolerance, the default included. Discrimination against
+    the test above: same operator, same gates, only the tolerance differs.
+    """
+    L_super = _cross_band_residual()
+
+    reduced = restrict_to_traceless(L_super)
+
+    assert reduced.trace_defect == 1.0e-300
+    assert reduced.trace_defect <= 1.0e-10 * reduced.operator_scale
+    assert reduced.trace_componentwise_error <= 1.0e-10
 
 
 @pytest.mark.parametrize("fast_rate", [1.0e8, 1.0e10, 1.0e12])
