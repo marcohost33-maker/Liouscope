@@ -75,7 +75,15 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `int / int`, whose small-int fast path double-rounds on x87 hardware
   (python/cpython#142449). `fsum` remains the fast path and every input it can
   sum is answered bit for bit as before; the accumulator agrees with it on all
-  3000 differential cases, 30% of them exact ties. Measured on 20000 columns
+  3000 differential cases, 30% of them exact ties -- stated precisely: CPython
+  documents `fsum` as accurate to under 1 ulp and "typically" correctly
+  rounded (double rounding on x87 builds), and on the IEEE-754 double hardware
+  this package is tested on the two agree. The construction is the standard
+  library's own precedent, `statistics._sum`, which buckets `as_integer_ratio`
+  numerators by power-of-two denominator. The fallback answer is independent
+  of input order (measured over 50 permutations), and a non-finite addend
+  reaching it decides the answer as `fsum` would (`inf`, `-inf`, `nan`)
+  instead of raising from inside the accumulator. Measured on 20000 columns
   forced into the fallback (adversarial tails spanning the whole exponent
   range): the band fallback abstained on 13172 and was never wrong; the
   accumulator abstains on none and is exact on all. The motivating column
@@ -113,7 +121,10 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   zero. Fault injection shows both gates bite: a basis spanning the trace
   direction instead of a traceless one is refused as "not invariant", a basis
   scaled by 1.2 as a projection-bound violation, and NaN/inf readings refuse
-  rather than compare false. No diagnostic consumes the restriction yet, so no
+  rather than compare false. The applied bound is recorded on the result as
+  `TracelessRestriction.reduction_tolerance` (a new trailing field with
+  default `0.0`, the value for `d = 1`), so an admission is auditable against
+  the numbers it admitted. No diagnostic consumes the restriction yet, so no
   reported number moves and the run manifest contract is untouched.
 - **Stacked pull requests now carry two independent evidence planes:
   proposed-merge evidence in the existing required contexts and submitted-head

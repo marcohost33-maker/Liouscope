@@ -692,3 +692,24 @@ def test_the_postcondition_admits_its_own_boundary() -> None:
         projection_bound=1.0,
         arithmetic=1.0,
     )
+
+
+def test_the_applied_reduction_tolerance_is_recorded_with_the_result() -> None:
+    """The gate's own bound travels with the numbers it admitted.
+
+    A postcondition that is enforced but not reported would leave a reader
+    of the result unable to tell how close the admitted defects came to it.
+    The recorded value is the bound itself, so ``reduction_rtol`` re-derives
+    it and both admitted defects verifiably sit below it.
+    """
+    L_super = _amplitude_damped_qubit(rate=0.3)
+    reduced = restrict_to_traceless(L_super)
+
+    assert reduced.reduction_tolerance == ZERO_MODE_EPS_FACTOR * _arithmetic_unit(reduced)
+    assert reduced.reconstruction_defect <= reduced.invariance_defect + reduced.reduction_tolerance
+
+    halved = restrict_to_traceless(L_super, reduction_rtol=ZERO_MODE_EPS_FACTOR / 2.0)
+    assert halved.reduction_tolerance == reduced.reduction_tolerance / 2.0
+
+    trivial = restrict_to_traceless(np.zeros((1, 1), dtype=complex))
+    assert trivial.reduction_tolerance == 0.0

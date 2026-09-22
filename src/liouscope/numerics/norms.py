@@ -128,17 +128,37 @@ def _overflow_safe_fsum(values: list[float]) -> float:
     is answered by it, bit for bit as before. Only when it raises does
     :func:`_fixed_point_sum` take over. That accumulator has no intermediate
     range to leave and no partial sum to round before the end, so it returns
-    the same correctly rounded exact sum ``fsum`` would have returned had it
-    not overflowed -- including for a residual that survives only across
-    exponents far apart, the case the earlier two-band fallback could not
-    carry and abstained on (issue #151). Overflow of the FINAL rounding is the
-    honest answer and returns a signed infinity: the true sum is not
-    representable.
+    the correctly rounded exact sum -- including for a residual that survives
+    only across exponents far apart, the case the earlier two-band fallback
+    could not carry and abstained on (issue #151). Overflow of the FINAL
+    rounding is the honest answer and returns a signed infinity: the true sum
+    is not representable.
+
+    Stated precisely rather than generously: CPython documents ``fsum`` as
+    accurate to under 1 ulp and "typically" correctly rounded, the residual
+    being extended-precision double rounding on x87 builds. On IEEE-754
+    double hardware with round-half-even -- every platform this package is
+    tested on -- the two paths agree bit for bit (measured, see the
+    differential test), so the fallback is invisible to inputs the fast path
+    can sum.
+
+    A non-finite addend never reaches the fallback through
+    :func:`scaled_column_sums`, which sums such columns in ordinary
+    arithmetic. If one does arrive here, the specials alone decide the answer
+    (``inf``, ``-inf`` or ``nan``), exactly as ``fsum`` treats them, instead
+    of ``as_integer_ratio`` raising from inside the accumulator.
     """
     try:
         return math.fsum(values)
     except OverflowError:
-        return _fixed_point_sum(values)
+        pass
+    specials = [value for value in values if not math.isfinite(value)]
+    if specials:
+        try:
+            return math.fsum(specials)
+        except ValueError:  # ``inf`` and ``-inf`` together: fsum refuses
+            return math.nan
+    return _fixed_point_sum(values)
 
 
 def _fixed_point_sum(values: list[float]) -> float:
@@ -162,7 +182,11 @@ def _fixed_point_sum(values: list[float]) -> float:
 
     It is kept as the fallback rather than the only path because ``fsum`` is
     much cheaper on the inputs it can sum, and the two agree on every one of
-    them: both return the correctly rounded exact sum.
+    them on IEEE-754 double hardware: both return the correctly rounded
+    exact sum. The standard library's ``statistics._sum`` accumulates floats
+    the same way -- ``as_integer_ratio`` numerators bucketed by power-of-two
+    denominator -- so this is the stdlib's own precedent for exact float
+    summation, not a private construction.
     """
     total = 0
     for value in values:

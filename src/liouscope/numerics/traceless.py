@@ -52,6 +52,11 @@ class TracelessRestriction:
     trace_componentwise_error: float
     invariance_defect: float
     reconstruction_defect: float
+    #: The arithmetic bound the #150 postcondition applied to both defects,
+    #: ``reduction_rtol * (eps * ||L||_F + d**3 * 2**-1074)``, recorded so the
+    #: admission is auditable against the numbers it admitted. ``0.0`` for
+    #: ``d = 1``, where the traceless space is empty and nothing is reduced.
+    reduction_tolerance: float = 0.0
 
 
 def trace_vector(d: int) -> np.ndarray:
@@ -302,4 +307,5 @@ def restrict_to_traceless(
         trace_componentwise_error=tp_componentwise,
         invariance_defect=invariance_defect,
         reconstruction_defect=reconstruction_defect,
+        reduction_tolerance=arithmetic,
     )

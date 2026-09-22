@@ -337,6 +337,12 @@ def test_fixed_point_sum_agrees_with_fsum_wherever_fsum_can_answer() -> None:
     Exact ties are manufactured on purpose, because ties are where a rounding
     rule that is merely "nearest" and one that is "nearest, ties to even"
     part ways.
+
+    CPython documents ``fsum`` as accurate to under 1 ulp and "typically"
+    correctly rounded, the residual being double rounding on x87 builds. The
+    inputs here are fixed by seed, so a mismatch is never flakiness: it is
+    a platform whose ``fsum`` is not correctly rounded, surfacing as a fact.
+    On IEEE-754 double hardware (every CI runner) the count is zero.
     """
     rng = random.Random(151)
     compared = 0
@@ -396,3 +402,63 @@ def test_overflow_fallback_rounds_once_ties_to_even(tail: list[float], expected:
 
     assert got == expected
     assert got == _correctly_rounded(sum(Fraction(v) for v in column))
+
+
+def test_overflow_fallback_answer_does_not_depend_on_input_order() -> None:
+    """Exactness implies order independence; measured rather than inferred.
+
+    The fixed-point accumulator adds integers, and integer addition is
+    associative and commutative, so every permutation of a column must yield
+    the identical float -- the property Neal (arXiv:1505.05571) names as the
+    reason exact summation makes serial and parallel results agree. Every
+    permutation here still overflows ``fsum``, so all of them are answered by
+    the fallback, not by the fast path.
+    """
+    rng = random.Random(2026)
+    column = [_FLOAT_MAX, _FLOAT_MAX, -_FLOAT_MAX, -_FLOAT_MAX, 3.0e-310, -1.0e100, 1.0e100, 7.0]
+    reference = scaled_column_sums(np.array([[v] for v in column], dtype=complex))[0].real
+    assert reference == _correctly_rounded(sum(Fraction(v) for v in column))
+
+    for _ in range(50):
+        permuted = column[:]
+        rng.shuffle(permuted)
+        # Put the two maxima first so the fast path overflows for certain.
+        permuted.sort(key=lambda v: v != _FLOAT_MAX)
+        with pytest.raises(OverflowError):
+            math.fsum(permuted)
+        got = scaled_column_sums(np.array([[v] for v in permuted], dtype=complex))[0].real
+        assert got == reference
+
+
+@pytest.mark.parametrize(
+    ("special", "expected"),
+    [
+        ([math.inf], math.inf),
+        ([-math.inf], -math.inf),
+        ([math.nan], math.nan),
+        ([math.inf, -math.inf], math.nan),
+    ],
+)
+def test_overflow_fallback_lets_a_special_value_decide(
+    special: list[float], expected: float
+) -> None:
+    """Defence in depth: a non-finite addend past the overflow must not raise.
+
+    ``scaled_column_sums`` keeps such columns away from the fallback, but the
+    helper's contract should not depend on its one caller: ``as_integer_ratio``
+    raises on ``inf`` and ``nan``, so without the guard an overflowing column
+    that also carries a special would escape as an exception instead of the
+    sentinel every other path returns.
+    """
+    from liouscope.numerics.norms import _overflow_safe_fsum
+
+    column = [_FLOAT_MAX, _FLOAT_MAX, *special]
+    with pytest.raises(OverflowError):
+        math.fsum(column)
+
+    got = _overflow_safe_fsum(column)
+
+    if math.isnan(expected):
+        assert math.isnan(got)
+    else:
+        assert got == expected
