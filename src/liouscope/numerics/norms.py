@@ -13,12 +13,12 @@ import math
 
 import numpy as np
 
-# Issue #139: exponent bands for the overflow fallback in
-# :func:`_overflow_safe_fsum`. The split at 2**512 is what makes two bands
-# provably enough -- see that function for why neither band can overflow or
-# underflow.
-_BAND_SHIFT = 1024
-_BAND_SPLIT = 2.0**512
+# Issue #151: every finite float64 is an integer multiple of 2**-1074, the
+# smallest subnormal, so the overflow fallback in :func:`_overflow_safe_fsum`
+# accumulates in those units and rounds once at the end.
+_FIXED_POINT_BITS = 1074
+# Significand width of float64, hidden bit included.
+_SIGNIFICAND_BITS = 53
 
 
 def _finite_component_scale(values: np.ndarray) -> tuple[np.ndarray, np.ndarray, int] | None:
@@ -115,7 +115,7 @@ def scaled_log_sum_squares(values: np.ndarray) -> float:
 
 
 def _overflow_safe_fsum(values: list[float]) -> float:
-    """Exact sum of finite float64 values, without sacrificing any addend.
+    """Correctly rounded exact sum of finite float64 values.
 
     ``math.fsum`` is already exact over the whole float64 range -- Shewchuk
     accumulation keeps a set of non-overlapping partial sums, so no bit of any
@@ -124,89 +124,112 @@ def _overflow_safe_fsum(values: list[float]) -> float:
     followed by eight ``-2.5e307`` raises ``OverflowError``, while the same
     sixteen values alternating return zero.
 
-    The first attempt is therefore the plain call. Only when it raises do we
-    split the addends into two exponent bands at ``2**512``:
+    The first attempt is therefore the plain call, and every input it can sum
+    is answered by it, bit for bit as before. Only when it raises does
+    :func:`_fixed_point_sum` take over. That accumulator has no intermediate
+    range to leave and no partial sum to round before the end, so it returns
+    the correctly rounded exact sum -- including for a residual that survives
+    only across exponents far apart, the case the earlier two-band fallback
+    could not carry and abstained on (issue #151). Overflow of the FINAL
+    rounding is the honest answer and returns a signed infinity: the true sum
+    is not representable.
 
-    * above the split, shifting by ``2**-1024`` lands every term in
-      ``[2**-512, 1)`` -- far above the subnormal floor, so nothing is lost --
-      and ``k`` such terms sum below ``k``, so nothing overflows;
-    * below the split, ``k`` terms sum below ``k * 2**512 < 2**1024``, so the
-      band needs no scaling at all and hence cannot underflow either.
+    Stated precisely rather than generously: CPython documents ``fsum`` as
+    accurate to under 1 ulp and "typically" correctly rounded, the residual
+    being extended-precision double rounding on x87 builds. On IEEE-754
+    double hardware with round-half-even -- every platform this package is
+    tested on -- the two paths agree bit for bit (measured, see the
+    differential test), so the fallback is invisible to inputs the fast path
+    can sum.
 
-    Both bands are summed exactly and recombined once. Overflow in the
-    recombination is the honest answer: it means the true sum is not
-    representable.
-
-    KNOWN LIMIT of the fallback, and it is an ABSTENTION rather than an error.
-    Two bands rounded independently cannot carry a residual that survives only
-    across their boundary, so the fallback establishes whether either band sum
-    or the recombination lost anything and returns ``nan`` when it did. Every
-    number it does return is the exact sum. Measured: the plain path answers
-    20000 randomised columns exactly; the fallback is reached by a few percent
-    of overflowing columns and abstains on a minority of those.
-
-    Making the fallback ANSWER those cases needs an accumulator that keeps
-    Shewchuk partial sums across the band boundary until a single final
-    rounding. That is a different construction and is deliberately not built
-    here.
+    A non-finite addend never reaches the fallback through
+    :func:`scaled_column_sums`, which sums such columns in ordinary
+    arithmetic. If one does arrive here, the specials alone decide the answer
+    (``inf``, ``-inf`` or ``nan``), exactly as ``fsum`` treats them, instead
+    of ``as_integer_ratio`` raising from inside the accumulator.
     """
     try:
         return math.fsum(values)
     except OverflowError:
         pass
-    high: list[float] = []
-    low: list[float] = []
-    for value in values:
-        (high if abs(value) >= _BAND_SPLIT else low).append(value)
-    scaled_high = [math.ldexp(value, -_BAND_SHIFT) for value in high]
-    high_total = math.fsum(scaled_high)
-    low_total = math.fsum(low)
-
-    # Each band sum is correctly ROUNDED, which is not the same as exact, and
-    # the difference is the whole finding of the fifth review round: for
-    # ``[7e307]*3 + [-7e307]*3 + [2**513] + [-2**511]*4 + [1e-300]`` the bands
-    # are ``+2**513`` and ``-2**513 + 1e-300``. The low band rounds to exactly
-    # ``-2**513`` -- the 1e-300 is far below its last place -- and the two then
-    # annihilate to 0.0, reporting an exactly trace-preserving generator for a
-    # column whose exact sum is 1e-300.
-    #
-    # Whether a band sum was rounded is cheap to establish: re-sum the band
-    # against its own negated total and see whether anything is left over.
-    # Recombination is checked the same way, by the fast-two-sum residual.
-    # When all three are exact the result is the exact sum; when any is not,
-    # this function does NOT guess. It reports ``nan``, so the trace-preservation
-    # gates refuse the operator instead of admitting it on a number nobody can
-    # vouch for. An unmeasurable result and a passing one are different things,
-    # and confusing them is why this pull request exists.
-    if not _is_exact(scaled_high, high_total) or not _is_exact(low, low_total):
-        return math.nan
-    try:
-        rescaled = math.ldexp(high_total, _BAND_SHIFT)
-    except OverflowError:
-        return math.copysign(math.inf, high_total)
-    # No test on the recombination itself: both band sums are exact at this
-    # point, so a single IEEE-754 addition of them returns the correctly
-    # rounded exact total by definition. An earlier revision guarded this step
-    # as well and was measurably WRONG to: it abstained on 6 of 109 fallback
-    # columns whose answer would have been correct. Abstaining without cause is
-    # its own defect -- a function that refuses everything passes every
-    # negative test and is still broken.
-    return rescaled + low_total
+    specials = [value for value in values if not math.isfinite(value)]
+    if specials:
+        try:
+            return math.fsum(specials)
+        except ValueError:  # ``inf`` and ``-inf`` together: fsum refuses
+            return math.nan
+    return _fixed_point_sum(values)
 
 
-def _is_exact(addends: list[float], total: float) -> bool:
-    """Whether ``math.fsum(addends)`` lost anything when it produced ``total``.
+def _fixed_point_sum(values: list[float]) -> float:
+    """Exact sum of finite float64 values in a fixed-point integer accumulator.
 
-    ``fsum`` returns the correctly rounded exact sum, so re-summing the addends
-    together with the negated total leaves exactly the part that was rounded
-    away. Zero means nothing was.
+    Issue #151. Every finite float64 is an integer multiple of ``2**-1074``,
+    the smallest subnormal, so ``value * 2**1074`` is an exact Python integer
+    for every addend -- the "long accumulator" of Kulisch, or the
+    superaccumulator of Neal (arXiv:1505.05571), built here from arbitrary
+    precision integers rather than fixed-width chunks. Integer addition is
+    exact and associative, so the order of the input cannot matter, no partial
+    sum is ever rounded, and the only rounding in the whole computation is the
+    single one in :func:`_round_fixed_point`.
+
+    This is the construction the two-band fallback it replaces pointed at: a
+    band that rounds its own sum before recombination has already discarded a
+    residual living only across the band boundary. Measured on
+    ``[7e307]*3 + [-7e307]*3 + [2**513] + [-2**511]*4 + [1e-300]``: the bands
+    returned ``nan`` (they could tell the residual was lost, not recover it);
+    this returns ``1e-300``, the exact sum.
+
+    It is kept as the fallback rather than the only path because ``fsum`` is
+    much cheaper on the inputs it can sum, and the two agree on every one of
+    them on IEEE-754 double hardware: both return the correctly rounded
+    exact sum. The standard library's ``statistics._sum`` accumulates floats
+    the same way -- ``as_integer_ratio`` numerators bucketed by power-of-two
+    denominator -- so this is the stdlib's own precedent for exact float
+    summation, not a private construction.
     """
-    if not addends or math.isinf(total):
-        return True
+    total = 0
+    for value in values:
+        numerator, denominator = value.as_integer_ratio()
+        # ``denominator`` is ``2**k`` with ``0 <= k <= 1074`` for any finite
+        # float64, so the shift is non-negative and the product exact.
+        total += numerator << (_FIXED_POINT_BITS - denominator.bit_length() + 1)
+    return _round_fixed_point(total)
+
+
+def _round_fixed_point(total: int) -> float:
+    """Round ``total * 2**-1074`` to float64, ties to even, exactly once.
+
+    Written in integer arithmetic instead of ``total / 2**1074``: CPython's
+    integer true division is correctly rounded in general, but its small-int
+    fast path relies on the platform FPU and is documented to double-round on
+    x87 hardware (python/cpython#142449). Doing the one rounding here keeps the
+    result a property of this function, not of the build.
+    """
+    magnitude = abs(total)
+    excess = magnitude.bit_length() - _SIGNIFICAND_BITS
+    if excess > 0:
+        # Keep the leading 53 bits and round the rest to nearest, ties to
+        # even. A carry out of the top bit (``2**53``) is still exact below.
+        kept = magnitude >> excess
+        rest = magnitude - (kept << excess)
+        half = 1 << (excess - 1)
+        if rest > half or (rest == half and kept & 1):
+            kept += 1
+    else:
+        # At most 53 significant bits: representable as-is. Values below
+        # ``2**52`` are the subnormals, ``k * 2**-1074`` exactly.
+        kept, excess = magnitude, 0
     try:
-        return math.fsum([*addends, -total]) == 0.0
-    except OverflowError:  # pragma: no cover - total is finite, so this cannot
-        return False       # overflow; refused rather than assumed if it ever does
+        # ``kept <= 2**53`` converts to float exactly, and scaling by a power
+        # of two is exact whenever the result is in range -- a normal result
+        # whenever ``excess > 0``, a subnormal or normal one otherwise.
+        result = math.ldexp(float(kept), excess - _FIXED_POINT_BITS)
+    except OverflowError:
+        # The sign comes from an integer comparison: ``copysign(inf, total)``
+        # would first convert the very integer that did not fit, and raise.
+        return -math.inf if total < 0 else math.inf
+    return -result if total < 0 else result
 
 
 def scaled_column_sums(values: np.ndarray) -> np.ndarray:

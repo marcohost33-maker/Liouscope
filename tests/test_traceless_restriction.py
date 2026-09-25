@@ -10,15 +10,20 @@ import numpy as np
 import pytest
 
 from liouscope import build_liouvillian
+from liouscope._consts import ZERO_MODE_EPS_FACTOR
+from liouscope.numerics import traceless as traceless_module
 from liouscope.numerics.linalg import (
     trace_preservation_componentwise_error,
     trace_preservation_defect,
 )
 from liouscope.numerics.traceless import (
+    _require_invariant_reduction,
     restrict_to_traceless,
     trace_vector,
     traceless_basis,
 )
+
+_EPS = float(np.finfo(float).eps)
 
 _LOWER = np.array([[0.0, 1.0], [0.0, 0.0]], dtype=complex)
 
@@ -389,45 +394,77 @@ def test_a_defect_far_below_the_dominant_scale_is_still_refused() -> None:
     )
 
 
-def test_a_cross_band_residual_is_refused_rather_than_admitted() -> None:
-    """#139, fifth round: unmeasurable must not read as trace preserving.
+def _cross_band_residual() -> np.ndarray:
+    """A finite 144x144 operator whose column-0 trace defect is exactly 1e-300.
 
-    These twelve coefficients form the trace equation of a finite 144x144
-    operator whose exact defect is 1e-300. While the two exponent bands were
-    rounded independently the defect read 0.0 and ``tp_rtol=0`` -- the
-    strictest request there is -- ACCEPTED the operator. The evidence is now
-    reported as not representable, so the existing fail-closed channel refuses
-    it.
+    Its twelve trace coefficients overflow ``math.fsum`` and, split at the old
+    band boundary ``2**512``, lose the 1e-300 to one band's own rounding.
     """
     column = [7e307] * 3 + [-7e307] * 3 + [2.0**513] + [-(2.0**511)] * 4 + [1e-300]
     d = 12
     n = d * d
     L_super = np.zeros((n, n), dtype=complex)
     trace_rows = np.arange(0, n, d + 1, dtype=int)
-    for row, value in zip(trace_rows, column, strict=False):
-        L_super[row, 0] = value
+    assert trace_rows.size == len(column)
+    L_super[trace_rows, 0] = column
 
     assert np.all(np.isfinite(L_super))
     assert float(sum(Fraction(v) for v in column)) == 1.0e-300
+    return L_super
 
-    with pytest.raises(Exception, match="not representable") as exc:
+
+def test_a_cross_band_residual_is_refused_for_its_exact_size() -> None:
+    """#139 fifth round, then #151: refused, and for the right reason.
+
+    While the two exponent bands were rounded independently the defect read
+    0.0 and ``tp_rtol=0`` -- the strictest request there is -- ACCEPTED this
+    operator. The interim fix refused it as "not representable", which was
+    safe but did not say what was wrong. The exact accumulator measures the
+    defect itself, so the refusal now comes from the trace-preservation gate
+    reading the true number.
+    """
+    L_super = _cross_band_residual()
+
+    defect, _ = trace_preservation_defect(L_super)
+    assert defect == 1.0e-300
+
+    with pytest.raises(Exception, match="not trace preserving") as exc:
         restrict_to_traceless(L_super, tp_rtol=0.0)
     assert isinstance(exc.value, ValueError), (
         f"expected ValueError, got {type(exc.value).__name__}: {exc.value}"
     )
 
 
+def test_the_same_cross_band_residual_is_admitted_within_tolerance() -> None:
+    """#151: the abstention's cost, measured on the case that paid it.
+
+    A defect of 1e-300 on an operator of norm 1.7e308 is a relative violation
+    of order 1e-608 -- invisible at double precision and far inside the default
+    ``tp_rtol``. The interim fix could not measure it and so refused the
+    operator at EVERY tolerance, the default included. Discrimination against
+    the test above: same operator, same gates, only the tolerance differs.
+    """
+    L_super = _cross_band_residual()
+
+    reduced = restrict_to_traceless(L_super)
+
+    assert reduced.trace_defect == 1.0e-300
+    assert reduced.trace_defect <= 1.0e-10 * reduced.operator_scale
+    assert reduced.trace_componentwise_error <= 1.0e-10
+
+
 @pytest.mark.parametrize("fast_rate", [1.0e8, 1.0e10, 1.0e12])
 def test_a_legitimate_stiff_generator_never_reaches_the_band_fallback(
     fast_rate: float,
 ) -> None:
-    """Positive control for the abstention: it costs legitimate input nothing.
+    """Positive control: the overflow fallback is not on the physical path.
 
-    An abstaining gate that abstains on real generators would be as useless as
-    one that admits everything, so this measures the thing that matters rather
-    than assuming it: whether a physical stiff generator's trace equations ever
+    Written when the fallback could still abstain (#139); since #151 it answers
+    exactly, and the point that remains is where it runs. This measures rather
+    than assumes whether a physical stiff generator's trace equations ever
     overflow ``math.fsum`` at all. They do not -- the fallback is unreachable
-    for them -- and the restriction still succeeds with a finite defect.
+    for them, so #151 cannot move their numbers -- and the restriction still
+    succeeds with a finite defect.
     """
     L_super = _classical_stiff_network(fast_rate)
     n = L_super.shape[0]
@@ -442,3 +479,270 @@ def test_a_legitimate_stiff_generator_never_reaches_the_band_fallback(
 
     assert np.isfinite(reduced.trace_defect)
     assert reduced.trace_defect <= 1.0e-10 * reduced.operator_scale
+
+
+# --------------------------------------------------------------------------
+# Issue #150: the audit numbers are a postcondition, not only a report.
+# --------------------------------------------------------------------------
+
+
+def _random_gksl(rng: np.random.Generator, d: int, n_jumps: int = 3) -> np.ndarray:
+    a = rng.normal(size=(d, d)) + 1j * rng.normal(size=(d, d))
+    jumps = [rng.normal(size=(d, d)) + 1j * rng.normal(size=(d, d)) for _ in range(n_jumps)]
+    return build_liouvillian((a + a.conj().T) / 2.0, jumps, list(rng.uniform(0.1, 2.0, n_jumps)))
+
+
+def _within_column_dilution() -> np.ndarray:
+    """The fixture of issue #150: ``1e300 - 1e300 + 1`` in one trace equation."""
+    L_super = np.zeros((9, 9), dtype=complex)
+    L_super[0, 2] = 1.0e300
+    L_super[4, 2] = -1.0e300
+    L_super[8, 2] = 1.0
+    return L_super
+
+
+def _arithmetic_unit(reduced: traceless_module.TracelessRestriction) -> float:
+    """``eps * ||L||_F + n * d * 2**-1074``: the bound per unit ``reduction_rtol``."""
+    n = reduced.basis.shape[0]
+    d = math.isqrt(n)
+    return _EPS * reduced.operator_scale + n * d * math.ulp(0.0)
+
+
+def test_the_issue_150_fixture_is_admitted_because_its_defects_are_round_off() -> None:
+    """Step 1 of #150, decided: the admission is correct.
+
+    ``invariance_defect = 0.577`` and ``reconstruction_defect = 4.2e284`` look
+    alarming only in absolute terms beside an operator of norm ``1.4e300``.
+    Measured against the identities the reduction rests on they are exact:
+    the invariance defect sits ON its projection bound ``||q^H L||``, and the
+    reconstruction defect exceeds it by about ``1.3 * eps * ||L||_F`` -- the
+    rounding of forming ``B^H L B``, not a subspace that fails to be invariant.
+    """
+    reduced = restrict_to_traceless(_within_column_dilution())
+
+    projection_bound = reduced.trace_defect / math.sqrt(3.0)
+    assert reduced.invariance_defect == pytest.approx(projection_bound, rel=1.0e-12)
+    excess = (reduced.reconstruction_defect - reduced.invariance_defect) / _arithmetic_unit(reduced)
+    assert 0.0 < excess < 10.0, f"reconstruction excess {excess:.3g} x arithmetic unit"
+
+
+def test_the_reduction_gate_is_not_empty_on_that_fixture() -> None:
+    """Positive control, measured: the same gate refuses the same input below it.
+
+    A postcondition no input can fail proves nothing. The fixture's own
+    reconstruction excess is read first and the tolerance set to half of it,
+    so the refusal is guaranteed to come from the reconstruction comparison
+    and not from a constant that happens to fit this platform's rounding.
+    """
+    L_super = _within_column_dilution()
+    reduced = restrict_to_traceless(L_super)
+    excess = (reduced.reconstruction_defect - reduced.invariance_defect) / _arithmetic_unit(reduced)
+    assert excess > 0.0
+
+    with pytest.raises(Exception, match="not invariant") as exc:
+        restrict_to_traceless(L_super, reduction_rtol=0.5 * excess)
+    assert isinstance(exc.value, ValueError), (
+        f"expected ValueError, got {type(exc.value).__name__}: {exc.value}"
+    )
+
+
+@pytest.mark.parametrize("d", [2, 3, 4, 6, 8])
+@pytest.mark.parametrize("scale", [1.0e-300, 1.0e-150, 1.0, 1.0e150, 1.0e300])
+def test_legal_generators_pass_the_reduction_gate_with_margin(d: int, scale: float) -> None:
+    """Negative control across dimension and rate unit: nothing legal is refused.
+
+    Both identities hold to well under ``10 * eps * ||L||_F`` here (measured
+    worst case 0.9), so the default multiplier ``ZERO_MODE_EPS_FACTOR`` leaves
+    two orders of magnitude beyond what this test tolerates.
+    """
+    rng = np.random.default_rng(1500 + d)
+    reduced = restrict_to_traceless(scale * _random_gksl(rng, d))
+
+    unit = _arithmetic_unit(reduced)
+    projection_bound = reduced.trace_defect / math.sqrt(d)
+    assert reduced.invariance_defect <= projection_bound + 10.0 * unit
+    assert reduced.reconstruction_defect <= reduced.invariance_defect + 10.0 * unit
+    assert ZERO_MODE_EPS_FACTOR > 10.0
+
+
+def test_subnormal_scale_generators_are_still_admitted() -> None:
+    """The underflow term of the bound, exercised rather than assumed.
+
+    At scale 1e-318 the relative part ``eps * ||L||_F`` underflows to exactly
+    zero, while forming ``B^H L B`` still rounds to whole subnormals. Without
+    the absolute ``n * d * 2**-1074`` part the gate would refuse legal
+    generators that the admission gates -- and ``main`` before #150 -- accept.
+    That at least one sample actually carries such a defect is counted, so the
+    test cannot pass on a sample that never needed the term.
+    """
+    needed_the_underflow_term = 0
+    for seed in range(20):
+        L_super = (_random_gksl(np.random.default_rng(seed), 2) * 1.0e-300) * 1.0e-18
+        reduced = restrict_to_traceless(L_super)
+
+        assert _EPS * reduced.operator_scale == 0.0
+        if reduced.reconstruction_defect > 0.0:
+            needed_the_underflow_term += 1
+
+    assert needed_the_underflow_term > 0
+
+
+def test_a_subspace_that_is_not_invariant_is_refused(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Fault injection: the basis spans the wrong subspace.
+
+    The diagonal traceless generator ``(e_00 - e_11) / sqrt(2)`` is swapped for
+    the trace direction ``(e_00 + e_11) / sqrt(2)``. Amplitude damping maps
+    the identity to ``gamma * (|0><0| - |1><1|)``, which leaves that span, so
+    ``L B`` has a component outside ``span(B)`` of order ``gamma``. The
+    invariance defect cannot see this -- ``q^H L = 0`` for a trace-preserving
+    generator whatever ``B`` is -- which is exactly why the reconstruction
+    identity is enforced as well.
+    """
+    L_super = _amplitude_damped_qubit()
+    restrict_to_traceless(L_super)  # control: the true basis is accepted
+
+    def wrong_basis(d: int) -> np.ndarray:
+        basis = traceless_basis(d)
+        basis[:, -1] = trace_vector(d)
+        return basis
+
+    monkeypatch.setattr(traceless_module, "traceless_basis", wrong_basis)
+    with pytest.raises(Exception, match="not invariant") as exc:
+        restrict_to_traceless(L_super)
+    assert isinstance(exc.value, ValueError), (
+        f"expected ValueError, got {type(exc.value).__name__}: {exc.value}"
+    )
+
+
+def test_a_basis_that_is_not_orthonormal_breaks_the_projection_bound(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Fault injection: ``||B|| = 1.2``, so the projection can outgrow its vector.
+
+    The operator carries a trace defect ``q^H L = e_1^T / sqrt(2)``, admitted
+    on purpose at ``tp_rtol=1``, which lies in ``q^perp``: with the true basis
+    the invariance defect sits exactly ON its bound ``||q^H L|| = 1/sqrt(2)``
+    and is accepted. Scaling the basis by 1.2 lifts it to ``1.2/sqrt(2)``. The
+    factor is chosen below ``sqrt(2)`` so that the ``/ sqrt(d)`` normalisation
+    of the bound is tested too: an unnormalised bound of 1 would admit it.
+    """
+    L_super = np.zeros((4, 4), dtype=complex)
+    L_super[0, 1] = 1.0
+    control = restrict_to_traceless(L_super, tp_rtol=1.0)
+    assert control.invariance_defect == pytest.approx(1.0 / math.sqrt(2.0), rel=1.0e-15)
+
+    monkeypatch.setattr(traceless_module, "traceless_basis", lambda d: 1.2 * traceless_basis(d))
+    with pytest.raises(Exception, match="projection bound") as exc:
+        restrict_to_traceless(L_super, tp_rtol=1.0)
+    assert isinstance(exc.value, ValueError), (
+        f"expected ValueError, got {type(exc.value).__name__}: {exc.value}"
+    )
+
+
+@pytest.mark.parametrize("bad", [-1.0, math.nan, math.inf])
+def test_the_reduction_tolerance_must_be_finite_and_non_negative(bad: float) -> None:
+    with pytest.raises(Exception, match="reduction_rtol") as exc:
+        restrict_to_traceless(_amplitude_damped_qubit(), reduction_rtol=bad)
+    assert isinstance(exc.value, ValueError), (
+        f"expected ValueError, got {type(exc.value).__name__}: {exc.value}"
+    )
+
+
+def test_a_reduction_bound_that_overflows_is_refused_not_trusted() -> None:
+    """A finite ``reduction_rtol`` can still make the bound ``inf``.
+
+    ``inf`` would admit every reduction, so -- as ``operator_zero_tolerance``
+    does for its own derived threshold -- the operator is refused instead.
+    """
+    with pytest.raises(Exception, match="not finite") as exc:
+        restrict_to_traceless(_amplitude_damped_qubit(rate=1.0e300), reduction_rtol=1.0e300)
+    assert isinstance(exc.value, ValueError), (
+        f"expected ValueError, got {type(exc.value).__name__}: {exc.value}"
+    )
+
+
+@pytest.mark.parametrize(
+    ("invariance", "reconstruction", "bound", "arithmetic"),
+    [
+        (math.nan, 0.0, 1.0, 1.0),
+        (0.0, math.nan, 1.0, 1.0),
+        (0.0, math.inf, 1.0, 1.0),
+        (math.inf, math.inf, 1.0, 1.0),
+        (0.0, 0.0, math.nan, 1.0),
+        (0.0, 0.0, 1.0, math.inf),
+        # PR #169 review (Codex P2): an infinite reading against a limit that
+        # has itself overflowed -- ``inf <= inf`` is true, and this passed.
+        (math.inf, math.inf, 1.0e308, 1.0e308),
+        (1.0, math.inf, 1.0e308, 1.0e308),
+    ],
+)
+def test_a_non_finite_reading_refuses_instead_of_comparing_false(
+    invariance: float, reconstruction: float, bound: float, arithmetic: float
+) -> None:
+    """A reading that is not a finite number is refused by name, never compared.
+
+    ``x > bound`` is False for NaN, and ``not (x <= bound)`` catches that --
+    but not an infinite ``x`` against a bound that overflowed to ``inf``.
+    Finiteness is therefore checked explicitly before any comparison.
+    """
+    with pytest.raises(Exception, match="not representable") as exc:
+        _require_invariant_reduction(
+            invariance_defect=invariance,
+            reconstruction_defect=reconstruction,
+            projection_bound=bound,
+            arithmetic=arithmetic,
+        )
+    assert isinstance(exc.value, ValueError), (
+        f"expected ValueError, got {type(exc.value).__name__}: {exc.value}"
+    )
+
+
+def test_a_limit_that_overflows_is_refused_even_for_finite_readings() -> None:
+    """Finite readings, finite inputs, and still no verdict: the limit is ``inf``.
+
+    ``1e308 + 1e308`` overflows, so ``projection_bound + arithmetic`` admits
+    every reading. That is the same situation ``operator_zero_tolerance``
+    refuses for its own threshold, and it is refused here for the same
+    reason: an unusable limit is not a pass.
+    """
+    with pytest.raises(Exception, match="overflows") as exc:
+        _require_invariant_reduction(
+            invariance_defect=1.0,
+            reconstruction_defect=1.0,
+            projection_bound=1.0e308,
+            arithmetic=1.0e308,
+        )
+    assert isinstance(exc.value, ValueError), (
+        f"expected ValueError, got {type(exc.value).__name__}: {exc.value}"
+    )
+
+
+def test_the_postcondition_admits_its_own_boundary() -> None:
+    """Both comparisons are inclusive: equality to the bound is a pass."""
+    _require_invariant_reduction(
+        invariance_defect=2.0,
+        reconstruction_defect=3.0,
+        projection_bound=1.0,
+        arithmetic=1.0,
+    )
+
+
+def test_the_applied_reduction_tolerance_is_recorded_with_the_result() -> None:
+    """The gate's own bound travels with the numbers it admitted.
+
+    A postcondition that is enforced but not reported would leave a reader
+    of the result unable to tell how close the admitted defects came to it.
+    The recorded value is the bound itself, so ``reduction_rtol`` re-derives
+    it and both admitted defects verifiably sit below it.
+    """
+    L_super = _amplitude_damped_qubit(rate=0.3)
+    reduced = restrict_to_traceless(L_super)
+
+    assert reduced.reduction_tolerance == ZERO_MODE_EPS_FACTOR * _arithmetic_unit(reduced)
+    assert reduced.reconstruction_defect <= reduced.invariance_defect + reduced.reduction_tolerance
+
+    halved = restrict_to_traceless(L_super, reduction_rtol=ZERO_MODE_EPS_FACTOR / 2.0)
+    assert halved.reduction_tolerance == reduced.reduction_tolerance / 2.0
+
+    trivial = restrict_to_traceless(np.zeros((1, 1), dtype=complex))
+    assert trivial.reduction_tolerance == 0.0
