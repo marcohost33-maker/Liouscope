@@ -62,6 +62,34 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     model matters; the run manifest does not record per-model likelihoods, so
     the change is not visible in `input_hash`.
 
+### Security
+- **The release toolchain is installed from a hash lock, and a gate keeps it
+  that way (code-scanning alerts #14/#15, OpenSSF Scorecard
+  Pinned-Dependencies).** `pypi.yml` built and inspected the distribution PyPI
+  receives with `pip install build twine check-wheel-contents` after
+  `pip install --upgrade pip`: no version, no digest, so the toolchain was
+  whatever the index served that minute. It now installs
+  `.github/requirements/release.txt` (pip-compile `--generate-hashes`, Python
+  3.12: 39 exact pins, 533 SHA-256 digests) with `--require-hashes
+  --only-binary :all:`, and builds with `--no-isolation` so the locked
+  setuptools is the backend -- an isolated build would have fetched an
+  unpinned one. Measured locally: the
+  wheel is file-for-file identical to an isolated build (setuptools 84.0.0 in
+  both). Dependabot now tracks the lock directory, so the pins do not only age.
+  `check_release_pins.py` (stdlib only, run by the Quality Contract on merge
+  and head, and by `pytest` via `tests/test_release_pin_gate.py`) rejects any
+  release-workflow `pip install` that is neither hash-locked nor a local
+  `--no-deps` wheel, a lock entry without an exact pin or a well-formed digest,
+  a lock that misses a top-level requirement or was compiled for another Python
+  than the workflow runs, a locked backend below `[build-system] requires`, an
+  unlisted workflow that publishes to PyPI, and an inline YAML value the parser
+  would reject. That last check exists because this change's own first draft
+  wrote `--only-binary :all: -r ...` inline, which is not valid YAML -- and the
+  zizmor gate skipped the unparsable file with a warning and exit 0 (zizmor
+  1.30.1), so the release workflow would have failed first on release day. A
+  mutation probe kills 22 of 22 mutants of the gate. No runtime code, anchor,
+  reported number or run-manifest field changes.
+
 ### Fixed
 - **The overflow fallback of `scaled_column_sums` now answers exactly instead
   of abstaining (issue #151).** When `math.fsum` overflows on an intermediate,

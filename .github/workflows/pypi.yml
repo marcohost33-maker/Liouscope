@@ -22,12 +22,21 @@ jobs:
         uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # v6.2.0
         with:
           python-version: "3.12"
-      - name: Install build + QA tools
+      # The release toolchain installs from a hash lock: every distribution,
+      # transitive ones included, must match a recorded SHA-256, and
+      # --only-binary keeps an sdist's build script from running here. The
+      # unpinned `pip install --upgrade pip` is gone rather than pinned: the
+      # interpreter's bundled pip already supports hash-checking mode.
+      # Block scalar, not an inline value: `:all: ` inside a plain YAML scalar
+      # is a mapping indicator and makes the whole file unparsable.
+      - name: Install build + QA tools (hash-locked)
         run: |
-          python -m pip install --upgrade pip
-          pip install build twine check-wheel-contents
+          python -m pip install --require-hashes --only-binary :all: -r .github/requirements/release.txt
+      # --no-isolation builds with the setuptools locked above. An isolated
+      # build would download whatever setuptools satisfies pyproject.toml at
+      # that moment -- the one unpinned input left in the artifact's build.
       - name: Build sdist + wheel
-        run: python -m build
+        run: python -m build --no-isolation
       - name: Release QA gate
         run: |
           twine check --strict dist/*
