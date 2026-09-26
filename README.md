@@ -237,17 +237,20 @@ LiouScope is built for paper-grade reproducibility:
 - **Anchor tests.** `tests/test_anchors.py` locks the numerical anchors that paper figures depend on;
   changes to physics code that move these values are caught in CI.
 - **Zero-mode conditioning evidence (audit only).** Every spectral run attaches
-  `SpectralResult.zero_mode_conditioning`: the reciprocal condition number of the stationary
-  eigenvalue's zero set, its left/right residuals, its separation, the trace-preservation defect
-  and the first-order forward-error estimates those imply. It exists because a backward error
-  does **not** bound the forward eigenvalue displacement for a non-normal generator, so it lets a
-  reader tell a failed eigensolve apart from the correctly located zero of an operator that is
-  only approximately trace preserving. **Nothing reads it** — no filter, gap, certificate, verdict
-  or tier — and it is *not* a detector for stiff eigensolver failure (issue #117). The public
-  entry point is `liouscope.numerics.zero_mode_conditioning(L, zero_tolerance=..., eigenvalues=...)`;
+  `SpectralResult.zero_mode_conditioning`. The headline cluster quantity is the reciprocal
+  **2-norm spectral-projector condition** `1 / ||P||_2`, computed from a reordered complex Schur
+  form plus a Sylvester solve; LAPACK `xTRSEN.S` is not treated as the exact value because it is a
+  Frobenius-norm lower bound. For a simple zero mode the audit also reports scalar first-order
+  forward-error estimates. For a multi-mode zero cluster it deliberately returns
+  `verdict="CLUSTER_ONLY"` and withholds those scalar estimates: a defective multiple eigenvalue
+  has no basis-independent scalar first-order condition number, and numerical proximity cannot
+  safely distinguish a Jordan block from a genuinely split pair. The report still carries the
+  cluster condition, residuals, separation and trace-preservation defect. **Nothing reads this
+  audit** — no filter, gap, certificate, diagnostic or tier — and it is not a detector for stiff
+  eigensolver failure (issues #117/#168). The public entry point is
+  `liouscope.numerics.zero_mode_conditioning(L, zero_tolerance=..., eigenvalues=...)`;
   `compute_spectral_layer(..., conditioning_audit=False)` switches the extra work off with no
-  other effect on the result. `benchmarks/issue117_zero_mode_conditioning.py` reproduces the
-  measurements and times the audit on your own hardware.
+  other effect on the result.
 - **Paper-figure pipeline.** `figures/generate_all.py` regenerates Fig 1-3 deterministically.
 
 ---
