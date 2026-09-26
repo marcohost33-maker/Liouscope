@@ -166,6 +166,7 @@ from .norms import scaled_euclidean_norm
 #: outcomes; ``UNAVAILABLE`` is the absence of a measurement, never a claim.
 CONDITIONING_BENIGN = "BENIGN"
 CONDITIONING_LIMITED = "CONDITIONING_LIMITED"
+CONDITIONING_CLUSTER_ONLY = "CLUSTER_ONLY"
 CONDITIONING_UNAVAILABLE = "UNAVAILABLE"
 
 
@@ -284,6 +285,89 @@ def cluster_conditioning(
     if sv.size == 0 or not np.all(np.isfinite(sv)):
         return 0.0
     return float(min(float(sv.min()), 1.0))
+
+
+def _schur_cluster_projector_condition(
+    L: np.ndarray,
+    *,
+    zero_tolerance: float | None,
+    expected_cluster_size: int,
+) -> float | None:
+    """Reciprocal 2-norm condition of the selected Schur spectral projector.
+
+    The selected eigenvalue cluster is reordered to the leading Schur block
+    with LAPACK ``xTRSEN``. LAPACK\'s reported ``S`` is deliberately not
+    used: ``xTRSEN`` documents it as the Frobenius-norm lower bound
+    ``(1 + ||R||_F**2)**(-1/2)`` on the true reciprocal projector 2-norm.
+
+    After reordering we solve ``T11 R - R T22 = T12`` and return
+    ``1 / sqrt(1 + ||R||_2**2)``. This equals ``1 / ||P||_2`` for
+    ``P = [[I, R], [0, 0]]`` in Schur coordinates. It is invariant under
+    unitary re-expression and remains defined for defective eigenvalues when
+    the selected cluster is separated from its complement.
+
+    ``expected_cluster_size`` binds the Schur measurement to the zero set
+    already selected by the report. A disagreement fails closed rather than
+    conditioning a different set of modes.
+    """
+    try:
+        T, Q = sla.schur(L, output="complex", check_finite=False)
+    except (ValueError, np.linalg.LinAlgError, sla.LinAlgError):
+        return None
+    w = np.asarray(np.diag(T), dtype=complex)
+    if w.size == 0 or not np.all(np.isfinite(w)):
+        return None
+
+    magnitudes = np.abs(w)
+    if zero_tolerance is not None:
+        selected = magnitudes <= float(zero_tolerance)
+    else:
+        anchor = int(np.argmin(magnitudes))
+        band = _agreement_band(w, w)
+        selected = np.abs(w - w[anchor]) <= band
+
+    m = int(np.count_nonzero(selected))
+    if m != int(expected_cluster_size) or m <= 0:
+        return None
+    n = int(L.shape[0])
+    if m == n:
+        return 1.0
+
+    try:
+        trsen = sla.get_lapack_funcs("trsen", (T,))
+        T_ord, _Q_ord, _w_ord, m_out, _s, _sep, info = trsen(
+            np.asarray(selected, dtype=np.int32),
+            T,
+            Q,
+            job="N",
+            wantq=0,
+            lwork=1,
+            overwrite_t=0,
+            overwrite_q=0,
+        )
+    except (ValueError, TypeError, np.linalg.LinAlgError, sla.LinAlgError):
+        return None
+    if int(info) != 0 or int(m_out) != m:
+        return None
+
+    T11 = np.asarray(T_ord[:m, :m], dtype=complex)
+    T12 = np.asarray(T_ord[:m, m:], dtype=complex)
+    T22 = np.asarray(T_ord[m:, m:], dtype=complex)
+    try:
+        R = sla.solve_sylvester(T11, -T22, T12)
+        if not np.all(np.isfinite(R)):
+            return 0.0
+        if R.size == 0:
+            return 1.0
+        sv = sla.svdvals(R)
+    except (ValueError, np.linalg.LinAlgError, sla.LinAlgError):
+        return None
+    if sv.size == 0:
+        return 1.0
+    r_norm_2 = float(sv[0])
+    if not np.isfinite(r_norm_2):
+        return 0.0
+    return float(1.0 / np.hypot(1.0, r_norm_2))
 
 
 @dataclass(frozen=True, slots=True)
@@ -687,7 +771,8 @@ def _measure(
         if zero_tolerance is not None and np.isfinite(zero_tolerance)
         else float("nan")
     )
-    if np.isfinite(tol) and bool(np.any(magnitudes <= tol)):
+    cluster_from_cutoff = bool(np.isfinite(tol) and np.any(magnitudes <= tol))
+    if cluster_from_cutoff:
         cluster = np.flatnonzero(magnitudes <= tol)
     else:
         # Round-4 review. This used to take the single smallest mode, which
@@ -734,7 +819,13 @@ def _measure(
         if cluster.size == 0:  # pragma: no cover - anchor is always its own member
             cluster = np.flatnonzero(magnitudes == magnitudes.min())
 
-    s_cluster = cluster_conditioning(right, left, cluster)
+    s_cluster = _schur_cluster_projector_condition(
+        L,
+        zero_tolerance=tol if cluster_from_cutoff else None,
+        expected_cluster_size=int(cluster.size),
+    )
+    if s_cluster is None:
+        return ZeroModeConditioning.unavailable("schur_cluster_mismatch")
     stationary = int(cluster[int(np.argmin(magnitudes[cluster]))])
     # Round-4 review. Round 2 replaced the subspace figure here with the MINIMUM
     # per-mode value over the cluster, on a fail-closed argument. That was
@@ -783,7 +874,13 @@ def _measure(
     # -- if ill-conditioned -- figure, with ``reciprocal_condition`` beside it
     # for a reader to compare against.
     tied = _unresolved_from(stationary, cluster)
-    s_scalar = cluster_conditioning(right, left, tied)
+    # A multi-mode zero set has a well-defined spectral projector, but no
+    # basis-independent scalar eigenvalue condition in the defective case.
+    # Issue #168 showed that proximity cannot safely distinguish semisimple
+    # from defective multiplicity. Keep the cluster evidence and abstain from
+    # scalar first-order claims whenever the report zero set has >1 mode.
+    cluster_only = int(cluster.size) > 1
+    s_scalar = float("nan") if cluster_only else float(s_cluster)
     residuals: dict[int, tuple[float, float]] = {}
     for j in cluster:
         x = _unit(right[:, j])
@@ -845,6 +942,27 @@ def _measure(
     defect = raw_defect / np.sqrt(float(dim))
 
     observed = float(magnitudes[stationary])
+    if cluster_only:
+        return ZeroModeConditioning(
+            available=True,
+            reason="cluster_conditioning_only",
+            eigenvalue=complex(reported[stationary]),
+            cluster_size=int(cluster.size),
+            reciprocal_condition=float(s_cluster),
+            per_mode_reciprocal_condition=float("nan"),
+            spectrum_min_reciprocal_condition=float(per_mode.min()),
+            right_residual=float(right_res),
+            left_residual=float(left_res),
+            separation=separation,
+            trace_defect=float(defect),
+            solver_forward_estimate=float("nan"),
+            structural_forward_estimate=float("nan"),
+            observed_displacement=observed,
+            zero_tolerance=tol,
+            conditioning_limited=False,
+            displacement_explained=None,
+            verdict=CONDITIONING_CLUSTER_ONLY,
+        )
     # Round-2 review, amended in round 4. Both estimates are about the
     # displacement of ONE scalar eigenvalue, so they divide by a PER-MODE
     # condition number, never by the subspace figure ``s_cluster``: for
