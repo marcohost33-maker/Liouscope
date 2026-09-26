@@ -89,6 +89,30 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   1.30.1), so the release workflow would have failed first on release day. A
   mutation probe kills 22 of 22 mutants of the gate. No runtime code, anchor,
   reported number or run-manifest field changes.
+- **The release build is exercised on every pull request and proven
+  reproducible on every run.** `pypi.yml` ran only on a published release or
+  by hand, so its toolchain, build and QA gate were first tested on release day
+  (both `release` runs for v0.5.0 failed, there on the not-yet-registered
+  Trusted Publisher). Its `build` job now also runs as a dry-run on every pull
+  request and every push to `main`, as PyPA's publishing guide recommends; only
+  `publish` can upload, and only for a published release. Each run builds twice
+  from the same commit with `SOURCE_DATE_EPOCH` set to the commit time and
+  refuses to continue unless the wheels are byte-identical and the sdists
+  content-identical (`.github/scripts/compare_dists.py`). Measured before the
+  change: without the variable neither artifact repeated; with it the wheel was
+  byte-identical, while the sdist still differed in gzip header, member mtimes
+  and owner fields, because setuptools' sdist does not read `SOURCE_DATE_EPOCH`
+  (pypa/setuptools#2133, open) -- so only those fields are disregarded. The
+  artifacts' SHA-256 go to the job summary. `check_release_pins.py` now also
+  checks every `release.in` specifier against the locked version (name coverage
+  alone accepted `build<1.6` against a lock pinning 1.6.1), refuses markers,
+  option lines and direct references in `release.in`, and recognises `uv`,
+  `poetry`, `flit`, `hatch` and `pdm` publish commands. Mutation probe over both
+  scripts: 38 of 38 mutants killed, controls green. Independent check of the
+  published release: the PyPI files of 0.5.0 match their recorded digests, and
+  a rebuild from tag `v0.5.0` reproduces every packaged file and all 103 sdist
+  members; only the wheel's `Generator: setuptools (83.0.0)` line (and hence
+  `RECORD`) differs from today's 84.0.0 -- the drift the lock now removes.
 
 ### Fixed
 - **The overflow fallback of `scaled_column_sums` now answers exactly instead

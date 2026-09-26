@@ -3,9 +3,23 @@ name: Publish to PyPI
 on:
   release:
     types: [published]
+  # Release dry-run. The build job below runs on every pull request and every
+  # push to main, so the hash-locked toolchain, the build, the QA gate and the
+  # reproducibility check are exercised long before a release depends on them
+  # (PyPA's publishing guide builds on every push for the same reason). Only
+  # `publish` can upload, and it runs solely for a published release.
+  pull_request:
+  push:
+    branches: [main]
   workflow_dispatch:  # build/QA dry-run only; never grants an OIDC publish token
 
 permissions: {}
+
+# Superseded dry-runs of the same pull request are cancelled; a release run is
+# never cancelled (cancel-in-progress is false for every other event).
+concurrency:
+  group: pypi-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   build:
@@ -35,8 +49,27 @@ jobs:
       # --no-isolation builds with the setuptools locked above. An isolated
       # build would download whatever setuptools satisfies pyproject.toml at
       # that moment -- the one unpinned input left in the artifact's build.
-      - name: Build sdist + wheel
-        run: python -m build --no-isolation
+      #
+      # SOURCE_DATE_EPOCH (the commit time) makes the wheel byte-reproducible,
+      # and the second, clean build proves it on every run: the wheel must be
+      # byte-identical and the sdist content-identical (setuptools' sdist
+      # ignores SOURCE_DATE_EPOCH, pypa/setuptools#2133, so its mtimes and
+      # owner fields are the only thing the comparison disregards). A build
+      # that is not a deterministic function of commit + lock cannot publish.
+      - name: Build sdist + wheel twice and verify reproducibility
+        run: |
+          set -euo pipefail
+          SOURCE_DATE_EPOCH="$(git log -1 --format=%ct HEAD)"
+          export SOURCE_DATE_EPOCH
+          python -m build --no-isolation --outdir dist
+          rm -rf build src/*.egg-info
+          python -m build --no-isolation --outdir "$RUNNER_TEMP/rebuild"
+          {
+            echo "### Release artifacts (event: $GITHUB_EVENT_NAME, commit: $(git rev-parse HEAD), SOURCE_DATE_EPOCH: $SOURCE_DATE_EPOCH)"
+            echo '```'
+            python .github/scripts/compare_dists.py dist "$RUNNER_TEMP/rebuild"
+            echo '```'
+          } | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Release QA gate
         run: |
           twine check --strict dist/*
@@ -52,7 +85,7 @@ jobs:
           DIST_VERSION="$(python -c 'import importlib.metadata as m; print(m.version("liouscope"))')"
           test "$SOURCE_VERSION" = "$DIST_VERSION"
           if [ -z "$RELEASE_TAG" ]; then
-            echo "Manual dry-run verified version=$SOURCE_VERSION at commit=$EVENT_SHA; no publish credentials exist in this job."
+            echo "Dry-run ($GITHUB_EVENT_NAME) verified version=$SOURCE_VERSION at commit=$EVENT_SHA; no publish credentials exist in this job."
             exit 0
           fi
           EXPECTED_VERSION="${RELEASE_TAG#v}"
@@ -67,6 +100,8 @@ jobs:
           name: pypi-distributions-${{ github.run_id }}
           path: dist/
           if-no-files-found: error
+          # Dry-run artifacts are evidence for a few days; a release keeps 90.
+          retention-days: ${{ github.event_name == 'release' && 90 || 7 }}
 
   publish:
     needs: build

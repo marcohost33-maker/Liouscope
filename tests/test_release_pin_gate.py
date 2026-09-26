@@ -89,6 +89,7 @@ def test_lock_below_the_build_backend_floor_is_rejected(tmp_path: Path) -> None:
     assert "violates pyproject.toml build-system requirement" in result.stderr
 
 
-def test_adversarial_unit_suite_passes() -> None:
-    result = _run(SCRIPTS / "test_release_pins.py")
+@pytest.mark.parametrize("suite", ["test_release_pins.py", "test_compare_dists.py"])
+def test_adversarial_unit_suites_pass(suite: str) -> None:
+    result = _run(SCRIPTS / suite)
     assert result.returncode == 0, result.stderr

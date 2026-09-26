@@ -19,9 +19,11 @@ exactly that. This gate keeps the release path at the stronger state:
 2. Every lock such an install names is a real hash lock: each entry is an exact
    ``name==version`` pin carrying at least one well-formed digest, and there
    are no nested ``-r``/``-c``/``-e`` lines that would pull in unhashed input.
-3. The lock covers every top-level requirement of its ``.in`` source, and it
-   was compiled for the interpreter the workflow runs (``python-version``),
-   because environment markers are resolved for exactly one interpreter.
+3. The lock covers every top-level requirement of its ``.in`` source, each at
+   a version that satisfies the source's specifier, and it was compiled for
+   the interpreter the workflow runs (``python-version``), because
+   environment markers are resolved for exactly one interpreter (which is also
+   why the ``.in`` may not carry markers of its own).
 4. The locked build backend satisfies ``[build-system] requires`` in
    ``pyproject.toml`` -- the workflow builds with ``--no-isolation``, so the
    locked setuptools IS the backend, and a lock that drifted below the
@@ -55,7 +57,15 @@ ROOT = Path(__file__).resolve().parents[2]
 #: so that renaming one cannot silently drop it from the gate (it must exist).
 RELEASE_WORKFLOWS: tuple[str, ...] = ("pypi.yml",)
 #: A workflow containing one of these publishes to PyPI and must be listed above.
-PUBLISH_MARKERS: tuple[str, ...] = ("pypa/gh-action-pypi-publish", "twine upload")
+PUBLISH_MARKERS: tuple[str, ...] = (
+    "pypa/gh-action-pypi-publish",
+    "twine upload",
+    "uv publish",
+    "poetry publish",
+    "flit publish",
+    "hatch publish",
+    "pdm publish",
+)
 
 #: ``pip install`` options that consume the following token as their value, so
 #: it is not mistaken for a package argument. An option missing from this set
@@ -386,17 +396,45 @@ def parse_lock(text: str) -> tuple[Lock, list[str]]:
     return lock, errors
 
 
-def requirement_names(text: str) -> list[str]:
-    """Top-level project names of a ``.in`` requirements file."""
-    names = []
-    for line in text.splitlines():
+def source_requirements(text: str) -> tuple[list[tuple[str, str]], list[str]]:
+    """``(name, specifier)`` per top-level line of a ``.in`` file, plus defects.
+
+    Refused, because the gate could not vouch for the lock against them:
+
+    * option lines (``-r``, ``-c``, ``--index-url`` ...) -- they pull in input
+      this check never reads;
+    * environment markers -- the lock is compiled for exactly one interpreter,
+      so a marker that excludes it would make the requirement legitimately
+      absent from the lock and the coverage check below would misreport it,
+      while a marker that includes it is redundant;
+    * direct references (``name @ url``) -- not an exact, index-hashed pin.
+    """
+    requirements: list[tuple[str, str]] = []
+    defects: list[str] = []
+    for number, line in enumerate(text.splitlines(), start=1):
         content = line.split("#", 1)[0].strip()
         if not content:
             continue
+        if content.startswith("-"):
+            defects.append(f"line {number}: option line {content.split()[0]!r} is not supported")
+            continue
         match = _NAME_RE.match(content)
-        if match:
-            names.append(normalise_name(match.group(1)))
-    return names
+        if match is None:
+            defects.append(f"line {number}: unreadable requirement {content!r}")
+            continue
+        rest = content[match.end() :].strip()
+        if rest.startswith("["):
+            rest = rest.split("]", 1)[1].strip() if "]" in rest else rest
+        if ";" in rest:
+            defects.append(
+                f"line {number}: environment marker in {content!r}; the lock holds one interpreter"
+            )
+            continue
+        if rest.startswith("@"):
+            defects.append(f"line {number}: direct reference {content!r} is not an index pin")
+            continue
+        requirements.append((normalise_name(match.group(1)), rest))
+    return requirements, defects
 
 
 def _release_tuple(version: str) -> tuple[int, ...] | None:
@@ -485,11 +523,28 @@ def check_lock(lock_path: Path, root: Path) -> tuple[Lock | None, list[str]]:
     if not source.is_file():
         errors.append(f"{shown}: missing requirements source {source.name}")
     else:
-        missing = [
-            n for n in requirement_names(source.read_text(encoding="utf-8")) if n not in lock.pins
-        ]
+        requirements, source_defects = source_requirements(source.read_text(encoding="utf-8"))
+        errors.extend(f"{shown.parent / source.name}: {defect}" for defect in source_defects)
+        missing = [name for name, _spec in requirements if name not in lock.pins]
         if missing:
             errors.append(f"{shown}: does not lock {missing} from {source.name}; recompile")
+        # Coverage by NAME is not enough: `twine<7` added to the .in while the
+        # lock still pins twine 7.0.0 passed the check above. Every specifier in
+        # the source must hold for the version the lock actually installs.
+        for name, specifier in requirements:
+            if name not in lock.pins or not specifier:
+                continue
+            verdict = satisfies(lock.pins[name], specifier)
+            if verdict is None:
+                errors.append(
+                    f"{shown}: cannot evaluate locked {name}=={lock.pins[name]} "
+                    f"against {source.name} specifier {specifier!r}"
+                )
+            elif not verdict:
+                errors.append(
+                    f"{shown}: locked {name}=={lock.pins[name]} violates {source.name} "
+                    f"specifier {specifier!r}; recompile"
+                )
     requires = build_system_requires((root / "pyproject.toml").read_text(encoding="utf-8"))
     if requires is None:
         why = " (tomllib needs Python 3.11+)" if tomllib is None else ""

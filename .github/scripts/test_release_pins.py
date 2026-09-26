@@ -238,6 +238,29 @@ class ReleasePinContractTests(unittest.TestCase):
         self.assert_rejected(contract.check(self.tree(source=None)), "missing requirements source")
         self.assert_rejected(contract.check(self.tree(lock=None)), "lock file does not exist")
 
+    def test_source_specifiers_must_hold_for_the_locked_versions(self) -> None:
+        """Name coverage alone let `build<1.6` pass against a lock pinning 1.6.1."""
+        self.assertEqual(
+            contract.check(self.tree(source="build[virtualenv]>=1.6,<2\nsetuptools\n")), []
+        )
+        cases = {
+            "build<1.6\nsetuptools\n": "violates release.in specifier '<1.6'",
+            "build>=1.0rc1\nsetuptools\n": "cannot evaluate locked build==1.6.1",
+        }
+        for source, fragment in cases.items():
+            with self.subTest(source=source):
+                self.assert_rejected(contract.check(self.tree(source=source)), fragment)
+
+    def test_source_lines_the_gate_cannot_vouch_for_are_refused(self) -> None:
+        cases = {
+            'tomli; python_version < "3.11"\n': "environment marker",
+            "-c constraints.txt\n": "option line '-c'",
+            "build @ https://example.invalid/build.whl\n": "direct reference",
+        }
+        for extra, fragment in cases.items():
+            with self.subTest(extra=extra):
+                self.assert_rejected(contract.check(self.tree(source=SOURCE + extra)), fragment)
+
     def test_locked_backend_must_satisfy_pyproject(self) -> None:
         errors = contract.check(self.tree(pyproject=PYPROJECT.replace(">=77.0", ">=85")))
         self.assert_rejected(errors, "violates pyproject.toml build-system requirement")
@@ -262,6 +285,16 @@ class ReleasePinContractTests(unittest.TestCase):
         publisher = "jobs:\n  p:\n    steps:\n      - uses: pypa/gh-action-pypi-publish@0\n"
         errors = contract.check(self.tree(extra_workflows={"release2.yml": publisher}))
         self.assert_rejected(errors, "release2.yml: publishes to PyPI")
+        for command in (
+            "uv publish",
+            "poetry publish --build",
+            "hatch publish",
+            "twine upload dist/*",
+        ):
+            with self.subTest(command=command):
+                workflow = f"jobs:\n  p:\n    steps:\n      - run: {command}\n"
+                errors = contract.check(self.tree(extra_workflows={"r.yml": workflow}))
+                self.assert_rejected(errors, "r.yml: publishes to PyPI")
         commented = "jobs:\n  p:\n    steps:\n      # pypa/gh-action-pypi-publish\n"
         self.assertEqual(contract.check(self.tree(extra_workflows={"ci.yml": commented})), [])
 
