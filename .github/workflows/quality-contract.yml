@@ -29,6 +29,12 @@ jobs:
           python-version: "3.12"
       - name: Check workflow hardening
         run: python .github/scripts/check_workflow_hardening.py
+      - name: Check release toolchain hash pins
+        run: python .github/scripts/check_release_pins.py
+      - name: Test release hash-pin contract adversarially
+        run: python .github/scripts/test_release_pins.py
+      - name: Test release reproducibility comparator adversarially
+        run: python .github/scripts/test_compare_dists.py
       - name: Test trigger-contract parser adversarially
         run: python .github/scripts/test_agent_branch_triggers.py
       - name: Check documented agent branch trigger coverage
@@ -57,6 +63,12 @@ jobs:
           python-version: "3.12"
       - name: Check workflow hardening
         run: python .github/scripts/check_workflow_hardening.py
+      - name: Check release toolchain hash pins
+        run: python .github/scripts/check_release_pins.py
+      - name: Test release hash-pin contract adversarially
+        run: python .github/scripts/test_release_pins.py
+      - name: Test release reproducibility comparator adversarially
+        run: python .github/scripts/test_compare_dists.py
       - name: Test trigger-contract parser adversarially
         run: python .github/scripts/test_agent_branch_triggers.py
       - name: Check documented agent branch trigger coverage

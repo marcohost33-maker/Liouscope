@@ -62,6 +62,58 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     model matters; the run manifest does not record per-model likelihoods, so
     the change is not visible in `input_hash`.
 
+### Security
+- **The release toolchain is installed from a hash lock, and a gate keeps it
+  that way (code-scanning alerts #14/#15, OpenSSF Scorecard
+  Pinned-Dependencies).** `pypi.yml` built and inspected the distribution PyPI
+  receives with `pip install build twine check-wheel-contents` after
+  `pip install --upgrade pip`: no version, no digest, so the toolchain was
+  whatever the index served that minute. It now installs
+  `.github/requirements/release.txt` (pip-compile `--generate-hashes`, Python
+  3.12: 39 exact pins, 533 SHA-256 digests) with `--require-hashes
+  --only-binary :all:`, and builds with `--no-isolation` so the locked
+  setuptools is the backend -- an isolated build would have fetched an
+  unpinned one. Measured locally: the
+  wheel is file-for-file identical to an isolated build (setuptools 84.0.0 in
+  both). Dependabot now tracks the lock directory, so the pins do not only age.
+  `check_release_pins.py` (stdlib only, run by the Quality Contract on merge
+  and head, and by `pytest` via `tests/test_release_pin_gate.py`) rejects any
+  release-workflow `pip install` that is neither hash-locked nor a local
+  `--no-deps` wheel, a lock entry without an exact pin or a well-formed digest,
+  a lock that misses a top-level requirement or was compiled for another Python
+  than the workflow runs, a locked backend below `[build-system] requires`, an
+  unlisted workflow that publishes to PyPI, and an inline YAML value the parser
+  would reject. That last check exists because this change's own first draft
+  wrote `--only-binary :all: -r ...` inline, which is not valid YAML -- and the
+  zizmor gate skipped the unparsable file with a warning and exit 0 (zizmor
+  1.30.1), so the release workflow would have failed first on release day. A
+  mutation probe kills 22 of 22 mutants of the gate. No runtime code, anchor,
+  reported number or run-manifest field changes.
+- **The release build is exercised on every pull request and proven
+  reproducible on every run.** `pypi.yml` ran only on a published release or
+  by hand, so its toolchain, build and QA gate were first tested on release day
+  (both `release` runs for v0.5.0 failed, there on the not-yet-registered
+  Trusted Publisher). Its `build` job now also runs as a dry-run on every pull
+  request and every push to `main`, as PyPA's publishing guide recommends; only
+  `publish` can upload, and only for a published release. Each run builds twice
+  from the same commit with `SOURCE_DATE_EPOCH` set to the commit time and
+  refuses to continue unless the wheels are byte-identical and the sdists
+  content-identical (`.github/scripts/compare_dists.py`). Measured before the
+  change: without the variable neither artifact repeated; with it the wheel was
+  byte-identical, while the sdist still differed in gzip header, member mtimes
+  and owner fields, because setuptools' sdist does not read `SOURCE_DATE_EPOCH`
+  (pypa/setuptools#2133, open) -- so only those fields are disregarded. The
+  artifacts' SHA-256 go to the job summary. `check_release_pins.py` now also
+  checks every `release.in` specifier against the locked version (name coverage
+  alone accepted `build<1.6` against a lock pinning 1.6.1), refuses markers,
+  option lines and direct references in `release.in`, and recognises `uv`,
+  `poetry`, `flit`, `hatch` and `pdm` publish commands. Mutation probe over both
+  scripts: 38 of 38 mutants killed, controls green. Independent check of the
+  published release: the PyPI files of 0.5.0 match their recorded digests, and
+  a rebuild from tag `v0.5.0` reproduces every packaged file and all 103 sdist
+  members; only the wheel's `Generator: setuptools (83.0.0)` line (and hence
+  `RECORD`) differs from today's 84.0.0 -- the drift the lock now removes.
+
 ### Fixed
 - **The overflow fallback of `scaled_column_sums` now answers exactly instead
   of abstaining (issue #151).** When `math.fsum` overflows on an intermediate,
