@@ -32,6 +32,7 @@ from liouscope.core.lindblad import build_liouvillian
 from liouscope.diagnostics.spectral import compute_spectral_layer
 from liouscope.numerics.conditioning import (
     CONDITIONING_BENIGN,
+    CONDITIONING_CLUSTER_ONLY,
     CONDITIONING_LIMITED,
     CONDITIONING_UNAVAILABLE,
     ZeroModeConditioning,
@@ -199,8 +200,9 @@ def test_near_degenerate_cluster_is_conditioned_by_its_subspace(delta: float) ->
     assert cluster_conditioning(right, left, idx) == pytest.approx(1.0, rel=1e-8)
 
 
-def test_degenerate_stationary_manifold_is_not_flagged() -> None:
-    """Two decoupled damped sectors: four zero modes, all benign."""
+
+def test_degenerate_stationary_manifold_reports_cluster_only() -> None:
+    """A physical repeated zero set gets projector evidence, not a scalar claim."""
     d = 4
     jump = np.zeros((d, d), dtype=complex)
     jump[0, 1] = math.sqrt(0.7)
@@ -208,16 +210,16 @@ def test_degenerate_stationary_manifold_is_not_flagged() -> None:
     L = build_liouvillian(np.zeros((d, d), dtype=complex), [jump])
 
     evidence = zero_mode_conditioning(L, zero_tolerance=1.0e-10)
+    assert evidence.available
     assert evidence.cluster_size > 1
     assert evidence.reciprocal_condition > 0.5
+    assert evidence.reason == "cluster_conditioning_only"
+    assert math.isnan(evidence.per_mode_reciprocal_condition)
+    assert math.isnan(evidence.structural_forward_estimate)
+    assert math.isnan(evidence.solver_forward_estimate)
     assert evidence.conditioning_limited is False
-    assert evidence.verdict == CONDITIONING_BENIGN
-
-
-# --------------------------------------------------------------------------
-# Semantics: whose operator is being conditioned
-# --------------------------------------------------------------------------
-
+    assert evidence.displacement_explained is None
+    assert evidence.verdict == CONDITIONING_CLUSTER_ONLY
 
 def test_conditioning_is_a_property_of_the_operator_as_written() -> None:
     """A diagonal similarity leaves the spectrum and moves the conditioning.
@@ -472,44 +474,39 @@ def _defective_superoperator(defect: float = 0.0) -> np.ndarray:
     return A
 
 
-def test_defective_pair_fails_closed_without_raising() -> None:
-    """A Jordan block has no eigenvector pair; ``s -> 0`` is the honest answer."""
-    evidence = zero_mode_conditioning(_defective_superoperator(), zero_tolerance=1e-13)
-    assert evidence.available
-    assert evidence.cluster_size == 3
-    # The three zero eigenvalues are exactly tied, so the divisor is the
-    # subspace figure for that group (round-5 review) -- and it is exactly zero,
-    # because the three vectors do not span a three-dimensional invariant
-    # subspace at all.
-    assert evidence.reciprocal_condition == 0.0
-    assert evidence.per_mode_reciprocal_condition == 0.0
-    # Exactly trace preserving, so the STRUCTURAL estimate stays 0.0: the 0/0
-    # branch reports no displacement for an exact backward error rather than
-    # inventing one.
-    assert evidence.trace_defect == 0.0
-    assert evidence.structural_forward_estimate == 0.0
-    # The SOLVER estimate is what is unusable here, and the verdict must read
-    # it -- a defective stationary pair is conditioning-limited even when the
-    # generator is exactly trace preserving.
-    assert evidence.solver_forward_estimate == math.inf
-    # An unbounded estimate explains anything, so the agreement field abstains.
-    assert evidence.displacement_explained is None
-    assert evidence.conditioning_limited is True
-    assert evidence.verdict == CONDITIONING_LIMITED
 
-
-def test_defective_pair_with_a_nonzero_defect_reports_unbounded_displacement() -> None:
-    """A real backward error over a vanishing ``s`` means an unusable location."""
+def test_defective_pair_reports_basis_invariant_cluster_only_evidence() -> None:
+    """A Jordan block has a projector condition but no scalar first-order claim."""
     evidence = zero_mode_conditioning(
-        _defective_superoperator(defect=1.0e-12), zero_tolerance=1.0e-13
+        _defective_superoperator(), zero_tolerance=1.0e-13
     )
     assert evidence.available
-    assert evidence.trace_defect == pytest.approx(1.0e-12 / math.sqrt(2.0), rel=1e-3)
-    # A real backward error over a vanishing conditioning: unbounded.
-    assert evidence.structural_forward_estimate == math.inf
-    assert evidence.conditioning_limited is True
-    assert evidence.verdict == CONDITIONING_LIMITED
+    assert evidence.cluster_size == 3
+    assert evidence.reciprocal_condition > 0.0
+    assert evidence.reason == "cluster_conditioning_only"
+    assert math.isnan(evidence.per_mode_reciprocal_condition)
+    assert evidence.trace_defect == 0.0
+    assert math.isnan(evidence.structural_forward_estimate)
+    assert math.isnan(evidence.solver_forward_estimate)
+    assert evidence.displacement_explained is None
+    assert evidence.conditioning_limited is False
+    assert evidence.verdict == CONDITIONING_CLUSTER_ONLY
 
+
+def test_defective_pair_with_nonzero_defect_still_withholds_scalar_attribution() -> None:
+    """A backward error does not make a defective cluster a simple eigenvalue."""
+    evidence = zero_mode_conditioning(
+        _defective_superoperator(defect=1.0e-12), zero_tolerance=1.0e-6
+    )
+    assert evidence.available
+    assert evidence.cluster_size > 1
+    assert evidence.trace_defect == pytest.approx(
+        1.0e-12 / math.sqrt(2.0), rel=1e-3
+    )
+    assert math.isnan(evidence.structural_forward_estimate)
+    assert math.isnan(evidence.solver_forward_estimate)
+    assert evidence.displacement_explained is None
+    assert evidence.verdict == CONDITIONING_CLUSTER_ONLY
 
 def test_a_nonrepresentable_forward_estimate_withholds_the_verdict() -> None:
     """Round-2 review: a verdict may not rest on an estimate that does not exist.
@@ -578,30 +575,22 @@ def test_a_side_that_cannot_be_a_superoperator_is_unavailable(side: int) -> None
     assert evidence.verdict == CONDITIONING_UNAVAILABLE
 
 
-def test_forward_estimates_do_not_depend_on_the_supplied_tolerance() -> None:
-    """The cutoff must not leak into quantities that are about the operator.
 
-    Two round-2 findings meet here. ``displacement_explained`` used to take the
-    tolerance into its budget, which made it true by construction for any mode
-    inside the zero set. And the scalar estimates used to divide by the SUBSPACE
-    condition number, which changes the moment a wider cutoff pulls a second
-    eigenvalue into the cluster -- for this fixture ``s_cluster`` jumps from
-    ``2e-7`` to ``1.0`` between ``tol = 1e-9`` and ``tol = 1e-6``, and the
-    estimate moved with it.
-
-    Both are now per-mode quantities, so across eight orders of magnitude of
-    cutoff -- and across the cluster-size change at ``1e-6`` -- the estimates and
-    the verdict are identical.
-    """
+def test_widening_the_cutoff_never_turns_cluster_condition_into_scalar_evidence() -> None:
+    """A scalar estimate is kept only while the reported zero set is simple."""
     L = _pr127_fixture()
-    runs = [zero_mode_conditioning(L, zero_tolerance=t) for t in (1e-13, 1e-9, 1e-6, 1e-5)]
+    narrow = [
+        zero_mode_conditioning(L, zero_tolerance=t)
+        for t in (1.0e-13, 1.0e-9)
+    ]
+    wide = [
+        zero_mode_conditioning(L, zero_tolerance=t)
+        for t in (1.0e-6, 1.0e-5)
+    ]
 
-    # The cluster really does change, so the invariant is not vacuous.
-    assert {r.cluster_size for r in runs} == {1, 2}
-    assert {round(r.reciprocal_condition, 6) for r in runs} == {0.0, 1.0}
-
-    reference = runs[0]
-    for run in runs[1:]:
+    assert all(r.cluster_size == 1 for r in narrow)
+    reference = narrow[0]
+    for run in narrow[1:]:
         assert run.per_mode_reciprocal_condition == pytest.approx(
             reference.per_mode_reciprocal_condition, rel=1e-12
         )
@@ -611,8 +600,14 @@ def test_forward_estimates_do_not_depend_on_the_supplied_tolerance() -> None:
         assert run.solver_forward_estimate == pytest.approx(
             reference.solver_forward_estimate, rel=1e-12
         )
-        assert run.displacement_explained == reference.displacement_explained
 
+    assert all(r.cluster_size == 2 for r in wide)
+    for run in wide:
+        assert run.verdict == CONDITIONING_CLUSTER_ONLY
+        assert math.isnan(run.per_mode_reciprocal_condition)
+        assert math.isnan(run.structural_forward_estimate)
+        assert math.isnan(run.solver_forward_estimate)
+        assert run.displacement_explained is None
 
 def test_displacement_agreement_is_true_when_the_estimates_earn_it() -> None:
     """The positive control: a displacement a forward estimate does account for.
@@ -858,58 +853,20 @@ def test_abstains_outside_the_first_order_perturbative_regime() -> None:
     assert evidence.observed_displacement > CONDITIONING_AGREEMENT_FACTOR * combined
 
 
-def test_a_repeated_stationary_eigenvalue_uses_a_basis_invariant_divisor() -> None:
-    """Round-5 review: a per-mode ``|y^H x|`` is basis dependent when repeated.
 
-    For a repeated eigenvalue LAPACK returns an arbitrary basis of each
-    eigenspace, and the left and right bases may be rotated independently.
-    Measured on two decoupled damped sectors, rotating only the right basis
-    inside the degenerate stationary eigenspace moves the per-mode values from
-    ``0.7206`` to ``0.5408`` while ``sigma_min(Y^H X)`` stays exactly ``0.7071`` -- so
-    a per-mode divisor would report a physical degenerate manifold as
-    conditioning-limited on LAPACK's choice of basis alone.
-    """
-    import scipy.linalg as sla
-
+def test_repeated_stationary_eigenvalue_uses_projector_condition_only() -> None:
+    """A repeated zero cluster is measured as a cluster, never as one root."""
     jump = np.zeros((4, 4), dtype=complex)
     jump[0, 1] = math.sqrt(0.7)
     jump[2, 3] = math.sqrt(0.4)
     L = build_liouvillian(np.zeros((4, 4), dtype=complex), [jump])
 
-    values, left, right = sla.eig(L, left=True, right=True)
-    zero = np.flatnonzero(np.abs(values) <= 1.0e-10)
-    assert zero.size > 1  # the premise: genuinely repeated
-
-    per_mode = eigenvalue_conditioning(right, left)
-    invariant = cluster_conditioning(right, left, zero)
-
-    # Rotate ONLY the right basis within the degenerate eigenspace: a legal,
-    # equally valid choice that LAPACK could have returned instead.
-    angle = 0.7
-    rotation = np.array(
-        [
-            [math.cos(angle), -math.sin(angle)],
-            [math.sin(angle), math.cos(angle)],
-        ],
-        dtype=complex,
-    )
-    pair = zero[:2]
-    turned = right.copy()
-    turned[:, pair] = right[:, pair] @ rotation
-
-    assert not np.allclose(
-        eigenvalue_conditioning(turned, left)[pair], per_mode[pair], rtol=1e-3
-    )
-    assert cluster_conditioning(turned, left, zero) == pytest.approx(
-        invariant, rel=1e-10
-    )
-    # The audit divides by the invariant figure, so the manifold stays benign.
     evidence = zero_mode_conditioning(L, zero_tolerance=1.0e-10)
-    assert evidence.per_mode_reciprocal_condition == pytest.approx(
-        invariant, rel=1e-10
-    )
-    assert evidence.verdict == CONDITIONING_BENIGN
-
+    assert evidence.available
+    assert evidence.cluster_size > 1
+    assert 0.0 < evidence.reciprocal_condition <= 1.0
+    assert evidence.verdict == CONDITIONING_CLUSTER_ONLY
+    assert math.isnan(evidence.per_mode_reciprocal_condition)
 
 def test_cluster_conditioning_fails_closed_on_unusable_vector_sets() -> None:
     """``0.0`` is the fail-closed value: it maximises every estimate built on it."""
@@ -950,24 +907,9 @@ def test_eigenvalue_conditioning_rejects_mismatched_vector_matrices() -> None:
 # --------------------------------------------------------------------------
 
 
-def test_the_divisor_survives_a_unitary_change_of_basis() -> None:
-    """Round-6 review: an exact tie is not how a repeated mode announces itself.
 
-    The round-5 fix grouped modes by exact eigenvalue equality, which holds only
-    when LAPACK happens to return bit-identical values. Writing the SAME
-    physical generator in a rotated orthonormal basis is a unitary similarity:
-    it cannot change ``|y^H x|`` or ``sigma_min(Y^H X)`` for any mode, so every
-    conditioning figure the audit reports must be invariant under it. It was
-    not. The rotated zero set comes back spread by ``2.9e-16`` of round-off
-    instead of exactly tied -- well inside the ``1.6e-13`` band #108 already
-    calls indistinguishable -- the exact-tie group collapses to a single
-    mode, and the divisor reported ``0.1026`` where the operator's value is
-    ``0.7071``: a 6.9x inflation of both forward estimates, caused by the
-    choice of basis alone.
-
-    The premise is asserted before the conclusion: if the rotation ever stopped
-    splitting the manifold this test would pass without testing anything.
-    """
+def test_cluster_projector_condition_survives_a_unitary_change_of_basis() -> None:
+    """The repeated stationary cluster is a property of the operator, not a basis."""
     import scipy.linalg as sla
 
     jump = np.zeros((4, 4), dtype=complex)
@@ -977,43 +919,30 @@ def test_the_divisor_survives_a_unitary_change_of_basis() -> None:
 
     generator = np.random.default_rng(3)
     unitary, _r = np.linalg.qr(
-        generator.standard_normal((16, 16)) + 1j * generator.standard_normal((16, 16))
+        generator.standard_normal((16, 16))
+        + 1j * generator.standard_normal((16, 16))
     )
     rotated = unitary @ plain @ unitary.conj().T
     assert np.allclose(unitary @ unitary.conj().T, np.eye(16), atol=1e-12)
 
-    # PREMISE 1: the unrotated manifold is exactly degenerate.
     flat = sla.eig(plain, left=False, right=False)
-    assert np.flatnonzero(np.abs(flat) <= 1.0e-8).size > 1
-    # PREMISE 2: the rotation splits it, so exact-tie grouping cannot see it.
     turned = sla.eig(rotated, left=False, right=False)
-    zero = turned[np.abs(turned) <= 1.0e-8]
-    assert zero.size > 1
-    spread = float(np.max(np.abs(zero[:, None] - zero[None, :])))
-    assert 0.0 < spread < 1.0e-14
+    assert np.flatnonzero(np.abs(flat) <= 1.0e-8).size > 1
+    assert np.flatnonzero(np.abs(turned) <= 1.0e-8).size > 1
 
     reference = zero_mode_conditioning(plain, zero_tolerance=1.0e-8)
     measured = zero_mode_conditioning(rotated, zero_tolerance=1.0e-8)
     assert reference.available and measured.available
-    assert reference.per_mode_reciprocal_condition == pytest.approx(0.7071, rel=1e-3)
-    # The property under test: the divisor is a property of the operator.
-    assert measured.per_mode_reciprocal_condition == pytest.approx(
-        reference.per_mode_reciprocal_condition, rel=1e-6
-    )
+    assert reference.verdict == measured.verdict == CONDITIONING_CLUSTER_ONLY
     assert measured.reciprocal_condition == pytest.approx(
-        reference.reciprocal_condition, rel=1e-6
+        reference.reciprocal_condition, rel=1e-8, abs=1e-10
     )
+    assert math.isnan(reference.per_mode_reciprocal_condition)
+    assert math.isnan(measured.per_mode_reciprocal_condition)
 
 
-def test_a_split_larger_than_the_backward_error_stays_two_modes() -> None:
-    """The other direction: grouping must not swallow a genuine splitting.
-
-    Round 2 established that the subspace figure understates the sensitivity of
-    a genuinely simple eigenvalue by ``1/delta``. The round-6 grouping is by
-    RESOLVABILITY, not by proximity, so a split the decomposition resolves --
-    orders of magnitude above the residuals that measure its backward error --
-    must leave the two modes separate and the per-mode value in force.
-    """
+def test_a_genuine_two_mode_zero_cluster_stays_cluster_only() -> None:
+    """A cutoff selecting two simple roots does not license choosing one as 'the' zero."""
     delta = 1.0e-8
     system = np.zeros((4, 4), dtype=complex)
     system[0, 0] = 0.0
@@ -1024,47 +953,29 @@ def test_a_split_larger_than_the_backward_error_stays_two_modes() -> None:
 
     evidence = zero_mode_conditioning(system, zero_tolerance=1.0e-6)
     assert evidence.available
-    # PREMISE: both small modes are inside the cutoff, and the backward error
-    # is far below their separation, so they ARE resolved.
     assert evidence.cluster_size == 2
-    assert max(evidence.right_residual, evidence.left_residual) < delta / 1.0e3
-    # So the divisor stays the per-mode figure, which is ~delta -- not the
-    # perfectly conditioned subspace figure.
-    assert evidence.per_mode_reciprocal_condition == pytest.approx(delta, rel=1e-3)
     assert evidence.reciprocal_condition == pytest.approx(1.0, rel=1e-6)
+    assert evidence.verdict == CONDITIONING_CLUSTER_ONLY
+    assert math.isnan(evidence.per_mode_reciprocal_condition)
+    assert evidence.displacement_explained is None
 
 
-def test_the_solver_estimate_ignores_unrelated_in_cutoff_residuals() -> None:
-    """Round-6 review: numerator and divisor must describe the same modes.
-
-    ``right_residual`` / ``left_residual`` were maxima over the whole cutoff
-    cluster while the divisor is the conditioning of the selected mode's group,
-    so an unrelated in-cutoff mode's backward error entered an estimate that
-    claims to bound the displacement of the selected eigenvalue -- the same
-    cutoff coupling round 4 removed from the structural estimate, in the other
-    numerator. Here the selected mode's eigenvector is a coordinate axis, so its
-    residual is exactly zero and the estimate must be exactly zero at every
-    cutoff.
-    """
+def test_wide_cutoff_with_multiple_modes_withholds_scalar_solver_estimate() -> None:
+    """An unrelated in-cutoff mode cannot leak into a named scalar estimate."""
     system = np.zeros((4, 4), dtype=complex)
-    system[0, 0] = 1.0e-12                  # selected; an exact eigenvector
-    system[1, 2] = 1.0e6                    # a block with eigenvalues +-1e-10
+    system[0, 0] = 1.0e-12
+    system[1, 2] = 1.0e6
     system[2, 1] = (1.0e-10) ** 2 / 1.0e6
     system[3, 3] = -1.0
 
     narrow = zero_mode_conditioning(system, zero_tolerance=1.0e-11)
     wide = zero_mode_conditioning(system, zero_tolerance=1.0e-9)
     assert narrow.available and wide.available
-    # PREMISE: the cutoff genuinely admits more modes, and the selected
-    # eigenvalue is untouched by that.
     assert narrow.cluster_size == 1
-    assert wide.cluster_size > narrow.cluster_size
-    assert wide.eigenvalue == narrow.eigenvalue
-    # The property under test.
-    assert wide.right_residual == narrow.right_residual == 0.0
-    assert wide.left_residual == narrow.left_residual == 0.0
-    assert wide.solver_forward_estimate == narrow.solver_forward_estimate == 0.0
-
+    assert wide.cluster_size > 1
+    assert narrow.solver_forward_estimate == 0.0
+    assert wide.verdict == CONDITIONING_CLUSTER_ONLY
+    assert math.isnan(wide.solver_forward_estimate)
 
 def test_displacement_abstains_when_the_perturbation_exceeds_the_separation() -> None:
     """Round-6 review: locality is a property of the perturbation, not the outcome.
@@ -1093,55 +1004,33 @@ def test_displacement_abstains_when_the_perturbation_exceeds_the_separation() ->
     assert evidence.displacement_explained is None
 
 
-def test_a_zero_generator_groups_its_whole_spectrum() -> None:
-    """The round-off band degenerates to exact equality when the scale is zero.
 
-    ``_agreement_band`` returns ``0.0`` for a spectrum whose largest magnitude
-    is zero, so the round-6 grouping falls back to exact equality -- which is
-    the right answer here, since every eigenvalue genuinely IS the same one.
-    """
+def test_a_zero_generator_reports_perfect_cluster_projector_only() -> None:
+    """The whole operator space is one stationary cluster; no scalar root is singled out."""
     evidence = zero_mode_conditioning(np.zeros((4, 4), dtype=complex))
 
     assert evidence.available
     assert evidence.cluster_size == 4
     assert evidence.reciprocal_condition == pytest.approx(1.0, rel=1e-12)
     assert evidence.trace_defect == 0.0
-    assert evidence.verdict == CONDITIONING_BENIGN
+    assert evidence.verdict == CONDITIONING_CLUSTER_ONLY
+    assert math.isnan(evidence.per_mode_reciprocal_condition)
 
 
-def test_separation_counts_a_resolved_neighbour_inside_the_cutoff() -> None:
-    """Round-7 review: the separation must describe the group being conditioned.
-
-    Round 6 moved the estimates and the residuals onto ``tied`` -- the modes the
-    arithmetic cannot separate from the selected one -- but left the separation
-    measured from the caller's whole cutoff cluster to its complement. A mode
-    the cutoff admits while the arithmetic RESOLVES it is then neither
-    conditioned nor counted as a neighbour, so it vanishes from the
-    first-order-regime test that exists to notice exactly such a mode.
-
-    Here the selected eigenvalue's nearest neighbour is `2e-6`, `1e-6` away and
-    inside the cutoff, which is precisely its own structural budget: the
-    module's own criterion demands abstention, and the inflated separation of
-    `1.000001` hid that.
-    """
+def test_cluster_separation_is_measured_to_the_complement() -> None:
+    """For cluster-only evidence, separation is from the whole cluster outward."""
     basis = _basis_with_first(trace_vector(2))
     spectrum = np.diag([1.0e-6, 2.0e-6, -1.0, -2.0]).astype(complex)
     system = basis @ spectrum @ basis.conj().T
 
     evidence = zero_mode_conditioning(system, zero_tolerance=3.0e-6)
     assert evidence.available
-    # PREMISE: the cutoff admits the neighbour, and the arithmetic RESOLVES it,
-    # so it is not part of the conditioned group.
     assert evidence.cluster_size == 2
-    assert evidence.eigenvalue == pytest.approx(1.0e-6, rel=1e-9)
-    # The property under test: the neighbour still counts as a neighbour.
-    assert evidence.separation == pytest.approx(1.0e-6, rel=1e-6)
-    budget = (
-        evidence.structural_forward_estimate + evidence.solver_forward_estimate
-    )
-    assert budget >= evidence.separation
+    assert evidence.verdict == CONDITIONING_CLUSTER_ONLY
+    # The nearest OUTSIDE mode is -1, not the second member of the cluster.
+    assert evidence.separation == pytest.approx(1.000001, rel=1e-6)
+    assert math.isnan(evidence.structural_forward_estimate)
     assert evidence.displacement_explained is None
-
 
 def test_a_wider_dtype_accepted_spectrum_does_not_raise() -> None:
     """Round-8 review: the accepted spectrum arrives in the caller's dtype.
