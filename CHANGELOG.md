@@ -229,6 +229,20 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     the change is not visible in `input_hash`.
 
 ### Fixed
+- **Zero-cluster conditioning is now basis invariant on defective repeated modes (issue #168).**
+  The audit-only #117 instrument previously formed `sigma_min(Y^H X)` from eigenvectors returned
+  by `?geev`. For a defective repeated eigenvalue no eigenspace of that dimension exists, so a
+  unitary re-expression of the same Jordan-block fixture moved the reported condition from
+  `0.000000` to `1.000000` and flipped its audit verdict. The zero cluster is now reordered in a
+  complex Schur form with LAPACK `xTRSEN`; after reordering the code solves
+  `T11 R - R T22 = T12` and reports the reciprocal projector 2-norm
+  `1/sqrt(1 + ||R||_2^2)`. `xTRSEN.S` itself is deliberately not reported as that value: LAPACK
+  defines it with `||R||_F` as a lower bound. Multi-mode zero clusters now return
+  `CLUSTER_ONLY`: cluster condition, residuals, separation and trace defect remain evidence, while
+  scalar first-order eigenvalue-displacement estimates are withheld because semisimple versus
+  defective multiplicity cannot be decided safely from numerical proximity. Simple zero modes
+  retain the scalar path. Audit only: no D1-D24 number, filter, certificate, mechanism verdict or
+  run-manifest field consumes this evidence; MANIFEST_SCHEMA therefore remains unchanged.
 - **Stacked pull requests now carry two independent evidence planes:
   proposed-merge evidence in the existing required contexts and submitted-head
   evidence in additional jobs (issue #159 follow-up).** CI, QuTiP and Quality
