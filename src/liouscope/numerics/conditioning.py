@@ -66,30 +66,19 @@ reasons not to:
 
 Degenerate and near-degenerate stationary manifolds
 ---------------------------------------------------
-A per-mode ``s`` is meaningless for a repeated eigenvalue and MISLEADING for a
-nearly repeated one: the individual eigenvectors are then ill-determined even
-though the invariant subspace they span is not. Measured on
-``[[0, 1, 0], [0, delta, 0], [0, 0, -1]]``, per-mode ``s`` of the two small
-modes falls as ``delta`` (1e-2 -> 1e-14) while the two-dimensional subspace
-stays perfectly conditioned:
+For a simple eigenvalue the reciprocal condition is ``|y^H x|``. For a
+cluster, the invariant quantity is the condition of its spectral projector.
+On a semisimple cluster this agrees with the familiar left/right-invariant-
+subspace formula, but deriving that formula from returned eigenvectors breaks
+down at a defective repeated eigenvalue because the advertised eigenspace does
+not exist.
 
-=========  ==================  ===========================
-``delta``  per-mode ``s``      ``sigma_min(Y^H X)``
-=========  ==================  ===========================
-1e-2       1.0e-02             1.000
-1e-6       1.0e-06             1.000
-1e-10      1.0e-10             1.000
-1e-14      1.0e-14             1.000
-=========  ==================  ===========================
-
-A degenerate stationary manifold -- a conserved quantity or a symmetry sector --
-is exactly this case and is PHYSICAL, so reporting per-mode ``s`` alone would
-raise a false alarm on a healthy generator. The reported figure is therefore the
-cluster quantity ``sigma_min(Y^H X)`` over orthonormal bases of the left and
-right invariant subspaces of the whole zero set (Stewart-Sun), which reduces to
-``|y^H x|`` for a simple eigenvalue. The per-mode minimum is kept alongside it
-as evidence, never as the verdict.
-
+The headline ``reciprocal_condition`` therefore comes from a reordered Schur
+form and the spectral projector, not from eigenvector spans. The legacy
+``cluster_conditioning`` primitive is retained for direct semisimple-subspace
+work and regression comparison, but ``zero_mode_conditioning`` does not use it
+as its headline cluster measurement. Scalar first-order estimates are reported
+only when the selected zero cluster is simple.
 Schur-projector conditioning for repeated/defective clusters (issue #168)
 -----------------------------------------------------------------------------
 A repeated stationary eigenvalue can be DEFECTIVE, in which case an eigenvector
