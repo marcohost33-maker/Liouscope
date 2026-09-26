@@ -90,43 +90,34 @@ right invariant subspaces of the whole zero set (Stewart-Sun), which reduces to
 ``|y^H x|`` for a simple eigenvalue. The per-mode minimum is kept alongside it
 as evidence, never as the verdict.
 
-KNOWN LIMITATION: a DEFECTIVE repeated stationary eigenvalue (issue #168)
--------------------------------------------------------------------------
-Everything above assumes the zero set has an eigenspace of its own dimension.
-A DEFECTIVE repeated eigenvalue does not, and then no figure derived from an
-eigenvector decomposition is basis invariant, because the decomposition itself
-does not exist -- ``?geev`` returns an arbitrary nearby diagonalisable
-perturbation. Measured on a 2x2 Jordan block at zero in the trace-vector basis,
-exactly trace preserving, re-expressed by a unitary that fixes ``q`` -- the same
-operator in a different orthonormal basis, so every figure here must be
-invariant under it:
+Schur-projector conditioning for repeated/defective clusters (issue #168)
+-----------------------------------------------------------------------------
+A repeated stationary eigenvalue can be DEFECTIVE, in which case an eigenvector
+decomposition of the advertised dimension does not exist and any conditioning
+figure manufactured from those vectors can depend on the basis in which the
+same operator is written. The audit therefore no longer uses eigenvectors for
+its headline zero-cluster condition.
 
-===================  ================  ======================  ====================
-basis                zero-set spread   ``reciprocal_condition``  verdict
-===================  ================  ======================  ====================
-as formed            0                 0.000000                CONDITIONING_LIMITED
-unitary re-expressed 2.88e-08          1.000000                BENIGN
-===================  ================  ======================  ====================
+The selected zero cluster is reordered to the leading block of a complex Schur
+form with LAPACK ``xTRSEN``. Crucially, the ``S`` returned by ``xTRSEN`` is
+*not* reported as ``1 / ||P||_2``: LAPACK defines it from ``||R||_F`` as a
+lower bound. After reordering, this module solves
+``T11 R - R T22 = T12`` and computes the actual 2-norm expression
+``1 / sqrt(1 + ||R||_2**2) = 1 / ||P||_2`` for the spectral projector. This
+cluster quantity is invariant under unitary re-expression and remains meaningful
+for a defective Jordan block so long as the cluster is separated from the
+complement.
 
-The split is 64931x the round-off band that groups modes below, so the group
-falls apart; ``sigma_min`` of the normalised right eigenvectors is ``2.0e-292``
-and ``2.0e-08`` in the two bases, i.e. neither spans a genuine two-dimensional
-eigenspace. Note this INVERTS the reading above: for a defective eigenvalue the
-per-mode value is the stable one (``0.0`` and ``3e-08``, both correctly about
-zero) and the SUBSPACE figure is the artifact, manufactured by orthonormalising
-two nearly parallel vectors.
-
-No proximity threshold separates the two regimes: the defective split is
-numerically indistinguishable from the genuine ``delta = 1e-8`` split of
-``[[0, 1], [0, delta]]`` above, which must NOT be merged. The fix is to compute
-cluster conditioning from a reordered Schur decomposition -- the spectral
-projector of an eigenvalue group is well defined where its eigenvectors are not
--- which replaces the eigenvector path this module is built on. Issue #168.
-
-This is AUDIT-ONLY evidence, so the flip reaches no filter, gap, certificate,
-verdict or tier; a reader of a report on a defective stationary manifold must
-not trust these fields until #168 is closed.
-
+That does NOT manufacture a scalar condition number for an individual root
+inside a defective cluster. No proximity test can reliably decide whether a
+numerically split multiple root is a genuine pair of simple eigenvalues or the
+round-off image of a Jordan block. Therefore a multi-mode zero cluster returns
+``verdict="CLUSTER_ONLY"``: the projector condition, residuals, separation and
+trace defect remain audit evidence, while the scalar first-order forward-error
+estimates are withheld (NaN / JSON null) and ``displacement_explained`` abstains.
+A simple zero cluster keeps the scalar first-order path. Nothing downstream
+reads this audit, so the change affects no D1-D24 value, filter, certificate or
+classification tier.
 What this instrument does NOT catch
 -----------------------------------
 The stiff deflation failure of issue #112 is invisible to conditioning. On the
@@ -162,8 +153,10 @@ from .._consts import CONDITIONING_AGREEMENT_FACTOR, ZERO_MODE_EPS_FACTOR
 from .linalg import require_finite_square_2d, trace_preservation_defect
 from .norms import scaled_euclidean_norm
 
-#: Verdict strings. ``BENIGN`` and ``CONDITIONING_LIMITED`` are the two decided
-#: outcomes; ``UNAVAILABLE`` is the absence of a measurement, never a claim.
+#: Verdict strings. ``BENIGN`` and ``CONDITIONING_LIMITED`` are scalar-mode
+#: outcomes. ``CLUSTER_ONLY`` means a valid Schur-projector cluster measurement
+#: exists but scalar first-order attribution is intentionally withheld;
+#: ``UNAVAILABLE`` means no trustworthy measurement exists.
 CONDITIONING_BENIGN = "BENIGN"
 CONDITIONING_LIMITED = "CONDITIONING_LIMITED"
 CONDITIONING_CLUSTER_ONLY = "CLUSTER_ONLY"
@@ -296,7 +289,7 @@ def _schur_cluster_projector_condition(
     """Reciprocal 2-norm condition of the selected Schur spectral projector.
 
     The selected eigenvalue cluster is reordered to the leading Schur block
-    with LAPACK ``xTRSEN``. LAPACK\'s reported ``S`` is deliberately not
+    with LAPACK ``xTRSEN``. LAPACK's reported ``S`` is deliberately not
     used: ``xTRSEN`` documents it as the Frobenius-norm lower bound
     ``(1 + ||R||_F**2)**(-1/2)`` on the true reciprocal projector 2-norm.
 
@@ -381,23 +374,24 @@ class ZeroModeConditioning:
     """
 
     available: bool
-    #: Why the measurement is absent. ``"ok"`` when it is present.
+    #: Measurement status. ``"ok"`` means scalar + cluster evidence is present;
+    #: ``"cluster_conditioning_only"`` means only the Schur-projector cluster
+    #: measurement is claimable; other strings explain an unavailable audit.
     reason: str
     #: The stationary eigenvalue the evidence refers to (smallest ``|lambda|``).
     eigenvalue: complex
     #: How many eigenvalues the zero set holds. ``> 1`` is a degenerate
     #: stationary manifold and is not by itself a defect.
     cluster_size: int
-    #: ``sigma_min(Y^H X)`` over the zero set -- the reported conditioning.
+    #: Reciprocal 2-norm condition of the zero-cluster spectral projector,
+    #: ``1 / ||P||_2``, obtained from a reordered Schur form and a Sylvester
+    #: solve. For a simple eigenvalue this equals ``|y^H x|``.
     reciprocal_condition: float
-    #: Conditioning of the group of modes the decomposition does NOT resolve
-    #: from the selected stationary one -- its own ``|y^H x|`` when that mode is
-    #: cleanly simple, and ``sigma_min(Y^H X)`` over the unresolved group
-    #: otherwise. This is the divisor of the two forward estimates below, so a
-    #: reader can reproduce them. It is deliberately neither the minimum over
-    #: the cluster (which coupled the estimate to unrelated in-cutoff modes --
-    #: round-4 review) nor a bare per-mode value (which is not a property of the
-    #: operator across a repeated or unresolved eigenvalue -- rounds 5 and 6).
+    #: Reciprocal scalar eigenvalue condition used by the two first-order
+    #: forward estimates. It equals the Schur-projector condition for a simple
+    #: zero cluster and is NaN for a multi-mode cluster: a defective repeated
+    #: eigenvalue has no basis-independent scalar first-order condition number,
+    #: and proximity cannot safely distinguish it from a semisimple cluster.
     per_mode_reciprocal_condition: float
     #: Smallest per-mode ``|y^H x|`` over the WHOLE spectrum.
     spectrum_min_reciprocal_condition: float
@@ -908,8 +902,9 @@ def _measure(
     # selected eigenvalue has nothing to do with. The magnitudes there are
     # round-off, so no verdict flips on that fixture -- the defect is that the
     # number is not a property of what it names.
-    right_res = max((residuals[int(j)][0] for j in tied), default=0.0)
-    left_res = max((residuals[int(j)][1] for j in tied), default=0.0)
+    residual_group = cluster if cluster_only else tied
+    right_res = max((residuals[int(j)][0] for j in residual_group), default=0.0)
+    left_res = max((residuals[int(j)][1] for j in residual_group), default=0.0)
     # ROUND-7 REVIEW, the completion of the round-6 change. This measured the
     # distance from the CUTOFF CLUSTER to its complement, while everything above
     # now conditions ``tied``. A mode the caller's cutoff admits but the
@@ -924,9 +919,19 @@ def _measure(
     # demands abstention. The separation is therefore measured from ``tied`` to
     # its complement in the WHOLE spectrum, the same group the estimates and the
     # residuals describe.
-    outside = np.setdiff1d(np.arange(values.size), tied, assume_unique=False)
+    separation_group = cluster if cluster_only else tied
+    outside = np.setdiff1d(
+        np.arange(values.size), separation_group, assume_unique=False
+    )
     separation = (
-        float(np.min(np.abs(reported[outside][:, None] - reported[tied][None, :])))
+        float(
+            np.min(
+                np.abs(
+                    reported[outside][:, None]
+                    - reported[separation_group][None, :]
+                )
+            )
+        )
         if outside.size
         else float("inf")
     )
@@ -950,7 +955,7 @@ def _measure(
             cluster_size=int(cluster.size),
             reciprocal_condition=float(s_cluster),
             per_mode_reciprocal_condition=float("nan"),
-            spectrum_min_reciprocal_condition=float(per_mode.min()),
+            spectrum_min_reciprocal_condition=float("nan"),
             right_residual=float(right_res),
             left_residual=float(left_res),
             separation=separation,
