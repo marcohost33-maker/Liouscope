@@ -183,7 +183,10 @@ abstract: >-
 # Frobenius-norm lower bound. A multi-mode zero cluster is now explicitly
 # CLUSTER_ONLY: no scalar first-order eigenvalue-displacement estimate is
 # claimed, because defective multiplicity makes such a scalar condition
-# non-identifiable from numerical proximity alone. Simple zero modes keep the
+# non-identifiable from numerical proximity alone. Before any multi-mode
+# projector is reported, the independent Schur spectrum must match the report's
+# spectrum mode-for-mode inside the existing round-off agreement band; otherwise
+# the audit withholds as schur_cluster_mismatch. Simple zero modes keep the
 # scalar path. When a diagnostic is gated on this evidence, THAT change is the
 # one that must be described as a correction.
 keywords:
