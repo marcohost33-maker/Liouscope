@@ -8,6 +8,8 @@ import warnings
 
 import numpy as np
 import scipy.linalg as sla
+import scipy.sparse as sp
+import scipy.sparse.linalg as spla
 
 from .._consts import EPS_SUPP
 from .._types import FitResult, RelaxationResult
@@ -36,45 +38,131 @@ class UnrepresentableTrajectoryError(RuntimeError):
     """The requested relaxation propagation is not representable reliably.
 
     This is a numerical-domain failure, not a statement about the underlying
-    GKSL dynamics. Returning a non-finite propagator or state would launder an
+    GKSL dynamics. Returning a non-finite propagated state would launder an
     arithmetic failure into entropy, fitting and uncertainty calculations, so
     the relaxation layer fails closed.
     """
 
 
-def _evolve(L_super: np.ndarray, rho0: np.ndarray, t_grid: np.ndarray) -> np.ndarray:
-    """Propagate ``rho(t) = expm(L t) rho_0``, failing closed on non-finite work.
+def _operator_is_finite(operator: object) -> bool:
+    """Exact stored-entry finiteness check without densifying sparse matrices."""
+    if sp.issparse(operator):
+        data = np.asarray(operator.data)
+        return bool(np.all(np.isfinite(data)))
+    return bool(np.all(np.isfinite(np.asarray(operator))))
 
-    A finite generator and finite time do not imply that the dimensionless
-    product ``L*t``, the dense matrix exponential, or its action on the state
-    is representable in float64. Each boundary is checked separately so later
-    diagnostics cannot consume NaN/inf as if it were physical data.
+
+def _scaled_action_operand(
+    L_super: object, t: float
+) -> np.ndarray | sp.spmatrix:
+    """Return t*L after representability checks needed by expm_multiply.
+
+    The action algorithm needs norm information internally. A matrix whose
+    represented entries are finite can still have an unrepresentable 1-norm;
+    passing that case onward can turn a numerical-domain failure into an
+    effectively unbounded scaling loop. Refuse only when the matrix or its
+    mathematical 1-norm is not representable -- no physics threshold is used.
+    """
+    with np.errstate(over="ignore", invalid="ignore", under="ignore"):
+        scaled = L_super * t
+    if not _operator_is_finite(scaled):
+        raise UnrepresentableTrajectoryError(
+            "relaxation trajectory: L*t contains non-finite entries at "
+            f"t={float(t):.6g}"
+        )
+
+    try:
+        with warnings.catch_warnings():
+            warnings.filterwarnings("error", category=RuntimeWarning)
+            with np.errstate(over="ignore", invalid="ignore", under="ignore"):
+                norm_1 = (
+                    float(spla.norm(scaled, ord=1))
+                    if sp.issparse(scaled)
+                    else float(np.linalg.norm(np.asarray(scaled), ord=1))
+                )
+    except (RuntimeWarning, OverflowError, ValueError) as exc:
+        raise UnrepresentableTrajectoryError(
+            "relaxation trajectory: ||L*t||_1 is not representable in float64 "
+            f"at t={float(t):.6g}"
+        ) from exc
+    if not np.isfinite(norm_1):
+        raise UnrepresentableTrajectoryError(
+            "relaxation trajectory: ||L*t||_1 is not representable in float64 "
+            f"at t={float(t):.6g}"
+        )
+    return scaled
+
+
+def _expm_action(operator: object, state: np.ndarray, *, t: float) -> np.ndarray:
+    """Compute one exponential action and normalise numerical failures."""
+    scaled = _scaled_action_operand(operator, t)
+    try:
+        with warnings.catch_warnings():
+            warnings.filterwarnings("error", category=RuntimeWarning)
+            with np.errstate(over="ignore", invalid="ignore", under="ignore"):
+                out = spla.expm_multiply(scaled, state)
+    except (
+        RuntimeWarning,
+        OverflowError,
+        ValueError,
+        np.linalg.LinAlgError,
+        sla.LinAlgError,
+    ) as exc:
+        raise UnrepresentableTrajectoryError(
+            "relaxation trajectory: scipy.sparse.linalg.expm_multiply could not "
+            f"represent the exponential action at t={float(t):.6g}"
+        ) from exc
+    out = np.asarray(out, dtype=complex)
+    if not np.all(np.isfinite(out)):
+        raise UnrepresentableTrajectoryError(
+            "relaxation trajectory: scipy.sparse.linalg.expm_multiply returned "
+            f"a non-finite state at t={float(t):.6g}"
+        )
+    return out
+
+
+def _is_exact_linspace(t_grid: np.ndarray) -> bool:
+    """Whether t_grid is exactly reproducible by NumPy linspace."""
+    if t_grid.ndim != 1 or t_grid.size < 2:
+        return False
+    expected = np.linspace(
+        float(t_grid[0]), float(t_grid[-1]), int(t_grid.size), endpoint=True
+    )
+    return bool(np.array_equal(np.asarray(t_grid, dtype=float), expected))
+
+
+def _evolve_with_backend(
+    L_super: object, rho0: np.ndarray, t_grid: np.ndarray
+) -> tuple[np.ndarray, str]:
+    """Propagate by exponential action without materialising exp(tL).
+
+    Exactly linspace-generated grids use SciPy interval mode so setup work can
+    be reused. Arbitrary grids use independent actions from the same initial
+    state; this avoids accumulated stepwise error on non-uniform grids.
     """
     rho_vec0 = vec(rho0)
     d = rho0.shape[0]
-    traj = np.empty((t_grid.size, d, d), dtype=complex)
-    for k, t in enumerate(t_grid):
-        if t == 0.0:
-            traj[k] = rho0
-            continue
+    times = np.asarray(t_grid, dtype=float)
+    traj = np.empty((times.size, d, d), dtype=complex)
 
-        with np.errstate(over="ignore", invalid="ignore", under="ignore"):
-            scaled = np.asarray(L_super * t)
-        if not np.all(np.isfinite(scaled)):
-            raise UnrepresentableTrajectoryError(
-                "relaxation trajectory: L*t contains non-finite entries at "
-                f"t={float(t):.6g}; the requested dimensionless propagation "
-                "is outside the current float64 dense-expm domain"
-            )
+    if times.size == 0:
+        return traj, "expm_multiply_pointwise"
 
+    if _is_exact_linspace(times) and times.size >= 2:
+        max_t = float(np.max(np.abs(times)))
+        _scaled_action_operand(L_super, max_t)
         try:
-            # SciPy's scaling-and-squaring path can emit RuntimeWarning outside
-            # NumPy's errstate. Convert that into the same explicit domain
-            # failure so warnings-as-errors and ordinary callers agree.
             with warnings.catch_warnings():
                 warnings.filterwarnings("error", category=RuntimeWarning)
                 with np.errstate(over="ignore", invalid="ignore", under="ignore"):
-                    propagator = sla.expm(scaled)
+                    states = spla.expm_multiply(
+                        L_super,
+                        rho_vec0,
+                        start=float(times[0]),
+                        stop=float(times[-1]),
+                        num=int(times.size),
+                        endpoint=True,
+                    )
         except (
             RuntimeWarning,
             OverflowError,
@@ -83,26 +171,58 @@ def _evolve(L_super: np.ndarray, rho0: np.ndarray, t_grid: np.ndarray) -> np.nda
             sla.LinAlgError,
         ) as exc:
             raise UnrepresentableTrajectoryError(
-                "relaxation trajectory: scipy.linalg.expm could not represent "
-                f"a finite propagator at t={float(t):.6g}; use a different "
-                "numerical propagation method or time window"
+                "relaxation trajectory: scipy.sparse.linalg.expm_multiply "
+                "interval propagation failed"
             ) from exc
-
-        if not np.all(np.isfinite(propagator)):
+        states = np.asarray(states, dtype=complex)
+        if states.shape != (times.size, rho_vec0.size) or not np.all(
+            np.isfinite(states)
+        ):
             raise UnrepresentableTrajectoryError(
-                "relaxation trajectory: scipy.linalg.expm returned a non-finite "
-                f"propagator at t={float(t):.6g} although L*t is finite"
+                "relaxation trajectory: expm_multiply interval propagation "
+                "returned a non-finite or malformed state sequence"
             )
+        for k in range(times.size):
+            traj[k] = unvec(states[k], d=d)
+        if times[0] == 0.0:
+            traj[0] = rho0
+        return traj, "expm_multiply_interval"
 
-        with np.errstate(over="ignore", invalid="ignore", under="ignore"):
-            rho_vec_t = propagator @ rho_vec0
-        if not np.all(np.isfinite(rho_vec_t)):
-            raise UnrepresentableTrajectoryError(
-                "relaxation trajectory: the propagated state became non-finite "
-                f"at t={float(t):.6g}"
-            )
-        traj[k] = unvec(rho_vec_t, d=d)
-    return traj
+    for k, t in enumerate(times):
+        if t == 0.0:
+            traj[k] = rho0
+            continue
+        traj[k] = unvec(_expm_action(L_super, rho_vec0, t=float(t)), d=d)
+    return traj, "expm_multiply_pointwise"
+
+
+def _evolve(L_super: object, rho0: np.ndarray, t_grid: np.ndarray) -> np.ndarray:
+    """Compatibility wrapper returning only the propagated trajectory."""
+    return _evolve_with_backend(L_super, rho0, t_grid)[0]
+
+
+def _trajectory_audit(traj: np.ndarray) -> tuple[float, float, float]:
+    """Return trace error, Hermiticity defect, and minimum Hermitian eigenvalue.
+
+    These are measurements, not positivity repairs or gates. In particular a
+    small negative eigenvalue is recorded as drift rather than silently clipped.
+    """
+    max_trace_error = 0.0
+    max_hermiticity_defect = 0.0
+    min_eigenvalue = float("inf")
+    for rho in np.asarray(traj):
+        max_trace_error = max(
+            max_trace_error, float(abs(np.trace(rho) - 1.0))
+        )
+        anti = rho - rho.conj().T
+        max_hermiticity_defect = max(
+            max_hermiticity_defect, float(np.linalg.norm(anti, ord="fro"))
+        )
+        herm = 0.5 * (rho + rho.conj().T)
+        min_eigenvalue = min(
+            min_eigenvalue, float(np.min(np.linalg.eigvalsh(herm)).real)
+        )
+    return max_trace_error, max_hermiticity_defect, min_eigenvalue
 
 
 def von_neumann_entropy(rho: np.ndarray) -> float:
@@ -387,7 +507,12 @@ def compute_relaxation_layer(
     if t_grid is None:
         t_grid = np.linspace(0.0, 10.0, 80)
 
-    traj = _evolve(L_super, rho_initial, t_grid)
+    traj, trajectory_backend = _evolve_with_backend(L_super, rho_initial, t_grid)
+    (
+        trajectory_max_trace_error,
+        trajectory_max_hermiticity_defect,
+        trajectory_min_eigenvalue,
+    ) = _trajectory_audit(traj)
     final_rho = traj[-1]
     rel_entropy = np.array(
         [relative_entropy(traj[k], rho_steady_state) for k in range(traj.shape[0])]
@@ -488,4 +613,8 @@ def compute_relaxation_layer(
         bca_ci_beta=(bca_lo, bca_hi),
         beta_D_linear=float(beta_D_linear),
         linear_fit_model=linear_fit_model,
+        trajectory_backend=trajectory_backend,
+        trajectory_max_trace_error=trajectory_max_trace_error,
+        trajectory_max_hermiticity_defect=trajectory_max_hermiticity_defect,
+        trajectory_min_eigenvalue=trajectory_min_eigenvalue,
     )
