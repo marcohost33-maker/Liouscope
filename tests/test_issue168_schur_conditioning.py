@@ -136,6 +136,18 @@ def test_schur_projector_matches_eigenvector_subspace_on_semisimple_cluster() ->
     assert schur == pytest.approx(legacy, rel=2e-10, abs=2e-12)
 
 
+def test_schur_projector_refuses_same_size_different_reference_spectrum() -> None:
+    """Cluster cardinality alone must not bind a projector to another spectrum."""
+    T = np.diag([0.0, 0.0, -1.0, -2.0]).astype(complex)
+    reference = np.array([0.0, 1.0e-8, -1.0, -2.0], dtype=complex)
+
+    measured = _schur_cluster_projector_condition(
+        T,
+        reference_eigenvalues=reference,
+        cluster_indices=np.array([0, 1], dtype=np.intp),
+    )
+    assert measured is None
+
 def test_simple_stationary_mode_keeps_scalar_first_order_evidence() -> None:
     """The abstention is specific to multi-mode clusters, not a global retreat."""
     jump = np.array([[0.0, 1.0], [0.0, 0.0]], dtype=complex)
