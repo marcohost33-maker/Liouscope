@@ -233,8 +233,8 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   The audit-only #117 instrument previously formed `sigma_min(Y^H X)` from eigenvectors returned
   by `?geev`. For a defective repeated eigenvalue no eigenspace of that dimension exists, so a
   unitary re-expression of the same Jordan-block fixture moved the reported condition from
-  `0.000000` to `1.000000` and flipped its audit verdict. The zero cluster is now reordered in a
-  complex Schur form with LAPACK `xTRSEN`; after reordering the code solves
+  `0.000000` to `1.000000` and flipped its audit verdict. A multi-mode zero cluster is now
+  reordered in a complex Schur form with LAPACK `xTRSEN`; after reordering the code solves
   `T11 R - R T22 = T12` and reports the reciprocal projector 2-norm
   `1/sqrt(1 + ||R||_2^2)`. `xTRSEN.S` itself is deliberately not reported as that value: LAPACK
   defines it with `||R||_F` as a lower bound. Multi-mode zero clusters now return
