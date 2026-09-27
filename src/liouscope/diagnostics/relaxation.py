@@ -144,6 +144,15 @@ def _evolve_with_backend(
     rho_vec0 = vec(rho0)
     d = rho0.shape[0]
     times = np.asarray(t_grid, dtype=float)
+    if times.ndim != 1:
+        raise ValueError(
+            "relaxation trajectory: t_grid must be one-dimensional; "
+            f"got shape {times.shape}"
+        )
+    if not np.all(np.isfinite(times)):
+        raise UnrepresentableTrajectoryError(
+            "relaxation trajectory: t_grid contains non-finite time points"
+        )
     traj = np.empty((times.size, d, d), dtype=complex)
 
     if times.size == 0:
