@@ -763,16 +763,8 @@ def test_spectrum_matching_accepts_a_within_band_pairing_the_sum_misses() -> Non
     assert _match_spectra(audit, accepted, 0.5 * max_worst) is None
 
 
-def test_scalar_estimates_use_the_selected_mode_not_the_cluster() -> None:
-    """Round-4 review: the cluster MINIMUM coupled the estimate to the cutoff.
-
-    Trace-basis blocks ``1e-10``, ``[[1e-5, 1], [0, 1.00001e-5]]`` and ``-1``.
-    Widening the cutoff leaves the selected stationary eigenvalue at ``1e-10``
-    but pulls in a near-defective pair whose own ``s`` is ~1e-10. Under the
-    round-2 cluster-minimum the structural estimate moved from ``1e-10`` to
-    ``1.0`` -- ten orders of magnitude contributed by modes the stationary one
-    has nothing to do with.
-    """
+def test_scalar_estimate_is_withheld_once_cutoff_selects_a_cluster() -> None:
+    """The cutoff may widen the cluster, but it may not relabel that as one root."""
     block = np.zeros((4, 4), dtype=complex)
     block[0, 0] = 1.0e-10
     block[1, 1] = 1.0e-5
@@ -785,21 +777,17 @@ def test_scalar_estimates_use_the_selected_mode_not_the_cluster() -> None:
     narrow = zero_mode_conditioning(L, zero_tolerance=1.0e-9)
     wide = zero_mode_conditioning(L, zero_tolerance=2.0e-5)
 
-    # The cutoff really does change the cluster, so the test is not vacuous ...
     assert narrow.cluster_size == 1
     assert wide.cluster_size == 3
-    # ... while selecting the same stationary eigenvalue ...
     assert narrow.observed_displacement == pytest.approx(
         wide.observed_displacement, rel=1e-9
     )
-    # ... so its conditioning and its estimates must not move.
-    assert wide.per_mode_reciprocal_condition == pytest.approx(
-        narrow.per_mode_reciprocal_condition, rel=1e-9
-    )
-    assert wide.structural_forward_estimate == pytest.approx(
-        narrow.structural_forward_estimate, rel=1e-9
-    )
-
+    assert np.isfinite(narrow.per_mode_reciprocal_condition)
+    assert np.isfinite(narrow.structural_forward_estimate)
+    assert wide.verdict == CONDITIONING_CLUSTER_ONLY
+    assert math.isnan(wide.per_mode_reciprocal_condition)
+    assert math.isnan(wide.structural_forward_estimate)
+    assert wide.displacement_explained is None
 
 def test_zero_set_membership_follows_the_accepted_spectrum() -> None:
     """Round-4 review: the report filters the accepted spectrum, so must this.
