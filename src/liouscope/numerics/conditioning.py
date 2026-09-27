@@ -811,6 +811,15 @@ def _measure(
             cluster = np.flatnonzero(magnitudes == magnitudes.min())
 
     stationary = int(cluster[int(np.argmin(magnitudes[cluster]))])
+
+    # Structural evidence is a prerequisite for either the scalar or cluster
+    # audit. Check it before any independent Schur solve so an already
+    # unrepresentable trace-preservation correction has one deterministic,
+    # primary failure reason across LAPACK builds.
+    raw_defect, _scale = trace_preservation_defect(L)
+    defect = raw_defect / np.sqrt(float(dim))
+    if not np.isfinite(defect):
+        return ZeroModeConditioning.unavailable("forward_estimate_unavailable")
     if int(cluster.size) == 1:
         # A simple eigenvalue already has the exact scalar first-order
         # condition |y^H x| from the accepted eigendecomposition. Routing this
@@ -941,21 +950,6 @@ def _measure(
         if outside.size
         else float("inf")
     )
-    # PR #166 review, finding P2. ``trace_preservation_defect`` returns
-    # ``||vec(I)^H L||`` with an UNNORMALISED ``vec(I)``, while the perturbation
-    # this bound is about is the minimum-norm correction ``E = -q (q^H L)`` that
-    # makes ``L`` trace preserving, with ``q = vec(I)/sqrt(d)`` a UNIT vector.
-    # Since ``||E||_2 = ||q^H L||_2 = ||vec(I)^H L|| / sqrt(d)``, dividing the
-    # raw defect by ``s`` inflated every structural estimate by ``sqrt(d)`` --
-    # on the PR #127 fixture 7.07e-08 where the perturbation argument gives
-    # 5.00e-08 -- and could flip the two report booleans near their thresholds.
-    raw_defect, _scale = trace_preservation_defect(L)
-    defect = raw_defect / np.sqrt(float(dim))
-    if not np.isfinite(defect):
-        # CLUSTER_ONLY abstains from scalar attribution; it does not license a
-        # cluster record whose structural evidence is itself unrepresentable.
-        return ZeroModeConditioning.unavailable("forward_estimate_unavailable")
-
     observed = float(magnitudes[stationary])
     if cluster_only:
         return ZeroModeConditioning(
