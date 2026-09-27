@@ -153,6 +153,18 @@ abstract: >-
 # than reduction_rtol * (eps * ||L||_F + d**3 * 2**-1074), reduction_rtol
 # defaulting to the existing ZERO_MODE_EPS_FACTOR. Like the restriction itself
 # this moves no reported number: no diagnostic consumes it yet.
+# Also pending for the next cut: relaxation trajectories use the
+# Al-Mohy--Higham exponential-action route exposed by SciPy
+# `sparse.linalg.expm_multiply` instead of materialising `expm(tL)` and then
+# multiplying by the initial state (issue #162). Exact linspace grids use the
+# interval API; non-uniform grids use independent actions from the same initial
+# state. The mathematical semigroup is unchanged, but floating-point values may
+# differ at round-off level, so this is a NUMERICAL METHODOLOGY change rather
+# than a pure refactor. Backend identity plus trace/Hermiticity/positivity-drift
+# measurements are recorded on RelaxationResult. The low-level action path is
+# dense/sparse; this must NOT be described as making diagnose() sparse-native.
+# The #156 representability guard remains a prerequisite and fails closed before
+# non-finite or unrepresentable action inputs can enter downstream fits.
 keywords:
   - open quantum systems
   - Lindblad
