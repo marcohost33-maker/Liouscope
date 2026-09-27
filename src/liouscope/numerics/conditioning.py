@@ -382,18 +382,18 @@ class ZeroModeConditioning:
     #: eigenvalue has no basis-independent scalar first-order condition number,
     #: and proximity cannot safely distinguish it from a semisimple cluster.
     per_mode_reciprocal_condition: float
-    #: Smallest per-mode ``|y^H x|`` over the WHOLE spectrum.
+    #: Smallest per-mode ``|y^H x|`` over the whole spectrum on the scalar
+    #: path. NaN for ``CLUSTER_ONLY`` because per-root eigenvector conditioning
+    #: is precisely the quantity that is not claimable there.
     spectrum_min_reciprocal_condition: float
-    #: ``max ||L x - lambda x||`` over the unresolved group, unit ``x``. Scoped
-    #: to the same group as the divisor above, so that the quotient below is a
-    #: statement about one eigenvalue rather than about the caller's cutoff.
+    #: ``max ||L x - lambda x||`` over the scalar unresolved group, or over the
+    #: whole selected zero cluster in ``CLUSTER_ONLY`` mode.
     right_residual: float
-    #: ``max ||L^H y - conj(lambda) y||`` over the unresolved group, unit ``y``.
+    #: Left-eigenvector residual on the same scope as ``right_residual``.
     left_residual: float
-    #: Distance from the conditioned group to the nearest eigenvalue outside
-    #: it -- the group the estimates above describe, not the caller's cutoff
-    #: cluster, so that a mode the cutoff admits but the arithmetic resolves
-    #: still counts as a neighbour (round-7 review).
+    #: Distance from the scope being conditioned to its spectral complement:
+    #: the scalar unresolved group on the simple path, or the whole selected
+    #: zero cluster in ``CLUSTER_ONLY`` mode.
     separation: float
     #: ``||q^H L|| = ||vec(I)^H L|| / sqrt(d)`` with ``q`` the UNIT trace
     #: vector: the norm of the minimum-norm perturbation that would make
@@ -411,21 +411,15 @@ class ZeroModeConditioning:
     observed_displacement: float
     #: The cutoff the layer's filters apply, for comparison only.
     zero_tolerance: float
-    #: ``structural + solver forward estimate > zero_tolerance``: the
-    #: conditioning-scaled displacement budget does not fit inside the cutoff
-    #: the layer's filters apply, so the zero mode cannot be pinned that
-    #: closely. The two estimates are SUMMED, not maximised: they are
-    #: successive perturbations, so their displacement bounds add (round-3
-    #: review; under ``max`` two estimates at ``0.6 * tol`` reported benign
-    #: while permitting ``1.2 * tol``). Reading both is deliberate: an exactly
-    #: trace-preserving generator has ``structural = 0`` and can still carry a
-    #: defective stationary pair whose solver estimate is unbounded.
+    #: Scalar-path verdict bit: ``structural + solver forward estimate >
+    #: zero_tolerance``. The two estimates are summed because they represent
+    #: successive perturbations. It is always ``False`` for ``CLUSTER_ONLY``:
+    #: that status is an abstention from the scalar comparison, not a benign
+    #: scalar verdict.
     conditioning_limited: bool
-    #: Whether the observed displacement is consistent with the two estimates.
-    #: ``None`` when an estimate is not finite, and also when the displacement
-    #: has reached the separation -- there the modes have interacted and a
-    #: first-order attribution is not meaningful, so the field abstains rather
-    #: than deny (round-5 review). Never ``False`` by default.
+    #: Whether the observed scalar displacement is consistent with the two
+    #: first-order estimates. ``None`` for ``CLUSTER_ONLY``, for non-finite
+    #: estimates, and outside the local/separated perturbative regime.
     displacement_explained: bool | None
     verdict: str
 
