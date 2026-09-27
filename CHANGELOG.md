@@ -35,6 +35,24 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   eigensolver paths use, so one quantity is not measured two different ways.
 
 ### Changed
+- **Relaxation propagation now computes the action `exp(tL) rho0` with
+  `scipy.sparse.linalg.expm_multiply` instead of materialising the full dense
+  matrix exponential (issue #162).** Exact NumPy-`linspace` grids use SciPy's
+  interval action API; arbitrary grids use independent actions from the same
+  initial state, avoiding stepwise error accumulation. The low-level propagator
+  accepts dense and SciPy sparse matrices and preserves the exact `t=0` state.
+  The #156 fail-closed contract remains in force: non-finite `L*t`, an
+  unrepresentable 1-norm, action failures, or non-finite output states raise
+  `UnrepresentableTrajectoryError` instead of flowing into fitting. The
+  relaxation result now records the backend plus trajectory-wide trace error,
+  Hermiticity defect and minimum Hermitian eigenvalue; positivity drift is
+  measured, never clipped. Dense-reference, sparse-vs-dense, non-uniform-grid,
+  and `L -> cL, t -> t/c` metamorphic tests bound the change. This is a
+  NUMERICAL METHODOLOGY change: floating-point trajectories may differ at
+  round-off level from the old full-`expm` route, although the mathematical
+  evolution is unchanged. The top-level orchestrator remains dense-only; sparse
+  support here is scoped to the propagation primitive. No manifest/schema
+  field changes.
 - **The Gaussian likelihood behind AICc is evaluated in log-RSS space, and an
   exact-zero RSS is now an explicit abstention (issue #135).** This is a
   METHODOLOGY change with user-visible consequences: it can reorder AICc,
