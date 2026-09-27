@@ -275,8 +275,8 @@ def cluster_conditioning(
 def _schur_cluster_projector_condition(
     L: np.ndarray,
     *,
-    zero_tolerance: float | None,
-    expected_cluster_size: int,
+    reference_eigenvalues: np.ndarray,
+    cluster_indices: np.ndarray,
 ) -> float | None:
     """Reciprocal 2-norm condition of the selected Schur spectral projector.
 
@@ -291,9 +291,12 @@ def _schur_cluster_projector_condition(
     unitary re-expression and remains defined for defective eigenvalues when
     the selected cluster is separated from its complement.
 
-    ``expected_cluster_size`` binds the Schur measurement to the zero set
-    already selected by the report. A disagreement fails closed rather than
-    conditioning a different set of modes.
+    ``reference_eigenvalues`` is the spectrum the report actually carries,
+    aligned to the audit eigendecomposition. The Schur spectrum must first
+    agree with it mode-for-mode inside the library's existing round-off band.
+    ``cluster_indices`` then selects exactly the report's cluster through that
+    pairing. A disagreement fails closed instead of conditioning a numerically
+    different Schur cluster.
     """
     try:
         T, Q = sla.schur(L, output="complex", check_finite=False)
@@ -303,16 +306,22 @@ def _schur_cluster_projector_condition(
     if w.size == 0 or not np.all(np.isfinite(w)):
         return None
 
-    magnitudes = np.abs(w)
-    if zero_tolerance is not None:
-        selected = magnitudes <= float(zero_tolerance)
-    else:
-        anchor = int(np.argmin(magnitudes))
-        band = _agreement_band(w, w)
-        selected = np.abs(w - w[anchor]) <= band
+    reference = np.asarray(reference_eigenvalues, dtype=complex).ravel()
+    idx = np.asarray(cluster_indices, dtype=np.intp).ravel()
+    if reference.size != w.size or idx.size == 0:
+        return None
+    if not np.all(np.isfinite(reference)):
+        return None
+    if np.any(idx < 0) or np.any(idx >= reference.size):
+        return None
+    matched = _match_spectra(w, reference, _agreement_band(w, reference))
+    if matched is None:
+        return None
+    perm, _worst = matched
+    selected = np.isin(perm, idx)
 
     m = int(np.count_nonzero(selected))
-    if m != int(expected_cluster_size) or m <= 0:
+    if m != int(idx.size) or m <= 0:
         return None
     n = int(L.shape[0])
     if m == n:
@@ -810,8 +819,8 @@ def _measure(
     else:
         schur_condition = _schur_cluster_projector_condition(
             L,
-            zero_tolerance=tol if cluster_from_cutoff else None,
-            expected_cluster_size=int(cluster.size),
+            reference_eigenvalues=reported,
+            cluster_indices=cluster,
         )
         if schur_condition is None:
             return ZeroModeConditioning.unavailable("schur_cluster_mismatch")
