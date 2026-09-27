@@ -66,6 +66,46 @@ def test_nonuniform_grid_uses_pointwise_backend() -> None:
     assert backend == "expm_multiply_pointwise"
 
 
+
+def test_interval_backend_handles_nonzero_start_from_same_initial_state() -> None:
+    """SciPy interval mode computes exp(t_k L) rho0, not stepwise propagation."""
+    L = _generator()
+    grid = np.linspace(0.2, 2.0, 10)
+    actual, backend = _evolve_with_backend(L, _RHO_PLUS, grid)
+    expected = _dense_reference(L, grid)
+    assert backend == "expm_multiply_interval"
+    np.testing.assert_allclose(actual, expected, rtol=3.0e-13, atol=3.0e-14)
+
+
+def test_rate_unit_metamorphism_on_interval_backend() -> None:
+    """The interval path obeys L -> cL, t -> t/c as well."""
+    L = _generator()
+    grid = np.linspace(0.0, 3.0, 25)
+    reference, backend = _evolve_with_backend(L, _RHO_PLUS, grid)
+    assert backend == "expm_multiply_interval"
+    for scale in (1.0e-6, 1.0e6):
+        changed, changed_backend = _evolve_with_backend(
+            scale * L, _RHO_PLUS, grid / scale
+        )
+        assert changed_backend == "expm_multiply_interval"
+        np.testing.assert_allclose(
+            changed, reference, rtol=5.0e-12, atol=5.0e-13
+        )
+
+
+def test_nonfinite_time_grid_fails_closed_before_linspace_detection() -> None:
+    """NaN/inf times must not escape as raw NumPy warnings."""
+    with pytest.raises(
+        Exception,
+        match=r"t_grid contains non-finite",
+    ):
+        _evolve(_generator(), _RHO_PLUS, np.array([0.0, np.inf]))
+
+
+def test_multidimensional_time_grid_is_a_caller_contract_error() -> None:
+    with pytest.raises(ValueError, match=r"t_grid must be one-dimensional"):
+        _evolve(_generator(), _RHO_PLUS, np.array([[0.0, 1.0]]))
+
 def test_sparse_and_dense_action_paths_agree() -> None:
     L = _generator()
     grid = np.linspace(0.0, 2.0, 21)
