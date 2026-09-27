@@ -68,15 +68,15 @@ def test_nonfinite_scaled_generator_fails_before_matrix_exponential() -> None:
         _evolve(L, _RHO_PLUS, grid)
 
 
-def test_extreme_finite_Lt_fails_closed_when_dense_expm_is_unusable() -> None:
-    """Finite L*t is necessary, not sufficient, for a usable dense propagator."""
+def test_extreme_finite_Lt_stays_fail_closed_under_action_backend() -> None:
+    """The action backend must not turn the #156 extreme into a hang or NaN."""
     L = _extreme_thermalising_qubit()
     grid = np.array([0.0, 1.1])
     assert np.all(np.isfinite(L * grid[-1]))
 
     with pytest.raises(
         UnrepresentableTrajectoryError,
-        match=r"scipy\.linalg\.expm",
+        match=r"\|\|L\*t\|\|_1|expm_multiply",
     ):
         _evolve(L, _RHO_PLUS, grid)
 
@@ -86,24 +86,29 @@ def test_scipy_runtime_warning_is_normalised_to_the_domain_error(
 ) -> None:
     """Warnings-as-errors and ordinary callers must see the same contract."""
 
-    def _warn(_scaled: np.ndarray) -> np.ndarray:
-        raise RuntimeWarning("synthetic scaling-and-squaring failure")
+    def _warn(*args: object, **kwargs: object) -> np.ndarray:
+        raise RuntimeWarning("synthetic exponential-action failure")
 
-    monkeypatch.setattr(relaxation.sla, "expm", _warn)
-    with pytest.raises(UnrepresentableTrajectoryError, match=r"scipy\.linalg\.expm"):
+    monkeypatch.setattr(relaxation.spla, "expm_multiply", _warn)
+    with pytest.raises(UnrepresentableTrajectoryError, match=r"expm_multiply"):
         _evolve(_ordinary_generator(), _RHO_PLUS, np.array([0.0, 1.0]))
 
 
-def test_nonfinite_action_is_rejected_even_with_finite_propagator(
+def test_nonfinite_action_result_is_rejected(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """A finite propagator can still overflow when applied to the state."""
-    huge = np.full((4, 4), 1.0e308, dtype=complex)
-    assert np.all(np.isfinite(huge))
-    monkeypatch.setattr(relaxation.sla, "expm", lambda _scaled: huge)
+    """The action backend must not pass NaN/inf states downstream."""
 
+    def _nonfinite(*args: object, **kwargs: object) -> np.ndarray:
+        return np.full(4, np.inf, dtype=complex)
+
+    monkeypatch.setattr(relaxation.spla, "expm_multiply", _nonfinite)
     with pytest.raises(
         UnrepresentableTrajectoryError,
-        match=r"propagated state became non-finite",
+        match=r"non-finite",
     ):
-        _evolve(_ordinary_generator(), _RHO_PLUS, np.array([0.0, 1.0]))
+        _evolve(
+            _ordinary_generator(),
+            _RHO_PLUS,
+            np.array([0.0, 0.3, 1.0]),
+        )
