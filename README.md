@@ -237,10 +237,11 @@ LiouScope is built for paper-grade reproducibility:
 - **Anchor tests.** `tests/test_anchors.py` locks the numerical anchors that paper figures depend on;
   changes to physics code that move these values are caught in CI.
 - **Zero-mode conditioning evidence (audit only).** Every spectral run attaches
-  `SpectralResult.zero_mode_conditioning`. The headline cluster quantity is the reciprocal
-  **2-norm spectral-projector condition** `1 / ||P||_2`, computed from a reordered complex Schur
-  form plus a Sylvester solve; LAPACK `xTRSEN.S` is not treated as the exact value because it is a
-  Frobenius-norm lower bound. For a simple zero mode the audit also reports scalar first-order
+  `SpectralResult.zero_mode_conditioning`. For a **multi-mode** zero cluster the headline quantity
+  is the reciprocal **2-norm spectral-projector condition** `1 / ||P||_2`, computed from a
+  reordered complex Schur form plus a Sylvester solve; LAPACK `xTRSEN.S` is not treated as the
+  exact value because it is a Frobenius-norm lower bound. A simple zero mode keeps the direct
+  `|y^H x|` scalar condition and the corresponding first-order
   forward-error estimates. For a multi-mode zero cluster it deliberately returns
   `verdict="CLUSTER_ONLY"` and withholds those scalar estimates: a defective multiple eigenvalue
   has no basis-independent scalar first-order condition number, and numerical proximity cannot
