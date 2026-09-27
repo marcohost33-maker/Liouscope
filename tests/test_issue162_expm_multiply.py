@@ -94,11 +94,11 @@ def test_trajectory_audit_measures_physicality_drift_without_repairing() -> None
     assert min_eval > -1.0e-12
 
     perturbed = traj.copy()
-    perturbed[-1, 0, 0] -= 1.0e-5
+    perturbed[-1] = np.diag([-1.0e-5, 1.0 + 1.0e-5]).astype(complex)
     _te, _hd, drift = _trajectory_audit(perturbed)
-    assert drift <= min_eval
+    assert drift == pytest.approx(-1.0e-5)
     # The audit records the input; it does not clip it back to positivity.
-    assert perturbed[-1, 0, 0] == traj[-1, 0, 0] - 1.0e-5
+    assert perturbed[-1, 0, 0] == pytest.approx(-1.0e-5)
 
 
 def test_relaxation_result_records_backend_and_audit_fields() -> None:
