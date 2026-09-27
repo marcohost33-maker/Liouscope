@@ -5,6 +5,7 @@ plus the M0-M3b fit hierarchy orchestrated through AICc with N_eff.
 from __future__ import annotations
 
 import warnings
+from typing import Any
 
 import numpy as np
 import scipy.linalg as sla
@@ -44,7 +45,7 @@ class UnrepresentableTrajectoryError(RuntimeError):
     """
 
 
-def _operator_is_finite(operator: object) -> bool:
+def _operator_is_finite(operator: Any) -> bool:
     """Exact stored-entry finiteness check without densifying sparse matrices."""
     if sp.issparse(operator):
         data = np.asarray(operator.data)
@@ -53,7 +54,7 @@ def _operator_is_finite(operator: object) -> bool:
 
 
 def _scaled_action_operand(
-    L_super: object, t: float
+    L_super: Any, t: float
 ) -> np.ndarray | sp.spmatrix:
     """Return t*L after representability checks needed by expm_multiply.
 
@@ -93,7 +94,7 @@ def _scaled_action_operand(
     return scaled
 
 
-def _expm_action(operator: object, state: np.ndarray, *, t: float) -> np.ndarray:
+def _expm_action(operator: Any, state: np.ndarray, *, t: float) -> np.ndarray:
     """Compute one exponential action and normalise numerical failures."""
     scaled = _scaled_action_operand(operator, t)
     try:
@@ -132,7 +133,7 @@ def _is_exact_linspace(t_grid: np.ndarray) -> bool:
 
 
 def _evolve_with_backend(
-    L_super: object, rho0: np.ndarray, t_grid: np.ndarray
+    L_super: Any, rho0: np.ndarray, t_grid: np.ndarray
 ) -> tuple[np.ndarray, str]:
     """Propagate by exponential action without materialising exp(tL).
 
@@ -196,7 +197,7 @@ def _evolve_with_backend(
     return traj, "expm_multiply_pointwise"
 
 
-def _evolve(L_super: object, rho0: np.ndarray, t_grid: np.ndarray) -> np.ndarray:
+def _evolve(L_super: Any, rho0: np.ndarray, t_grid: np.ndarray) -> np.ndarray:
     """Compatibility wrapper returning only the propagated trajectory."""
     return _evolve_with_backend(L_super, rho0, t_grid)[0]
 
