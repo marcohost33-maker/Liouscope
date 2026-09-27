@@ -808,13 +808,14 @@ def _measure(
         # Schur-projector conditioning is reserved for size > 1.
         s_cluster = float(per_mode[stationary])
     else:
-        s_cluster = _schur_cluster_projector_condition(
+        schur_condition = _schur_cluster_projector_condition(
             L,
             zero_tolerance=tol if cluster_from_cutoff else None,
             expected_cluster_size=int(cluster.size),
         )
-        if s_cluster is None:
+        if schur_condition is None:
             return ZeroModeConditioning.unavailable("schur_cluster_mismatch")
+        s_cluster = float(schur_condition)
     # Round-4 review. Round 2 replaced the subspace figure here with the MINIMUM
     # per-mode value over the cluster, on a fail-closed argument. That was
     # wrong: it made the selected eigenvalue's estimate depend on unrelated
