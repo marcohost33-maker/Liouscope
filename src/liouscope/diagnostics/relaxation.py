@@ -31,11 +31,21 @@ from ..numerics.kronecker import unvec, vec
 from ..numerics.linalg import support_check
 from ..numerics.propagation import (
     BACKEND_AUTO,
+    UnrepresentableTrajectoryError,
     propagate_trajectory,
 )
-from ..numerics.propagation import (
-    UnrepresentableTrajectoryError as UnrepresentableTrajectoryError,  # re-export
-)
+
+# ``UnrepresentableTrajectoryError`` is re-exported: it is raised through
+# ``compute_relaxation_layer`` and callers catch it from this module.
+__all__ = [
+    "UnrepresentableTrajectoryError",
+    "compute_relaxation_layer",
+    "entanglement_asymmetry",
+    "fidelity",
+    "relative_entropy",
+    "trace_distance",
+    "von_neumann_entropy",
+]
 
 
 def _propagate(
