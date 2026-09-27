@@ -73,12 +73,14 @@ subspace formula, but deriving that formula from returned eigenvectors breaks
 down at a defective repeated eigenvalue because the advertised eigenspace does
 not exist.
 
-The headline ``reciprocal_condition`` therefore comes from a reordered Schur
-form and the spectral projector, not from eigenvector spans. The legacy
-``cluster_conditioning`` primitive is retained for direct semisimple-subspace
-work and regression comparison, but ``zero_mode_conditioning`` does not use it
-as its headline cluster measurement. Scalar first-order estimates are reported
-only when the selected zero cluster is simple.
+For a multi-mode zero cluster, the headline ``reciprocal_condition`` therefore
+comes from a reordered Schur form and the spectral projector, not from
+eigenvector spans. A simple zero mode keeps the scalar ``|y^H x|`` condition.
+The legacy ``cluster_conditioning`` primitive is retained for direct
+semisimple-subspace work and regression comparison, but
+``zero_mode_conditioning`` does not use it as its multi-mode headline
+measurement. Scalar first-order estimates are reported only when the selected
+zero cluster is simple.
 Schur-projector conditioning for repeated/defective clusters (issue #168)
 -----------------------------------------------------------------------------
 A repeated stationary eigenvalue can be DEFECTIVE, in which case an eigenvector
