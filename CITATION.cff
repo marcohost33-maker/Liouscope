@@ -163,7 +163,7 @@ abstract: >-
 # deflated, WRONG spectrum carries condition numbers between 1 and 25, so
 # conditioning is additive to the structural certificate and no substitute for
 # it. Issue #168 corrects the repeated/defective-cluster measurement itself:
-# the zero cluster is reordered in a complex Schur form, the Sylvester equation
+# a multi-mode zero cluster is reordered in a complex Schur form, the Sylvester equation
 # T11 R - R T22 = T12 is solved, and the reported cluster figure is the actual
 # reciprocal spectral-projector 2-norm 1/sqrt(1 + ||R||_2^2). LAPACK xTRSEN.S
 # is NOT identified with that exact value; it is only the documented
