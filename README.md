@@ -246,7 +246,10 @@ LiouScope is built for paper-grade reproducibility:
   `verdict="CLUSTER_ONLY"` and withholds those scalar estimates: a defective multiple eigenvalue
   has no basis-independent scalar first-order condition number, and numerical proximity cannot
   safely distinguish a Jordan block from a genuinely split pair. The report still carries the
-  cluster condition, residuals, separation and trace-preservation defect. **Nothing reads this
+  cluster condition, residuals, separation and trace-preservation defect. Before a multi-mode
+  projector is reported, the independent Schur spectrum must match the spectrum carried by the
+  report mode-for-mode inside the existing round-off agreement band; otherwise the audit returns
+  `UNAVAILABLE` rather than conditioning a numerically different cluster. **Nothing reads this
   audit** — no filter, gap, certificate, diagnostic or tier — and it is not a detector for stiff
   eigensolver failure (issues #117/#168). The public entry point is
   `liouscope.numerics.zero_mode_conditioning(L, zero_tolerance=..., eigenvalues=...)`;
