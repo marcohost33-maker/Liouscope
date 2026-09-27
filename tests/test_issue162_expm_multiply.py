@@ -105,7 +105,9 @@ def test_relaxation_result_records_backend_and_audit_fields() -> None:
     report = compute_relaxation_layer(
         _generator(),
         rho_initial=_RHO_PLUS,
-        t_grid=np.linspace(0.0, 2.0, 16),
+        # Stay above the existing GLS small-sample warning boundary (n <= 40):
+        # this test targets trajectory-backend metadata, not small-n fit policy.
+        t_grid=np.linspace(0.0, 2.0, 41),
         bootstrap_B=5,
         seed=1,
     )
