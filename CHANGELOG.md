@@ -7,6 +7,36 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Added
+- **Relaxation trajectories can be propagated by the exponential ACTION instead
+  of a materialised `expm(L t)` (issue #162).** The relaxation layer needs
+  `exp(t L) vec(rho_0)`, not the `d^2 x d^2` propagator. The new
+  `numerics.propagation` module offers two backends: `"dense_expm"` (the
+  historical per-point `scipy.linalg.expm(L*t) @ vec(rho_0)`, kept bit-for-bit
+  as the reference) and `"expm_action"` (Al-Mohy & Higham 2011 via
+  `scipy.sparse.linalg.expm_multiply`, stepping `tau_k = t_k - t_{k-1}` along
+  the grid, dense or sparse `L`). `compute_relaxation_layer(...,
+  trajectory_backend="auto")` chooses by a deterministic rule of `(L, t_grid)`
+  alone and records the backend actually used in the new, defaulted
+  `RelaxationResult.trajectory_backend` -- a switch is auditable, never silent.
+  The rule: `n = d^2 < 64` stays dense (per-call overhead dominates there);
+  otherwise the action is used only if its matrix-vector-product bound
+  `sum_k min_m m*ceil(tau_k*||L - mu I||_1/theta_m)` -- an upper bound on
+  SciPy's own `(m, s)` choice, verified by a counting probe -- is within
+  `DEFAULT_ACTION_MATVEC_BUDGET` and below the dense estimate. Stiff
+  generators therefore stay on the dense path instead of looping for hours;
+  forcing `"expm_action"` on them raises `UnrepresentableTrajectoryError`
+  before running. Measured (single-threaded BLAS, 80-point grid, damped
+  transverse-field Ising chain): `n = 64` 0.08 s -> 0.02 s, `n = 256`
+  2.9 s -> 0.09 s, `n = 1024` 120 s -> 2.6 s; dense-vs-action deviation
+  <= 2e-14 (declared tolerance 1e-11). Both backends fail closed with
+  `UnrepresentableTrajectoryError` on a non-finite `L*t`, a SciPy runtime
+  warning or a non-finite propagator/state (the #156 semantics); the extreme
+  #156 fixture fails closed on every backend in well under a second. This
+  CHANGES REPORTED NUMBERS at round-off level (~1e-14) for systems with
+  `d >= 8` in the default path; every system with `d < 8`, including every
+  anchor fixture, is unchanged bit-for-bit. No manifest field, schema, anchor
+  or diagnostic definition changes; the backend is a deterministic function
+  of the run inputs, so `input_hash` and `run_id` keep their meaning.
 - **Trace-preserving generators can be restricted to the traceless operator
   space by an exact structural identity, with no eigenvalue-magnitude
   threshold (issue #113).** For column-stacked operators trace preservation IS

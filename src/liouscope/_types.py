@@ -223,6 +223,12 @@ class RelaxationResult:
     # uses. Additive + defaulted so older callers / serialised reports stay valid.
     beta_D_linear: float = float("nan")
     linear_fit_model: str = "none"
+    # Issue #162: which propagation backend produced the trajectory the curves
+    # above were computed from -- "dense_expm" (reference, materialised
+    # expm(L t)) or "expm_action" (Al-Mohy & Higham exponential action).
+    # Recorded so a backend switch is auditable, never silent. Defaulted to the
+    # historical dense path so older callers / serialised results stay valid.
+    trajectory_backend: str = "dense_expm"
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)

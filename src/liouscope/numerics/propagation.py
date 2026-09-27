@@ -1,0 +1,429 @@
+"""Trajectory propagation backends for the relaxation layer (issue #162).
+
+The relaxation layer needs ``rho(t_k) = exp(t_k L) rho_0`` on a time grid --
+the *action* of the matrix exponential on one vector, not the matrix
+exponential itself. Two backends compute it:
+
+``"dense_expm"`` (reference)
+    Materialises ``scipy.linalg.expm(L * t_k)`` for every grid point and
+    applies it to ``vec(rho_0)``. This is the historical formula, kept
+    bit-for-bit. Its cost is ``O(n^3)`` per grid point (``n = d^2``) with only
+    a logarithmic dependence on ``||L t||`` (scaling and squaring), so it is
+    the right tool for small or stiff generators.
+
+``"expm_action"``
+    Al-Mohy & Higham's exponential-action algorithm
+    (``scipy.sparse.linalg.expm_multiply``), stepping the state from grid point
+    to grid point with ``tau_k = t_k - t_{k-1}``. Only matrix-vector products
+    with ``L`` are formed, so it works unchanged for dense and sparse
+    generators and never allocates an ``n x n`` propagator. Its cost is linear
+    in ``||L - mu I||_1 * t_max`` (``mu = tr(L)/n``), which makes it the right
+    tool for larger, non-stiff generators and the wrong one for stiff ones.
+
+Stepping instead of restarting from ``rho_0`` at every grid point costs one
+long propagation instead of ``N`` overlapping ones. The price is that rounding
+errors of successive steps accumulate. For a GKSL generator every step is a
+CPTP map and hence a trace-norm contraction, so a step can never amplify the
+error it inherits: the accumulated error is bounded by the sum of the per-step
+errors (``<= N * u`` in the backward sense), which the dense cross-check tests
+measure rather than assume.
+
+Backend selection (``"auto"``)
+------------------------------
+The choice is a deterministic function of ``(L, t_grid)`` only -- no timing,
+no machine state -- so it is reproducible and recorded by the caller
+(``RelaxationResult.trajectory_backend``). The rule:
+
+1. ``n < ACTION_MIN_DIM`` (``d < 8``): dense. Measured (single-threaded BLAS,
+   80-point grid, dissipative spin chain): at ``n = 4`` and ``n = 16`` dense
+   takes 3-5 ms against 11-13 ms for the action, whose per-call overhead
+   dominates; from ``n = 64`` on the action wins (0.08 s vs 0.02 s at
+   ``n = 64``, 2.9 s vs 0.09 s at ``n = 256``, 120 s vs 2.6 s at
+   ``n = 1024``). Every system below the threshold -- which includes every
+   anchor fixture -- therefore keeps the historical dense trajectory
+   bit-for-bit.
+2. The grid must be finite, non-negative and non-decreasing for stepping;
+   otherwise dense (whose per-point formula handles any grid).
+3. The action is chosen only if its matrix-vector-product count bound is
+   finite, within ``max_action_matvecs`` and no larger than the dense
+   estimate expressed in the same unit. This is what keeps a stiff generator
+   (``||L|| t`` of order ``1e7`` and beyond) on the dense path instead of
+   letting the action loop for hours.
+
+The bound is an *upper* bound on what SciPy's parameter selection will spend:
+SciPy minimises ``m * s`` with ``s = ceil(alpha_p / theta_m)`` over the same
+``theta_m`` table, and ``alpha_p <= ||A||_1`` for every ``p``
+(Al-Mohy & Higham 2011, eqs. (3.11)-(3.13)). Using the 1-norm itself can only
+overestimate the cost, i.e. err towards the dense reference, never towards a
+hang.
+
+Failure semantics
+-----------------
+Both backends fail closed with :class:`UnrepresentableTrajectoryError` when
+the propagation leaves the representable float64 domain (non-finite ``L*t``,
+a SciPy runtime warning or a non-finite propagator/state) and the action
+backend additionally when its cost bound exceeds the budget. A finite
+generator and a finite time do not imply a representable trajectory, and a
+NaN that reached entropy, fitting or bootstrap would be laundered into a
+diagnostic.
+
+Reference: A. H. Al-Mohy and N. J. Higham, *Computing the Action of the Matrix
+Exponential, with an Application to Exponential Integrators*, SIAM J. Sci.
+Comput. 33(2), 488-511 (2011), doi:10.1137/100788860.
+"""
+
+from __future__ import annotations
+
+import math
+import warnings
+from dataclasses import dataclass
+
+import numpy as np
+import scipy.linalg as sla
+import scipy.sparse as sp
+from scipy.sparse.linalg import expm_multiply
+
+BACKEND_DENSE: str = "dense_expm"
+BACKEND_ACTION: str = "expm_action"
+BACKEND_AUTO: str = "auto"
+TRAJECTORY_BACKENDS: tuple[str, ...] = (BACKEND_DENSE, BACKEND_ACTION)
+
+# Smallest superoperator dimension n = d^2 at which "auto" considers the
+# action backend (d = 8). Measured crossover, see the module docstring.
+ACTION_MIN_DIM: int = 64
+
+# Default ceiling on the action backend's matrix-vector-product bound. At
+# n = 1024 a benign 80-point trajectory needs ~1.5e3 products, so the ceiling
+# only ever bites on stiff inputs, where it turns an hours-long loop into an
+# immediate, explicit refusal.
+DEFAULT_ACTION_MATVEC_BUDGET: int = 1_000_000
+
+# theta_m for double precision: m = 1..30 from Higham, *Functions of Matrices*
+# (SIAM 2008), table A.3; m = 35..55 from Al-Mohy & Higham (2011), table 3.1.
+# The same table SciPy's ``expm_multiply`` selects (m, s) from.
+_THETA: dict[int, float] = {
+    1: 2.29e-16, 2: 2.58e-8, 3: 1.39e-5, 4: 3.40e-4, 5: 2.40e-3,
+    6: 9.07e-3, 7: 2.38e-2, 8: 5.00e-2, 9: 8.96e-2, 10: 1.44e-1,
+    11: 2.14e-1, 12: 3.00e-1, 13: 4.00e-1, 14: 5.14e-1, 15: 6.41e-1,
+    16: 7.81e-1, 17: 9.31e-1, 18: 1.09, 19: 1.26, 20: 1.44,
+    21: 1.62, 22: 1.82, 23: 2.01, 24: 2.22, 25: 2.43,
+    26: 2.64, 27: 2.86, 28: 3.08, 29: 3.31, 30: 3.54,
+    35: 4.7, 40: 6.0, 45: 7.2, 50: 8.5, 55: 9.9,
+}
+
+# Dense estimate, in matrix-vector-product units (one n x n matmul = n
+# products): a degree-13 Pade approximant costs ~6 matmuls plus one LU solve
+# (~2 matmul equivalents), followed by s squarings with
+# s = ceil(log2(||L t||_1 / theta_13)).
+_DENSE_BASE_MATMULS: int = 8
+_THETA_13: float = 5.371920351148152
+
+
+class UnrepresentableTrajectoryError(RuntimeError):
+    """The requested relaxation propagation is not representable reliably.
+
+    This is a numerical-domain failure, not a statement about the underlying
+    GKSL dynamics. Returning a non-finite propagator or state would launder an
+    arithmetic failure into entropy, fitting and uncertainty calculations, so
+    the relaxation layer fails closed. The action backend raises it too when
+    its cost bound exceeds the budget: a propagation that cannot finish is not
+    one that can be reported.
+    """
+
+
+@dataclass(frozen=True, slots=True)
+class TrajectoryPropagation:
+    """Propagated states plus the audit record of how they were obtained."""
+
+    states: np.ndarray            # shape (len(t_grid), n), complex
+    backend: str                  # BACKEND_DENSE or BACKEND_ACTION
+    action_matvec_bound: float    # upper bound on the action's products (inf if ineligible)
+
+
+def _is_sparse(L: object) -> bool:
+    return bool(sp.issparse(L))
+
+
+def _trace(L: np.ndarray | sp.spmatrix) -> complex:
+    if _is_sparse(L):
+        return complex(L.diagonal().sum())  # type: ignore[union-attr]
+    return complex(np.trace(L))
+
+
+def _one_norm(A: np.ndarray | sp.spmatrix) -> float:
+    """Exact induced 1-norm (max column sum); ``inf`` on overflow."""
+    with np.errstate(over="ignore", invalid="ignore"):
+        if _is_sparse(A):
+            col = np.asarray(abs(A).sum(axis=0)).ravel()  # type: ignore[operator]
+        else:
+            col = np.abs(A).sum(axis=0)
+        value = float(col.max()) if col.size else 0.0
+    return value if math.isfinite(value) else math.inf
+
+
+def shifted_one_norm(L: np.ndarray | sp.spmatrix) -> float:
+    """``||L - mu I||_1`` with ``mu = tr(L)/n`` -- the norm the action scales by."""
+    n = L.shape[0]
+    if n == 0:
+        return 0.0
+    with np.errstate(over="ignore", invalid="ignore"):
+        mu = _trace(L) / n
+        if _is_sparse(L):
+            shifted = L - mu * sp.identity(n, dtype=complex, format="csr")
+        else:
+            shifted = L - mu * np.eye(n, dtype=complex)
+    return _one_norm(shifted)
+
+
+def _action_step_cost(scaled_norm: float) -> float:
+    """Upper bound on ``m * s`` for one ``expm_multiply`` call on ``tau * A``."""
+    if not math.isfinite(scaled_norm):
+        return math.inf
+    if scaled_norm == 0.0:
+        return 0.0
+    return float(
+        min(m * max(1, math.ceil(scaled_norm / theta)) for m, theta in _THETA.items())
+    )
+
+
+def _grid_is_steppable(t_grid: np.ndarray) -> bool:
+    """Stepping needs a finite, non-negative, non-decreasing grid."""
+    if t_grid.size == 0:
+        return True
+    return bool(
+        np.all(np.isfinite(t_grid))
+        and t_grid[0] >= 0.0
+        and np.all(np.diff(t_grid) >= 0.0)
+    )
+
+
+def action_matvec_bound(L: np.ndarray | sp.spmatrix, t_grid: np.ndarray) -> float:
+    """Upper bound on the matrix-vector products the action backend will form.
+
+    ``inf`` when the grid cannot be stepped or the bound is not representable.
+    """
+    t_grid = np.asarray(t_grid, dtype=float)
+    if not _grid_is_steppable(t_grid):
+        return math.inf
+    norm = shifted_one_norm(L)
+    total = 0.0
+    previous = 0.0
+    for t in t_grid:
+        tau = float(t) - previous
+        previous = float(t)
+        if tau == 0.0:
+            continue
+        with np.errstate(over="ignore"):
+            total += _action_step_cost(tau * norm)
+        if not math.isfinite(total):
+            return math.inf
+    return total
+
+
+def dense_matvec_estimate(L: np.ndarray | sp.spmatrix, t_grid: np.ndarray) -> float:
+    """Cost estimate of the dense backend, in matrix-vector-product units."""
+    t_grid = np.asarray(t_grid, dtype=float)
+    n = L.shape[0]
+    norm = _one_norm(L)
+    total = 0.0
+    for t in t_grid:
+        if t == 0.0:
+            continue
+        scaled = abs(float(t)) * norm
+        if not math.isfinite(scaled):
+            return math.inf
+        squarings = max(0, math.ceil(math.log2(scaled / _THETA_13))) if scaled > 0 else 0
+        total += (_DENSE_BASE_MATMULS + squarings) * n + 1
+    return total
+
+
+def select_trajectory_backend(
+    L: np.ndarray | sp.spmatrix,
+    t_grid: np.ndarray,
+    *,
+    max_action_matvecs: float = DEFAULT_ACTION_MATVEC_BUDGET,
+) -> tuple[str, float]:
+    """Deterministic ``"auto"`` rule; returns ``(backend, action_matvec_bound)``.
+
+    See the module docstring for the rule and the measurements behind it.
+    """
+    t_grid = np.asarray(t_grid, dtype=float)
+    n = L.shape[0]
+    bound = action_matvec_bound(L, t_grid)
+    if n < ACTION_MIN_DIM or not math.isfinite(bound) or bound > max_action_matvecs:
+        return BACKEND_DENSE, bound
+    if _is_sparse(L):
+        # Dense would first have to materialise the n x n generator.
+        return BACKEND_ACTION, bound
+    if bound <= dense_matvec_estimate(L, t_grid):
+        return BACKEND_ACTION, bound
+    return BACKEND_DENSE, bound
+
+
+def _propagate_dense(
+    L: np.ndarray | sp.spmatrix, rho_vec0: np.ndarray, t_grid: np.ndarray
+) -> np.ndarray:
+    """Reference path: ``expm(L t) @ rho_vec0`` per grid point, fail-closed."""
+    L_dense = L.toarray() if _is_sparse(L) else L  # type: ignore[union-attr]
+    states = np.empty((t_grid.size, rho_vec0.size), dtype=complex)
+    for k, t in enumerate(t_grid):
+        if t == 0.0:
+            states[k] = rho_vec0
+            continue
+
+        with np.errstate(over="ignore", invalid="ignore", under="ignore"):
+            scaled = np.asarray(L_dense * t)
+        if not np.all(np.isfinite(scaled)):
+            raise UnrepresentableTrajectoryError(
+                "relaxation trajectory: L*t contains non-finite entries at "
+                f"t={float(t):.6g}; the requested dimensionless propagation "
+                "is outside the current float64 dense-expm domain"
+            )
+
+        try:
+            # SciPy's scaling-and-squaring path can emit RuntimeWarning outside
+            # NumPy's errstate. Convert that into the same explicit domain
+            # failure so warnings-as-errors and ordinary callers agree.
+            with warnings.catch_warnings():
+                warnings.filterwarnings("error", category=RuntimeWarning)
+                with np.errstate(over="ignore", invalid="ignore", under="ignore"):
+                    propagator = sla.expm(scaled)
+        except (
+            RuntimeWarning,
+            OverflowError,
+            ValueError,
+            np.linalg.LinAlgError,
+            sla.LinAlgError,
+        ) as exc:
+            raise UnrepresentableTrajectoryError(
+                "relaxation trajectory: scipy.linalg.expm could not represent "
+                f"a finite propagator at t={float(t):.6g}; use a different "
+                "numerical propagation method or time window"
+            ) from exc
+
+        if not np.all(np.isfinite(propagator)):
+            raise UnrepresentableTrajectoryError(
+                "relaxation trajectory: scipy.linalg.expm returned a non-finite "
+                f"propagator at t={float(t):.6g} although L*t is finite"
+            )
+
+        with np.errstate(over="ignore", invalid="ignore", under="ignore"):
+            rho_vec_t = propagator @ rho_vec0
+        if not np.all(np.isfinite(rho_vec_t)):
+            raise UnrepresentableTrajectoryError(
+                "relaxation trajectory: the propagated state became non-finite "
+                f"at t={float(t):.6g}"
+            )
+        states[k] = rho_vec_t
+    return states
+
+
+def _propagate_action(
+    L: np.ndarray | sp.spmatrix, rho_vec0: np.ndarray, t_grid: np.ndarray
+) -> np.ndarray:
+    """Exponential-action path: step ``v <- exp(tau L) v`` along the grid."""
+    trace = _trace(L)
+    states = np.empty((t_grid.size, rho_vec0.size), dtype=complex)
+    v = np.asarray(rho_vec0, dtype=complex)
+    previous = 0.0
+    for k, t in enumerate(t_grid):
+        tau = float(t) - previous
+        if tau == 0.0:
+            # t == 0 keeps rho_0 exactly (as the dense path does); a repeated
+            # grid point repeats the state exactly.
+            states[k] = v
+            continue
+
+        with np.errstate(over="ignore", invalid="ignore", under="ignore"):
+            scaled = L * tau
+            trace_tau = trace * tau
+        scaled_values = scaled.data if _is_sparse(scaled) else scaled  # type: ignore[union-attr]
+        if not (np.all(np.isfinite(scaled_values)) and np.isfinite(trace_tau)):
+            raise UnrepresentableTrajectoryError(
+                "relaxation trajectory: L*tau contains non-finite entries at "
+                f"t={float(t):.6g}; the requested dimensionless propagation "
+                "is outside the float64 exponential-action domain"
+            )
+        try:
+            with warnings.catch_warnings():
+                warnings.filterwarnings("error", category=RuntimeWarning)
+                with np.errstate(over="ignore", invalid="ignore", under="ignore"):
+                    v = expm_multiply(scaled, v, traceA=trace_tau)
+        except (
+            RuntimeWarning,
+            OverflowError,
+            ValueError,
+            np.linalg.LinAlgError,
+        ) as exc:
+            raise UnrepresentableTrajectoryError(
+                "relaxation trajectory: scipy.sparse.linalg.expm_multiply could "
+                f"not represent the propagated state at t={float(t):.6g}"
+            ) from exc
+        if not np.all(np.isfinite(v)):
+            raise UnrepresentableTrajectoryError(
+                "relaxation trajectory: the propagated state became non-finite "
+                f"at t={float(t):.6g}"
+            )
+        states[k] = v
+        previous = float(t)
+    return states
+
+
+def propagate_trajectory(
+    L: np.ndarray | sp.spmatrix,
+    rho_vec0: np.ndarray,
+    t_grid: np.ndarray,
+    *,
+    backend: str = BACKEND_AUTO,
+    max_action_matvecs: float = DEFAULT_ACTION_MATVEC_BUDGET,
+) -> TrajectoryPropagation:
+    """Propagate ``vec(rho)`` along ``t_grid`` under ``d/dt vec(rho) = L vec(rho)``.
+
+    ``backend`` is ``"auto"`` (deterministic rule, see module docstring),
+    ``"dense_expm"`` (reference) or ``"expm_action"``. Forcing the action
+    backend on a grid it cannot step raises ``ValueError``; on a cost bound
+    above ``max_action_matvecs`` it raises
+    :class:`UnrepresentableTrajectoryError` instead of running unbounded.
+    """
+    if backend not in (BACKEND_AUTO, *TRAJECTORY_BACKENDS):
+        allowed = ", ".join(repr(b) for b in (BACKEND_AUTO, *TRAJECTORY_BACKENDS))
+        raise ValueError(f"backend must be one of {allowed}, got {backend!r}")
+    if not (_is_sparse(L) or isinstance(L, np.ndarray)):
+        L = np.asarray(L)
+    if L.ndim != 2 or L.shape[0] != L.shape[1]:
+        raise ValueError(f"L must be a square matrix, got shape {L.shape}")
+    t_grid = np.asarray(t_grid, dtype=float)
+    if t_grid.ndim != 1:
+        raise ValueError(f"t_grid must be one-dimensional, got shape {t_grid.shape}")
+    rho_vec0 = np.asarray(rho_vec0)
+    if rho_vec0.shape != (L.shape[0],):
+        raise ValueError(
+            f"rho_vec0 must have shape ({L.shape[0]},), got {rho_vec0.shape}"
+        )
+
+    if backend == BACKEND_AUTO:
+        chosen, bound = select_trajectory_backend(
+            L, t_grid, max_action_matvecs=max_action_matvecs
+        )
+    elif backend == BACKEND_ACTION:
+        if not _grid_is_steppable(t_grid):
+            raise ValueError(
+                "backend='expm_action' steps along the grid and needs a finite, "
+                "non-negative, non-decreasing t_grid"
+            )
+        chosen, bound = BACKEND_ACTION, action_matvec_bound(L, t_grid)
+        if not math.isfinite(bound) or bound > max_action_matvecs:
+            raise UnrepresentableTrajectoryError(
+                "relaxation trajectory: the exponential-action cost bound "
+                f"({bound:.3g} matrix-vector products) exceeds the budget "
+                f"({float(max_action_matvecs):.3g}); ||L - mu I||_1 * t is too "
+                "large for the action algorithm -- use backend='dense_expm'"
+            )
+    else:
+        chosen, bound = BACKEND_DENSE, action_matvec_bound(L, t_grid)
+
+    if chosen == BACKEND_ACTION:
+        states = _propagate_action(L, rho_vec0, t_grid)
+    else:
+        states = _propagate_dense(L, rho_vec0, t_grid)
+    return TrajectoryPropagation(states=states, backend=chosen, action_matvec_bound=bound)
