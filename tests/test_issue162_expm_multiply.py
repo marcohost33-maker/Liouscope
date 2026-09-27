@@ -9,6 +9,7 @@ import scipy.sparse as sp
 
 from liouscope.core.lindblad import build_liouvillian
 from liouscope.diagnostics.relaxation import (
+    UnrepresentableTrajectoryError,
     _evolve,
     _evolve_with_backend,
     _trajectory_audit,
@@ -96,7 +97,7 @@ def test_rate_unit_metamorphism_on_interval_backend() -> None:
 def test_nonfinite_time_grid_fails_closed_before_linspace_detection() -> None:
     """NaN/inf times must not escape as raw NumPy warnings."""
     with pytest.raises(
-        Exception,
+        UnrepresentableTrajectoryError,
         match=r"t_grid contains non-finite",
     ):
         _evolve(_generator(), _RHO_PLUS, np.array([0.0, np.inf]))
