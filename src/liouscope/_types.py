@@ -223,6 +223,13 @@ class RelaxationResult:
     # uses. Additive + defaulted so older callers / serialised reports stay valid.
     beta_D_linear: float = float("nan")
     linear_fit_model: str = "none"
+    # Issue #162: trajectory backend and numerical-state audit. Additive +
+    # defaulted so older synthetic callers and serialised report objects remain
+    # valid. These fields are measurements, not physicality gates.
+    trajectory_backend: str = "legacy_dense_expm"
+    trajectory_max_trace_error: float = float("nan")
+    trajectory_max_hermiticity_defect: float = float("nan")
+    trajectory_min_eigenvalue: float = float("nan")
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
