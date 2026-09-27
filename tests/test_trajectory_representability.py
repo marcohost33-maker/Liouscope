@@ -41,8 +41,8 @@ def _extreme_thermalising_qubit() -> np.ndarray:
     return L
 
 
-def test_ordinary_dense_trajectory_is_bitwise_the_existing_formula() -> None:
-    """The guard must not change representable dense propagation."""
+def test_ordinary_action_trajectory_agrees_with_dense_reference() -> None:
+    """The backend change is bounded against the former dense formula."""
     L = _ordinary_generator()
     grid = np.array([0.0, 0.2, 1.0, 2.0])
     actual = _evolve(L, _RHO_PLUS, grid)
@@ -54,7 +54,7 @@ def test_ordinary_dense_trajectory_is_bitwise_the_existing_formula() -> None:
             expected[k] = _RHO_PLUS
         else:
             expected[k] = unvec(sla.expm(L * t) @ initial, d=2)
-    np.testing.assert_array_equal(actual, expected)
+    np.testing.assert_allclose(actual, expected, rtol=2.0e-13, atol=2.0e-14)
 
 
 def test_nonfinite_scaled_generator_fails_before_matrix_exponential() -> None:
