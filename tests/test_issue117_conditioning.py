@@ -948,8 +948,15 @@ def test_a_genuine_two_mode_zero_cluster_stays_cluster_only() -> None:
     assert evidence.displacement_explained is None
 
 
-def test_wide_cutoff_with_multiple_modes_withholds_scalar_solver_estimate() -> None:
-    """An unrelated in-cutoff mode cannot leak into a named scalar estimate."""
+def test_multi_mode_schur_spectrum_mismatch_fails_closed() -> None:
+    """A same-size Schur cluster is not enough if it is a different spectrum.
+
+    This badly scaled 2x2 block has exact/eig roots +-1e-10, while unbalanced
+    GEES moves them by O(1e-11). A wide cutoff contains three modes in both
+    decompositions, so a count-only guard would accept and publish the
+    projector of a numerically different cluster. The simple narrow case keeps
+    the direct eigenvector path; the multi-mode Schur path must withhold.
+    """
     system = np.zeros((4, 4), dtype=complex)
     system[0, 0] = 1.0e-12
     system[1, 2] = 1.0e6
@@ -958,12 +965,13 @@ def test_wide_cutoff_with_multiple_modes_withholds_scalar_solver_estimate() -> N
 
     narrow = zero_mode_conditioning(system, zero_tolerance=1.0e-11)
     wide = zero_mode_conditioning(system, zero_tolerance=1.0e-9)
-    assert narrow.available and wide.available
+    assert narrow.available
     assert narrow.cluster_size == 1
-    assert wide.cluster_size > 1
     assert narrow.solver_forward_estimate == 0.0
-    assert wide.verdict == CONDITIONING_CLUSTER_ONLY
-    assert math.isnan(wide.solver_forward_estimate)
+    assert wide.available is False
+    assert wide.reason == "schur_cluster_mismatch"
+    assert wide.verdict == CONDITIONING_UNAVAILABLE
+
 
 def test_displacement_abstains_when_the_perturbation_exceeds_the_separation() -> None:
     """Round-6 review: locality is a property of the perturbation, not the outcome.
