@@ -32,9 +32,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `UnrepresentableTrajectoryError` on a non-finite `L*t`, a SciPy runtime
   warning or a non-finite propagator/state (the #156 semantics); the extreme
   #156 fixture fails closed on every backend in well under a second. This
-  CHANGES REPORTED NUMBERS at round-off level (~1e-14) for systems with
-  `d >= 8` in the default path; every system with `d < 8`, including every
-  anchor fixture, is unchanged bit-for-bit. No manifest field, schema, anchor
+  CHANGES REPORTED NUMBERS for systems with `d >= 8` in the default path: the
+  D5-D7 curves at round-off level (~1e-14), fitted quantities such as
+  `beta_D` within the least-squares termination tolerance (`xtol = 1e-8`;
+  measured <= 3e-8 relative, ~1e-6 of the BCa interval width) -- the same
+  scale on which two BLAS builds of the dense path already differ. Every
+  system with `d < 8`, including every anchor fixture, is unchanged
+  bit-for-bit. No manifest field, schema, anchor
   or diagnostic definition changes; the backend is a deterministic function
   of the run inputs, so `input_hash` and `run_id` keep their meaning.
 - **Trace-preserving generators can be restricted to the traceless operator

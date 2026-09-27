@@ -393,7 +393,16 @@ def test_relaxation_layer_rejects_an_unknown_backend() -> None:
 
 
 def test_relaxation_layer_is_backend_independent_end_to_end() -> None:
-    """Curves agree to round-off, and the fitted rate far below its CI width."""
+    """Curves agree to round-off; the fitted rate to the fit's own tolerance.
+
+    A round-off difference in the curves does NOT give a round-off difference
+    in ``beta_D``: ``least_squares`` terminates at its default ``xtol = 1e-8``
+    (relative step), so two backends -- or two BLAS builds of the same
+    backend -- land anywhere inside that termination region. Measured: 5e-9
+    relative locally, 2.9e-8 on the CI runner (M2, four parameters). The
+    bound is therefore stated on that scale (1e-6, 100x ``xtol``) and against
+    the quantity a reader compares ``beta_D`` with, its BCa interval width.
+    """
     L = _chain(3)
     rho0 = _ground(8)
     dense = compute_relaxation_layer(
@@ -411,7 +420,11 @@ def test_relaxation_layer_is_backend_independent_end_to_end() -> None:
         action.relative_entropy_curve, dense.relative_entropy_curve, rtol=0.0, atol=1.0e-10
     )
     assert action.aicc_model == dense.aicc_model
-    assert action.beta_D == pytest.approx(dense.beta_D, rel=1.0e-8)
+    delta = abs(action.beta_D - dense.beta_D)
+    assert delta <= 1.0e-6 * abs(dense.beta_D)
+    ci_width = dense.bca_ci_beta[1] - dense.bca_ci_beta[0]
+    assert ci_width > 0.0
+    assert delta <= 1.0e-4 * ci_width
 
 
 def test_sparse_input_is_accepted_by_the_propagator_only() -> None:

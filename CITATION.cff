@@ -158,9 +158,10 @@ abstract: >-
 # materialised expm(L t) (#162). The backend is chosen by a deterministic
 # size/cost rule, recorded in RelaxationResult.trajectory_backend, and agrees
 # with the dense reference to round-off (<= 2e-14 measured, 1e-11 declared);
-# d < 8 (every anchor fixture) is unchanged bit-for-bit. It must be described
-# as a numerical-method change moving reported numbers only at round-off
-# level, not as a change of any diagnostic's definition.
+# fitted rates then move only within the least-squares termination tolerance
+# (xtol = 1e-8; <= 3e-8 relative measured). d < 8 (every anchor fixture) is
+# unchanged bit-for-bit. It must be described as a numerical-method change,
+# not as a change of any diagnostic's definition.
 keywords:
   - open quantum systems
   - Lindblad
