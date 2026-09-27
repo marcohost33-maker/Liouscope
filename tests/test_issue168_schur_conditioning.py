@@ -88,7 +88,9 @@ def test_projector_2norm_is_not_lapack_trsen_frobenius_lower_bound() -> None:
     T[3, 3] = -2.0
 
     exact = _schur_cluster_projector_condition(
-        T, zero_tolerance=1.0e-12, expected_cluster_size=2
+        T,
+        reference_eigenvalues=np.diag(T),
+        cluster_indices=np.array([0, 1], dtype=np.intp),
     )
     assert exact == pytest.approx(1.0 / math.sqrt(10.0), rel=1e-12)
 
@@ -126,7 +128,9 @@ def test_schur_projector_matches_eigenvector_subspace_on_semisimple_cluster() ->
 
     legacy = cluster_conditioning(right, left, idx)
     schur = _schur_cluster_projector_condition(
-        L, zero_tolerance=1.0e-8, expected_cluster_size=2
+        L,
+        reference_eigenvalues=values,
+        cluster_indices=idx,
     )
     assert schur is not None
     assert schur == pytest.approx(legacy, rel=2e-10, abs=2e-12)
