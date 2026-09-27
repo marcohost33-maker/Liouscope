@@ -237,6 +237,17 @@ LiouScope is built for paper-grade reproducibility:
 - **Anchor tests.** `tests/test_anchors.py` locks the numerical anchors that paper figures depend on;
   changes to physics code that move these values are caught in CI.
 - **Paper-figure pipeline.** `figures/generate_all.py` regenerates Fig 1-3 deterministically.
+- **Relaxation trajectories use exponential action, not a materialised propagator.**
+  `diagnostics.relaxation` evolves `exp(tL) rho0` with
+  `scipy.sparse.linalg.expm_multiply`: exact `linspace` grids use its interval
+  API, while arbitrary/non-uniform grids evaluate each requested time directly
+  from the same initial state. `RelaxationResult.trajectory_backend` records
+  which path was used, together with maximum trace error, maximum Hermiticity
+  defect, and the minimum eigenvalue of the Hermitian part seen along the
+  trajectory. These are audit measurements, not silent positivity repairs.
+  The low-level propagation primitive accepts dense and SciPy sparse matrices;
+  the top-level `diagnose()` orchestrator remains dense-only until its separate
+  sparse solver path is wired. Unrepresentable propagation fails closed.
 
 ---
 
