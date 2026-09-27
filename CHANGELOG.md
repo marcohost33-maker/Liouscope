@@ -31,7 +31,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   <= 2e-14 (declared tolerance 1e-11). Both backends fail closed with
   `UnrepresentableTrajectoryError` on a non-finite `L*t`, a SciPy runtime
   warning or a non-finite propagator/state (the #156 semantics); the extreme
-  #156 fixture fails closed on every backend in well under a second. This
+  #156 fixture fails closed on every backend in well under a second.
+  `propagate_trajectory` refuses a non-finite `L` or initial state with
+  `ValueError` before any shortcut (a zero-only grid used to hand a NaN
+  state back), and the cost model saturates instead of raising on subnormal
+  or near-overflow norms. Sparse generators are cost-compared like dense ones
+  up to `DENSE_MAX_DIM = 2048`; above it an over-budget action is refused
+  rather than densified (PR #176 review). This
   CHANGES REPORTED NUMBERS for systems with `d >= 8` in the default path: the
   D5-D7 curves at round-off level (~1e-14), fitted quantities such as
   `beta_D` within the least-squares termination tolerance (`xtol = 1e-8`;

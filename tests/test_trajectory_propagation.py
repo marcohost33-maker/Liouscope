@@ -434,3 +434,105 @@ def test_sparse_input_is_accepted_by_the_propagator_only() -> None:
     assert sp.issparse(L_sparse)
     result = propagate_trajectory(L_sparse, vec(_ground(8)), np.array([0.0, 1.0]))
     assert result.states.shape == (2, 64)
+
+
+# --------------------------------------------------------------------------
+# PR #176 review (Codex, commit ee8b8e8): four boundary findings
+# --------------------------------------------------------------------------
+
+
+def test_dense_estimate_survives_a_subnormal_generator_norm() -> None:
+    """``scaled / theta_13`` underflows to 0.0 for a subnormal norm; log2 must not see it."""
+    tiny = np.nextafter(0.0, 1.0)
+    L = -tiny * np.eye(ACTION_MIN_DIM, dtype=complex)
+    grid = np.array([0.0, 1.0])
+    assert np.isfinite(propagation.dense_matvec_estimate(L, grid))
+    result = propagate_trajectory(L, np.ones(ACTION_MIN_DIM, dtype=complex), grid)
+    assert np.all(np.isfinite(result.states))
+
+
+@pytest.mark.parametrize("backend", ["auto", BACKEND_DENSE, BACKEND_ACTION])
+def test_non_finite_initial_state_is_refused_even_on_a_zero_only_grid(backend: str) -> None:
+    """The exact t == 0 shortcut must not hand a NaN state straight back."""
+    v0 = np.full(ACTION_MIN_DIM, np.nan, dtype=complex)
+    with pytest.raises(ValueError, match="rho_vec0 contains non-finite"):
+        propagate_trajectory(
+            np.zeros((ACTION_MIN_DIM, ACTION_MIN_DIM), dtype=complex),
+            v0,
+            np.array([0.0]),
+            backend=backend,
+        )
+
+
+@pytest.mark.parametrize("sparse", [False, True])
+def test_non_finite_generator_is_refused_even_on_a_zero_only_grid(sparse: bool) -> None:
+    L = np.zeros((ACTION_MIN_DIM, ACTION_MIN_DIM), dtype=complex)
+    L[3, 5] = np.nan
+    L_in = sp.csr_matrix(L) if sparse else L
+    with pytest.raises(ValueError, match="L contains non-finite"):
+        propagate_trajectory(L_in, np.ones(ACTION_MIN_DIM, dtype=complex), np.array([0.0]))
+
+
+def _dephasing_chain(rate: float) -> np.ndarray:
+    """d = 8 pure dephasing, finite for rates whose ||L|| / theta_m overflows."""
+    jumps = [np.sqrt(rate) * _site(_SZ, i, 3) for i in range(3)]
+    L = build_liouvillian(np.zeros((8, 8), dtype=complex), jumps)
+    assert np.all(np.isfinite(L))
+    return L
+
+
+def test_action_cost_saturates_instead_of_overflowing_ceil() -> None:
+    """Finite norm, overflowing quotient: a (huge) bound, not an OverflowError.
+
+    ``||L|| / theta_1`` overflows here while ``||L|| / theta_55`` does not, so
+    the low degrees drop out of the minimum and the bound stays well-defined.
+    """
+    L = _dephasing_chain(1.0e293)
+    grid = np.array([0.0, 1.0])
+    with np.errstate(over="ignore"):
+        assert not np.isfinite(propagation.shifted_one_norm(L) / propagation._THETA[1])
+    bound = action_matvec_bound(L, grid)
+    assert bound > propagation.DEFAULT_ACTION_MATVEC_BUDGET
+    assert propagation._action_step_cost(1.0e308) > 1.0e307
+    backend, _bound = select_trajectory_backend(L, grid)
+    assert backend == BACKEND_DENSE
+    auto = propagate_trajectory(L, vec(_ground(8)), grid)
+    assert auto.backend == BACKEND_DENSE
+    with pytest.raises(UnrepresentableTrajectoryError, match="exceeds the budget"):
+        propagate_trajectory(L, vec(_ground(8)), grid, backend=BACKEND_ACTION)
+
+
+def test_sparse_generator_is_cost_compared_while_densifiable() -> None:
+    """A stiff sparse n = 64 generator is cheap dense and must not go to the action."""
+    L = sp.csr_matrix(_dephasing_chain(1.0e4))
+    grid = np.array([0.0, 1.0])
+    bound = action_matvec_bound(L, grid)
+    assert propagation.dense_matvec_estimate(L, grid) < bound
+    assert bound < propagation.DEFAULT_ACTION_MATVEC_BUDGET  # affordable, not cheaper
+    start = time.perf_counter()
+    result = propagate_trajectory(L, vec(_ground(8)), grid)
+    assert result.backend == BACKEND_DENSE
+    assert time.perf_counter() - start < 5.0
+
+
+def _large_sparse_diagonal(rate: float) -> sp.csr_matrix:
+    n = propagation.DENSE_MAX_DIM + 2
+    diag = np.full(n, -rate, dtype=complex)
+    diag[0] = 0.0
+    return sp.diags(diag).tocsr()
+
+
+def test_large_sparse_generator_uses_the_action_without_densifying() -> None:
+    L = _large_sparse_diagonal(0.5)
+    v0 = np.ones(L.shape[0], dtype=complex)
+    result = propagate_trajectory(L, v0, np.array([0.0, 1.0, 2.0]))
+    assert result.backend == BACKEND_ACTION
+    expected = np.exp(-0.5 * 2.0)
+    np.testing.assert_allclose(result.states[2, 1:], expected, rtol=1.0e-12)
+    assert result.states[2, 0] == pytest.approx(1.0)
+
+
+def test_large_sparse_over_budget_generator_is_refused_not_densified() -> None:
+    L = _large_sparse_diagonal(1.0e9)
+    with pytest.raises(UnrepresentableTrajectoryError, match="neither backend is practical"):
+        propagate_trajectory(L, np.ones(L.shape[0], dtype=complex), np.array([0.0, 1.0]))

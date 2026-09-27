@@ -48,7 +48,10 @@ no machine state -- so it is reproducible and recorded by the caller
    finite, within ``max_action_matvecs`` and no larger than the dense
    estimate expressed in the same unit. This is what keeps a stiff generator
    (``||L|| t`` of order ``1e7`` and beyond) on the dense path instead of
-   letting the action loop for hours.
+   letting the action loop for hours. Sparse generators follow the same
+   comparison while densifying them is practical (``n <= DENSE_MAX_DIM``);
+   above that the action is the only candidate, and an over-budget action
+   is refused rather than replaced by an ``n x n`` materialisation.
 
 The bound is an *upper* bound on what SciPy's parameter selection will spend:
 SciPy minimises ``m * s`` with ``s = ceil(alpha_p / theta_m)`` over the same
@@ -83,6 +86,8 @@ import scipy.linalg as sla
 import scipy.sparse as sp
 from scipy.sparse.linalg import expm_multiply
 
+from .generator_guard import require_finite_generator
+
 BACKEND_DENSE: str = "dense_expm"
 BACKEND_ACTION: str = "expm_action"
 BACKEND_AUTO: str = "auto"
@@ -97,6 +102,12 @@ ACTION_MIN_DIM: int = 64
 # only ever bites on stiff inputs, where it turns an hours-long loop into an
 # immediate, explicit refusal.
 DEFAULT_ACTION_MATVEC_BUDGET: int = 1_000_000
+
+# Largest superoperator dimension a SPARSE generator is densified for when
+# "auto" compares against, or falls back to, the dense backend: one complex
+# n x n array is 64 MiB here, and expm needs several. Above it the dense
+# backend is not a practical fallback, so "auto" uses the action or refuses.
+DENSE_MAX_DIM: int = 2048
 
 # theta_m for double precision: m = 1..30 from Higham, *Functions of Matrices*
 # (SIAM 2008), table A.3; m = 35..55 from Al-Mohy & Higham (2011), table 3.1.
@@ -181,9 +192,16 @@ def _action_step_cost(scaled_norm: float) -> float:
         return math.inf
     if scaled_norm == 0.0:
         return 0.0
-    return float(
-        min(m * max(1, math.ceil(scaled_norm / theta)) for m, theta in _THETA.items())
-    )
+    best = math.inf
+    for m, theta in _THETA.items():
+        # A finite norm can still overflow the quotient for the tiny theta_m
+        # of low degrees; that degree is then simply not a candidate.
+        quotient = scaled_norm / theta
+        if math.isfinite(quotient):
+            # Float arithmetic on purpose: m * ceil(q) as an int can exceed the
+            # float range, float multiplication saturates to inf instead.
+            best = min(best, m * max(1.0, float(math.ceil(quotient))))
+    return best
 
 
 def _grid_is_steppable(t_grid: np.ndarray) -> bool:
@@ -232,7 +250,9 @@ def dense_matvec_estimate(L: np.ndarray | sp.spmatrix, t_grid: np.ndarray) -> fl
         scaled = abs(float(t)) * norm
         if not math.isfinite(scaled):
             return math.inf
-        squarings = max(0, math.ceil(math.log2(scaled / _THETA_13))) if scaled > 0 else 0
+        # Compare before taking the logarithm: for a subnormal ``scaled`` the
+        # quotient underflows to 0.0 and log2 would raise.
+        squarings = 0 if scaled <= _THETA_13 else math.ceil(math.log2(scaled / _THETA_13))
         total += (_DENSE_BASE_MATMULS + squarings) * n + 1
     return total
 
@@ -245,16 +265,28 @@ def select_trajectory_backend(
 ) -> tuple[str, float]:
     """Deterministic ``"auto"`` rule; returns ``(backend, action_matvec_bound)``.
 
-    See the module docstring for the rule and the measurements behind it.
+    See the module docstring for the rule and the measurements behind it. A
+    sparse generator is compared against the dense estimate like a dense one
+    as long as densifying it is practical (``n <= DENSE_MAX_DIM``); above that
+    the action is the only candidate, and when it is over budget as well the
+    rule refuses with :class:`UnrepresentableTrajectoryError` rather than
+    materialising an ``n x n`` matrix nobody asked for.
     """
     t_grid = np.asarray(t_grid, dtype=float)
     n = L.shape[0]
     bound = action_matvec_bound(L, t_grid)
-    if n < ACTION_MIN_DIM or not math.isfinite(bound) or bound > max_action_matvecs:
+    action_affordable = math.isfinite(bound) and bound <= max_action_matvecs
+    if _is_sparse(L) and n > DENSE_MAX_DIM:
+        if action_affordable:
+            return BACKEND_ACTION, bound
+        raise UnrepresentableTrajectoryError(
+            "relaxation trajectory: sparse generator of dimension "
+            f"{n} > DENSE_MAX_DIM={DENSE_MAX_DIM} whose exponential-action cost "
+            f"bound ({bound:.3g} matrix-vector products) exceeds the budget "
+            f"({float(max_action_matvecs):.3g}); neither backend is practical"
+        )
+    if n < ACTION_MIN_DIM or not action_affordable:
         return BACKEND_DENSE, bound
-    if _is_sparse(L):
-        # Dense would first have to materialise the n x n generator.
-        return BACKEND_ACTION, bound
     if bound <= dense_matvec_estimate(L, t_grid):
         return BACKEND_ACTION, bound
     return BACKEND_DENSE, bound
@@ -400,6 +432,15 @@ def propagate_trajectory(
         raise ValueError(
             f"rho_vec0 must have shape ({L.shape[0]},), got {rho_vec0.shape}"
         )
+    # Validate the inputs themselves: the exact t == 0 shortcut returns
+    # rho_vec0 without ever reaching a post-propagation finiteness check, so a
+    # zero-only grid would otherwise hand a NaN state straight back.
+    if not np.all(np.isfinite(rho_vec0)):
+        raise ValueError("propagate_trajectory: rho_vec0 contains non-finite entries")
+    try:
+        require_finite_generator(L, builder="propagate_trajectory")
+    except ValueError as exc:
+        raise ValueError("propagate_trajectory: L contains non-finite entries") from exc
 
     if backend == BACKEND_AUTO:
         chosen, bound = select_trajectory_backend(
