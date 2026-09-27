@@ -577,7 +577,15 @@ def test_a_side_that_cannot_be_a_superoperator_is_unavailable(side: int) -> None
 
 
 def test_widening_the_cutoff_never_turns_cluster_condition_into_scalar_evidence() -> None:
-    """A scalar estimate is kept only while the reported zero set is simple."""
+    """A wider zero set may be cluster-only or unavailable, never scalar.
+
+    On this deliberately non-normal #127 fixture, LAPACK ``geev`` and ``gees``
+    do not reproduce the two small roots identically on every SciPy/LAPACK
+    build. That is evidence to abstain, not a reason to weaken the independent
+    spectrum-agreement gate. The invariant under test is the scientific claim:
+    once the report cutoff selects multiple modes, no scalar first-order
+    eigenvalue-displacement estimate may be published.
+    """
     L = _pr127_fixture()
     narrow = [
         zero_mode_conditioning(L, zero_tolerance=t)
@@ -588,7 +596,7 @@ def test_widening_the_cutoff_never_turns_cluster_condition_into_scalar_evidence(
         for t in (1.0e-6, 1.0e-5)
     ]
 
-    assert all(r.cluster_size == 1 for r in narrow)
+    assert all(r.available and r.cluster_size == 1 for r in narrow)
     reference = narrow[0]
     for run in narrow[1:]:
         assert run.per_mode_reciprocal_condition == pytest.approx(
@@ -601,14 +609,17 @@ def test_widening_the_cutoff_never_turns_cluster_condition_into_scalar_evidence(
             reference.solver_forward_estimate, rel=1e-12
         )
 
-    assert all(r.cluster_size == 2 for r in wide)
     for run in wide:
-        assert run.verdict == CONDITIONING_CLUSTER_ONLY
-        assert math.isnan(run.per_mode_reciprocal_condition)
-        assert math.isnan(run.structural_forward_estimate)
-        assert math.isnan(run.solver_forward_estimate)
-        assert run.displacement_explained is None
-
+        if run.available:
+            assert run.cluster_size > 1
+            assert run.verdict == CONDITIONING_CLUSTER_ONLY
+            assert math.isnan(run.per_mode_reciprocal_condition)
+            assert math.isnan(run.structural_forward_estimate)
+            assert math.isnan(run.solver_forward_estimate)
+            assert run.displacement_explained is None
+        else:
+            assert run.reason == "schur_cluster_mismatch"
+            assert run.verdict == CONDITIONING_UNAVAILABLE
 def test_displacement_agreement_is_true_when_the_estimates_earn_it() -> None:
     """The positive control: a displacement a forward estimate does account for.
 
