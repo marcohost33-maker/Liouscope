@@ -55,7 +55,7 @@ def _operator_is_finite(operator: Any) -> bool:
 
 def _scaled_action_operand(
     L_super: Any, t: float
-) -> np.ndarray | sp.spmatrix:
+) -> Any:
     """Return t*L after representability checks needed by expm_multiply.
 
     The action algorithm needs norm information internally. A matrix whose
