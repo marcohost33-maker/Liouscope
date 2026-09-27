@@ -240,8 +240,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   defines it with `||R||_F` as a lower bound. Multi-mode zero clusters now return
   `CLUSTER_ONLY`: cluster condition, residuals, separation and trace defect remain evidence, while
   scalar first-order eigenvalue-displacement estimates are withheld because semisimple versus
-  defective multiplicity cannot be decided safely from numerical proximity. Simple zero modes
-  retain the scalar path. Audit only: no D1-D24 number, filter, certificate, mechanism verdict or
+  defective multiplicity cannot be decided safely from numerical proximity. The Schur spectrum
+  must also agree mode-for-mode with the spectrum the report carries before a multi-mode projector
+  is published; a same-size but numerically different Schur cluster now fails closed as
+  `schur_cluster_mismatch`. Simple zero modes retain the scalar path. Audit only: no D1-D24
+  number, filter, certificate, mechanism verdict or
   run-manifest field consumes this evidence; MANIFEST_SCHEMA therefore remains unchanged.
 - **Dense and sparse Liouvillian builders now fail closed when finite inputs overflow during generator assembly (issue #152).** Input finiteness alone did not prevent derived expressions such as `H_jj - H_kk`, `L^dag L`, Kronecker products, or finite-rate scaling from producing `NaN`/`inf`; e.g. `H = diag(1e308, -1e308)` passed the input gates and could return a non-finite generator. Both builders now assemble inside a bounded floating-point warning context and apply one shared exact output-finiteness guard. The sparse path canonicalises duplicates on a copy and checks only stored data, so the check remains O(nnz) and never densifies. Large but representable generators remain accepted. No manifest/schema field changes and no reported value for a representable generator changes.
 - **The overflow fallback of `scaled_column_sums` now answers exactly instead
