@@ -87,8 +87,11 @@ figure manufactured from those vectors can depend on the basis in which the
 same operator is written. The audit therefore no longer uses eigenvectors for
 its headline zero-cluster condition.
 
-The selected zero cluster is reordered to the leading block of a complex Schur
-form with LAPACK ``xTRSEN``. Crucially, the ``S`` returned by ``xTRSEN`` is
+For a multi-mode zero cluster, the selected modes are reordered to the leading
+block of a complex Schur form with LAPACK ``xTRSEN``. A simple mode keeps the
+direct ``|y^H x|`` scalar condition; an independent Schur solve would add
+round-off without improving that quantity. Crucially, the ``S`` returned by
+``xTRSEN`` is
 *not* reported as ``1 / ||P||_2``: LAPACK defines it from ``||R||_F`` as a
 lower bound. After reordering, this module solves
 ``T11 R - R T22 = T12`` and computes the actual 2-norm expression
@@ -796,14 +799,22 @@ def _measure(
         if cluster.size == 0:  # pragma: no cover - anchor is always its own member
             cluster = np.flatnonzero(magnitudes == magnitudes.min())
 
-    s_cluster = _schur_cluster_projector_condition(
-        L,
-        zero_tolerance=tol if cluster_from_cutoff else None,
-        expected_cluster_size=int(cluster.size),
-    )
-    if s_cluster is None:
-        return ZeroModeConditioning.unavailable("schur_cluster_mismatch")
     stationary = int(cluster[int(np.argmin(magnitudes[cluster]))])
+    if int(cluster.size) == 1:
+        # A simple eigenvalue already has the exact scalar first-order
+        # condition |y^H x| from the accepted eigendecomposition. Routing this
+        # case through an independent Schur solve adds numerical error with no
+        # new information. Issue #168 concerns repeated/defective clusters, so
+        # Schur-projector conditioning is reserved for size > 1.
+        s_cluster = float(per_mode[stationary])
+    else:
+        s_cluster = _schur_cluster_projector_condition(
+            L,
+            zero_tolerance=tol if cluster_from_cutoff else None,
+            expected_cluster_size=int(cluster.size),
+        )
+        if s_cluster is None:
+            return ZeroModeConditioning.unavailable("schur_cluster_mismatch")
     # Round-4 review. Round 2 replaced the subspace figure here with the MINIMUM
     # per-mode value over the cluster, on a fail-closed argument. That was
     # wrong: it made the selected eigenvalue's estimate depend on unrelated
@@ -928,6 +939,10 @@ def _measure(
     # 5.00e-08 -- and could flip the two report booleans near their thresholds.
     raw_defect, _scale = trace_preservation_defect(L)
     defect = raw_defect / np.sqrt(float(dim))
+    if not np.isfinite(defect):
+        # CLUSTER_ONLY abstains from scalar attribution; it does not license a
+        # cluster record whose structural evidence is itself unrepresentable.
+        return ZeroModeConditioning.unavailable("forward_estimate_unavailable")
 
     observed = float(magnitudes[stationary])
     if cluster_only:
