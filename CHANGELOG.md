@@ -64,6 +64,16 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 - **Dense and sparse Liouvillian builders now fail closed when finite inputs overflow during generator assembly (issue #152).** Input finiteness alone did not prevent derived expressions such as `H_jj - H_kk`, `L^dag L`, Kronecker products, or finite-rate scaling from producing `NaN`/`inf`; e.g. `H = diag(1e308, -1e308)` passed the input gates and could return a non-finite generator. Both builders now assemble inside a bounded floating-point warning context and apply one shared exact output-finiteness guard. The sparse path canonicalises duplicates on a copy and checks only stored data, so the check remains O(nnz) and never densifies. Large but representable generators remain accepted. No manifest/schema field changes and no reported value for a representable generator changes.
+- **Relaxation trajectories now fail closed when dense propagation leaves the representable
+  float64 domain (issue #156 trajectory slice).** A finite Liouvillian and finite time do not
+  guarantee that `L*t`, `scipy.linalg.expm(L*t)`, or the action of that propagator on the
+  initial state remains finite. `_evolve` now raises `UnrepresentableTrajectoryError` at each
+  of those boundaries instead of allowing NaN/inf to enter entropy, model fitting or
+  uncertainty calculations. This is deliberately independent of PR #115's gap-scaled-grid
+  and resolution-warning methodology; no time-grid policy, fit, diagnostic definition,
+  manifest field or schema changes here. The existing dense propagation formula is unchanged
+  for representable inputs; issue #162 separately replaces full-matrix `expm` with an
+  exponential-action backend.
 - **The overflow fallback of `scaled_column_sums` now answers exactly instead
   of abstaining (issue #151).** When `math.fsum` overflows on an intermediate,
   the column used to be split into two exponent bands at `2**512`, each rounded
