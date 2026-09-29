@@ -469,7 +469,7 @@ def dense_block_matvec_estimate(
     if not math.isfinite(scaled):
         return math.inf
     squarings = 0 if scaled <= _THETA_13 else math.ceil(math.log2(scaled / _THETA_13))
-    return (_DENSE_BASE_MATMULS + squarings) * L.shape[0] + n_rhs
+    return float((_DENSE_BASE_MATMULS + squarings) * L.shape[0] + n_rhs)
 
 
 def select_block_backend(
