@@ -754,7 +754,7 @@ def propagate_block_at_time(
         return BlockPropagation(states=B.copy(), backend=chosen, action_matvec_bound=bound)
 
     if chosen == BACKEND_DENSE:
-        L_dense = L.toarray() if _is_sparse(L) else L
+        L_dense = L.toarray() if _is_sparse(L) else L  # type: ignore[union-attr]
         with np.errstate(over="ignore", invalid="ignore", under="ignore"):
             scaled = np.asarray(L_dense * t)
         if not np.all(np.isfinite(scaled)):
@@ -803,7 +803,7 @@ def propagate_block_at_time(
     with np.errstate(over="ignore", invalid="ignore", under="ignore"):
         scaled = L * tau_sub
         trace_sub = _trace(scaled)
-    scaled_values = scaled.data if _is_sparse(scaled) else scaled
+    scaled_values = scaled.data if _is_sparse(scaled) else scaled  # type: ignore[union-attr]
     if not (np.all(np.isfinite(scaled_values)) and np.isfinite(trace_sub)):
         raise UnrepresentableTrajectoryError(
             "block propagation: L*tau contains non-finite entries"
