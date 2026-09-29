@@ -171,9 +171,9 @@ def initial_state_sensitivity(
 ) -> float:
     """D18: std of relaxation distance over a Haar-random initial-state ensemble.
 
-    The Haar states are evolved as one RHS block. For n=d^2 < 64 the automatic
-    path keeps the historical dense formula bit-for-bit; for larger systems it
-    may use the deterministic exponential action when its cost bound is lower.
+    The Haar states are evolved as one RHS block. Automatic selection keeps the
+    historical dense formula for small/medium dense systems and only considers
+    the deterministic exponential action beyond the D18-specific crossover.
     """
     value, _backend = _initial_state_sensitivity_with_backend(
         L_super,
