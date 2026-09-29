@@ -631,3 +631,86 @@ def test_large_sparse_unsteppable_grid_is_refused_with_the_right_reason() -> Non
     L = _large_sparse_diagonal(0.5)
     with pytest.raises(UnrepresentableTrajectoryError, match="cannot step it"):
         propagate_trajectory(L, np.ones(L.shape[0], dtype=complex), np.array([0.0, 2.0, 1.0]))
+
+
+# --------------------------------------------------------------------------
+# Runtime audit of the physical invariants (issue #162: "measured, not assumed")
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("backend", [BACKEND_DENSE, BACKEND_ACTION])
+def test_relaxation_layer_records_measured_trajectory_invariants(backend: str) -> None:
+    result = compute_relaxation_layer(
+        _chain(3), rho_initial=_ground(8), bootstrap_B=20, trajectory_backend=backend
+    )
+    assert 0.0 <= result.trajectory_max_trace_error < 1.0e-12
+    assert 0.0 <= result.trajectory_max_hermiticity_defect < 1.0e-12
+    # Pure initial state: seven exact zero eigenvalues, so round-off shows here.
+    assert -1.0e-12 < result.trajectory_min_eigenvalue <= 1.0e-12
+
+
+def test_trajectory_invariants_detect_a_non_physical_state() -> None:
+    """The audit must report violations, not only pass physical input."""
+    from liouscope.diagnostics.relaxation import _trajectory_invariants
+
+    bad = np.array([[[0.7, 0.2], [0.0, 0.5]]], dtype=complex)  # tr 1.2, non-Hermitian
+    trace_error, herm, min_eig = _trajectory_invariants(bad)
+    assert trace_error == pytest.approx(0.2)
+    assert herm == pytest.approx(0.2)
+    negative = np.array([[[1.2, 0.0], [0.0, -0.2]]], dtype=complex)
+    assert _trajectory_invariants(negative)[2] == pytest.approx(-0.2)
+    assert all(np.isnan(v) for v in _trajectory_invariants(np.empty((0, 2, 2), dtype=complex)))
+
+
+@pytest.mark.parametrize("bad_time", [np.nan, np.inf])
+def test_non_finite_time_grid_is_refused_as_input_error(bad_time: float) -> None:
+    with pytest.raises(ValueError, match="t_grid contains non-finite"):
+        propagate_trajectory(_chain(1), vec(_plus_state(2)), np.array([0.0, bad_time]))
+
+
+# --------------------------------------------------------------------------
+# PR #176 review (Codex, commit 548ed2d)
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("shift", [0.0, -2.0])
+def test_zero_shifted_norm_steps_cost_no_products(shift: float) -> None:
+    """``||tau (L - mu I)||_1 == 0`` makes SciPy take m* = 0: no product, bound 0.
+
+    Pins the review question whether zero-norm steps are undercounted: they
+    are not -- SciPy sets ``m_star, s = 0, 1`` and never calls ``A.dot``.
+    """
+    n = ACTION_MIN_DIM
+    L = (shift * np.eye(n, dtype=complex)).view(_CountingArray)
+    _CountingArray.products = 0
+    result = propagate_trajectory(
+        L, np.ones(n, dtype=complex), np.linspace(0.0, 5.0, 40),
+        backend=BACKEND_ACTION, max_action_matvecs=0,
+    )
+    assert _CountingArray.products == 0
+    assert result.action_matvec_bound == 0.0
+    np.testing.assert_allclose(result.states[-1], np.exp(shift * 5.0), rtol=1.0e-13)
+
+
+@pytest.mark.parametrize("sparse", [False, True])
+def test_overflowing_unscaled_norm_does_not_refuse_a_representable_step(sparse: bool) -> None:
+    """Two 1e308 entries in one column overflow ||L||_1, yet exp(tau L) is finite.
+
+    ``L`` is nilpotent (``L @ L == 0``), so ``exp(tau L) v = v + tau L v``
+    exactly; with ``tau = 1e-308`` every entry of ``tau L`` is 1.
+    """
+    n = propagation.DENSE_MAX_DIM + 2 if sparse else ACTION_MIN_DIM
+    M = sp.lil_matrix((n, n), dtype=complex)
+    M[0, 1] = 1.0e308
+    M[2, 1] = 1.0e308
+    L = M.tocsr() if sparse else M.toarray()
+    assert propagation.shifted_one_norm(L) == np.inf  # the unscaled norm overflows
+    v0 = np.ones(n, dtype=complex)
+    grid = np.array([0.0, 1.0e-308])
+    assert np.isfinite(action_matvec_bound(L, grid))
+    result = propagate_trajectory(L, v0, grid)
+    assert result.backend == BACKEND_ACTION
+    expected = v0.copy()
+    expected[0] += 1.0
+    expected[2] += 1.0
+    np.testing.assert_allclose(result.states[1], expected, rtol=1.0e-14)

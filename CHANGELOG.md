@@ -45,7 +45,18 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   is therefore split into sub-steps below that threshold, so SciPy always
   selects `(m, s)` from the exact 1-norm, results are bitwise independent of
   the global seed, and the matrix-vector-product bound is exact; benign grids
-  (every step below the threshold) are not split and are unchanged. This
+  (every step below the threshold) are not split and are unchanged.
+  `RelaxationResult` additionally records the measured physical invariants of
+  every propagated trajectory -- `trajectory_max_trace_error`,
+  `trajectory_max_hermiticity_defect` and `trajectory_min_eigenvalue` (the
+  positivity drift) -- as audit values without any repair; NaN for results
+  without a trajectory. A non-finite `t_grid` is refused as an input error
+  (`ValueError`). The shifted 1-norm that drives sub-stepping and the cost
+  bound is formed as `(base, power-of-two scale)` and multiplied by `tau`
+  only then, so a finite generator whose unscaled column sums overflow (two
+  `1e308` entries in one column) is still propagated for a representable
+  `tau` instead of being refused; the trace passed to SciPy is taken from the
+  already-scaled matrix (PR #176 review). This
   CHANGES REPORTED NUMBERS for systems with `d >= 8` in the default path: the
   D5-D7 curves at round-off level (~1e-14), fitted quantities such as
   `beta_D` within the least-squares termination tolerance (`xtol = 1e-8`;

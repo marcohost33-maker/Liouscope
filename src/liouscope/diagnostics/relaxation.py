@@ -71,6 +71,22 @@ def _propagate(
     return traj, result.backend
 
 
+def _trajectory_invariants(traj: np.ndarray) -> tuple[float, float, float]:
+    """Measured physical invariants of a propagated trajectory (issue #162).
+
+    Returns ``(max |tr rho - 1|, max ||rho - rho^dag||_max, min eig(herm(rho)))``;
+    NaN for an empty trajectory. The last value is the positivity drift: a
+    CPTP evolution keeps it >= 0 exactly, round-off pushes it below by a few ulp.
+    """
+    if traj.shape[0] == 0:
+        return float("nan"), float("nan"), float("nan")
+    adjoint = np.conj(np.swapaxes(traj, 1, 2))
+    trace_error = float(np.max(np.abs(np.einsum("kii->k", traj) - 1.0)))
+    hermiticity = float(np.max(np.abs(traj - adjoint)))
+    min_eig = float(np.min(np.linalg.eigvalsh(0.5 * (traj + adjoint))))
+    return trace_error, hermiticity, min_eig
+
+
 def _evolve(
     L_super: np.ndarray,
     rho0: np.ndarray,
@@ -360,7 +376,10 @@ def compute_relaxation_layer(
     ``trajectory_backend`` selects how ``rho(t)`` is propagated (issue #162):
     ``"auto"`` (default, deterministic size/cost rule), ``"dense_expm"``
     (reference) or ``"expm_action"``. The backend actually used is recorded in
-    :attr:`RelaxationResult.trajectory_backend`.
+    :attr:`RelaxationResult.trajectory_backend`, together with the measured
+    trace error, Hermiticity defect and minimum eigenvalue of the propagated
+    states (``trajectory_max_trace_error``, ``trajectory_max_hermiticity_defect``,
+    ``trajectory_min_eigenvalue``).
     """
     L_super = np.asarray(L_super)
     n2 = L_super.shape[0]
@@ -375,6 +394,7 @@ def compute_relaxation_layer(
     traj, used_backend = _propagate(
         L_super, rho_initial, np.asarray(t_grid, dtype=float), backend=trajectory_backend
     )
+    trace_error, hermiticity_defect, min_eigenvalue = _trajectory_invariants(traj)
     final_rho = traj[-1]
     rel_entropy = np.array(
         [relative_entropy(traj[k], rho_steady_state) for k in range(traj.shape[0])]
@@ -476,4 +496,7 @@ def compute_relaxation_layer(
         beta_D_linear=float(beta_D_linear),
         linear_fit_model=linear_fit_model,
         trajectory_backend=used_backend,
+        trajectory_max_trace_error=trace_error,
+        trajectory_max_hermiticity_defect=hermiticity_defect,
+        trajectory_min_eigenvalue=min_eigenvalue,
     )

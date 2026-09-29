@@ -192,18 +192,60 @@ def _one_norm(A: np.ndarray | sp.spmatrix) -> float:
     return value if math.isfinite(value) else math.inf
 
 
-def shifted_one_norm(L: np.ndarray | sp.spmatrix) -> float:
-    """``||L - mu I||_1`` with ``mu = tr(L)/n`` -- the norm the action scales by."""
+def _max_abs_entry(L: np.ndarray | sp.spmatrix) -> float:
+    if _is_sparse(L):
+        data = np.asarray(L.data)  # type: ignore[union-attr]
+        return float(np.max(np.abs(data))) if data.size else 0.0
+    return float(np.max(np.abs(L))) if L.size else 0.0
+
+
+def _shifted_norm_parts(L: np.ndarray | sp.spmatrix) -> tuple[float, float]:
+    """``||L - mu I||_1`` as ``(base, scale)`` with ``norm = scale * base``.
+
+    ``scale`` is the power of two just below ``max |L_ij|``, so ``L / scale``
+    is exact (no rounding, barring subnormals) and its shifted column sums can
+    no longer overflow. A finite generator whose unscaled norm overflows -- two
+    ``1e308`` entries in one column -- still gets a finite ``tau * norm`` for a
+    small enough ``tau`` (PR #176 review): the product is formed only after
+    scaling, see :func:`_step_norm`.
+    """
     n = L.shape[0]
-    if n == 0:
-        return 0.0
-    with np.errstate(over="ignore", invalid="ignore"):
-        mu = _trace(L) / n
-        if _is_sparse(L):
-            shifted = L - mu * sp.identity(n, dtype=complex, format="csr")
+    amax = _max_abs_entry(L)
+    if n == 0 or amax == 0.0:
+        return 0.0, 1.0
+    # frexp: amax = m * 2**e with m in [0.5, 1); 2**(e - 1) <= amax < 2**e.
+    # The lower power keeps the scale representable even for amax ~ 1.8e308
+    # (2**1024 is not) and leaves |L_ij / scale| < 2.
+    scale = math.ldexp(1.0, math.frexp(amax)[1] - 1)
+    with np.errstate(over="ignore", invalid="ignore", under="ignore"):
+        Ls = L / scale
+        mu = _trace(Ls) / n
+        if _is_sparse(Ls):
+            shifted = Ls - mu * sp.identity(n, dtype=complex, format="csr")
         else:
-            shifted = L - mu * np.eye(n, dtype=complex)
-    return _one_norm(shifted)
+            shifted = Ls - mu * np.eye(n, dtype=complex)
+    return _one_norm(shifted), scale
+
+
+def _step_norm(tau: float, base: float, scale: float) -> float:
+    """``tau * scale * base`` without spurious intermediate overflow/underflow."""
+    if tau == 0.0 or base == 0.0:
+        return 0.0
+    direct = tau * (scale * base) if math.isfinite(scale * base) else math.inf
+    if math.isfinite(direct) and direct > 0.0:
+        return direct
+    log2_norm = math.log2(abs(tau)) + math.log2(scale) + math.log2(base)
+    return math.inf if log2_norm >= 1024.0 else 2.0**log2_norm
+
+
+def shifted_one_norm(L: np.ndarray | sp.spmatrix) -> float:
+    """``||L - mu I||_1`` with ``mu = tr(L)/n`` -- the norm the action scales by.
+
+    ``inf`` if the norm itself exceeds the float range; the propagation works
+    with the overflow-safe ``(base, scale)`` form internally.
+    """
+    base, scale = _shifted_norm_parts(L)
+    return _step_norm(1.0, base, scale)
 
 
 def _action_step_cost(scaled_norm: float) -> float:
@@ -262,7 +304,7 @@ def action_matvec_bound(L: np.ndarray | sp.spmatrix, t_grid: np.ndarray) -> floa
     t_grid = np.asarray(t_grid, dtype=float)
     if not _grid_is_steppable(t_grid):
         return math.inf
-    norm = shifted_one_norm(L)
+    base, scale = _shifted_norm_parts(L)
     total = 0.0
     previous = 0.0
     for t in t_grid:
@@ -271,7 +313,7 @@ def action_matvec_bound(L: np.ndarray | sp.spmatrix, t_grid: np.ndarray) -> floa
         if tau == 0.0:
             continue
         with np.errstate(over="ignore"):
-            total += _step_cost(tau * norm)
+            total += _step_cost(_step_norm(tau, base, scale))
         if not math.isfinite(total):
             return math.inf
     return total
@@ -406,8 +448,7 @@ def _propagate_action(
     ``tau`` by ``O(k)`` units in the last place of ``tau``; for ``k == 1``
     (every benign grid) the step is exactly ``t_k - t_{k-1}``.
     """
-    trace = _trace(L)
-    norm = shifted_one_norm(L)
+    base, scale = _shifted_norm_parts(L)
     states = np.empty((t_grid.size, rho_vec0.size), dtype=complex)
     v = np.asarray(rho_vec0, dtype=complex)
     previous = 0.0
@@ -420,7 +461,7 @@ def _propagate_action(
             continue
 
         with np.errstate(over="ignore"):
-            count = _substep_count(tau * norm)
+            count = _substep_count(_step_norm(tau, base, scale))
         if not math.isfinite(count):
             raise UnrepresentableTrajectoryError(
                 "relaxation trajectory: ||L - mu I||_1 * tau is not representable "
@@ -430,7 +471,9 @@ def _propagate_action(
         tau_sub = tau / substeps
         with np.errstate(over="ignore", invalid="ignore", under="ignore"):
             scaled = L * tau_sub
-            trace_sub = trace * tau_sub
+            # Trace of the already-scaled matrix: tr(L) itself may overflow
+            # where tr(L * tau_sub) does not.
+            trace_sub = _trace(scaled)
         scaled_values = scaled.data if _is_sparse(scaled) else scaled  # type: ignore[union-attr]
         if not (np.all(np.isfinite(scaled_values)) and np.isfinite(trace_sub)):
             raise UnrepresentableTrajectoryError(
@@ -490,6 +533,8 @@ def propagate_trajectory(
     t_grid = np.asarray(t_grid, dtype=float)
     if t_grid.ndim != 1:
         raise ValueError(f"t_grid must be one-dimensional, got shape {t_grid.shape}")
+    if not np.all(np.isfinite(t_grid)):
+        raise ValueError("propagate_trajectory: t_grid contains non-finite time points")
     rho_vec0 = np.asarray(rho_vec0)
     if rho_vec0.shape != (L.shape[0],):
         raise ValueError(
