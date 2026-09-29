@@ -32,17 +32,76 @@ from ..numerics.kronecker import unvec, vec
 from ..numerics.linalg import support_check
 
 
+class UnrepresentableTrajectoryError(RuntimeError):
+    """The requested relaxation propagation is not representable reliably.
+
+    This is a numerical-domain failure, not a statement about the underlying
+    GKSL dynamics. Returning a non-finite propagator or state would launder an
+    arithmetic failure into entropy, fitting and uncertainty calculations, so
+    the relaxation layer fails closed.
+    """
+
+
 def _evolve(L_super: np.ndarray, rho0: np.ndarray, t_grid: np.ndarray) -> np.ndarray:
-    """Propagate ``rho(t) = expm(L t) rho_0`` and return the trajectory."""
+    """Propagate ``rho(t) = expm(L t) rho_0``, failing closed on non-finite work.
+
+    A finite generator and finite time do not imply that the dimensionless
+    product ``L*t``, the dense matrix exponential, or its action on the state
+    is representable in float64. Each boundary is checked separately so later
+    diagnostics cannot consume NaN/inf as if it were physical data.
+    """
     rho_vec0 = vec(rho0)
     d = rho0.shape[0]
     traj = np.empty((t_grid.size, d, d), dtype=complex)
     for k, t in enumerate(t_grid):
         if t == 0.0:
             traj[k] = rho0
-        else:
-            rho_vec_t = sla.expm(L_super * t) @ rho_vec0
-            traj[k] = unvec(rho_vec_t, d=d)
+            continue
+
+        with np.errstate(over="ignore", invalid="ignore", under="ignore"):
+            scaled = np.asarray(L_super * t)
+        if not np.all(np.isfinite(scaled)):
+            raise UnrepresentableTrajectoryError(
+                "relaxation trajectory: L*t contains non-finite entries at "
+                f"t={float(t):.6g}; the requested dimensionless propagation "
+                "is outside the current float64 dense-expm domain"
+            )
+
+        try:
+            # SciPy's scaling-and-squaring path can emit RuntimeWarning outside
+            # NumPy's errstate. Convert that into the same explicit domain
+            # failure so warnings-as-errors and ordinary callers agree.
+            with warnings.catch_warnings():
+                warnings.filterwarnings("error", category=RuntimeWarning)
+                with np.errstate(over="ignore", invalid="ignore", under="ignore"):
+                    propagator = sla.expm(scaled)
+        except (
+            RuntimeWarning,
+            OverflowError,
+            ValueError,
+            np.linalg.LinAlgError,
+            sla.LinAlgError,
+        ) as exc:
+            raise UnrepresentableTrajectoryError(
+                "relaxation trajectory: scipy.linalg.expm could not represent "
+                f"a finite propagator at t={float(t):.6g}; use a different "
+                "numerical propagation method or time window"
+            ) from exc
+
+        if not np.all(np.isfinite(propagator)):
+            raise UnrepresentableTrajectoryError(
+                "relaxation trajectory: scipy.linalg.expm returned a non-finite "
+                f"propagator at t={float(t):.6g} although L*t is finite"
+            )
+
+        with np.errstate(over="ignore", invalid="ignore", under="ignore"):
+            rho_vec_t = propagator @ rho_vec0
+        if not np.all(np.isfinite(rho_vec_t)):
+            raise UnrepresentableTrajectoryError(
+                "relaxation trajectory: the propagated state became non-finite "
+                f"at t={float(t):.6g}"
+            )
+        traj[k] = unvec(rho_vec_t, d=d)
     return traj
 
 
