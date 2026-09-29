@@ -146,7 +146,7 @@ def test_initial_state_sensitivity_block_action_agrees_with_dense():
     d = 8
     L = -0.2 * np.eye(n, dtype=complex)
     rho_ss = np.eye(d, dtype=complex) / d
-    kwargs = dict(n_samples=6, t_eval=1.75, seed=23)
+    kwargs = {"n_samples": 6, "t_eval": 1.75, "seed": 23}
     dense = initial_state_sensitivity(
         L, rho_ss, propagation_backend="dense_expm", **kwargs
     )
