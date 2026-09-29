@@ -35,6 +35,25 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   eigensolver paths use, so one quantity is not measured two different ways.
 
 ### Changed
+- **Dependency floors raised to the lowest TESTED combination: `numpy>=2.0`,
+  `scipy>=1.13` (was `numpy>=1.24`, `scipy>=1.10`; issue #177).** The old
+  floors were never tested and did not hold. On the declared minimum the
+  spectral layer crashed (see Fixed), and after that fix the full suite still
+  failed on older combinations. Measured 2026-09-29, full suite, Python
+  3.10/3.11:
+  - scipy 1.10.1, 1.11.4 and 1.12.0: two failures;
+  - scipy 1.13.1 + numpy 1.26.4 and scipy 1.14.1 + numpy 1.24.4: one failure;
+  - scipy 1.13.1 + numpy 2.0.2 and scipy 1.14.1 + numpy 2.0.2: all pass.
+
+  The remaining failures are ulp-sensitive tests at the edge of float64
+  resolution, not API breaks (tracked separately). A new `min-deps` CI job
+  installs exactly the `pyproject.toml` floors on Python 3.10, derived by
+  `.github/scripts/min_deps_constraints.py` and never hand-copied, and runs
+  the anchors and the full suite. A floor can therefore no longer drift away
+  from what is tested. The floors stay looser than Scientific Python SPEC 0,
+  which would already allow `numpy>=2.2` and `scipy>=1.15`.
+  **Migration:** environments pinned to NumPy 1.x or SciPy < 1.13 must
+  upgrade before installing this version.
 - **The Gaussian likelihood behind AICc is evaluated in log-RSS space, and an
   exact-zero RSS is now an explicit abstention (issue #135).** This is a
   METHODOLOGY change with user-visible consequences: it can reorder AICc,
@@ -63,6 +82,15 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     the change is not visible in `input_hash`.
 
 ### Fixed
+- **`scipy.linalg.sqrtm`'s extended-precision result no longer reaches NumPy
+  linalg (issue #177).** Up to SciPy 1.14, `sqrtm` returns a complex input's
+  root as `complex256` (scipy/scipy#18250). `np.linalg.eigvalsh` rejects that
+  dtype, so D2 (GNS gap) failed with `TypeError: array type complex256 is
+  unsupported in linalg`. All three `sqrtm` calls in `diagnostics/spectral.py`
+  now go through `_sqrtm_double`, which casts to double precision. The new
+  floor `scipy>=1.13` still upcasts, so the cast is required, not legacy. No
+  reported number changes: the extra precision was discarded by the next
+  float64 operation anyway.
 - **Dense and sparse Liouvillian builders now fail closed when finite inputs overflow during generator assembly (issue #152).** Input finiteness alone did not prevent derived expressions such as `H_jj - H_kk`, `L^dag L`, Kronecker products, or finite-rate scaling from producing `NaN`/`inf`; e.g. `H = diag(1e308, -1e308)` passed the input gates and could return a non-finite generator. Both builders now assemble inside a bounded floating-point warning context and apply one shared exact output-finiteness guard. The sparse path canonicalises duplicates on a copy and checks only stored data, so the check remains O(nnz) and never densifies. Large but representable generators remain accepted. No manifest/schema field changes and no reported value for a representable generator changes.
 - **Relaxation trajectories now fail closed when dense propagation leaves the representable
   float64 domain (issue #156 trajectory slice).** A finite Liouvillian and finite time do not

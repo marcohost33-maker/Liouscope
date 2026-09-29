@@ -35,9 +35,15 @@ classifiers = [
     "Topic :: Scientific/Engineering :: Physics",
     "Typing :: Typed",
 ]
+# Floors are the lowest combination on which the FULL test suite passes, and the
+# `min-deps` CI job re-verifies exactly that combination on every push (issue #177).
+# Measured 2026-09-29 (full suite, Python 3.10/3.11): scipy 1.10.1-1.12.0 fail two
+# tests, scipy 1.13.1 + numpy 1.26.4 and scipy 1.14.1 + numpy 1.24.4 fail one;
+# scipy 1.13.1 + numpy 2.0.2 and scipy 1.14.1 + numpy 2.0.2 pass. Stricter than
+# nothing, looser than SPEC 0 (which would already allow numpy>=2.2, scipy>=1.15).
 dependencies = [
-    "numpy>=1.24",
-    "scipy>=1.10",
+    "numpy>=2.0",
+    "scipy>=1.13",
 ]
 
 [project.optional-dependencies]

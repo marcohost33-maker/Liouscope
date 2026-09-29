@@ -67,9 +67,10 @@ def require_finite_generator(
         If any entry of the represented matrix is ``NaN`` or ``+/-inf``.
     """
     # Do not use ``isinstance(..., sp.sparray)`` here.  ``sparray`` became a
-    # public base class in SciPy 1.11, while pyproject.toml promises scipy>=1.10.
-    # ``issparse`` is the compatibility API and accepts both sparse matrices and
-    # sparse arrays on supported SciPy releases.
+    # public base class only in SciPy 1.11 (the floor was scipy>=1.10 when this
+    # guard was written; it is scipy>=1.13 since issue #177). ``issparse`` is the
+    # documented compatibility API and accepts both sparse matrices and sparse
+    # arrays on every SciPy release, so it stays the robust choice.
     if sp.issparse(L_super):
         # ``issparse`` is not a TypeGuard, so mypy keeps the ndarray arm of the
         # union and rejects the sparse attributes below. scipy.sparse is untyped
