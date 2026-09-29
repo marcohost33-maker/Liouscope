@@ -9,6 +9,7 @@ hid genuine non-diagonalisability cases (Tay 2023, Claeys 2022).
 from __future__ import annotations
 
 import numpy as np
+
 from .._types import LepResult
 from ..core.lindblad import steady_state
 from ..io.seed import RNGLike, SeedLike, derive_seed
