@@ -37,7 +37,15 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   state back), and the cost model saturates instead of raising on subnormal
   or near-overflow norms. Sparse generators are cost-compared like dense ones
   up to `DENSE_MAX_DIM = 2048`; above it an over-budget action is refused
-  rather than densified (PR #176 review). This
+  rather than densified (PR #176 review). The action backend never touches
+  global random state: above ||A||_1 = 63.36 per call (condition (3.13) of
+  Al-Mohy & Higham) SciPy's `expm_multiply` estimates matrix-power norms with
+  the randomised `onenormest`, which draws from the caller's GLOBAL legacy
+  `np.random` stream (measured: consumed on every such call). Each grid step
+  is therefore split into sub-steps below that threshold, so SciPy always
+  selects `(m, s)` from the exact 1-norm, results are bitwise independent of
+  the global seed, and the matrix-vector-product bound is exact; benign grids
+  (every step below the threshold) are not split and are unchanged. This
   CHANGES REPORTED NUMBERS for systems with `d >= 8` in the default path: the
   D5-D7 curves at round-off level (~1e-14), fitted quantities such as
   `beta_D` within the least-squares termination tolerance (`xtol = 1e-8`;

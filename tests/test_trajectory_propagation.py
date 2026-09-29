@@ -536,3 +536,98 @@ def test_large_sparse_over_budget_generator_is_refused_not_densified() -> None:
     L = _large_sparse_diagonal(1.0e9)
     with pytest.raises(UnrepresentableTrajectoryError, match="neither backend is practical"):
         propagate_trajectory(L, np.ones(L.shape[0], dtype=complex), np.array([0.0, 1.0]))
+
+
+# --------------------------------------------------------------------------
+# Determinism: SciPy's condition-(3.13) branch and the global RNG
+# --------------------------------------------------------------------------
+#
+# Above ||A||_1 = 63.36 per call, expm_multiply estimates ||A^p||_1 with the
+# randomised onenormest, which draws from the GLOBAL legacy np.random state.
+# The coarse grid below has per-step shifted norms 72.9 and 413 -- both on the
+# randomised side without sub-stepping (measured before the fix: the global
+# stream was consumed on every call).
+
+_COARSE_GRID = np.array([0.0, 3.0, 20.0])
+
+
+def _coarse_fixture() -> np.ndarray:
+    L = _chain(3, gamma=5.0)
+    assert propagation.shifted_one_norm(L) * 3.0 > propagation._CONDITION_3_13_NORM
+    return L
+
+
+def test_action_never_touches_the_global_random_state() -> None:
+    L = _coarse_fixture()
+    np.random.seed(20260929)
+    before = np.random.get_state()
+    propagate_trajectory(L, vec(_ground(8)), _COARSE_GRID, backend=BACKEND_ACTION)
+    after = np.random.get_state()
+    assert before[0] == after[0]
+    np.testing.assert_array_equal(before[1], after[1])
+    assert before[2:] == after[2:]
+
+
+def test_action_is_bitwise_independent_of_the_global_seed() -> None:
+    L = _coarse_fixture()
+    runs = []
+    for seed in (0, 1, 2):
+        np.random.seed(seed)
+        runs.append(
+            propagate_trajectory(L, vec(_ground(8)), _COARSE_GRID, backend=BACKEND_ACTION).states
+        )
+    for other in runs[1:]:
+        np.testing.assert_array_equal(other, runs[0])
+
+
+def test_every_expm_multiply_call_stays_on_the_exact_norm_branch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Each call's shifted norm is below the (3.13) threshold; sub-steps are counted."""
+    L = _coarse_fixture()
+    real = propagation.expm_multiply
+    norms: list[float] = []
+
+    def _spy(A: np.ndarray, v: np.ndarray, *, traceA: complex) -> np.ndarray:
+        n = A.shape[0]
+        norms.append(float(np.abs(A - (traceA / n) * np.eye(n)).sum(axis=0).max()))
+        return real(A, v, traceA=traceA)
+
+    monkeypatch.setattr(propagation, "expm_multiply", _spy)
+    result = propagate_trajectory(L, vec(_ground(8)), _COARSE_GRID, backend=BACKEND_ACTION)
+    assert max(norms) <= propagation._CONDITION_3_13_NORM
+    a = propagation.shifted_one_norm(L)
+    expected_calls = sum(
+        int(propagation._substep_count(tau * a)) for tau in np.diff(_COARSE_GRID)
+    )
+    assert len(norms) == expected_calls > len(_COARSE_GRID) - 1  # sub-stepping happened
+    dense = propagate_trajectory(L, vec(_ground(8)), _COARSE_GRID, backend=BACKEND_DENSE)
+    np.testing.assert_allclose(result.states, dense.states, rtol=0.0, atol=_AGREE_ATOL)
+
+
+def test_benign_grid_steps_are_not_split() -> None:
+    """Sub-stepping only engages above the threshold: benign trajectories are unchanged."""
+    L = _chain(3)
+    a = propagation.shifted_one_norm(L)
+    grid = np.linspace(0.0, 10.0, 80)
+    assert all(propagation._substep_count(tau * a) == 1.0 for tau in np.diff(grid))
+
+
+def test_report_json_records_the_trajectory_backend(tmp_path) -> None:  # type: ignore[no-untyped-def]
+    """The audit field must survive serialisation, not only live in memory."""
+    import json
+
+    import liouscope as ls
+    from liouscope.io.export import dump_report
+
+    report = ls.diagnose(_chain(1), rho_initial=_plus_state(2), bootstrap_B=20, seed=42)
+    path = tmp_path / "report.json"
+    dump_report(report, path)
+    payload = json.loads(path.read_text())
+    assert payload["relaxation"]["trajectory_backend"] == BACKEND_DENSE
+
+
+def test_large_sparse_unsteppable_grid_is_refused_with_the_right_reason() -> None:
+    L = _large_sparse_diagonal(0.5)
+    with pytest.raises(UnrepresentableTrajectoryError, match="cannot step it"):
+        propagate_trajectory(L, np.ones(L.shape[0], dtype=complex), np.array([0.0, 2.0, 1.0]))

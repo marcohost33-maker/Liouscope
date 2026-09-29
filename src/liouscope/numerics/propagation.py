@@ -53,6 +53,14 @@ no machine state -- so it is reproducible and recorded by the caller
    above that the action is the only candidate, and an over-budget action
    is refused rather than replaced by an ``n x n`` materialisation.
 
+Each grid step is split into sub-steps whose shifted norm stays below the
+threshold of Al-Mohy & Higham's condition (3.13) (63.36 for one vector). Above
+it SciPy would estimate matrix-power norms with the randomised ``onenormest``,
+which draws from the caller's GLOBAL ``np.random`` state; below it the
+parameter choice is a deterministic function of the exact 1-norm. The
+propagation therefore never touches global random state, and its cost bound is
+exact.
+
 The bound is an *upper* bound on what SciPy's parameter selection will spend:
 SciPy minimises ``m * s`` with ``s = ceil(alpha_p / theta_m)`` over the same
 ``theta_m`` table, and ``alpha_p <= ||A||_1`` for every ``p``
@@ -121,6 +129,18 @@ _THETA: dict[int, float] = {
     26: 2.64, 27: 2.86, 28: 3.08, 29: 3.31, 30: 3.54,
     35: 4.7, 40: 6.0, 45: 7.2, 50: 8.5, 55: 9.9,
 }
+
+# Condition (3.13) of Al-Mohy & Higham (2011) for one right-hand side with
+# SciPy's m_max = 55, ell = 2 (p_max = 8): ||A||_1 <= 2*ell*p_max*(p_max+3) *
+# theta_55 / m_max = 63.36. At or below it SciPy selects (m, s) from the EXACT
+# 1-norm; above it SciPy estimates ||A^p||_1 with ``onenormest``, which is
+# randomised and draws from the GLOBAL legacy ``np.random`` state -- a hidden
+# side effect on the caller's random stream and a data-dependent (m, s). The
+# action backend therefore splits every grid step into sub-steps whose shifted
+# norm stays below this value (with a 10% margin for the rounding of the norm
+# SciPy recomputes), so every call takes the deterministic exact-norm path.
+_CONDITION_3_13_NORM: float = 2 * 2 * 8 * (8 + 3) * 9.9 / 55
+_SUBSTEP_NORM: float = 0.9 * _CONDITION_3_13_NORM
 
 # Dense estimate, in matrix-vector-product units (one n x n matmul = n
 # products): a degree-13 Pade approximant costs ~6 matmuls plus one LU solve
@@ -204,6 +224,21 @@ def _action_step_cost(scaled_norm: float) -> float:
     return best
 
 
+def _substep_count(scaled_norm: float) -> float:
+    """Sub-steps that keep each call at or below ``_SUBSTEP_NORM`` (float: may be huge)."""
+    if not math.isfinite(scaled_norm):
+        return math.inf
+    return max(1.0, float(math.ceil(scaled_norm / _SUBSTEP_NORM)))
+
+
+def _step_cost(scaled_norm: float) -> float:
+    """Products for one grid step of shifted norm ``scaled_norm``, sub-steps included."""
+    count = _substep_count(scaled_norm)
+    if not math.isfinite(count):
+        return math.inf
+    return count * _action_step_cost(scaled_norm / count)
+
+
 def _grid_is_steppable(t_grid: np.ndarray) -> bool:
     """Stepping needs a finite, non-negative, non-decreasing grid."""
     if t_grid.size == 0:
@@ -218,7 +253,11 @@ def _grid_is_steppable(t_grid: np.ndarray) -> bool:
 def action_matvec_bound(L: np.ndarray | sp.spmatrix, t_grid: np.ndarray) -> float:
     """Upper bound on the matrix-vector products the action backend will form.
 
-    ``inf`` when the grid cannot be stepped or the bound is not representable.
+    Every call runs on SciPy's exact-norm branch (see ``_SUBSTEP_NORM``), where
+    SciPy's ``(m, s)`` is the minimiser of ``m * ceil(norm / theta_m)`` over the
+    same table, so the bound equals SciPy's ``sum m * s``; SciPy's early
+    termination can only use fewer products. ``inf`` when the grid cannot be
+    stepped or the bound is not representable.
     """
     t_grid = np.asarray(t_grid, dtype=float)
     if not _grid_is_steppable(t_grid):
@@ -232,7 +271,7 @@ def action_matvec_bound(L: np.ndarray | sp.spmatrix, t_grid: np.ndarray) -> floa
         if tau == 0.0:
             continue
         with np.errstate(over="ignore"):
-            total += _action_step_cost(tau * norm)
+            total += _step_cost(tau * norm)
         if not math.isfinite(total):
             return math.inf
     return total
@@ -279,11 +318,17 @@ def select_trajectory_backend(
     if _is_sparse(L) and n > DENSE_MAX_DIM:
         if action_affordable:
             return BACKEND_ACTION, bound
+        reason = (
+            "the time grid is not finite, non-negative and non-decreasing, so "
+            "the action backend cannot step it"
+            if not _grid_is_steppable(t_grid)
+            else f"its exponential-action cost bound ({bound:.3g} matrix-vector "
+            f"products) exceeds the budget ({float(max_action_matvecs):.3g})"
+        )
         raise UnrepresentableTrajectoryError(
             "relaxation trajectory: sparse generator of dimension "
-            f"{n} > DENSE_MAX_DIM={DENSE_MAX_DIM} whose exponential-action cost "
-            f"bound ({bound:.3g} matrix-vector products) exceeds the budget "
-            f"({float(max_action_matvecs):.3g}); neither backend is practical"
+            f"{n} > DENSE_MAX_DIM={DENSE_MAX_DIM} and {reason}; neither backend "
+            "is practical"
         )
     if n < ACTION_MIN_DIM or not action_affordable:
         return BACKEND_DENSE, bound
@@ -353,8 +398,16 @@ def _propagate_dense(
 def _propagate_action(
     L: np.ndarray | sp.spmatrix, rho_vec0: np.ndarray, t_grid: np.ndarray
 ) -> np.ndarray:
-    """Exponential-action path: step ``v <- exp(tau L) v`` along the grid."""
+    """Exponential-action path: step ``v <- exp(tau L) v`` along the grid.
+
+    Each grid step ``tau`` is split into ``k`` equal sub-steps with
+    ``(tau / k) * ||L - mu I||_1 <= _SUBSTEP_NORM`` so that SciPy never takes
+    its randomised norm-estimation branch. ``k * (tau / k)`` may differ from
+    ``tau`` by ``O(k)`` units in the last place of ``tau``; for ``k == 1``
+    (every benign grid) the step is exactly ``t_k - t_{k-1}``.
+    """
     trace = _trace(L)
+    norm = shifted_one_norm(L)
     states = np.empty((t_grid.size, rho_vec0.size), dtype=complex)
     v = np.asarray(rho_vec0, dtype=complex)
     previous = 0.0
@@ -366,36 +419,46 @@ def _propagate_action(
             states[k] = v
             continue
 
+        with np.errstate(over="ignore"):
+            count = _substep_count(tau * norm)
+        if not math.isfinite(count):
+            raise UnrepresentableTrajectoryError(
+                "relaxation trajectory: ||L - mu I||_1 * tau is not representable "
+                f"at t={float(t):.6g}; outside the float64 exponential-action domain"
+            )
+        substeps = int(count)
+        tau_sub = tau / substeps
         with np.errstate(over="ignore", invalid="ignore", under="ignore"):
-            scaled = L * tau
-            trace_tau = trace * tau
+            scaled = L * tau_sub
+            trace_sub = trace * tau_sub
         scaled_values = scaled.data if _is_sparse(scaled) else scaled  # type: ignore[union-attr]
-        if not (np.all(np.isfinite(scaled_values)) and np.isfinite(trace_tau)):
+        if not (np.all(np.isfinite(scaled_values)) and np.isfinite(trace_sub)):
             raise UnrepresentableTrajectoryError(
                 "relaxation trajectory: L*tau contains non-finite entries at "
                 f"t={float(t):.6g}; the requested dimensionless propagation "
                 "is outside the float64 exponential-action domain"
             )
-        try:
-            with warnings.catch_warnings():
-                warnings.filterwarnings("error", category=RuntimeWarning)
-                with np.errstate(over="ignore", invalid="ignore", under="ignore"):
-                    v = expm_multiply(scaled, v, traceA=trace_tau)
-        except (
-            RuntimeWarning,
-            OverflowError,
-            ValueError,
-            np.linalg.LinAlgError,
-        ) as exc:
-            raise UnrepresentableTrajectoryError(
-                "relaxation trajectory: scipy.sparse.linalg.expm_multiply could "
-                f"not represent the propagated state at t={float(t):.6g}"
-            ) from exc
-        if not np.all(np.isfinite(v)):
-            raise UnrepresentableTrajectoryError(
-                "relaxation trajectory: the propagated state became non-finite "
-                f"at t={float(t):.6g}"
-            )
+        for _ in range(substeps):
+            try:
+                with warnings.catch_warnings():
+                    warnings.filterwarnings("error", category=RuntimeWarning)
+                    with np.errstate(over="ignore", invalid="ignore", under="ignore"):
+                        v = expm_multiply(scaled, v, traceA=trace_sub)
+            except (
+                RuntimeWarning,
+                OverflowError,
+                ValueError,
+                np.linalg.LinAlgError,
+            ) as exc:
+                raise UnrepresentableTrajectoryError(
+                    "relaxation trajectory: scipy.sparse.linalg.expm_multiply could "
+                    f"not represent the propagated state at t={float(t):.6g}"
+                ) from exc
+            if not np.all(np.isfinite(v)):
+                raise UnrepresentableTrajectoryError(
+                    "relaxation trajectory: the propagated state became non-finite "
+                    f"at t={float(t):.6g}"
+                )
         states[k] = v
         previous = float(t)
     return states
