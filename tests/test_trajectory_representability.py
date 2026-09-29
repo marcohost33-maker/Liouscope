@@ -11,11 +11,11 @@ import pytest
 import scipy.linalg as sla
 
 from liouscope.core.lindblad import build_liouvillian
-from liouscope.diagnostics import relaxation
 from liouscope.diagnostics.relaxation import (
     UnrepresentableTrajectoryError,
     _evolve,
 )
+from liouscope.numerics import propagation
 from liouscope.numerics.kronecker import unvec, vec
 
 _SM = np.array([[0.0, 1.0], [0.0, 0.0]], dtype=complex)
@@ -89,7 +89,7 @@ def test_scipy_runtime_warning_is_normalised_to_the_domain_error(
     def _warn(_scaled: np.ndarray) -> np.ndarray:
         raise RuntimeWarning("synthetic scaling-and-squaring failure")
 
-    monkeypatch.setattr(relaxation.sla, "expm", _warn)
+    monkeypatch.setattr(propagation.sla, "expm", _warn)
     with pytest.raises(UnrepresentableTrajectoryError, match=r"scipy\.linalg\.expm"):
         _evolve(_ordinary_generator(), _RHO_PLUS, np.array([0.0, 1.0]))
 
@@ -100,7 +100,7 @@ def test_nonfinite_action_is_rejected_even_with_finite_propagator(
     """A finite propagator can still overflow when applied to the state."""
     huge = np.full((4, 4), 1.0e308, dtype=complex)
     assert np.all(np.isfinite(huge))
-    monkeypatch.setattr(relaxation.sla, "expm", lambda _scaled: huge)
+    monkeypatch.setattr(propagation.sla, "expm", lambda _scaled: huge)
 
     with pytest.raises(
         UnrepresentableTrajectoryError,
