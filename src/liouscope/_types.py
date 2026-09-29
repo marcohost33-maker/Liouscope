@@ -296,6 +296,10 @@ class LepResult:
     lep_proximity: float                  # D16 min pair separation (NaN = withheld)
     gap_rate_consistency: float           # D17 |beta_D_linear - Delta| / Delta
     initial_state_sensitivity: float      # D18 std over Haar ensemble
+    # Issue #178: D18 may use the block exponential action for larger systems.
+    # Defaulted to the historical dense path for backward-compatible synthetic
+    # callers and older serialised results.
+    initial_state_backend: str = "dense_expm"
     # ROUND-23 REVIEW (PR #121). ``None`` where D16 is withheld, in parity with
     # ``SpectralResult.has_complex_pairs``. An integer count cannot express
     # "not counted": 0 is a measured absence of close pairs, and the count is
