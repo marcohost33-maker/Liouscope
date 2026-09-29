@@ -5,6 +5,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 import scipy.linalg as sla
+import scipy.sparse as sp
 
 import liouscope.numerics.propagation as propagation_module
 from liouscope import build_liouvillian, steady_state
@@ -225,5 +226,17 @@ def test_compute_lep_layer_records_d18_action_backend():
         rho_steady_state=rho_ss,
         n_haar=4,
         seed=3,
+        d18_backend="expm_action",
     )
     assert result.initial_state_backend == "expm_action"
+
+
+def test_d18_auto_uses_separate_conservative_block_crossover():
+    """Single-expm D18 must not inherit the trajectory's n=64 crossover."""
+    mid = -0.1 * np.eye(256, dtype=complex)
+    backend_mid, _ = propagation_module.select_block_backend(mid, 1.0, 10)
+    assert backend_mid == "dense_expm"
+
+    large = -0.1 * sp.eye(1024, dtype=complex, format="csr")
+    backend_large, _ = propagation_module.select_block_backend(large, 1.0, 10)
+    assert backend_large == "expm_action"
