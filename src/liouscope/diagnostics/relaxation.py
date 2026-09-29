@@ -65,9 +65,11 @@ def _propagate(
     d = rho0.shape[0]
     result = propagate_trajectory(L_super, vec(rho0), t_grid, backend=backend)
     traj = np.empty((t_grid.size, d, d), dtype=complex)
-    for k, t in enumerate(t_grid):
-        # t == 0 is rho_0 itself, not its vec/unvec round trip.
-        traj[k] = rho0 if t == 0.0 else unvec(result.states[k], d=d)
+    for k in range(t_grid.size):
+        # ``states`` holds rho_0 exactly at t == 0, already validated in the
+        # complex128 working dtype; vec/unvec is a pure reshape, so this is
+        # rho_0 itself without a second, unchecked narrowing store.
+        traj[k] = unvec(result.states[k], d=d)
     return traj, result.backend
 
 

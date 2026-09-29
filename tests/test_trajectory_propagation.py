@@ -714,3 +714,69 @@ def test_overflowing_unscaled_norm_does_not_refuse_a_representable_step(sparse: 
     expected[0] += 1.0
     expected[2] += 1.0
     np.testing.assert_allclose(result.states[1], expected, rtol=1.0e-14)
+
+
+# --------------------------------------------------------------------------
+# PR #174 review (Codex, commit c908045) -- applies to this implementation too
+# --------------------------------------------------------------------------
+
+_HAS_EXTENDED = np.dtype(np.clongdouble).itemsize > np.dtype(np.complex128).itemsize
+
+
+def test_scipy_runtime_error_from_expm_is_normalised(monkeypatch: pytest.MonkeyPatch) -> None:
+    """SciPy raises RuntimeError on a nonzero internal LAPACK status in expm."""
+
+    def _lapack_failure(_A: np.ndarray) -> np.ndarray:
+        raise RuntimeError("scipy.linalg.expm got an internal LAPACK error")
+
+    monkeypatch.setattr(propagation.sla, "expm", _lapack_failure)
+    with pytest.raises(UnrepresentableTrajectoryError, match=r"scipy\.linalg\.expm"):
+        propagate_trajectory(
+            _chain(1), vec(_plus_state(2)), np.array([0.0, 1.0]), backend=BACKEND_DENSE
+        )
+
+
+def test_scipy_runtime_error_from_expm_multiply_is_normalised(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def _lapack_failure(*_args: object, **_kwargs: object) -> np.ndarray:
+        raise RuntimeError("internal failure")
+
+    monkeypatch.setattr(propagation, "expm_multiply", _lapack_failure)
+    with pytest.raises(UnrepresentableTrajectoryError, match="expm_multiply"):
+        propagate_trajectory(
+            _chain(1), vec(_plus_state(2)), np.array([0.0, 1.0]), backend=BACKEND_ACTION
+        )
+
+
+def test_memory_error_is_not_disguised_as_a_domain_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    def _oom(_A: np.ndarray) -> np.ndarray:
+        raise MemoryError("scipy.linalg.expm could not allocate sufficient memory")
+
+    monkeypatch.setattr(propagation.sla, "expm", _oom)
+    with pytest.raises(MemoryError):
+        propagate_trajectory(
+            _chain(1), vec(_plus_state(2)), np.array([0.0, 1.0]), backend=BACKEND_DENSE
+        )
+
+
+@pytest.mark.skipif(not _HAS_EXTENDED, reason="clongdouble == complex128 on this platform")
+@pytest.mark.parametrize("backend", ["auto", BACKEND_DENSE, BACKEND_ACTION])
+@pytest.mark.parametrize("grid", [np.array([0.0]), np.array([0.0, 1.0])])
+def test_extended_precision_state_beyond_complex128_is_refused(
+    backend: str, grid: np.ndarray
+) -> None:
+    """Finite as clongdouble, inf as complex128: refuse instead of storing inf."""
+    v0 = np.full(4, np.clongdouble(1.0e308) * 4)
+    assert np.all(np.isfinite(v0))
+    with pytest.raises(ValueError, match="not representable in complex128"):
+        propagate_trajectory(np.zeros((4, 4), dtype=complex), v0, grid, backend=backend)
+
+
+def test_extended_precision_ordinary_state_propagates_like_complex128() -> None:
+    L = _chain(1)
+    grid = np.array([0.0, 0.5, 2.0])
+    reference = _evolve(L, _plus_state(2), grid)
+    extended = _evolve(L, _plus_state(2).astype(np.clongdouble), grid)
+    assert extended.dtype == np.complex128
+    np.testing.assert_array_equal(extended, reference)

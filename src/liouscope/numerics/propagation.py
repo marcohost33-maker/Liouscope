@@ -413,6 +413,11 @@ def _propagate_dense(
             ValueError,
             np.linalg.LinAlgError,
             sla.LinAlgError,
+            # SciPy >= 1.9 raises RuntimeError for a nonzero internal LAPACK
+            # status ("scipy.linalg.expm got an internal LAPACK error").
+            # MemoryError is deliberately NOT converted: it is a resource
+            # failure, not a statement about the propagation's domain.
+            RuntimeError,
         ) as exc:
             raise UnrepresentableTrajectoryError(
                 "relaxation trajectory: scipy.linalg.expm could not represent "
@@ -492,6 +497,7 @@ def _propagate_action(
                 OverflowError,
                 ValueError,
                 np.linalg.LinAlgError,
+                RuntimeError,
             ) as exc:
                 raise UnrepresentableTrajectoryError(
                     "relaxation trajectory: scipy.sparse.linalg.expm_multiply could "
@@ -542,9 +548,22 @@ def propagate_trajectory(
         )
     # Validate the inputs themselves: the exact t == 0 shortcut returns
     # rho_vec0 without ever reaching a post-propagation finiteness check, so a
-    # zero-only grid would otherwise hand a NaN state straight back.
+    # zero-only grid would otherwise hand a NaN state straight back. The check
+    # runs AFTER conversion to the complex128 working dtype: an extended-
+    # precision input (clongdouble) can be finite as given and overflow to inf
+    # on the narrowing store into the complex128 trajectory (PR #174 review).
+    with np.errstate(over="ignore", invalid="ignore"):
+        rho_vec0 = rho_vec0.astype(np.complex128)
     if not np.all(np.isfinite(rho_vec0)):
-        raise ValueError("propagate_trajectory: rho_vec0 contains non-finite entries")
+        raise ValueError(
+            "propagate_trajectory: rho_vec0 contains non-finite entries or entries "
+            "not representable in complex128"
+        )
+    if not _is_sparse(L) and np.dtype(L.dtype).itemsize > np.dtype(np.complex128).itemsize:
+        # Extended-precision generators would otherwise make every product
+        # extended-precision and narrow silently on store; work in double.
+        with np.errstate(over="ignore", invalid="ignore"):
+            L = L.astype(np.complex128)
     try:
         require_finite_generator(L, builder="propagate_trajectory")
     except ValueError as exc:
