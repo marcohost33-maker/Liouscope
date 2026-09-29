@@ -10,10 +10,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **D18 initial-state sensitivity can use one deterministic block exponential
   action instead of materialising a full propagator (issue #178).** The Haar
   ensemble is collected as right-hand-side columns and evolved by
-  `propagate_block_at_time`. For `n=d^2 < 64` the automatic path retains the
-  historical dense formula and column-wise multiplication order; larger
-  systems choose the action only when its equivalent-matvec bound beats the
-  dense estimate. The sub-step threshold scales as `1 / n_rhs`, matching
+  `propagate_block_at_time`. The automatic D18 path uses a separate,
+  conservative block crossover (`n >= 512`) because D18 forms only one dense
+  exponential and level-3 BLAS changes the small/medium crossover; below it the
+  historical dense formula and column-wise multiplication order are retained.
+  Beyond it, action still has to satisfy the equivalent-matvec budget/estimate. The sub-step threshold scales as `1 / n_rhs`, matching
   SciPy's condition (3.13), so multi-column `expm_multiply` stays on the exact
   1-norm branch and does not consume global `np.random` state. The backend is
   persisted as `LepResult.initial_state_backend`; dense/action parity,
