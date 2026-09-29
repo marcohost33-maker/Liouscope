@@ -36,9 +36,28 @@ def _gram_gns(rho: np.ndarray) -> np.ndarray:
     return np.kron(rho.T, eye)
 
 
+def _sqrtm_double(A: np.ndarray) -> np.ndarray:
+    """``scipy.linalg.sqrtm`` in double precision on every supported SciPy.
+
+    Up to and including SciPy 1.14, ``sqrtm`` returns a complex input's root
+    with DOUBLE the precision -- ``complex256`` on x86-64 Linux/macOS
+    (scipy/scipy#18250, measured for 1.10.1, 1.11.4, 1.12.0, 1.13.1 and
+    1.14.1; 1.15.3 returns ``complex128``). NumPy's ``linalg`` rejects that
+    dtype ("array type complex256 is unsupported in linalg"), so every
+    downstream ``eigvalsh`` failed on the then-declared minimum ``scipy>=1.10``
+    (issue #177). The current floor ``scipy>=1.13`` still upcasts, so the cast
+    is required, not legacy. The extra precision is discarded by the next float64
+    operation anyway; casting here only removes the dtype hazard.
+    """
+    root = np.asarray(sla.sqrtm(A))
+    if np.iscomplexobj(root):
+        return root.astype(np.complex128, copy=False)
+    return root.astype(np.float64, copy=False)
+
+
 def _gram_kms(rho: np.ndarray) -> np.ndarray:
     """``G_KMS = rho^{1/2}.conj() (x) rho^{1/2}``."""
-    sqrt_rho = sla.sqrtm(rho)
+    sqrt_rho = _sqrtm_double(rho)
     if np.iscomplexobj(rho):
         sqrt_rho = sqrt_rho.astype(complex)
     return np.kron(sqrt_rho.conj(), sqrt_rho)
@@ -78,7 +97,7 @@ def gns_gap(L_super: np.ndarray, rho_steady: np.ndarray) -> float:
     L_sym = symmetrised_liouvillian(L_super, rho_reg)
 
     G = _gram_gns(rho_reg)
-    G_half = sla.sqrtm(G)
+    G_half = _sqrtm_double(G)
     G_inv_half = sla.inv(G_half)
     M = G_half @ L_sym @ G_inv_half
     return _real_gap_from_symmetric(M)
@@ -100,7 +119,7 @@ def kms_gap(L_super: np.ndarray, rho_steady: np.ndarray) -> float:
     G = _gram_kms(rho_reg)
     L_HS = L_super.conj().T
     L_sym = 0.5 * (L_HS + gram_adjoint(L_super, G))
-    G_half = sla.sqrtm(G)
+    G_half = _sqrtm_double(G)
     G_inv_half = sla.inv(G_half)
     M = G_half @ L_sym @ G_inv_half
     return _real_gap_from_symmetric(M)

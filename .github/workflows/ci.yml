@@ -51,6 +51,35 @@ jobs:
           name: coverage-xml
           path: coverage.xml
 
+  test-min-deps:
+    # Issue #177: the declared dependency floors are a promise; this job keeps
+    # it. Every runtime dependency is pinned to its pyproject floor (derived by
+    # .github/scripts/min_deps_constraints.py, never hand-copied) on the lowest
+    # supported Python, and the full suite runs against exactly that set.
+    name: min-deps test (python 3.10, declared floors)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803  # v6.1.0
+        with:
+          persist-credentials: false
+      - name: Set up Python 3.10
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # v6.2.0
+        with:
+          python-version: "3.10"
+      - name: Install package at the declared dependency floors
+        run: |
+          python -m pip install --upgrade pip
+          python .github/scripts/min_deps_constraints.py > min-deps-constraints.txt
+          cat min-deps-constraints.txt
+          pip install -e .[dev] --constraint min-deps-constraints.txt
+          python -c "import numpy, scipy; print('numpy', numpy.__version__, 'scipy', scipy.__version__)"
+      - name: Run anchor regressions (must pass)
+        run: pytest tests/test_anchors.py -v
+      - name: Run full test suite
+        run: pytest -q
+
   test-head:
     if: ${{ github.event_name == 'pull_request' }}
     name: head test (${{ matrix.os }}, ${{ matrix.python-version }})

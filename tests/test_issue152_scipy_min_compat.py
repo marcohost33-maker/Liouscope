@@ -1,8 +1,9 @@
 """Regression for the SciPy 1.10 compatibility boundary of issue #152.
 
-Liouscope declares ``scipy>=1.10``.  The public ``scipy.sparse.sparray`` base
-class was introduced in SciPy 1.11, so the output guard must not require that
-symbol at runtime.  These tests delete the symbol from a modern SciPy module to
+Liouscope declared ``scipy>=1.10`` when this was written (``scipy>=1.13`` since
+issue #177).  The public ``scipy.sparse.sparray`` base class was introduced in
+SciPy 1.11, so the output guard must not require that symbol at runtime; the
+tests stay as defence in depth for the ``issparse`` compatibility API.  These tests delete the symbol from a modern SciPy module to
 model the declared minimum-version surface and prove both dense and sparse
 paths continue to use the compatibility API ``scipy.sparse.issparse``.
 """
