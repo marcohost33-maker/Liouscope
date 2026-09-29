@@ -6,6 +6,7 @@ import numpy as np
 import pytest
 import scipy.linalg as sla
 
+import liouscope.numerics.propagation as propagation_module
 from liouscope import build_liouvillian, steady_state
 from liouscope.diagnostics.lep import (
     compute_lep_layer,
@@ -14,7 +15,6 @@ from liouscope.diagnostics.lep import (
     lep_proximity,
 )
 from liouscope.numerics.linalg import eig_nonhermitian
-import liouscope.numerics.propagation as propagation_module
 
 
 def test_lep_proximity_includes_complex_pairs(pauli):
