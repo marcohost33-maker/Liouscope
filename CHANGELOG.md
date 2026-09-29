@@ -7,6 +7,20 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Added
+- **D18 initial-state sensitivity can use one deterministic block exponential
+  action instead of materialising a full propagator (issue #178).** The Haar
+  ensemble is collected as right-hand-side columns and evolved by
+  `propagate_block_at_time`. The automatic D18 path uses a separate,
+  conservative block crossover (`n >= 512`) because D18 forms only one dense
+  exponential and level-3 BLAS changes the small/medium crossover; below it the
+  historical dense formula and column-wise multiplication order are retained.
+  Beyond it, action still has to satisfy the equivalent-matvec budget/estimate. The sub-step threshold scales as `1 / n_rhs`, matching
+  SciPy's condition (3.13), so multi-column `expm_multiply` stays on the exact
+  1-norm branch and does not consume global `np.random` state. The backend is
+  persisted as `LepResult.initial_state_backend`; dense/action parity,
+  RHS-scaled sub-stepping and global-RNG invariance have dedicated regression
+  tests.
+
 - **Relaxation trajectories can be propagated by the exponential ACTION instead
   of a materialised `expm(L t)` (issue #162).** The relaxation layer needs
   `exp(t L) vec(rho_0)`, not the `d^2 x d^2` propagator. The new

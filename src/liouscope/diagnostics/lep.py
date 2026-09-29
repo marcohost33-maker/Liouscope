@@ -9,12 +9,16 @@ hid genuine non-diagonalisability cases (Tay 2023, Claeys 2022).
 from __future__ import annotations
 
 import numpy as np
-import scipy.linalg as sla
 
 from .._types import LepResult
 from ..core.lindblad import steady_state
 from ..io.seed import RNGLike, SeedLike, derive_seed
 from ..numerics.kronecker import unvec, vec
+from ..numerics.propagation import (
+    BACKEND_AUTO,
+    DEFAULT_ACTION_MATVEC_BUDGET,
+    propagate_block_at_time,
+)
 from ..numerics.scale import spectral_zero_tolerance
 
 
@@ -113,6 +117,47 @@ def gap_rate_consistency(rate: float, gap: float) -> float:
     return float(abs(rate - gap) / gap)
 
 
+def _initial_state_sensitivity_with_backend(
+    L_super: np.ndarray,
+    rho_steady_state: np.ndarray,
+    *,
+    n_samples: int = 10,
+    t_eval: float = 1.0,
+    seed: int | None = None,
+    rng: RNGLike | SeedLike | None = None,
+    propagation_backend: str = BACKEND_AUTO,
+    max_action_matvecs: float = DEFAULT_ACTION_MATVEC_BUDGET,
+) -> tuple[float, str]:
+    """D18 value plus the propagation backend that produced it."""
+    L_super = np.asarray(L_super)
+    n2 = L_super.shape[0]
+    d = int(round(np.sqrt(n2)))
+    gen = np.random.default_rng(derive_seed(rng, seed, default=7))
+
+    # Generate the Haar ensemble in exactly the historical order, but collect
+    # the vectorised states as columns so one block exponential action can serve
+    # all samples. Small systems still select the dense reference backend,
+    # which materialises expm once and multiplies each column separately.
+    initial = np.empty((n2, n_samples), dtype=complex)
+    for k in range(n_samples):
+        psi = gen.normal(size=d) + 1j * gen.normal(size=d)
+        psi /= np.linalg.norm(psi)
+        initial[:, k] = vec(np.outer(psi, psi.conj()))
+
+    propagated = propagate_block_at_time(
+        L_super,
+        initial,
+        t_eval,
+        backend=propagation_backend,
+        max_action_matvecs=max_action_matvecs,
+    )
+    distances = np.empty(n_samples)
+    for k in range(n_samples):
+        rho_t = unvec(propagated.states[:, k], d=d)
+        distances[k] = float(np.linalg.norm(rho_t - rho_steady_state, ord="fro"))
+    return float(np.std(distances)), propagated.backend
+
+
 def initial_state_sensitivity(
     L_super: np.ndarray,
     rho_steady_state: np.ndarray,
@@ -121,28 +166,26 @@ def initial_state_sensitivity(
     t_eval: float = 1.0,
     seed: int | None = None,
     rng: RNGLike | SeedLike | None = None,
+    propagation_backend: str = BACKEND_AUTO,
+    max_action_matvecs: float = DEFAULT_ACTION_MATVEC_BUDGET,
 ) -> float:
     """D18: std of relaxation distance over a Haar-random initial-state ensemble.
 
-    Samples ``n_samples`` Haar-random pure states, evolves to ``t_eval`` and
-    measures
-    ``||rho(t) - rho_ss||_F``. Returns the standard deviation across samples.
-    ``seed`` (legacy, default 7) and the SPEC 7 ``rng`` keyword are mutually
-    exclusive; ``rng`` is normalised via :func:`liouscope.io.seed.derive_seed`.
+    The Haar states are evolved as one RHS block. Automatic selection keeps the
+    historical dense formula for small/medium dense systems and only considers
+    the deterministic exponential action beyond the D18-specific crossover.
     """
-    L_super = np.asarray(L_super)
-    n2 = L_super.shape[0]
-    d = int(round(np.sqrt(n2)))
-    gen = np.random.default_rng(derive_seed(rng, seed, default=7))
-    expm_t = sla.expm(L_super * t_eval)
-    distances = np.empty(n_samples)
-    for k in range(n_samples):
-        psi = gen.normal(size=d) + 1j * gen.normal(size=d)
-        psi /= np.linalg.norm(psi)
-        rho0 = np.outer(psi, psi.conj())
-        rho_t = unvec(expm_t @ vec(rho0), d=d)
-        distances[k] = float(np.linalg.norm(rho_t - rho_steady_state, ord="fro"))
-    return float(np.std(distances))
+    value, _backend = _initial_state_sensitivity_with_backend(
+        L_super,
+        rho_steady_state,
+        n_samples=n_samples,
+        t_eval=t_eval,
+        seed=seed,
+        rng=rng,
+        propagation_backend=propagation_backend,
+        max_action_matvecs=max_action_matvecs,
+    )
+    return value
 
 
 def compute_lep_layer(
@@ -156,6 +199,8 @@ def compute_lep_layer(
     rng: RNGLike | SeedLike | None = None,
     n_haar: int = 10,
     spectral_resolved: bool = True,
+    d18_backend: str = BACKEND_AUTO,
+    d18_max_action_matvecs: float = DEFAULT_ACTION_MATVEC_BUDGET,
 ) -> LepResult:
     """Run D16, D17, D18 together.
 
@@ -193,8 +238,14 @@ def compute_lep_layer(
     if rho_steady_state is None:
         rho_steady_state = steady_state(L_super)
     consistency = gap_rate_consistency(beta_D_linear, gap)
-    sensitivity = initial_state_sensitivity(
-        L_super, rho_steady_state, n_samples=n_haar, seed=seed, rng=rng
+    sensitivity, sensitivity_backend = _initial_state_sensitivity_with_backend(
+        L_super,
+        rho_steady_state,
+        n_samples=n_haar,
+        seed=seed,
+        rng=rng,
+        propagation_backend=d18_backend,
+        max_action_matvecs=d18_max_action_matvecs,
     )
     # Computed BEFORE the withholding branch on purpose: ``lep_proximity``
     # carries the issue-#82 fail-closed check that non-finite eigenvalues are
@@ -210,6 +261,7 @@ def compute_lep_layer(
             initial_state_sensitivity=sensitivity,
             lep_candidate_count=None,
             beta_D_linear=float(beta_D_linear),
+            initial_state_backend=sensitivity_backend,
         )
     return LepResult(
         lep_proximity=proximity if np.isfinite(proximity) else float("inf"),
@@ -217,4 +269,5 @@ def compute_lep_layer(
         initial_state_sensitivity=sensitivity,
         lep_candidate_count=candidates,
         beta_D_linear=float(beta_D_linear),
+        initial_state_backend=sensitivity_backend,
     )

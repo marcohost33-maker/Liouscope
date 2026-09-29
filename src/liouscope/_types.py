@@ -304,6 +304,10 @@ class LepResult:
     # LIOU-#69: the LINEAR-metric rate actually fed to D17 (dimension-coherent
     # with the gap). Additive + defaulted so synthetic callers stay valid.
     beta_D_linear: float = float("nan")
+    # Issue #178: D18 may use the block exponential action for larger systems.
+    # Defaulted to the historical dense path for backward-compatible synthetic
+    # callers and older serialised results.
+    initial_state_backend: str = "dense_expm"
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)

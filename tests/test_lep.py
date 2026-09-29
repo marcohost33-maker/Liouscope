@@ -4,7 +4,10 @@ from __future__ import annotations
 
 import numpy as np
 import pytest
+import scipy.linalg as sla
+import scipy.sparse as sp
 
+import liouscope.numerics.propagation as propagation_module
 from liouscope import build_liouvillian, steady_state
 from liouscope.diagnostics.lep import (
     compute_lep_layer,
@@ -111,3 +114,129 @@ def test_compute_lep_layer_returns_result(pauli):
     assert res.gap_rate_consistency == abs(0.6 - 0.3) / 0.3
     assert res.beta_D_linear == 0.6
     assert res.lep_candidate_count >= 0
+
+
+def test_initial_state_sensitivity_small_system_is_bitwise_legacy(pauli):
+    """n < 64 must keep the pre-#178 dense formula exactly."""
+    L = build_liouvillian(0.5 * pauli["X"], [pauli["Z"]], [0.3])
+    rho_ss = steady_state(L)
+    seed = 19
+    n_samples = 7
+    t_eval = 1.25
+
+    gen = np.random.default_rng(seed)
+    propagator = sla.expm(L * t_eval)
+    legacy = np.empty(n_samples)
+    d = rho_ss.shape[0]
+    for k in range(n_samples):
+        psi = gen.normal(size=d) + 1j * gen.normal(size=d)
+        psi /= np.linalg.norm(psi)
+        rho0 = np.outer(psi, psi.conj())
+        rho_t = (propagator @ rho0.reshape(-1, order="F")).reshape((d, d), order="F")
+        legacy[k] = float(np.linalg.norm(rho_t - rho_ss, ord="fro"))
+
+    current = initial_state_sensitivity(
+        L, rho_ss, n_samples=n_samples, t_eval=t_eval, seed=seed
+    )
+    assert current == float(np.std(legacy))
+
+
+def test_initial_state_sensitivity_block_action_agrees_with_dense():
+    """D18's block action agrees with its dense reference for n=64."""
+    n = 64
+    d = 8
+    L = -0.2 * np.eye(n, dtype=complex)
+    rho_ss = np.eye(d, dtype=complex) / d
+    kwargs = {"n_samples": 6, "t_eval": 1.75, "seed": 23}
+    dense = initial_state_sensitivity(
+        L, rho_ss, propagation_backend="dense_expm", **kwargs
+    )
+    action = initial_state_sensitivity(
+        L, rho_ss, propagation_backend="expm_action", **kwargs
+    )
+    assert action == pytest.approx(dense, rel=1e-12, abs=1e-14)
+
+
+def test_d18_block_action_scales_condition_3_13_by_rhs_count(monkeypatch):
+    """A block must use the n0-scaled exact-norm branch, not the 1-RHS bound."""
+    n = 64
+    d = 8
+    # Shifted norm * t is 30: below the one-RHS margin (~57), but far above
+    # the 10-RHS margin (~5.7). A missing / n_rhs would be caught here.
+    L = np.diag(np.linspace(-3.0, 3.0, n)).astype(complex)
+    rho_ss = np.eye(d, dtype=complex) / d
+    real = propagation_module.expm_multiply
+    seen = []
+
+    def checked(A, B, **kwargs):
+        n_rhs = B.shape[1]
+        scaled_norm = propagation_module.shifted_one_norm(A)
+        limit = propagation_module._SUBSTEP_NORM / n_rhs
+        assert scaled_norm <= limit * (1.0 + 1e-12)
+        seen.append((scaled_norm, n_rhs))
+        return real(A, B, **kwargs)
+
+    monkeypatch.setattr(propagation_module, "expm_multiply", checked)
+    initial_state_sensitivity(
+        L,
+        rho_ss,
+        n_samples=10,
+        t_eval=10.0,
+        seed=7,
+        propagation_backend="expm_action",
+    )
+    assert len(seen) > 1
+    assert {n_rhs for _norm, n_rhs in seen} == {10}
+
+
+def test_d18_block_action_does_not_consume_global_numpy_rng():
+    """Regression pin for SciPy's randomised onenormest side effect."""
+    n = 64
+    d = 8
+    L = np.diag(np.linspace(-3.0, 3.0, n)).astype(complex)
+    rho_ss = np.eye(d, dtype=complex) / d
+    np.random.seed(20260930)
+    before = np.random.get_state()
+    initial_state_sensitivity(
+        L,
+        rho_ss,
+        n_samples=10,
+        t_eval=10.0,
+        seed=11,
+        propagation_backend="expm_action",
+    )
+    after = np.random.get_state()
+    assert before[0] == after[0]
+    np.testing.assert_array_equal(before[1], after[1])
+    assert before[2:] == after[2:]
+
+
+def test_compute_lep_layer_records_d18_action_backend():
+    """The numerical method behind reported D18 is auditable."""
+    n = 64
+    d = 8
+    L = -0.1 * np.eye(n, dtype=complex)
+    rho_ss = np.eye(d, dtype=complex) / d
+    eigs = np.linspace(-1.0, 0.0, n, dtype=complex)
+    result = compute_lep_layer(
+        L,
+        eigs,
+        beta_D_linear=0.1,
+        gap=0.1,
+        rho_steady_state=rho_ss,
+        n_haar=4,
+        seed=3,
+        d18_backend="expm_action",
+    )
+    assert result.initial_state_backend == "expm_action"
+
+
+def test_d18_auto_uses_separate_conservative_block_crossover():
+    """Single-expm D18 must not inherit the trajectory's n=64 crossover."""
+    mid = -0.1 * np.eye(256, dtype=complex)
+    backend_mid, _ = propagation_module.select_block_backend(mid, 1.0, 10)
+    assert backend_mid == "dense_expm"
+
+    large = -0.1 * sp.eye(1024, dtype=complex, format="csr")
+    backend_large, _ = propagation_module.select_block_backend(large, 1.0, 10)
+    assert backend_large == "expm_action"
