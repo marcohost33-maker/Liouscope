@@ -105,6 +105,14 @@ TRAJECTORY_BACKENDS: tuple[str, ...] = (BACKEND_DENSE, BACKEND_ACTION)
 # action backend (d = 8). Measured crossover, see the module docstring.
 ACTION_MIN_DIM: int = 64
 
+# D18 forms ONE dense expm and applies it to a small RHS block, unlike
+# the relaxation trajectory which forms one expm per grid point. The crossover
+# is therefore different and non-monotone at small n because level-3 BLAS makes
+# the dense Pade path very efficient. Keep auto conservative until the
+# asymptotic advantage is large; forced expm_action remains available for
+# experiments and sparse/future callers.
+BLOCK_ACTION_MIN_DIM: int = 512
+
 # Default ceiling on the action backend's matrix-vector-product bound. At
 # n = 1024 a benign 80-point trajectory needs ~1.5e3 products, so the ceiling
 # only ever bites on stiff inputs, where it turns an hours-long loop into an
@@ -495,8 +503,10 @@ def select_block_backend(
             "path is ineligible or over budget"
         )
 
-    # Preserve the historical D18 formula bit-for-bit for all small systems.
-    if n < ACTION_MIN_DIM or float(t) < 0.0 or not action_affordable:
+    # D18 has a different crossover from the multi-point trajectory: it
+    # materialises only one dense expm. Keep auto conservative below the
+    # separately measured block threshold; forced action remains available.
+    if n < BLOCK_ACTION_MIN_DIM or float(t) < 0.0 or not action_affordable:
         return BACKEND_DENSE, bound
     if bound <= dense_block_matvec_estimate(L, t, n_rhs):
         return BACKEND_ACTION, bound
