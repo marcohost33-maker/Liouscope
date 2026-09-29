@@ -192,39 +192,78 @@ def _one_norm(A: np.ndarray | sp.spmatrix) -> float:
     return value if math.isfinite(value) else math.inf
 
 
-def _max_abs_entry(L: np.ndarray | sp.spmatrix) -> float:
+_EXTENDED_TYPES = (np.longdouble, np.clongdouble)
+_HAS_EXTENDED_PRECISION = np.dtype(np.longdouble) != np.dtype(np.float64)
+
+
+def _normalise_generator(L: np.ndarray | sp.spmatrix) -> np.ndarray | sp.spmatrix:
+    """Bring ``L`` into the forms every routine below relies on.
+
+    * Sparse input becomes canonical CSR. LIL keeps ``.data`` as nested Python
+      lists, DOK has no ``.data`` at all, and a non-canonical CSR/COO can hold
+      duplicate entries whose SUM is the represented value (PR #176 review).
+    * Extended precision (``longdouble``/``clongdouble``, dense or sparse)
+      becomes ``complex128``. Otherwise every product stays extended and
+      narrows silently -- possibly to ``inf`` -- when stored into the
+      ``complex128`` trajectory. A narrowing overflow surfaces as a non-finite
+      entry and is refused by the finiteness gate that follows.
+    """
     if _is_sparse(L):
-        data = np.asarray(L.data)  # type: ignore[union-attr]
-        return float(np.max(np.abs(data))) if data.size else 0.0
-    return float(np.max(np.abs(L))) if L.size else 0.0
+        csr = sp.csr_matrix(L)
+        if not csr.has_canonical_format:
+            csr = csr.copy()
+            csr.sum_duplicates()
+        L = csr
+    if _HAS_EXTENDED_PRECISION and np.dtype(L.dtype).type in _EXTENDED_TYPES:
+        with np.errstate(over="ignore", invalid="ignore"):
+            L = L.astype(np.complex128)
+    return L
 
 
-def _shifted_norm_parts(L: np.ndarray | sp.spmatrix) -> tuple[float, float]:
+def _max_abs_component(L: np.ndarray | sp.spmatrix) -> float:
+    """``max(|Re L_ij|, |Im L_ij|)`` -- never forms a possibly overflowing modulus.
+
+    ``abs(1.3e308 + 1.3e308j)`` is ``inf`` although both components are finite
+    (PR #176 review); the component maximum is within a factor sqrt(2) of the
+    modulus maximum, which is all the power-of-two scale needs.
+    """
+    data = np.asarray(L.data if _is_sparse(L) else L)  # type: ignore[union-attr]
+    if data.size == 0:
+        return 0.0
+    if np.iscomplexobj(data):
+        return float(max(np.max(np.abs(data.real)), np.max(np.abs(data.imag))))
+    return float(np.max(np.abs(data)))
+
+
+def _shifted_norm_parts(L: np.ndarray | sp.spmatrix) -> tuple[float, float, float]:
     """``||L - mu I||_1`` as ``(base, scale)`` with ``norm = scale * base``.
 
-    ``scale`` is the power of two just below ``max |L_ij|``, so ``L / scale``
-    is exact (no rounding, barring subnormals) and its shifted column sums can
-    no longer overflow. A finite generator whose unscaled norm overflows -- two
-    ``1e308`` entries in one column -- still gets a finite ``tau * norm`` for a
-    small enough ``tau`` (PR #176 review): the product is formed only after
-    scaling, see :func:`_step_norm`.
+    Returns ``(base, scale, trace_base)`` with ``||L - mu I||_1 = scale * base``
+    and ``|tr L| = scale * trace_base``. ``scale`` is the power of two just
+    below the largest real/imaginary component, so ``L / scale`` is exact (no
+    rounding, barring subnormals) and neither its shifted column sums nor its
+    trace can overflow. A finite generator whose unscaled norm or trace
+    overflows -- two ``1e308`` entries in one column -- still gets a finite
+    ``tau * norm`` for a small enough ``tau`` (PR #176 review): products with
+    ``tau`` are formed only after scaling, see :func:`_step_norm`.
     """
     n = L.shape[0]
-    amax = _max_abs_entry(L)
+    amax = _max_abs_component(L)
     if n == 0 or amax == 0.0:
-        return 0.0, 1.0
+        return 0.0, 1.0, 0.0
     # frexp: amax = m * 2**e with m in [0.5, 1); 2**(e - 1) <= amax < 2**e.
     # The lower power keeps the scale representable even for amax ~ 1.8e308
     # (2**1024 is not) and leaves |L_ij / scale| < 2.
     scale = math.ldexp(1.0, math.frexp(amax)[1] - 1)
     with np.errstate(over="ignore", invalid="ignore", under="ignore"):
         Ls = L / scale
-        mu = _trace(Ls) / n
+        trace_scaled = _trace(Ls)
+        mu = trace_scaled / n
         if _is_sparse(Ls):
             shifted = Ls - mu * sp.identity(n, dtype=complex, format="csr")
         else:
             shifted = Ls - mu * np.eye(n, dtype=complex)
-    return _one_norm(shifted), scale
+    return _one_norm(shifted), scale, abs(trace_scaled)
 
 
 def _step_norm(tau: float, base: float, scale: float) -> float:
@@ -244,7 +283,7 @@ def shifted_one_norm(L: np.ndarray | sp.spmatrix) -> float:
     ``inf`` if the norm itself exceeds the float range; the propagation works
     with the overflow-safe ``(base, scale)`` form internally.
     """
-    base, scale = _shifted_norm_parts(L)
+    base, scale, _trace_base = _shifted_norm_parts(_normalise_generator(L))
     return _step_norm(1.0, base, scale)
 
 
@@ -304,7 +343,7 @@ def action_matvec_bound(L: np.ndarray | sp.spmatrix, t_grid: np.ndarray) -> floa
     t_grid = np.asarray(t_grid, dtype=float)
     if not _grid_is_steppable(t_grid):
         return math.inf
-    base, scale = _shifted_norm_parts(L)
+    base, scale, trace_base = _shifted_norm_parts(_normalise_generator(L))
     total = 0.0
     previous = 0.0
     for t in t_grid:
@@ -312,6 +351,12 @@ def action_matvec_bound(L: np.ndarray | sp.spmatrix, t_grid: np.ndarray) -> floa
         previous = float(t)
         if tau == 0.0:
             continue
+        # SciPy needs tr(tau L) itself (it forms mu = tr/n). If that sum is
+        # not representable, the action cannot even be called -- even when
+        # the shifted norm is zero, e.g. L = -1e308 I with n = 64 (PR #176
+        # review). The dense path has no such sum, so "auto" must use it.
+        if not math.isfinite(_step_norm(tau, trace_base, scale)):
+            return math.inf
         with np.errstate(over="ignore"):
             total += _step_cost(_step_norm(tau, base, scale))
         if not math.isfinite(total):
@@ -321,6 +366,7 @@ def action_matvec_bound(L: np.ndarray | sp.spmatrix, t_grid: np.ndarray) -> floa
 
 def dense_matvec_estimate(L: np.ndarray | sp.spmatrix, t_grid: np.ndarray) -> float:
     """Cost estimate of the dense backend, in matrix-vector-product units."""
+    L = _normalise_generator(L)
     t_grid = np.asarray(t_grid, dtype=float)
     n = L.shape[0]
     norm = _one_norm(L)
@@ -338,6 +384,16 @@ def dense_matvec_estimate(L: np.ndarray | sp.spmatrix, t_grid: np.ndarray) -> fl
     return total
 
 
+def _require_budget(max_action_matvecs: float) -> None:
+    """A NaN budget would make every ``bound > budget`` test False (PR #176 review).
+
+    That silently disables the guard against an hours-long action loop, so it
+    is an input error. ``+inf`` stays a deliberate "no limit".
+    """
+    if math.isnan(float(max_action_matvecs)):
+        raise ValueError("max_action_matvecs must not be NaN (use math.inf for no limit)")
+
+
 def select_trajectory_backend(
     L: np.ndarray | sp.spmatrix,
     t_grid: np.ndarray,
@@ -353,6 +409,8 @@ def select_trajectory_backend(
     rule refuses with :class:`UnrepresentableTrajectoryError` rather than
     materialising an ``n x n`` matrix nobody asked for.
     """
+    _require_budget(max_action_matvecs)
+    L = _normalise_generator(L)
     t_grid = np.asarray(t_grid, dtype=float)
     n = L.shape[0]
     bound = action_matvec_bound(L, t_grid)
@@ -453,7 +511,7 @@ def _propagate_action(
     ``tau`` by ``O(k)`` units in the last place of ``tau``; for ``k == 1``
     (every benign grid) the step is exactly ``t_k - t_{k-1}``.
     """
-    base, scale = _shifted_norm_parts(L)
+    base, scale, _trace_base = _shifted_norm_parts(L)
     states = np.empty((t_grid.size, rho_vec0.size), dtype=complex)
     v = np.asarray(rho_vec0, dtype=complex)
     previous = 0.0
@@ -559,15 +617,18 @@ def propagate_trajectory(
             "propagate_trajectory: rho_vec0 contains non-finite entries or entries "
             "not representable in complex128"
         )
-    if not _is_sparse(L) and np.dtype(L.dtype).itemsize > np.dtype(np.complex128).itemsize:
-        # Extended-precision generators would otherwise make every product
-        # extended-precision and narrow silently on store; work in double.
-        with np.errstate(over="ignore", invalid="ignore"):
-            L = L.astype(np.complex128)
+    _require_budget(max_action_matvecs)
+    # Canonical CSR for sparse input, complex128 for extended precision (dense
+    # and sparse alike); the finiteness gate then also catches a narrowing
+    # overflow.
+    L = _normalise_generator(L)
     try:
         require_finite_generator(L, builder="propagate_trajectory")
     except ValueError as exc:
-        raise ValueError("propagate_trajectory: L contains non-finite entries") from exc
+        raise ValueError(
+            "propagate_trajectory: L contains non-finite entries or entries not "
+            "representable in complex128"
+        ) from exc
 
     if backend == BACKEND_AUTO:
         chosen, bound = select_trajectory_backend(
@@ -580,7 +641,13 @@ def propagate_trajectory(
                 "non-negative, non-decreasing t_grid"
             )
         chosen, bound = BACKEND_ACTION, action_matvec_bound(L, t_grid)
-        if not math.isfinite(bound) or bound > max_action_matvecs:
+        if not math.isfinite(bound):
+            raise UnrepresentableTrajectoryError(
+                "relaxation trajectory: an exponential-action step is not "
+                "representable in float64 (||L - mu I||_1 * tau or |tr L| * tau "
+                "overflows) -- use backend='dense_expm'"
+            )
+        if bound > max_action_matvecs:
             raise UnrepresentableTrajectoryError(
                 "relaxation trajectory: the exponential-action cost bound "
                 f"({bound:.3g} matrix-vector products) exceeds the budget "

@@ -780,3 +780,115 @@ def test_extended_precision_ordinary_state_propagates_like_complex128() -> None:
     extended = _evolve(L, _plus_state(2).astype(np.clongdouble), grid)
     assert extended.dtype == np.complex128
     np.testing.assert_array_equal(extended, reference)
+
+
+# --------------------------------------------------------------------------
+# PR #176 review (Codex, commits 5564332 and 788c352)
+# --------------------------------------------------------------------------
+
+
+def test_complex_entry_with_overflowing_modulus_still_scales() -> None:
+    """|1.3e308 + 1.3e308j| overflows; its components do not -- scale by those."""
+    n = propagation.DENSE_MAX_DIM + 2
+    M = sp.lil_matrix((n, n), dtype=complex)
+    M[0, 1] = 1.3e308 + 1.3e308j
+    with np.errstate(over="ignore"):
+        assert not np.isfinite(abs(M[0, 1]))
+    v0 = np.ones(n, dtype=complex)
+    result = propagate_trajectory(M.tocsr(), v0, np.array([0.0, 1.0e-308]))
+    assert result.backend == BACKEND_ACTION
+    expected = v0.copy()
+    expected[0] += 1.3 + 1.3j  # exp(tau L) v = v + tau L v for nilpotent L
+    np.testing.assert_allclose(result.states[1], expected, rtol=1.0e-14)
+
+
+@pytest.mark.parametrize("fmt", ["lil", "dok", "coo", "csc"])
+def test_every_scipy_sparse_format_is_accepted(fmt: str) -> None:
+    """LIL has list-valued .data, DOK none at all; both must work like CSR."""
+    H, jumps = _chain_operators(3)
+    L_csr = build_sparse_liouvillian(H, jumps)
+    L_fmt = L_csr.asformat(fmt)
+    grid = np.array([0.0, 0.5, 2.0])
+    reference = propagate_trajectory(L_csr, vec(_ground(8)), grid)
+    result = propagate_trajectory(L_fmt, vec(_ground(8)), grid)
+    assert result.backend == reference.backend
+    np.testing.assert_array_equal(result.states, reference.states)
+
+
+def test_non_canonical_sparse_duplicates_propagate_their_represented_sum() -> None:
+    """Two stored 0.6e308 at one position represent 1.2e308, not 0.6e308.
+
+    Correctness pin, not a guard pin: duplicates can shift the power-of-two
+    scale by at most their multiplicity k (|L / scale| <= 2k stays finite), and
+    a sum that is NOT representable is refused by the #152 finiteness guard,
+    which canonicalises on a copy. The canonicalisation in
+    ``_normalise_generator`` is hygiene so ``.data`` equals the represented
+    values; removing it does not change this result (mutation-checked).
+    """
+    n = propagation.DENSE_MAX_DIM + 2
+    # (data, indices, indptr) keeps duplicates; the (data, (row, col)) form
+    # would sum them on construction and test nothing.
+    indptr = np.zeros(n + 1, dtype=np.int64)
+    indptr[1:] = 2
+    L = sp.csr_matrix(
+        (np.array([0.6e308, 0.6e308], dtype=complex), np.array([1, 1]), indptr),
+        shape=(n, n),
+    )
+    assert not L.has_canonical_format and L.nnz == 2
+    v0 = np.ones(n, dtype=complex)
+    result = propagate_trajectory(L, v0, np.array([0.0, 1.0e-308]))
+    np.testing.assert_allclose(result.states[1][0], 1.0 + 1.2, rtol=1.0e-14)
+
+
+@pytest.mark.skipif(not _HAS_EXTENDED, reason="clongdouble == complex128 on this platform")
+@pytest.mark.parametrize("backend", ["auto", BACKEND_DENSE, BACKEND_ACTION])
+def test_extended_precision_sparse_generator_fails_closed_not_inf(backend: str) -> None:
+    """complex256 [[0, 4], [0, 0]] on [0, 1e308] yields 4e308: refuse, never inf."""
+    S = sp.csr_matrix(np.array([[0, 4], [0, 0]], dtype=np.clongdouble))
+    with pytest.raises(UnrepresentableTrajectoryError):
+        propagate_trajectory(S, np.array([0, 1.0e308], dtype=complex), np.array([0.0, 1.0]),
+                             backend=backend)
+
+
+@pytest.mark.skipif(not _HAS_EXTENDED, reason="clongdouble == complex128 on this platform")
+def test_extended_precision_generator_beyond_complex128_is_refused() -> None:
+    L = np.zeros((4, 4), dtype=np.clongdouble)
+    L[0, 1] = np.clongdouble(1.0e308) * 4
+    with pytest.raises(ValueError, match="not representable in complex128"):
+        propagate_trajectory(L, np.ones(4, dtype=complex), np.array([0.0, 1.0]))
+
+
+@pytest.mark.parametrize("backend", ["auto", BACKEND_ACTION])
+def test_nan_budget_is_an_input_error(backend: str) -> None:
+    """A NaN budget makes every bound > budget test False: refuse it up front."""
+    with pytest.raises(ValueError, match="must not be NaN"):
+        propagate_trajectory(
+            _chain(3), vec(_ground(8)), np.array([0.0, 1.0]),
+            backend=backend, max_action_matvecs=float("nan"),
+        )
+    with pytest.raises(ValueError, match="must not be NaN"):
+        select_trajectory_backend(_chain(3), np.array([0.0, 1.0]), max_action_matvecs=np.nan)
+
+
+def test_infinite_budget_remains_a_deliberate_no_limit() -> None:
+    result = propagate_trajectory(
+        _chain(3), vec(_ground(8)), np.array([0.0, 1.0]),
+        backend=BACKEND_ACTION, max_action_matvecs=np.inf,
+    )
+    assert result.backend == BACKEND_ACTION
+
+
+def test_overflowing_trace_keeps_auto_off_the_action_path() -> None:
+    """L = -1e308 I: shifted norm 0, but tr(L) overflows -- SciPy cannot be called.
+
+    The dense path has no such sum and returns the (underflowed) trajectory.
+    """
+    n = ACTION_MIN_DIM
+    L = -1.0e308 * np.eye(n, dtype=complex)
+    grid = np.array([0.0, 1.0])
+    assert action_matvec_bound(L, grid) == np.inf
+    auto = propagate_trajectory(L, np.ones(n, dtype=complex), grid)
+    assert auto.backend == BACKEND_DENSE
+    assert np.all(np.isfinite(auto.states))
+    with pytest.raises(UnrepresentableTrajectoryError, match=r"\|tr L\| \* tau"):
+        propagate_trajectory(L, np.ones(n, dtype=complex), grid, backend=BACKEND_ACTION)
