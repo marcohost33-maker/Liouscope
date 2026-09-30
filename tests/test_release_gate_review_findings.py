@@ -161,6 +161,11 @@ def test_marker_evaluation(marker: str, expected: bool) -> None:
         "|\n          twine \\\n            upload dist/*",
         "python -m twine upload dist/*",
         "uv  publish",
+        # Only the token scan sees these; the whitespace-collapsed substring
+        # net (kept as an addition) does not.
+        "twine --verbose upload dist/*",
+        "python -m 'twine' upload dist/*",
+        "poetry -v publish",
     ],
 )
 def test_publish_commands_are_recognised_on_tokens(run: str) -> None:
