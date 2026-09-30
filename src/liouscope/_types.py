@@ -326,6 +326,9 @@ class LepResult:
     # LIOU-#69: the LINEAR-metric rate actually fed to D17 (dimension-coherent
     # with the gap). Additive + defaulted so synthetic callers stay valid.
     beta_D_linear: float = float("nan")
+    # Issue #178: propagation backend used by D18. Additive/defaulted so older
+    # callers and serialised reports remain valid.
+    initial_state_backend: str = "dense_expm"
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)

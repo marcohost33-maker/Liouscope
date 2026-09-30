@@ -171,6 +171,15 @@ class TrajectoryPropagation:
     action_matvec_bound: float    # upper bound on the action's products (inf if ineligible)
 
 
+@dataclass(frozen=True, slots=True)
+class BlockPropagation:
+    """One-time exponential action on multiple right-hand sides (issue #178)."""
+
+    states: np.ndarray
+    backend: str
+    action_matvec_bound: float
+
+
 def _is_sparse(L: object) -> bool:
     return bool(sp.issparse(L))
 
@@ -569,6 +578,160 @@ def _propagate_action(
         states[k] = v
         previous = float(t)
     return states
+
+
+def propagate_block_at_time(
+    L: np.ndarray | sp.spmatrix,
+    vectors: np.ndarray,
+    t_eval: float,
+    *,
+    backend: str = BACKEND_AUTO,
+    max_action_matvecs: float = DEFAULT_ACTION_MATVEC_BUDGET,
+) -> BlockPropagation:
+    """Compute exp(t_eval * L) @ vectors for a block of right-hand sides.
+
+    For the action backend, the condition-(3.13) exact-norm threshold is divided
+    by the number of right-hand sides. This keeps SciPy away from randomised
+    onenormest, so the call does not consume the caller's global np.random state.
+    The reported bound is in matvec-equivalent units.
+    """
+    if backend not in (BACKEND_AUTO, *TRAJECTORY_BACKENDS):
+        allowed = ", ".join(repr(b) for b in (BACKEND_AUTO, *TRAJECTORY_BACKENDS))
+        raise ValueError(f"backend must be one of {allowed}, got {backend!r}")
+    if not (_is_sparse(L) or isinstance(L, np.ndarray)):
+        L = np.asarray(L)
+    if L.ndim != 2 or L.shape[0] != L.shape[1]:
+        raise ValueError(f"L must be a square matrix, got shape {L.shape}")
+    vectors = np.asarray(vectors)
+    if vectors.ndim != 2 or vectors.shape[0] != L.shape[0]:
+        raise ValueError(
+            f"vectors must have shape ({L.shape[0]}, n_rhs), got {vectors.shape}"
+        )
+    if vectors.shape[1] < 1:
+        raise ValueError("vectors must contain at least one right-hand side")
+    t_eval = float(t_eval)
+    if not math.isfinite(t_eval) or t_eval < 0.0:
+        raise ValueError("t_eval must be finite and non-negative")
+    with np.errstate(over="ignore", invalid="ignore"):
+        vectors = vectors.astype(np.complex128)
+    if not np.all(np.isfinite(vectors)):
+        raise ValueError(
+            "propagate_block_at_time: vectors contain non-finite entries or entries "
+            "not representable in complex128"
+        )
+    _require_budget(max_action_matvecs)
+    L = _normalise_generator(L)
+    try:
+        require_finite_generator(L, builder="propagate_block_at_time")
+    except ValueError as exc:
+        raise ValueError(
+            "propagate_block_at_time: L contains non-finite entries or entries not "
+            "representable in complex128"
+        ) from exc
+
+    n = L.shape[0]
+    n_rhs = vectors.shape[1]
+    base, scale, trace_base = _shifted_norm_parts(L)
+    scaled_norm = _step_norm(t_eval, base, scale)
+    block_threshold = _SUBSTEP_NORM / n_rhs
+    if not math.isfinite(scaled_norm):
+        action_bound = math.inf
+    else:
+        substeps_f = max(1.0, float(math.ceil(scaled_norm / block_threshold)))
+        per_step = _action_step_cost(scaled_norm / substeps_f)
+        action_bound = substeps_f * per_step * n_rhs
+
+    dense_estimate = dense_matvec_estimate(L, np.asarray([t_eval], dtype=float))
+    if backend == BACKEND_AUTO:
+        chosen = (
+            BACKEND_ACTION
+            if n >= ACTION_MIN_DIM
+            and math.isfinite(action_bound)
+            and action_bound <= max_action_matvecs
+            and action_bound <= dense_estimate
+            else BACKEND_DENSE
+        )
+    else:
+        chosen = backend
+
+    if chosen == BACKEND_DENSE:
+        L_dense = L.toarray() if _is_sparse(L) else L  # type: ignore[union-attr]
+        with np.errstate(over="ignore", invalid="ignore", under="ignore"):
+            scaled = np.asarray(L_dense * t_eval)
+        if not np.all(np.isfinite(scaled)):
+            raise UnrepresentableTrajectoryError(
+                "block propagation: L*t contains non-finite entries"
+            )
+        try:
+            with warnings.catch_warnings():
+                warnings.filterwarnings("error", category=RuntimeWarning)
+                propagator = sla.expm(scaled)
+        except (
+            RuntimeWarning,
+            OverflowError,
+            ValueError,
+            np.linalg.LinAlgError,
+            sla.LinAlgError,
+            RuntimeError,
+        ) as exc:
+            raise UnrepresentableTrajectoryError(
+                "block propagation: scipy.linalg.expm could not represent a finite propagator"
+            ) from exc
+        with np.errstate(over="ignore", invalid="ignore", under="ignore"):
+            states = propagator @ vectors
+        if not np.all(np.isfinite(states)):
+            raise UnrepresentableTrajectoryError(
+                "block propagation: propagated states became non-finite"
+            )
+        return BlockPropagation(states=states, backend=chosen, action_matvec_bound=action_bound)
+
+    if not math.isfinite(action_bound):
+        raise UnrepresentableTrajectoryError(
+            "block propagation: exponential-action norm is not representable"
+        )
+    if action_bound > max_action_matvecs:
+        raise UnrepresentableTrajectoryError(
+            "block propagation: exponential-action cost bound "
+            f"({action_bound:.3g} matvec-equivalents) exceeds the budget "
+            f"({float(max_action_matvecs):.3g})"
+        )
+    if t_eval == 0.0:
+        return BlockPropagation(
+            states=vectors.copy(), backend=chosen, action_matvec_bound=action_bound
+        )
+
+    substeps = int(max(1.0, float(math.ceil(scaled_norm / block_threshold))))
+    tau = t_eval / substeps
+    with np.errstate(over="ignore", invalid="ignore", under="ignore"):
+        scaled = L * tau
+        trace_sub = _trace(scaled)
+    scaled_values = scaled.data if _is_sparse(scaled) else scaled
+    if not (np.all(np.isfinite(scaled_values)) and np.isfinite(trace_sub)):
+        raise UnrepresentableTrajectoryError(
+            "block propagation: L*tau or its trace is non-finite"
+        )
+    states = vectors
+    for _ in range(substeps):
+        try:
+            with warnings.catch_warnings():
+                warnings.filterwarnings("error", category=RuntimeWarning)
+                with np.errstate(over="ignore", invalid="ignore", under="ignore"):
+                    states = expm_multiply(scaled, states, traceA=trace_sub)
+        except (
+            RuntimeWarning,
+            OverflowError,
+            ValueError,
+            np.linalg.LinAlgError,
+            RuntimeError,
+        ) as exc:
+            raise UnrepresentableTrajectoryError(
+                "block propagation: scipy.sparse.linalg.expm_multiply failed"
+            ) from exc
+        if not np.all(np.isfinite(states)):
+            raise UnrepresentableTrajectoryError(
+                "block propagation: propagated states became non-finite"
+            )
+    return BlockPropagation(states=states, backend=chosen, action_matvec_bound=action_bound)
 
 
 def propagate_trajectory(
