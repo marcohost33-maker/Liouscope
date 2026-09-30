@@ -54,7 +54,7 @@ def test_amplitude_rescaling_preserves_the_fitted_rate() -> None:
     assert tiny.params[0] == pytest.approx(ordinary.params[0], rel=1.0e-9, abs=1.0e-12)
 
 
-@pytest.mark.parametrize("scale", [1.0e-150, 1.0e-310])
+@pytest.mark.parametrize("scale", [1.0e-160, 1.0e-310])
 def test_unrepresentable_rescaling_falls_back_instead_of_dropping_the_fit(
     scale: float,
 ) -> None:
@@ -66,6 +66,12 @@ def test_unrepresentable_rescaling_falls_back_instead_of_dropping_the_fit(
     returned ``success=False`` / ``aicc=inf``, while main fitted rate 1.3. The
     Jacobian-level overflow is the case the residual-level check cannot see, so
     it is pinned here separately from the #147 subnormal fixture.
+
+    The first scale was 1e-150 until the solver scaled its variables by the
+    Jacobian column norms (``x_scale="jac"``): 1e-150 is representable since
+    then and no longer reaches the fallback, while 1e-160 still does -- and
+    only through the floating-point-event arm (measured: with ``events``
+    removed from the check, 1e-155 .. 1e-305 report ``success=False``).
     """
     import warnings
 
@@ -307,3 +313,104 @@ def test_fallback_warning_has_a_dedicated_filterable_category() -> None:
     assert fallback, [str(w.message) for w in caught]
     assert all(w.category is AmplitudeRescalingFallbackWarning for w in fallback)
     assert not fit.success
+
+
+# --------------------------------------------------------------------------
+# PR #134 round 4 (Equalita on 28c7db2): the library model M0 with a FREE
+# amplitude, and the ldexp normalisation under a strict underflow policy.
+# --------------------------------------------------------------------------
+
+
+def _m0_fit(scale: float):  # type: ignore[no-untyped-def]
+    from liouscope.diagnostics import relaxation as relaxation_mod
+
+    y = scale * (np.exp(-_TRUE_RATE * _T) + 1.0e-3 * _NOISE)
+    (fit_result, _), messages = _recorded(relaxation_mod._fit_with_model, "M0", _T, y)
+    return fit_result, messages
+
+
+@pytest.mark.parametrize("scale", [1.0e-40, 1.0e40])
+def test_free_amplitude_m0_rate_is_amplitude_invariant(scale: float) -> None:
+    """``_fit_with_model("M0")`` fits the same rate at 1e-40, 1 and 1e+40.
+
+    Measured on 28c7db2: at 1e-40 and 1e+40 the fit returned its seed rate
+    1.3245053905 with ``success=True`` and no warning, while scale 1 fits
+    1.2993514754 -- the Jacobian column of the free amplitude outweighed the
+    rate column by the curve's scale.
+    """
+    from liouscope.fitting.models import initial_guess_m0
+
+    ref, _ = _m0_fit(1.0)
+    other, messages = _m0_fit(scale)
+    seed_rate = float(initial_guess_m0(_T, scale * (np.exp(-_TRUE_RATE * _T) + 1.0e-3 * _NOISE))[1])
+    assert ref.success and other.success
+    assert not any(_FALLBACK in m for m in messages), messages
+    assert other.params[1] == pytest.approx(ref.params[1], rel=1.0e-8)
+    assert other.params[0] == pytest.approx(scale * ref.params[0], rel=1.0e-8)
+    # The seed is 0.025 away; the invariance above must not be the seed twice.
+    assert abs(other.params[1] - seed_rate) > 1.0e-2
+
+
+def _ar1_reference(r: np.ndarray) -> float:
+    """``ar1_correlation`` as it stood on main, before the normalisation."""
+    x = np.asarray(r, dtype=float) - float(np.mean(r))
+    num = float(np.dot(x[:-1], x[1:]))
+    den = float(np.dot(x, x))
+    return 0.0 if den == 0.0 else float(num / den)
+
+
+def test_ar1_normalisation_does_not_raise_under_a_strict_underflow_policy() -> None:
+    """The ldexp that normalises the residuals is this function's own scaling.
+
+    Measured on 28c7db2: under ``np.errstate(under="raise")``,
+    ``ar1_correlation([1e150, 1e-200])`` raised ``FloatingPointError`` in
+    ``ldexp``; main returns -0.5 there without any floating-point event.
+    """
+    from liouscope.fitting.neff import ar1_correlation
+
+    for series in ([1.0e150, 1.0e-200], [1.0e150, -1.0e150, 1.0e-200], [1.0, 1.0e-320, -1.0, 0.5]):
+        with np.errstate(all="raise"):
+            expected = _ar1_reference(np.asarray(series))
+            got = ar1_correlation(np.asarray(series))
+        assert got == expected, series
+    with np.errstate(under="raise"):
+        assert ar1_correlation(np.array([1.0e150, 1.0e-200])) == -0.5
+
+
+def test_ar1_normalisation_matches_main_wherever_main_was_event_free() -> None:
+    """Bit-identical to main on every series main computes without an FP event.
+
+    Magnitudes span 1e-320 .. 1e300 so that the normalisation underflows
+    entries in a large share of cases; the count is asserted so that this
+    property cannot pass vacuously on series that never reach the fixed path.
+    """
+    from liouscope.fitting.neff import ar1_correlation
+
+    rng = np.random.default_rng(20260930)
+    compared = underflowing = 0
+    for _ in range(3000):
+        n = int(rng.integers(2, 12))
+        x = rng.standard_normal(n) * 10.0 ** rng.integers(-320, 300, size=n).astype(float)
+        try:
+            with np.errstate(all="raise"):
+                expected = _ar1_reference(x)
+        except FloatingPointError:
+            continue
+        peak = float(np.max(np.abs(x)))
+        try:
+            with np.errstate(under="raise"):
+                np.ldexp(x, -int(np.frexp(peak)[1]))
+        except FloatingPointError:
+            underflowing += 1
+        with np.errstate(all="raise"):
+            assert ar1_correlation(x) == expected, x
+        compared += 1
+    assert compared >= 300 and underflowing >= 100, (compared, underflowing)
+
+
+def test_ar1_normalisation_keeps_nan_fail_closed() -> None:
+    """A NaN residual still yields NaN -- never a finite rho -- under any policy."""
+    from liouscope.fitting.neff import ar1_correlation
+
+    with np.errstate(under="raise"):
+        assert np.isnan(ar1_correlation(np.array([1.0e-200, np.nan, 1.0e150])))

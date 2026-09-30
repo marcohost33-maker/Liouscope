@@ -307,7 +307,18 @@ def fit_gls_ar1(
     rho = 0.0
     success = True
     for _ in range(n_iters):
-        ls_kwargs: dict[str, object] = {"max_nfev": max_nfev}
+        # ``x_scale="jac"``: rescaling the RESIDUALS makes the problem
+        # amplitude-invariant only when the amplitude is not a fitted
+        # parameter. With a FREE amplitude ``A ~ max|y|`` the Jacobian column
+        # of ``A`` carries ``1/max|y|`` relative to the rate column (1e40 at a
+        # 1e-40 curve), the rate direction drops below the SVD's resolution of
+        # the trust-region subproblem, and TRF returned the seed rate with
+        # ``success=True`` (PR #134 review, M0 at 1e-40 and 1e+40). Scaling
+        # each variable by its Jacobian column norm (More 1978) makes the
+        # scaled problem identical under ``y -> c*y, A -> c*A``. Measured on
+        # ``_fit_with_model("M0")`` with 1e-3 noise: rate 1.2993514737..55 at
+        # every scale from 1e-150 to 1e100 (seed 1.3245, returned before).
+        ls_kwargs: dict[str, object] = {"max_nfev": max_nfev, "x_scale": "jac"}
         if bounds is not None:
             ls_kwargs["bounds"] = bounds
         try:

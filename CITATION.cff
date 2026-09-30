@@ -152,9 +152,11 @@ abstract: >-
 # stayed in range it is bit-identical. This CHANGES NUMERICAL RESULTS and is a
 # METHODOLOGY correction: fitted rates, rho, AICc and the selected model can
 # differ for curves far from unit scale. It must NOT be described as making the
-# fit amplitude-invariant in general: a FREE amplitude parameter still returns
-# its seed rate at 1e-40, and the fallback keeps the unscaled problem's own
-# limits. MANIFEST_SCHEMA is deliberately unchanged -- none of these quantities
+# fit amplitude-invariant in general: a FREE amplitude parameter is covered by
+# the solver's Jacobian-based variable scaling (x_scale="jac") only between
+# about 1e-150 and 1e100 (measured on M0), the fallback keeps the unscaled
+# problem's own limits below that, and the variable scaling can move fitted
+# values within the optimiser's tolerance at unit scale too. MANIFEST_SCHEMA is deliberately unchanged -- none of these quantities
 # is a run-manifest field, so `input_hash` does not move.
 keywords:
   - open quantum systems
