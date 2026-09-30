@@ -382,8 +382,14 @@ def test_ar1_normalisation_does_not_raise_under_a_strict_underflow_policy() -> N
     """
 
     for series in ([1.0e150, 1.0e-200], [1.0e150, -1.0e150, 1.0e-200], [1.0, 1.0e-320, -1.0, 0.5]):
-        with np.errstate(all="raise"):
+        # Main's own arithmetic may underflow harmlessly too, and whether it
+        # SIGNALS that is BLAS-dependent (measured: OpenBLAS on ubuntu raises
+        # in ``dot`` for the second series, the Windows build does not), so
+        # the reference value is taken with underflow ignored. The function
+        # under test runs under the strict policy.
+        with np.errstate(all="raise", under="ignore"):
             expected = _ar1_reference(np.asarray(series))
+        with np.errstate(all="raise"):
             got = _ar1_or_event(np.asarray(series))
         assert got == expected, series
     with np.errstate(under="raise"):
