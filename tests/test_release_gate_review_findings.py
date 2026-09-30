@@ -68,6 +68,24 @@ def test_pip_and_install_without_a_recognised_invocation_fail_closed() -> None:
     assert any("no recognised pip invocation" in r for r in _reasons(wrapped)), _reasons(wrapped)
 
 
+@pytest.mark.parametrize(
+    "command",
+    ["$PIP install build", "pip $CMD build", "python -m $MODULE install build"],
+)
+def test_installs_through_a_shell_expansion_fail_closed(command: str) -> None:
+    """Found by running the gate's own fault class against it: the command or
+    pip's sub-command decided at run time was invisible (no literal
+    ``pip``+``install`` pair on the line)."""
+    text = _workflow(f"          {command}\n")
+    assert any("expansion" in r for r in _reasons(text)), _reasons(text)
+
+
+def test_pip_commands_that_do_not_install_stay_clean() -> None:
+    """Positive control for the nets above."""
+    text = _workflow("          python -m pip check && pip --version && echo $HOME\n")
+    assert _reasons(text) == []
+
+
 def test_workflow_outside_the_yaml_subset_fails_closed() -> None:
     anchored = _workflow("      - run: &cmd pip install build\n")
     installs, unreadable = gate.find_pip_installs(anchored)
@@ -187,6 +205,29 @@ def test_non_publishing_twine_and_the_action_by_uses() -> None:
 def test_unreadable_workflow_cannot_be_ruled_out_as_a_publisher() -> None:
     _, unreadable = gate.publish_evidence("jobs:\n  x:\n    steps:\n      - run: *alias\n")
     assert unreadable is not None
+
+
+@pytest.mark.parametrize(
+    "step",
+    [
+        "- run: $TOOL upload dist/*",
+        "- uses: ./.github/actions/release",
+        "- uses: other/repo/.github/workflows/publish.yml@0123456789abcdef",
+    ],
+)
+def test_publishing_the_scan_cannot_inspect_is_not_cleared(step: str) -> None:
+    _, unreadable = gate.publish_evidence(f"jobs:\n  x:\n    steps:\n      {step}\n")
+    assert unreadable is not None, step
+
+
+def test_inspectable_steps_are_cleared() -> None:
+    """Positive control: a local reusable workflow and artifact upload are fine."""
+    evidence, unreadable = gate.publish_evidence(
+        "jobs:\n  x:\n    uses: ./.github/workflows/ci-python-local.yml\n"
+        "  y:\n    steps:\n      - uses: actions/upload-artifact@v4\n"
+        '      - run: echo "$GITHUB_SHA"\n'
+    )
+    assert (evidence, unreadable) == ([], None)
 
 
 # --- compare_dists.py:73 -- PAX records are content ---------------------------

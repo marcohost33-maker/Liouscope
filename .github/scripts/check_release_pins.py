@@ -695,16 +695,15 @@ def _segments(tokens: list[str]) -> list[list[str]]:
     return [segment for segment in segments if segment]
 
 
-def _install_arguments(segment: list[str]) -> list[str] | None:
-    """Arguments after ``install`` for a recognised pip command, else ``None``.
+def _pip_subcommand(segment: list[str]) -> tuple[list[str], int] | None:
+    """``(words, index of pip's sub-command)`` for a recognised pip command.
 
     Recognised: ``pip``/``pip3[.N]`` and
     ``python[3[.N]] [interpreter options] -m pip``, after optional leading
-    ``VAR=value`` assignments, then pip's own global options, then
-    ``install``. Global options are skipped rather than required absent:
-    ``pip --disable-pip-version-check install x`` is an install too, and a
-    parser that only looked for ``pip install`` side by side would let it
-    through unchecked.
+    ``VAR=value`` assignments. pip's own global options are skipped rather than
+    required absent: ``pip --disable-pip-version-check install x`` is an
+    install too, and a parser that only looked for ``pip install`` side by side
+    would let it through unchecked. ``None`` for anything else.
     """
     words = list(segment)
     while words and _ENV_ASSIGNMENT_RE.match(words[0]):
@@ -726,6 +725,15 @@ def _install_arguments(segment: list[str]) -> list[str] | None:
         index += 1
         if name in _VALUE_OPTIONS and not has_inline:
             index += 1
+    return words, index
+
+
+def _install_arguments(segment: list[str]) -> list[str] | None:
+    """Arguments after ``install`` for a recognised pip command, else ``None``."""
+    located = _pip_subcommand(segment)
+    if located is None:
+        return None
+    words, index = located
     if index < len(words) and words[index] == "install":
         return words[index + 1 :]
     return None
@@ -744,6 +752,37 @@ def _mentions_pip_install(segment: list[str]) -> bool:
     return False
 
 
+_EXPANSION_RE = re.compile(r"[$`]")
+
+
+def _unreadable_segment(segment: list[str]) -> str | None:
+    """Why a segment that is NOT a recognised ``pip install`` cannot be cleared.
+
+    Fail-closed nets, in order: pip whose sub-command is a shell expansion
+    (``pip $CMD build``); an unfamiliar pip spelling; any command that names
+    ``install`` and runs through an expansion (``$PIP install build``,
+    ``python -m $M install build``); anything else naming both ``pip`` and
+    ``install`` (``bash -c "pip install build"``). ``None`` when the segment
+    is plainly not an install.
+    """
+    shown = " ".join(segment)
+    located = _pip_subcommand(segment)
+    if located is not None:
+        words, index = located
+        if index < len(words) and _EXPANSION_RE.search(words[index]):
+            return f"pip sub-command is a shell expansion {shown!r}"
+        return None
+    if _mentions_pip_install(segment):
+        return f"unrecognised pip invocation {shown!r}"
+    lowered = [word.lower() for word in segment]
+    names_install = any("install" in word for word in lowered)
+    if names_install and any(_EXPANSION_RE.search(word) for word in segment):
+        return f"a command naming install runs through a shell expansion {shown!r}"
+    if names_install and any("pip" in word for word in lowered):
+        return f"names pip and install but no recognised pip invocation {shown!r}"
+    return None
+
+
 def find_pip_installs(text: str) -> tuple[list[PipInstall], list[str]]:
     """Every ``pip install`` in a workflow, plus the ones it cannot read.
 
@@ -751,12 +790,11 @@ def find_pip_installs(text: str) -> tuple[list[PipInstall], list[str]]:
     mentions a pip install the parser does not understand. Those fail the
     contract rather than being skipped: an unreadable install is an unverified
     install. That includes the whole workflow when it is outside the YAML
-    subset, and a shell line that names both ``pip`` and ``install`` without a
-    recognised invocation (``bash -c "pip install x"``).
+    subset, and every net of :func:`_unreadable_segment`.
 
     Every ``run`` value is read as shell text; so is every OTHER scalar that
-    mentions both words -- over-inclusive on purpose: a false match can only
-    produce an error, never hide an install.
+    mentions both ``pip`` and ``install`` -- over-inclusive on purpose: a false
+    match can only produce an error, never hide an install.
     """
     try:
         document = load_workflow_yaml(text)
@@ -768,37 +806,25 @@ def find_pip_installs(text: str) -> tuple[list[PipInstall], list[str]]:
     installs: list[PipInstall] = []
     unreadable: list[str] = []
     for key, scalar in _scalars(document):
-        if key != "run" and not ("pip" in scalar.value and "install" in scalar.value):
+        lowered = scalar.value.lower()
+        if key != "run" and not ("pip" in lowered and "install" in lowered):
             continue
         for number, line in _script_lines(scalar):
-            if "pip" not in line or "install" not in line:
+            if "pip" not in line.lower() and "install" not in line.lower():
                 continue
             try:
                 tokens = _tokens(line)
             except ValueError as exc:
                 unreadable.append(f"{number}: cannot tokenise shell text ({exc})")
                 continue
-            recognised = False
             for segment in _segments(tokens):
                 arguments = _install_arguments(segment)
-                if arguments is None:
-                    if _mentions_pip_install(segment):
-                        unreadable.append(
-                            f"{number}: unrecognised pip invocation {' '.join(segment)!r}"
-                        )
-                        recognised = True
+                if arguments is not None:
+                    installs.append(_parse_install(number, arguments))
                     continue
-                installs.append(_parse_install(number, arguments))
-                recognised = True
-            if (
-                not recognised
-                and any("pip" in token for token in tokens)
-                and any("install" in token for token in tokens)
-            ):
-                unreadable.append(
-                    f"{number}: names pip and install but no recognised pip invocation "
-                    f"{line.strip()!r}"
-                )
+                reason = _unreadable_segment(segment)
+                if reason is not None:
+                    unreadable.append(f"{number}: {reason}")
     return installs, unreadable
 
 
@@ -1276,7 +1302,9 @@ def publish_evidence(text: str) -> tuple[list[str], str | None]:
     backslash-continued ``twine``/``upload`` are the same command. A line that
     names a publishing tool but cannot be tokenised counts as publishing. The
     old substring net over the comment-stripped text is kept as an addition.
-    A workflow outside the YAML subset returns the read error: the caller
+    The second value says why a workflow cannot be cleared -- outside the YAML
+    subset, a `uses` this scan cannot open (a local action, another repository's
+    workflow), or an upload through a shell expansion: the caller
     cannot rule out that it publishes.
     """
     evidence: list[str] = []
@@ -1287,13 +1315,23 @@ def publish_evidence(text: str) -> tuple[list[str], str | None]:
         document = load_workflow_yaml(text)
     except WorkflowYamlError as exc:
         return evidence, str(exc)
+    uninspectable: list[str] = []
+    verbs = set(_PUBLISH_TOOLS.values())
     for key, scalar in _scalars(document):
         if key == "uses":
             action = scalar.value.split("@", 1)[0].strip().lower()
             if action.startswith("pypa/gh-action-pypi-publish"):
                 evidence.append(f"line {scalar.line}: uses {scalar.value!r}")
+            # What this scan cannot open, it cannot clear: a local action
+            # outside .github/workflows, or another repository's workflow.
+            elif (action.startswith("./") and not action.startswith("./.github/workflows/")) or (
+                not action.startswith("./") and "/.github/workflows/" in action
+            ):
+                uninspectable.append(f"line {scalar.line}: uses {scalar.value!r}")
         for number, line in _script_lines(scalar):
-            if not any(tool in line for tool in _PUBLISH_TOOLS):
+            if not any(tool in line for tool in _PUBLISH_TOOLS) and not any(
+                verb in line for verb in verbs
+            ):
                 continue
             try:
                 tokens = _tokens(line)
@@ -1307,7 +1345,16 @@ def publish_evidence(text: str) -> tuple[list[str], str | None]:
                     if verb is not None and verb in words[position + 1 :]:
                         evidence.append(f"line {number}: {' '.join(segment)!r}")
                         break
-    return evidence, None
+                else:
+                    # `$TOOL upload`: the command is decided at run time.
+                    if any(verb in words for verb in verbs) and any(
+                        _EXPANSION_RE.search(word) for word in segment
+                    ):
+                        uninspectable.append(
+                            f"line {number}: {' '.join(segment)!r} uploads or publishes "
+                            "through a shell expansion"
+                        )
+    return evidence, (uninspectable[0] if uninspectable else None)
 
 
 def check_workflow(path: Path, root: Path) -> list[str]:
@@ -1363,7 +1410,7 @@ def check(root: Path = ROOT) -> list[str]:
             evidence, unreadable = publish_evidence(path.read_text(encoding="utf-8"))
             if unreadable is not None:
                 errors.append(
-                    f".github/workflows/{path.name}: cannot be read as YAML ({unreadable}), "
+                    f".github/workflows/{path.name}: cannot be inspected ({unreadable}), "
                     "so the gate cannot rule out that it publishes to PyPI"
                 )
             if evidence:
