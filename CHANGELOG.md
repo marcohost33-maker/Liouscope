@@ -324,6 +324,22 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `schur_cluster_mismatch`. Simple zero modes retain the scalar path. Audit only: no D1-D24
   number, filter, certificate, mechanism verdict or
   run-manifest field consumes this evidence; MANIFEST_SCHEMA therefore remains unchanged.
+- **A conditioning audit called without `zero_tolerance` now abstains instead of answering
+  `BENIGN` (PR #173 review).** `zero_mode_conditioning(L)` used to turn the missing cutoff into
+  an internal NaN; every ordered comparison with NaN is False, so the scalar path could only say
+  `BENIGN` -- measured for `diag(0, -1, -1, -2)`, which is not trace preserving (defect `1.414`).
+  The zero set was then chosen by proximity, which a defective double root split by
+  `~sqrt(eps) * ||L||` makes basis dependent: the exact issue-#168 Jordan pair gave
+  `CLUSTER_ONLY` (two modes) in its plain basis and `BENIGN` (one mode, `s = 3.6e-8`) under a
+  unitary re-expression. A call without a cutoff now returns the new verdict `ABSTAIN`
+  (`reason="zero_tolerance_not_supplied"`, `cluster_size=0`): smallest eigenvalue, its magnitude
+  and the trace defect as observations, every zero-set figure NaN / JSON null,
+  `conditioning_limited=False`, `displacement_explained=None`. This withdraws the round-8
+  contract under which `displacement_explained` still answered from a default call. With a
+  cutoff, `BENIGN` is now issued only when `budget <= zero_tolerance` is TRUE, so a NaN budget
+  can no longer fall through to it. The spectral layer always supplies its certified cutoff, so
+  no `SpectralResult`, D1-D24 value or manifest field changes. Two round-3/8 regression tests
+  that need `np.longdouble` wider than float64 now skip where it is not (Windows/MSVC).
 - **`scipy.linalg.sqrtm`'s extended-precision result no longer reaches NumPy
   linalg (issue #177).** Up to SciPy 1.14, `sqrtm` returns a complex input's
   root as `complex256` (scipy/scipy#18250). `np.linalg.eigvalsh` rejects that

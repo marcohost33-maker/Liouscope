@@ -252,7 +252,10 @@ LiouScope is built for paper-grade reproducibility:
   `UNAVAILABLE` rather than conditioning a numerically different cluster. **Nothing reads this
   audit** — no filter, gap, certificate, diagnostic or tier — and it is not a detector for stiff
   eigensolver failure (issues #117/#168). The public entry point is
-  `liouscope.numerics.zero_mode_conditioning(L, zero_tolerance=..., eigenvalues=...)`;
+  `liouscope.numerics.zero_mode_conditioning(L, zero_tolerance=..., eigenvalues=...)`. Called
+  **without** `zero_tolerance` it returns `verdict="ABSTAIN"`: no cutoff means no zero set, so it
+  reports only the smallest eigenvalue, its magnitude and the trace defect and never `BENIGN`
+  (the spectral layer always passes its certified cutoff and is unaffected).
   `compute_spectral_layer(..., conditioning_audit=False)` switches the extra work off with no
   other effect on the result.
 - **Paper-figure pipeline.** `figures/generate_all.py` regenerates Fig 1-3 deterministically.

@@ -187,8 +187,12 @@ abstract: >-
 # projector is reported, the independent Schur spectrum must match the report's
 # spectrum mode-for-mode inside the existing round-off agreement band; otherwise
 # the audit withholds as schur_cluster_mismatch. Simple zero modes keep the
-# scalar path. When a diagnostic is gated on this evidence, THAT change is the
-# one that must be described as a correction.
+# scalar path. A call WITHOUT a zero_tolerance returns the verdict ABSTAIN
+# (observations only, never BENIGN): without a cutoff the zero set is not
+# defined in a basis-independent way (PR #173 review). The spectral layer always
+# passes its certified cutoff, so no reported number moves. When a diagnostic is
+# gated on this evidence, THAT change is the one that must be described as a
+# correction.
 # Also pending for the next cut: relaxation trajectories for d >= 8 may be
 # propagated by the Al-Mohy & Higham exponential action instead of a
 # materialised expm(L t) (#162). The backend is chosen by a deterministic
