@@ -6,6 +6,14 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Changed
+- **D18 initial-state sensitivity now uses a deterministic block exponential
+  action for superoperator dimension n >= 64 (issue #178).** Small systems keep
+  the historical dense path bit-for-bit. The multi-right-hand-side action scales
+  the condition-(3.13) exact-norm threshold by the block width, preserving global
+  RNG isolation, and records the selected backend in
+  `LepResult.initial_state_backend`.
+
 ### Added
 - **Relaxation trajectories can be propagated by the exponential ACTION instead
   of a materialised `expm(L t)` (issue #162).** The relaxation layer needs
