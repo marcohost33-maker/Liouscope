@@ -335,7 +335,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   (`reason="zero_tolerance_not_supplied"`, `cluster_size=0`): smallest eigenvalue, its magnitude
   and the trace defect as observations, every zero-set figure NaN / JSON null,
   `conditioning_limited=False`, `displacement_explained=None`. This withdraws the round-8
-  contract under which `displacement_explained` still answered from a default call. With a
+  contract under which `displacement_explained` still answered from a default call.
+  **Breaking (public API):** a caller that relied on a verdict from a default call must now pass
+  `zero_tolerance` or handle the new `ABSTAIN` verdict. Known limit: with a finite cutoff below
+  the defective split the issue-#168 pair still differs by basis (`CLUSTER_ONLY` vs
+  `CONDITIONING_LIMITED`, never `BENIGN`); tracked in #183. With a
   cutoff, `BENIGN` is now issued only when `budget <= zero_tolerance` is TRUE, so a NaN budget
   can no longer fall through to it. The spectral layer always supplies its certified cutoff, so
   no `SpectralResult`, D1-D24 value or manifest field changes. Two round-3/8 regression tests
