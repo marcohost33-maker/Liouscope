@@ -1,6 +1,12 @@
 """Low-level numerical primitives for LiouScope."""
 
 from .adjoint import alicki_adjoint, hs_adjoint
+from .conditioning import (
+    ZeroModeConditioning,
+    cluster_conditioning,
+    eigenvalue_conditioning,
+    zero_mode_conditioning,
+)
 from .kronecker import unvec, vec
 from .linalg import (
     EigenDecomposition,
@@ -16,8 +22,11 @@ from .scale import rate_scale
 
 __all__ = [
     "EigenDecomposition",
+    "ZeroModeConditioning",
     "alicki_adjoint",
+    "cluster_conditioning",
     "eig_nonhermitian",
+    "eigenvalue_conditioning",
     "hermiticity_defect",
     "hs_adjoint",
     "is_density_matrix",
@@ -30,4 +39,5 @@ __all__ = [
     "support_check",
     "unvec",
     "vec",
+    "zero_mode_conditioning",
 ]

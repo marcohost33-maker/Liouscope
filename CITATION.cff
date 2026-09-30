@@ -153,6 +153,46 @@ abstract: >-
 # than reduction_rtol * (eps * ||L||_F + d**3 * 2**-1074), reduction_rtol
 # defaulting to the existing ZERO_MODE_EPS_FACTOR. Like the restriction itself
 # this moves no reported number: no diagnostic consumes it yet.
+# Also pending for the next cut: the spectral layer records AUDIT-ONLY
+# eigenvalue-conditioning evidence for the stationary mode (issue #117). The
+# reciprocal condition number of the zero set -- sigma_min(Y^H X) over
+# orthonormal bases of the left and right invariant subspaces, which reduces to
+# |y^H x| for a simple eigenvalue -- is reported alongside the left/right
+# residuals, the separation, the trace-preservation defect and the first-order
+# forward-error estimates those imply. It exists because a backward error does
+# NOT bound the forward eigenvalue displacement for a non-normal generator:
+# measured on the 4x4 (two-level, d = 2) fixture of the 2026-09-11 external
+# review, a 1.00e-14 perturbation moves the stationary eigenvalue to 1.00e-07,
+# which the certificate band (4.44e-13) under-predicts by 2.25e5x and the
+# conditioning-scaled estimate (5.00e-08) reproduces within a factor of two.
+# (The canonical FOUR-level network referenced elsewhere in this file is a
+# different, 16x16 fixture; the two must not be conflated.) This entry
+# describes a MEASUREMENT that is available in the codebase and it must NOT be
+# described as changing any reported number: no filter, gap, certificate,
+# verdict or tier consumes it, D1-D24 are byte-identical and the run manifest
+# contract is untouched (MANIFEST_SCHEMA deliberately unchanged; the evidence is
+# a report field, so `input_hash` does not move). It must also NOT be described
+# as detecting stiff eigensolver failure: on the canonical #112 network the
+# deflated, WRONG spectrum carries condition numbers between 1 and 25, so
+# conditioning is additive to the structural certificate and no substitute for
+# it. Issue #168 corrects the repeated/defective-cluster measurement itself:
+# a multi-mode zero cluster is reordered in a complex Schur form, the Sylvester equation
+# T11 R - R T22 = T12 is solved, and the reported cluster figure is the actual
+# reciprocal spectral-projector 2-norm 1/sqrt(1 + ||R||_2^2). LAPACK xTRSEN.S
+# is NOT identified with that exact value; it is only the documented
+# Frobenius-norm lower bound. A multi-mode zero cluster is now explicitly
+# CLUSTER_ONLY: no scalar first-order eigenvalue-displacement estimate is
+# claimed, because defective multiplicity makes such a scalar condition
+# non-identifiable from numerical proximity alone. Before any multi-mode
+# projector is reported, the independent Schur spectrum must match the report's
+# spectrum mode-for-mode inside the existing round-off agreement band; otherwise
+# the audit withholds as schur_cluster_mismatch. Simple zero modes keep the
+# scalar path. A call WITHOUT a zero_tolerance returns the verdict ABSTAIN
+# (observations only, never BENIGN): without a cutoff the zero set is not
+# defined in a basis-independent way (PR #173 review). The spectral layer always
+# passes its certified cutoff, so no reported number moves. When a diagnostic is
+# gated on this evidence, THAT change is the one that must be described as a
+# correction.
 # Also pending for the next cut: relaxation trajectories for d >= 8 may be
 # propagated by the Al-Mohy & Higham exponential action instead of a
 # materialised expm(L t) (#162). The backend is chosen by a deterministic
