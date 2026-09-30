@@ -15,6 +15,7 @@ Reference: Geyer, "Practical Markov Chain Monte Carlo", Statistical Science
 
 from __future__ import annotations
 
+import math
 import warnings
 
 import numpy as np
@@ -100,9 +101,45 @@ def ar1_correlation(residuals: np.ndarray) -> float:
     coefficient is estimator-convention dependent, so treat it as indicative
     rather than a pinned analytic identity.
     """
-    x = np.asarray(residuals, dtype=float) - float(np.mean(residuals))
+    x = np.asarray(residuals, dtype=float)
     if x.size < 2:
         return 0.0
+    # rho is a RATIO of two quadratic forms, so it is invariant under a common
+    # rescaling of the residuals -- but the dot products that form it are not:
+    # residuals below ~1e-162 square to 0 (rho_hat = 0, and the corrected
+    # estimate collapses to its floor 1/(n-3)), and above ~1e154 they overflow
+    # to NaN (PR #134 review, measured through fit_gls_ar1 at 1e-170 / 1e160).
+    # Normalise by the exact power of two nearest the peak magnitude. Scaling
+    # by 2**k is exact in binary floating point whenever nothing under- or
+    # overflows, so every mean, product and sum below is the old one times an
+    # exact power of two and rho_hat is BIT-IDENTICAL wherever the unnormalised
+    # computation stayed in range -- the audit-pinned formula does not move.
+    #
+    # The normalisation can UNDERFLOW (PR #134 review): an entry more than
+    # ~2**-1021 below the peak lands in the subnormal range or at zero, and
+    # under a caller's ``np.errstate(under="raise")`` the ``ldexp`` -- and the
+    # mean or dot products that follow on the subnormals it made -- raised
+    # ``FloatingPointError`` where the unnormalised code returned a number
+    # (measured: ``[1e150, 1e-200]`` raised; main gives -0.5). Those underflows
+    # are this function's own scaling, not the caller's arithmetic, and they
+    # are harmless: after normalisation every entry is below 1 in magnitude,
+    # so each underflowed quantity is below 2**-1022 in absolute terms, while
+    # ``den`` is either exactly 0 or at least ~2**-110 (two distinct floats in
+    # [-1, 1) that include the peak differ by at least ulp(0.5) = 2**-53). The
+    # perturbation of rho is therefore below ``n * 2**-912`` -- far under one
+    # rounding of the ratio. Only UNDERFLOW is silenced, and only on the
+    # normalised path: overflow/invalid keep the caller's policy, and the
+    # non-finite and all-zero inputs take the unnormalised path verbatim.
+    peak = float(np.max(np.abs(x)))
+    if math.isfinite(peak) and peak > 0.0:
+        with np.errstate(under="ignore"):
+            return _lag1_ratio(np.ldexp(x, -math.frexp(peak)[1]))
+    return _lag1_ratio(x)
+
+
+def _lag1_ratio(x: np.ndarray) -> float:
+    """Mean-subtracted lag-1 plug-in ratio: the arithmetic of ``ar1_correlation``."""
+    x = x - float(np.mean(x))
     num = float(np.dot(x[:-1], x[1:]))
     den = float(np.dot(x, x))
     if den == 0.0:
