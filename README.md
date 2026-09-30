@@ -256,6 +256,17 @@ LiouScope is built for paper-grade reproducibility:
   `compute_spectral_layer(..., conditioning_audit=False)` switches the extra work off with no
   other effect on the result.
 - **Paper-figure pipeline.** `figures/generate_all.py` regenerates Fig 1-3 deterministically.
+- **Relaxation trajectories: dense `expm` or exponential action, recorded.** For `d >= 8`
+  the relaxation layer propagates `exp(tL) rho0` with the Al-Mohy & Higham exponential action
+  (`scipy.sparse.linalg.expm_multiply`) whenever its exact cost bound is within budget and below
+  the dense estimate, instead of materialising `expm(L t)`; stiff generators stay on the dense
+  path, and smaller systems (every anchor fixture) keep the historical dense formula
+  bit-for-bit. The choice is a deterministic function of the generator and the time grid,
+  never of timings, and
+  `RelaxationResult.trajectory_backend` records it together with the measured trace error,
+  Hermiticity defect and minimum eigenvalue along the trajectory (audit values, no silent
+  repair). The action path never touches global random state. Unrepresentable propagation
+  fails closed with `UnrepresentableTrajectoryError`.
 
 ---
 

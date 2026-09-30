@@ -245,6 +245,20 @@ class RelaxationResult:
     # uses. Additive + defaulted so older callers / serialised reports stay valid.
     beta_D_linear: float = float("nan")
     linear_fit_model: str = "none"
+    # Issue #162: which propagation backend produced the trajectory the curves
+    # above were computed from -- "dense_expm" (reference, materialised
+    # expm(L t)) or "expm_action" (Al-Mohy & Higham exponential action).
+    # Recorded so a backend switch is auditable, never silent. Defaulted to the
+    # historical dense path so older callers / serialised results stay valid.
+    trajectory_backend: str = "dense_expm"
+    # Issue #162 acceptance: "positivity drift measured, not assumed". Physical
+    # invariants of the propagated states, measured on every run (not only in
+    # tests): max |tr(rho(t)) - 1|, max ||rho - rho^dag||_max and the smallest
+    # eigenvalue of the Hermitian part along the trajectory. Audit measurements
+    # only -- nothing is repaired. NaN for results that carry no trajectory.
+    trajectory_max_trace_error: float = float("nan")
+    trajectory_max_hermiticity_defect: float = float("nan")
+    trajectory_min_eigenvalue: float = float("nan")
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)

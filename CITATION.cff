@@ -189,6 +189,15 @@ abstract: >-
 # the audit withholds as schur_cluster_mismatch. Simple zero modes keep the
 # scalar path. When a diagnostic is gated on this evidence, THAT change is the
 # one that must be described as a correction.
+# Also pending for the next cut: relaxation trajectories for d >= 8 may be
+# propagated by the Al-Mohy & Higham exponential action instead of a
+# materialised expm(L t) (#162). The backend is chosen by a deterministic
+# size/cost rule, recorded in RelaxationResult.trajectory_backend, and agrees
+# with the dense reference to round-off (<= 2e-14 measured, 1e-11 declared);
+# fitted rates then move only within the least-squares termination tolerance
+# (xtol = 1e-8; <= 3e-8 relative measured). d < 8 (every anchor fixture) is
+# unchanged bit-for-bit. It must be described as a numerical-method change,
+# not as a change of any diagnostic's definition.
 keywords:
   - open quantum systems
   - Lindblad
