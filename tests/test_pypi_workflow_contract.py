@@ -10,8 +10,37 @@ def test_manual_dispatch_is_build_only_without_oidc_permission():
     build_block, publish_block = text.split("\n  publish:\n", maxsplit=1)
     assert "workflow_dispatch:" in build_block
     assert "id-token: write" not in build_block
-    assert "Manual dry-run verified" in build_block
+    assert "Dry-run ($GITHUB_EVENT_NAME) verified" in build_block
+    assert "no publish credentials exist in this job" in build_block
     assert "id-token: write" in publish_block
+
+
+def test_dry_run_triggers_reach_the_build_job_only():
+    """Pull requests and pushes to main exercise the release build, never publish.
+
+    The build job carries no OIDC permission and no deployment environment, and
+    only the release-gated publish job has either; the concurrency group cancels
+    superseded pull-request dry-runs but never a release run.
+    """
+    text = _WORKFLOW.read_text(encoding="utf-8")
+    build_block, publish_block = text.split("\n  publish:\n", maxsplit=1)
+    on_block = text.split("\npermissions:", maxsplit=1)[0]
+    assert "\n  pull_request:\n" in on_block
+    assert "\n  push:\n    branches: [main]\n" in on_block
+    assert "environment:" not in build_block
+    assert "environment:" in publish_block
+    assert "cancel-in-progress: ${{ github.event_name == 'pull_request' }}" in text
+
+
+def test_reproducibility_is_verified_before_qa_and_upload():
+    text = _WORKFLOW.read_text(encoding="utf-8")
+    build_block, _ = text.split("\n  publish:\n", maxsplit=1)
+    assert 'SOURCE_DATE_EPOCH="$(git log -1 --format=%ct HEAD)"' in build_block
+    assert "python -m build --no-isolation --outdir dist" in build_block
+    assert 'python .github/scripts/compare_dists.py dist "$RUNNER_TEMP/rebuild"' in build_block
+    step = build_block.index("Build sdist + wheel twice and verify reproducibility")
+    assert step < build_block.index("Release QA gate")
+    assert step < build_block.index("Upload verified distributions")
 
 
 def test_publish_job_is_release_only_and_feature_gated():
