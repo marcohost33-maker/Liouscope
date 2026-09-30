@@ -7,6 +7,65 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Added
+- **Relaxation trajectories can be propagated by the exponential ACTION instead
+  of a materialised `expm(L t)` (issue #162).** The relaxation layer needs
+  `exp(t L) vec(rho_0)`, not the `d^2 x d^2` propagator. The new
+  `numerics.propagation` module offers two backends: `"dense_expm"` (the
+  historical per-point `scipy.linalg.expm(L*t) @ vec(rho_0)`, kept bit-for-bit
+  as the reference) and `"expm_action"` (Al-Mohy & Higham 2011 via
+  `scipy.sparse.linalg.expm_multiply`, stepping `tau_k = t_k - t_{k-1}` along
+  the grid, dense or sparse `L`). `compute_relaxation_layer(...,
+  trajectory_backend="auto")` chooses by a deterministic rule of `(L, t_grid)`
+  alone and records the backend actually used in the new, defaulted
+  `RelaxationResult.trajectory_backend` -- a switch is auditable, never silent.
+  The rule: `n = d^2 < 64` stays dense (per-call overhead dominates there);
+  otherwise the action is used only if its matrix-vector-product bound
+  `sum_k min_m m*ceil(tau_k*||L - mu I||_1/theta_m)` -- an upper bound on
+  SciPy's own `(m, s)` choice, verified by a counting probe -- is within
+  `DEFAULT_ACTION_MATVEC_BUDGET` and below the dense estimate. Stiff
+  generators therefore stay on the dense path instead of looping for hours;
+  forcing `"expm_action"` on them raises `UnrepresentableTrajectoryError`
+  before running. Measured (single-threaded BLAS, 80-point grid, damped
+  transverse-field Ising chain): `n = 64` 0.08 s -> 0.02 s, `n = 256`
+  2.9 s -> 0.09 s, `n = 1024` 120 s -> 2.6 s; dense-vs-action deviation
+  <= 2e-14 (declared tolerance 1e-11). Both backends fail closed with
+  `UnrepresentableTrajectoryError` on a non-finite `L*t`, a SciPy runtime
+  warning or a non-finite propagator/state (the #156 semantics); the extreme
+  #156 fixture fails closed on every backend in well under a second.
+  `propagate_trajectory` refuses a non-finite `L` or initial state with
+  `ValueError` before any shortcut (a zero-only grid used to hand a NaN
+  state back), and the cost model saturates instead of raising on subnormal
+  or near-overflow norms. Sparse generators are cost-compared like dense ones
+  up to `DENSE_MAX_DIM = 2048`; above it an over-budget action is refused
+  rather than densified (PR #176 review). The action backend never touches
+  global random state: above ||A||_1 = 63.36 per call (condition (3.13) of
+  Al-Mohy & Higham) SciPy's `expm_multiply` estimates matrix-power norms with
+  the randomised `onenormest`, which draws from the caller's GLOBAL legacy
+  `np.random` stream (measured: consumed on every such call). Each grid step
+  is therefore split into sub-steps below that threshold, so SciPy always
+  selects `(m, s)` from the exact 1-norm, results are bitwise independent of
+  the global seed, and the matrix-vector-product bound is exact; benign grids
+  (every step below the threshold) are not split and are unchanged.
+  `RelaxationResult` additionally records the measured physical invariants of
+  every propagated trajectory -- `trajectory_max_trace_error`,
+  `trajectory_max_hermiticity_defect` and `trajectory_min_eigenvalue` (the
+  positivity drift) -- as audit values without any repair; NaN for results
+  without a trajectory. A non-finite `t_grid` is refused as an input error
+  (`ValueError`). The shifted 1-norm that drives sub-stepping and the cost
+  bound is formed as `(base, power-of-two scale)` and multiplied by `tau`
+  only then, so a finite generator whose unscaled column sums overflow (two
+  `1e308` entries in one column) is still propagated for a representable
+  `tau` instead of being refused; the trace passed to SciPy is taken from the
+  already-scaled matrix (PR #176 review). This
+  CHANGES REPORTED NUMBERS for systems with `d >= 8` in the default path: the
+  D5-D7 curves at round-off level (~1e-14), fitted quantities such as
+  `beta_D` within the least-squares termination tolerance (`xtol = 1e-8`;
+  measured <= 3e-8 relative, ~1e-6 of the BCa interval width) -- the same
+  scale on which two BLAS builds of the dense path already differ. Every
+  system with `d < 8`, including every anchor fixture, is unchanged
+  bit-for-bit. No manifest field, schema, anchor
+  or diagnostic definition changes; the backend is a deterministic function
+  of the run inputs, so `input_hash` and `run_id` keep their meaning.
 - **Trace-preserving generators can be restricted to the traceless operator
   space by an exact structural identity, with no eigenvalue-magnitude
   threshold (issue #113).** For column-stacked operators trace preservation IS
@@ -35,6 +94,25 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   eigensolver paths use, so one quantity is not measured two different ways.
 
 ### Changed
+- **Dependency floors raised to the lowest TESTED combination: `numpy>=2.0`,
+  `scipy>=1.13` (was `numpy>=1.24`, `scipy>=1.10`; issue #177).** The old
+  floors were never tested and did not hold. On the declared minimum the
+  spectral layer crashed (see Fixed), and after that fix the full suite still
+  failed on older combinations. Measured 2026-09-29, full suite, Python
+  3.10/3.11:
+  - scipy 1.10.1, 1.11.4 and 1.12.0: two failures;
+  - scipy 1.13.1 + numpy 1.26.4 and scipy 1.14.1 + numpy 1.24.4: one failure;
+  - scipy 1.13.1 + numpy 2.0.2 and scipy 1.14.1 + numpy 2.0.2: all pass.
+
+  The remaining failures are ulp-sensitive tests at the edge of float64
+  resolution, not API breaks (tracked separately). A new `min-deps` CI job
+  installs exactly the `pyproject.toml` floors on Python 3.10, derived by
+  `.github/scripts/min_deps_constraints.py` and never hand-copied, and runs
+  the anchors and the full suite. A floor can therefore no longer drift away
+  from what is tested. The floors stay looser than Scientific Python SPEC 0,
+  which would already allow `numpy>=2.2` and `scipy>=1.15`.
+  **Migration:** environments pinned to NumPy 1.x or SciPy < 1.13 must
+  upgrade before installing this version.
 - **The Gaussian likelihood behind AICc is evaluated in log-RSS space, and an
   exact-zero RSS is now an explicit abstention (issue #135).** This is a
   METHODOLOGY change with user-visible consequences: it can reorder AICc,
@@ -115,6 +193,26 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `RECORD`) differs from today's 84.0.0 -- the drift the lock now removes.
 
 ### Fixed
+- **`scipy.linalg.sqrtm`'s extended-precision result no longer reaches NumPy
+  linalg (issue #177).** Up to SciPy 1.14, `sqrtm` returns a complex input's
+  root as `complex256` (scipy/scipy#18250). `np.linalg.eigvalsh` rejects that
+  dtype, so D2 (GNS gap) failed with `TypeError: array type complex256 is
+  unsupported in linalg`. All three `sqrtm` calls in `diagnostics/spectral.py`
+  now go through `_sqrtm_double`, which casts to double precision. The new
+  floor `scipy>=1.13` still upcasts, so the cast is required, not legacy. No
+  reported number changes: the extra precision was discarded by the next
+  float64 operation anyway.
+- **Dense and sparse Liouvillian builders now fail closed when finite inputs overflow during generator assembly (issue #152).** Input finiteness alone did not prevent derived expressions such as `H_jj - H_kk`, `L^dag L`, Kronecker products, or finite-rate scaling from producing `NaN`/`inf`; e.g. `H = diag(1e308, -1e308)` passed the input gates and could return a non-finite generator. Both builders now assemble inside a bounded floating-point warning context and apply one shared exact output-finiteness guard. The sparse path canonicalises duplicates on a copy and checks only stored data, so the check remains O(nnz) and never densifies. Large but representable generators remain accepted. No manifest/schema field changes and no reported value for a representable generator changes.
+- **Relaxation trajectories now fail closed when dense propagation leaves the representable
+  float64 domain (issue #156 trajectory slice).** A finite Liouvillian and finite time do not
+  guarantee that `L*t`, `scipy.linalg.expm(L*t)`, or the action of that propagator on the
+  initial state remains finite. `_evolve` now raises `UnrepresentableTrajectoryError` at each
+  of those boundaries instead of allowing NaN/inf to enter entropy, model fitting or
+  uncertainty calculations. This is deliberately independent of PR #115's gap-scaled-grid
+  and resolution-warning methodology; no time-grid policy, fit, diagnostic definition,
+  manifest field or schema changes here. The existing dense propagation formula is unchanged
+  for representable inputs; issue #162 separately replaces full-matrix `expm` with an
+  exponential-action backend.
 - **The overflow fallback of `scaled_column_sums` now answers exactly instead
   of abstaining (issue #151).** When `math.fsum` overflows on an intermediate,
   the column used to be split into two exponent bands at `2**512`, each rounded
