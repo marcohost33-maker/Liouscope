@@ -19,6 +19,11 @@ violated trace equation; the componentwise reading normalises every column's
 trace equation by only those coefficients that can cancel within it. A gate
 that reads only the first accepts generators whose traceless subspace is not
 invariant, which is the one property this module exists to rely on.
+
+After the restriction is formed, its own audit numbers are enforced as a
+postcondition rather than only reported (issue #150): the invariance and
+reconstruction defects must agree, to rounding, with the two identities the
+reduction rests on. See :func:`_require_invariant_reduction`.
 """
 
 from __future__ import annotations
@@ -28,6 +33,7 @@ from dataclasses import dataclass
 
 import numpy as np
 
+from .._consts import ZERO_MODE_EPS_FACTOR
 from .linalg import (
     trace_preservation_componentwise_error,
     trace_preservation_defect,
@@ -46,6 +52,11 @@ class TracelessRestriction:
     trace_componentwise_error: float
     invariance_defect: float
     reconstruction_defect: float
+    #: The arithmetic bound the #150 postcondition applied to both defects,
+    #: ``reduction_rtol * (eps * ||L||_F + d**3 * 2**-1074)``, recorded so the
+    #: admission is auditable against the numbers it admitted. ``0.0`` for
+    #: ``d = 1``, where the traceless space is empty and nothing is reduced.
+    reduction_tolerance: float = 0.0
 
 
 def trace_vector(d: int) -> np.ndarray:
@@ -96,10 +107,85 @@ def traceless_basis(d: int) -> np.ndarray:
     return basis
 
 
+def _require_invariant_reduction(
+    *,
+    invariance_defect: float,
+    reconstruction_defect: float,
+    projection_bound: float,
+    arithmetic: float,
+) -> None:
+    """Enforce, to rounding, the two identities the reduction rests on.
+
+    With ``q`` the unit trace vector and ``B`` an orthonormal basis of
+    ``ker(q^H)``:
+
+    1. ``||q^H L B|| <= ||q^H L||``. ``q^H L B`` holds the coordinates of the
+       orthogonal projection of ``q^H L`` onto ``q^perp``, and a projection
+       cannot exceed the vector it projects. The admission gates bound
+       ``||q^H L||`` and therefore already bound the invariance defect, which
+       is why no SEPARATE relative threshold is placed on it: that would be a
+       second, slightly different gate on a quantity that is not free.
+    2. ``L B - B (B^H L B) = (I - B B^H) L B = q (q^H L B)``, because
+       ``I - B B^H = q q^H``. The reconstruction defect therefore EQUALS the
+       invariance defect in exact arithmetic; it is not an independent
+       structural quantity, and anything it adds beyond the invariance defect
+       is either rounding or a subspace that is not invariant.
+
+    ``projection_bound`` is ``||q^H L||`` and ``arithmetic`` the rounding
+    either computed number may carry. Every reading and both limits are
+    required to be finite BEFORE anything is compared. A NaN reading would
+    compare false and a ``not (x <= bound)`` form catches that, but it does
+    not catch an infinite reading against a limit that has itself overflowed
+    to ``inf`` -- ``inf <= inf`` is true (PR #169 review, Codex P2:
+    ``invariance_defect=inf, projection_bound=1e308, arithmetic=1e308``
+    passed). A reading that is not finite, including one propagated from a
+    non-finite entry of the reduced operator, and a limit that admits
+    everything are therefore refused by name instead of compared.
+    """
+    readings = {
+        "invariance_defect": invariance_defect,
+        "reconstruction_defect": reconstruction_defect,
+        "projection_bound": projection_bound,
+        "arithmetic": arithmetic,
+    }
+    for name, value in readings.items():
+        if not math.isfinite(value):
+            raise ValueError(
+                f"the traceless restriction's {name} is not representable as "
+                f"finite float64 ({name}={value}); refused rather than compared"
+            )
+    projection_limit = projection_bound + arithmetic
+    reconstruction_limit = invariance_defect + arithmetic
+    if not (math.isfinite(projection_limit) and math.isfinite(reconstruction_limit)):
+        # Same rule as the arithmetic bound itself: a limit that is not
+        # finite admits everything, so it is refused rather than compared.
+        raise ValueError(
+            "a reduction limit of the traceless restriction overflows float64 "
+            f"(projection_limit={projection_limit}, "
+            f"reconstruction_limit={reconstruction_limit}); no reading could "
+            "fail it, so the restriction is refused"
+        )
+    if invariance_defect > projection_limit:
+        raise ValueError(
+            "the traceless restriction violates its projection bound: "
+            f"invariance_defect={invariance_defect:.6e} exceeds "
+            f"||q^H L||={projection_bound:.6e} by more than the arithmetic "
+            f"bound {arithmetic:.6e}"
+        )
+    if reconstruction_defect > reconstruction_limit:
+        raise ValueError(
+            "the traceless subspace is not invariant under L_super within "
+            f"rounding: reconstruction_defect={reconstruction_defect:.6e}, "
+            f"invariance_defect={invariance_defect:.6e}, arithmetic bound "
+            f"{arithmetic:.6e}"
+        )
+
+
 def restrict_to_traceless(
     L_super: np.ndarray,
     *,
     tp_rtol: float = 1.0e-10,
+    reduction_rtol: float = ZERO_MODE_EPS_FACTOR,
 ) -> TracelessRestriction:
     """Restrict a trace-preserving ``d^2 x d^2`` generator to traceless space.
 
@@ -113,14 +199,24 @@ def restrict_to_traceless(
     in the reduced operator and must be handled explicitly by the caller.
 
     ``invariance_defect`` measures ``||q^H L B||_2`` and
-    ``reconstruction_defect`` measures ``||L B - B (B^H L B)||_F``. Both should
-    be at round-off for a legal trace-preserving input and make the subspace
-    reduction auditable rather than assumed. ``trace_componentwise_error``
-    reports the worst single trace equation, the reading the normwise ratio
-    cannot make.
+    ``reconstruction_defect`` measures ``||L B - B (B^H L B)||_F``. They make
+    the subspace reduction auditable rather than assumed, and since issue #150
+    they are also ENFORCED: the routine fails closed unless both agree with
+    their exact values to within the floating-point arithmetic of forming them,
+    ``reduction_rtol * (eps * ||L||_F + d**3 * 2**-1074)`` -- the standard
+    rounding model with its gradual-underflow term, so the verdict does not
+    change with the rate unit down to the subnormal range. The default
+    ``reduction_rtol`` is :data:`liouscope._consts.ZERO_MODE_EPS_FACTOR`, the
+    multiplier the certified eigensolver residuals already use, not a newly
+    calibrated number. ``trace_componentwise_error`` reports the worst single
+    trace equation, the reading the normwise ratio cannot make.
     """
     if not np.isfinite(tp_rtol) or tp_rtol < 0.0:
         raise ValueError(f"tp_rtol must be finite and non-negative, got {tp_rtol}")
+    if not np.isfinite(reduction_rtol) or reduction_rtol < 0.0:
+        raise ValueError(
+            f"reduction_rtol must be finite and non-negative, got {reduction_rtol}"
+        )
 
     L_c = np.asarray(L_super, dtype=complex)
     if L_c.ndim != 2 or L_c.shape[0] != L_c.shape[1] or L_c.size == 0:
@@ -201,6 +297,36 @@ def restrict_to_traceless(
     invariance_defect = scaled_euclidean_norm(q.conj() @ image)
     reconstruction_defect = scaled_euclidean_norm(image - basis @ reduced)
 
+    # Issue #150. The rounding the three products above may commit, in the
+    # standard model with gradual underflow: a relative part ``eps * ||L||_F``
+    # and an absolute part of at most half a subnormal per product -- each
+    # entry is an inner product over at most ``d`` non-zero basis
+    # coefficients, so the Frobenius norm of that absolute error over the
+    # ``n * (n - 1)`` entries stays below ``n * d * 2**-1075``, which
+    # ``n * d * 2**-1074`` covers twice over. Measured across random GKSL
+    # generators with ``d <= 16`` over rate scales 1e-300..1e300, both defects
+    # stay below ``0.9 * eps * ||L||_F`` of their exact values, so the default
+    # multiplier leaves three orders of magnitude of margin. The absolute part
+    # is not decoration: a legal ``d = 2`` generator at scale 1e-318 carries a
+    # reconstruction defect of two subnormals while ``eps * ||L||_F``
+    # underflows to exactly zero, and the relative part alone refuses it.
+    eps = float(np.finfo(float).eps)
+    arithmetic = reduction_rtol * (eps * operator_scale + n * d * math.ulp(0.0))
+    if not math.isfinite(arithmetic):
+        # Same rule as ``operator_zero_tolerance``: a bound that is not finite
+        # admits everything, so it is refused rather than compared against.
+        raise ValueError(
+            "the reduction tolerance derived from L_super is not finite "
+            f"(reduction_rtol = {reduction_rtol}, ||L||_F = {operator_scale}); "
+            "no reduction could fail it"
+        )
+    _require_invariant_reduction(
+        invariance_defect=invariance_defect,
+        reconstruction_defect=reconstruction_defect,
+        projection_bound=trace_defect / math.sqrt(d),
+        arithmetic=arithmetic,
+    )
+
     return TracelessRestriction(
         operator=reduced,
         basis=basis,
@@ -209,4 +335,5 @@ def restrict_to_traceless(
         trace_componentwise_error=tp_componentwise,
         invariance_defect=invariance_defect,
         reconstruction_defect=reconstruction_defect,
+        reduction_tolerance=arithmetic,
     )

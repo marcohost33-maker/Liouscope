@@ -237,6 +237,17 @@ LiouScope is built for paper-grade reproducibility:
 - **Anchor tests.** `tests/test_anchors.py` locks the numerical anchors that paper figures depend on;
   changes to physics code that move these values are caught in CI.
 - **Paper-figure pipeline.** `figures/generate_all.py` regenerates Fig 1-3 deterministically.
+- **Relaxation trajectories: dense `expm` or exponential action, recorded.** For `d >= 8`
+  the relaxation layer propagates `exp(tL) rho0` with the Al-Mohy & Higham exponential action
+  (`scipy.sparse.linalg.expm_multiply`) whenever its exact cost bound is within budget and below
+  the dense estimate, instead of materialising `expm(L t)`; stiff generators stay on the dense
+  path, and smaller systems (every anchor fixture) keep the historical dense formula
+  bit-for-bit. The choice is a deterministic function of the generator and the time grid,
+  never of timings, and
+  `RelaxationResult.trajectory_backend` records it together with the measured trace error,
+  Hermiticity defect and minimum eigenvalue along the trajectory (audit values, no silent
+  repair). The action path never touches global random state. Unrepresentable propagation
+  fails closed with `UnrepresentableTrajectoryError`.
 
 ---
 

@@ -41,7 +41,7 @@ Every third-party `uses:` reference must pin to a full 40-character commit SHA.
 Allowed:
 
 ```yaml
-uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683  # v4.2.2
+uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803  # v6.1.0
 ```
 
 Not allowed:

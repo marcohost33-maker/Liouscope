@@ -1,14 +1,13 @@
 # B3-Pilot (2026-06-04): reusable-CI pilot, ADDITIV neben der bestehenden
-# ci.yml (kein Ersatz, kein BP-Touch). This caller intentionally uses a local
-# reusable workflow so the public repo does not fail at workflow graph creation
-# when a private cross-repo workflow is inaccessible.
+# ci.yml (kein Ersatz, kein BP-Touch). On pull requests this intentionally keeps
+# GitHub's synthetic merge ref, providing an integration smoke test complementary
+# to the exact-head scientific jobs. The caller uses a local reusable workflow.
 name: ci-reusable-pilot
 
 on:
   push:
     branches: [main]
   pull_request:
-    branches: [main]
 
 permissions:
   contents: read

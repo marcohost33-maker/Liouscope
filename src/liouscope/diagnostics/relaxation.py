@@ -7,7 +7,6 @@ from __future__ import annotations
 import warnings
 
 import numpy as np
-import scipy.linalg as sla
 
 from .._consts import EPS_SUPP
 from .._types import FitResult, RelaxationResult
@@ -30,19 +29,75 @@ from ..fitting.neff import estimate_neff_geyer
 from ..fitting.prony import prony_seed
 from ..numerics.kronecker import unvec, vec
 from ..numerics.linalg import support_check
+from ..numerics.propagation import (
+    BACKEND_AUTO,
+    UnrepresentableTrajectoryError,
+    propagate_trajectory,
+)
+
+# ``UnrepresentableTrajectoryError`` is re-exported: it is raised through
+# ``compute_relaxation_layer`` and callers catch it from this module.
+__all__ = [
+    "UnrepresentableTrajectoryError",
+    "compute_relaxation_layer",
+    "entanglement_asymmetry",
+    "fidelity",
+    "relative_entropy",
+    "trace_distance",
+    "von_neumann_entropy",
+]
 
 
-def _evolve(L_super: np.ndarray, rho0: np.ndarray, t_grid: np.ndarray) -> np.ndarray:
-    """Propagate ``rho(t) = expm(L t) rho_0`` and return the trajectory."""
-    rho_vec0 = vec(rho0)
+def _propagate(
+    L_super: np.ndarray,
+    rho0: np.ndarray,
+    t_grid: np.ndarray,
+    *,
+    backend: str = BACKEND_AUTO,
+) -> tuple[np.ndarray, str]:
+    """Propagate ``rho(t) = exp(L t) rho_0``; return the trajectory and the backend.
+
+    The backend (``"dense_expm"`` reference or ``"expm_action"``, issue #162)
+    is chosen by :func:`liouscope.numerics.propagation.select_trajectory_backend`
+    under ``backend="auto"``. Both fail closed with
+    :class:`UnrepresentableTrajectoryError` instead of returning NaN/inf.
+    """
     d = rho0.shape[0]
+    result = propagate_trajectory(L_super, vec(rho0), t_grid, backend=backend)
     traj = np.empty((t_grid.size, d, d), dtype=complex)
-    for k, t in enumerate(t_grid):
-        if t == 0.0:
-            traj[k] = rho0
-        else:
-            rho_vec_t = sla.expm(L_super * t) @ rho_vec0
-            traj[k] = unvec(rho_vec_t, d=d)
+    for k in range(t_grid.size):
+        # ``states`` holds rho_0 exactly at t == 0, already validated in the
+        # complex128 working dtype; vec/unvec is a pure reshape, so this is
+        # rho_0 itself without a second, unchecked narrowing store.
+        traj[k] = unvec(result.states[k], d=d)
+    return traj, result.backend
+
+
+def _trajectory_invariants(traj: np.ndarray) -> tuple[float, float, float]:
+    """Measured physical invariants of a propagated trajectory (issue #162).
+
+    Returns ``(max |tr rho - 1|, max ||rho - rho^dag||_max, min eig(herm(rho)))``;
+    NaN for an empty trajectory. The last value is the positivity drift: a
+    CPTP evolution keeps it >= 0 exactly, round-off pushes it below by a few ulp.
+    """
+    if traj.shape[0] == 0:
+        return float("nan"), float("nan"), float("nan")
+    adjoint = np.conj(np.swapaxes(traj, 1, 2))
+    trace_error = float(np.max(np.abs(np.einsum("kii->k", traj) - 1.0)))
+    hermiticity = float(np.max(np.abs(traj - adjoint)))
+    min_eig = float(np.min(np.linalg.eigvalsh(0.5 * (traj + adjoint))))
+    return trace_error, hermiticity, min_eig
+
+
+def _evolve(
+    L_super: np.ndarray,
+    rho0: np.ndarray,
+    t_grid: np.ndarray,
+    *,
+    backend: str = BACKEND_AUTO,
+) -> np.ndarray:
+    """Propagate ``rho(t) = exp(L t) rho_0`` and return the trajectory."""
+    traj, _backend = _propagate(L_super, rho0, t_grid, backend=backend)
     return traj
 
 
@@ -316,8 +371,18 @@ def compute_relaxation_layer(
     t_grid: np.ndarray | None = None,
     bootstrap_B: int = 200,
     seed: int = 42,
+    trajectory_backend: str = BACKEND_AUTO,
 ) -> RelaxationResult:
-    """Run D5-D7b and the M0..M3b fit hierarchy."""
+    """Run D5-D7b and the M0..M3b fit hierarchy.
+
+    ``trajectory_backend`` selects how ``rho(t)`` is propagated (issue #162):
+    ``"auto"`` (default, deterministic size/cost rule), ``"dense_expm"``
+    (reference) or ``"expm_action"``. The backend actually used is recorded in
+    :attr:`RelaxationResult.trajectory_backend`, together with the measured
+    trace error, Hermiticity defect and minimum eigenvalue of the propagated
+    states (``trajectory_max_trace_error``, ``trajectory_max_hermiticity_defect``,
+    ``trajectory_min_eigenvalue``).
+    """
     L_super = np.asarray(L_super)
     n2 = L_super.shape[0]
     d = int(round(np.sqrt(n2)))
@@ -328,7 +393,10 @@ def compute_relaxation_layer(
     if t_grid is None:
         t_grid = np.linspace(0.0, 10.0, 80)
 
-    traj = _evolve(L_super, rho_initial, t_grid)
+    traj, used_backend = _propagate(
+        L_super, rho_initial, np.asarray(t_grid, dtype=float), backend=trajectory_backend
+    )
+    trace_error, hermiticity_defect, min_eigenvalue = _trajectory_invariants(traj)
     final_rho = traj[-1]
     rel_entropy = np.array(
         [relative_entropy(traj[k], rho_steady_state) for k in range(traj.shape[0])]
@@ -429,4 +497,8 @@ def compute_relaxation_layer(
         bca_ci_beta=(bca_lo, bca_hi),
         beta_D_linear=float(beta_D_linear),
         linear_fit_model=linear_fit_model,
+        trajectory_backend=used_backend,
+        trajectory_max_trace_error=trace_error,
+        trajectory_max_hermiticity_defect=hermiticity_defect,
+        trajectory_min_eigenvalue=min_eigenvalue,
     )
