@@ -191,6 +191,27 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   a rebuild from tag `v0.5.0` reproduces every packaged file and all 103 sdist
   members; only the wheel's `Generator: setuptools (83.0.0)` line (and hence
   `RECORD`) differs from today's 84.0.0 -- the drift the lock now removes.
+- **The release gate reads workflows structurally and fails closed on what it
+  cannot read (PR #170 review).** Four review findings, each reproduced as a
+  silent pass: a `pip install` split across a folded `>-` block, a
+  `--no-deps "$BASE/pkg.whl"` install (pip also installs remote archives), a
+  lock entry whose marker (`python_version < "3"`) keeps pip from installing it
+  on 3.12, and a publisher spelled `twine  upload`. `check_release_pins.py` now
+  decodes workflows with a strict, stdlib-only YAML subset reader -- block
+  mappings and sequences, one-line scalars and flow collections, `|`/`|-`/`>`/
+  `>-` blocks with YAML's folding rules -- and refuses anchors, aliases, tags,
+  multi-line plain or quoted scalars, duplicate keys and tabs; a refused
+  workflow fails the gate. Measured against PyYAML 6.0.3 `BaseLoader`: all ten
+  workflows decode identically, and in 45,000 randomly mutated workflows plus
+  40,000 generated block scalars no accepted input decoded differently or was
+  rejected by PyYAML. Shell text is tokenised with `shlex`: a line naming
+  `pip` and `install` without a recognised invocation (`bash -c "pip install
+  x"`) fails, the local-wheel exception accepts only literal `dist/*.whl`
+  paths, lock markers are evaluated for the lock's Python (`python_version`
+  only; anything else fails), and publishers are found on tokens. Two further
+  findings: `compare_dists.py` compares every sdist PAX record except the
+  time and owner ones, and `pypi.yml` runs the second build in a fresh
+  `git worktree` of the same commit instead of the first build's tree.
 
 ### Fixed
 - **`scipy.linalg.sqrtm`'s extended-precision result no longer reaches NumPy

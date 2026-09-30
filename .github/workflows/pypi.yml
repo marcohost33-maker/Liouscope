@@ -56,14 +56,21 @@ jobs:
       # ignores SOURCE_DATE_EPOCH, pypa/setuptools#2133, so its mtimes and
       # owner fields are the only thing the comparison disregards). A build
       # that is not a deterministic function of commit + lock cannot publish.
+      #
+      # The second build runs in a fresh worktree of the same commit, not in
+      # the first build's tree (PR #170 review): deleting known output
+      # directories left every other file the first build created or changed,
+      # so a build step that generates a file only when it is absent would
+      # have agreed with itself here and differed from a fresh clone. A
+      # worktree holds exactly the tracked files of HEAD.
       - name: Build sdist + wheel twice and verify reproducibility
         run: |
           set -euo pipefail
           SOURCE_DATE_EPOCH="$(git log -1 --format=%ct HEAD)"
           export SOURCE_DATE_EPOCH
           python -m build --no-isolation --outdir dist
-          rm -rf build src/*.egg-info
-          python -m build --no-isolation --outdir "$RUNNER_TEMP/rebuild"
+          git worktree add --detach "$RUNNER_TEMP/rebuild-src" HEAD
+          (cd "$RUNNER_TEMP/rebuild-src" && python -m build --no-isolation --outdir "$RUNNER_TEMP/rebuild")
           {
             echo "### Release artifacts (event: $GITHUB_EVENT_NAME, commit: $(git rev-parse HEAD), SOURCE_DATE_EPOCH: $SOURCE_DATE_EPOCH)"
             echo '```'

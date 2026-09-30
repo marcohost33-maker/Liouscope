@@ -11,7 +11,8 @@ blocked unless the two builds agree:
   toolchain nothing else may differ -- measured 2026-09-25: two builds were
   bit-identical with the variable set and differed without it.
 * **Sdists must be content-identical**: the same members, in the same order,
-  of the same type, mode, size and bytes. Byte identity is not required
+  of the same type, mode, size, bytes and PAX records other than the time and
+  owner ones. Byte identity is not required
   because setuptools' sdist does not honour ``SOURCE_DATE_EPOCH``: the gzip
   header and member mtimes carry the build time, and the owner fields carry the
   build user (pypa/setuptools#2133, open). Those fields are ignored, and ONLY
@@ -35,6 +36,18 @@ from pathlib import Path
 #: Member types an sdist may contain. Links and devices are refused outright:
 #: a reproducibility check that followed or skipped them would not be checking.
 _ALLOWED_TYPES = {tarfile.REGTYPE, tarfile.AREGTYPE, tarfile.DIRTYPE}
+#: PAX records that carry build time or build user -- the same information as
+#: the ustar mtime/owner fields this comparison disregards. Every OTHER PAX
+#: record (an extended attribute, a provenance field, a path or size override)
+#: is content and must match (PR #170 review: the member tuples ignored
+#: ``pax_headers`` entirely, so two builds differing only there passed).
+_VOLATILE_PAX = frozenset({"mtime", "atime", "ctime", "uid", "gid", "uname", "gname"})
+
+Member = tuple[str, int, int, int, str, tuple[tuple[str, str], ...]]
+
+
+def _pax(headers: dict[str, str]) -> tuple[tuple[str, str], ...]:
+    return tuple(sorted((k, v) for k, v in headers.items() if k not in _VOLATILE_PAX))
 
 
 def sha256(path: Path) -> str:
@@ -45,17 +58,22 @@ def sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
-def _sdist_members(path: Path) -> tuple[list[tuple[str, int, int, int, str]], list[str]]:
-    """``(name, type, mode, size, content-sha256)`` per member, plus defects.
+def _sdist_members(path: Path) -> tuple[list[Member], list[str]]:
+    """``(name, type, mode, size, content-sha256, pax)`` per member, plus defects.
+
+    The archive's global PAX header is compared as a leading pseudo-member
+    with the empty name.
 
     A truncated or corrupt archive can fail midway through the stream as well
     as at open, so the whole read sits inside one handler.
     """
-    members: list[tuple[str, int, int, int, str]] = []
+    members: list[Member] = []
     defects: list[str] = []
     try:
         with tarfile.open(path, mode="r:gz") as archive:
-            for member in archive.getmembers():
+            archive_members = archive.getmembers()
+            members.append(("", -1, 0, 0, "", _pax(archive.pax_headers)))
+            for member in archive_members:
                 if member.type not in _ALLOWED_TYPES:
                     defects.append(
                         f"{path.name}: member {member.name!r} is not a regular file or directory"
@@ -69,7 +87,14 @@ def _sdist_members(path: Path) -> tuple[list[tuple[str, int, int, int, str]], li
                         continue
                     content = hashlib.sha256(extracted.read()).hexdigest()
                 members.append(
-                    (member.name, int(member.isdir()), member.mode, member.size, content)
+                    (
+                        member.name,
+                        int(member.isdir()),
+                        member.mode,
+                        member.size,
+                        content,
+                        _pax(member.pax_headers),
+                    )
                 )
     except (tarfile.TarError, OSError, EOFError, zlib.error) as exc:
         return [], [f"{path.name}: not a readable .tar.gz ({exc})"]
@@ -100,7 +125,8 @@ def compare(first: Path, second: Path) -> tuple[list[str], list[str]]:
             errors.extend(defects_a + defects_b)
             if members_a != members_b:
                 differing = sorted(
-                    {m[0] for m in members_a} ^ {m[0] for m in members_b}
+                    (name or "<global PAX header>")
+                    for name in {m[0] for m in members_a} ^ {m[0] for m in members_b}
                     | {x[0] for x, y in zip(members_a, members_b) if x != y}
                 )
                 errors.append(
