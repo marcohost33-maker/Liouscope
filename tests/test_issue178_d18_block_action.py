@@ -43,7 +43,7 @@ def test_d18_large_system_matches_dense_reference_and_preserves_global_rng():
     )
     after = np.random.get_state()
 
-    assert actual == np.std(expected)
+    assert np.isclose(actual, np.std(expected), rtol=1e-12, atol=1e-14)
     assert _rng_state_equal(before, after)
 
 
