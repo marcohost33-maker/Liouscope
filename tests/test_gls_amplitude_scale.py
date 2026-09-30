@@ -351,6 +351,20 @@ def test_free_amplitude_m0_rate_is_amplitude_invariant(scale: float) -> None:
     assert abs(other.params[1] - seed_rate) > 1.0e-2
 
 
+def _ar1_or_event(r: np.ndarray) -> float | str:
+    """``ar1_correlation``, with a floating-point exception as a comparable value.
+
+    A raised ``FloatingPointError`` is the defect under test, so it must
+    surface as a failed comparison, not as a crash of the test itself.
+    """
+    from liouscope.fitting.neff import ar1_correlation
+
+    try:
+        return ar1_correlation(np.asarray(r, dtype=float))
+    except FloatingPointError as exc:
+        return f"FloatingPointError: {exc}"
+
+
 def _ar1_reference(r: np.ndarray) -> float:
     """``ar1_correlation`` as it stood on main, before the normalisation."""
     x = np.asarray(r, dtype=float) - float(np.mean(r))
@@ -366,15 +380,14 @@ def test_ar1_normalisation_does_not_raise_under_a_strict_underflow_policy() -> N
     ``ar1_correlation([1e150, 1e-200])`` raised ``FloatingPointError`` in
     ``ldexp``; main returns -0.5 there without any floating-point event.
     """
-    from liouscope.fitting.neff import ar1_correlation
 
     for series in ([1.0e150, 1.0e-200], [1.0e150, -1.0e150, 1.0e-200], [1.0, 1.0e-320, -1.0, 0.5]):
         with np.errstate(all="raise"):
             expected = _ar1_reference(np.asarray(series))
-            got = ar1_correlation(np.asarray(series))
+            got = _ar1_or_event(np.asarray(series))
         assert got == expected, series
     with np.errstate(under="raise"):
-        assert ar1_correlation(np.array([1.0e150, 1.0e-200])) == -0.5
+        assert _ar1_or_event(np.array([1.0e150, 1.0e-200])) == -0.5
 
 
 def test_ar1_normalisation_matches_main_wherever_main_was_event_free() -> None:
@@ -384,7 +397,6 @@ def test_ar1_normalisation_matches_main_wherever_main_was_event_free() -> None:
     entries in a large share of cases; the count is asserted so that this
     property cannot pass vacuously on series that never reach the fixed path.
     """
-    from liouscope.fitting.neff import ar1_correlation
 
     rng = np.random.default_rng(20260930)
     compared = underflowing = 0
@@ -403,7 +415,7 @@ def test_ar1_normalisation_matches_main_wherever_main_was_event_free() -> None:
         except FloatingPointError:
             underflowing += 1
         with np.errstate(all="raise"):
-            assert ar1_correlation(x) == expected, x
+            assert _ar1_or_event(x) == expected, x
         compared += 1
     assert compared >= 300 and underflowing >= 100, (compared, underflowing)
 
