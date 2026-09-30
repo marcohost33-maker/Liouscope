@@ -655,7 +655,7 @@ def propagate_block_at_time(
         chosen = backend
 
     if chosen == BACKEND_DENSE:
-        L_dense = L.toarray() if _is_sparse(L) else L
+        L_dense = L.toarray() if _is_sparse(L) else L  # type: ignore[union-attr]
         with np.errstate(over="ignore", invalid="ignore", under="ignore"):
             scaled = np.asarray(L_dense * t_eval)
         if not np.all(np.isfinite(scaled)):
