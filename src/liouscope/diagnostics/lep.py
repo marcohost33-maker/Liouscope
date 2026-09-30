@@ -12,15 +12,15 @@ import numpy as np
 import scipy.linalg as sla
 
 from .._types import LepResult
+from ..core.lindblad import steady_state
+from ..io.seed import RNGLike, SeedLike, derive_seed
+from ..numerics.kronecker import unvec, vec
 from ..numerics.propagation import (
     ACTION_MIN_DIM,
     BACKEND_ACTION,
     BACKEND_DENSE,
     propagate_block_at_time,
 )
-from ..core.lindblad import steady_state
-from ..io.seed import RNGLike, SeedLike, derive_seed
-from ..numerics.kronecker import unvec, vec
 from ..numerics.scale import spectral_zero_tolerance
 
 
