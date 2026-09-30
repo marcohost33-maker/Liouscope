@@ -31,6 +31,7 @@ from liouscope._consts import CONDITIONING_AGREEMENT_FACTOR
 from liouscope.core.lindblad import build_liouvillian
 from liouscope.diagnostics.spectral import compute_spectral_layer
 from liouscope.numerics.conditioning import (
+    CONDITIONING_ABSTAIN,
     CONDITIONING_BENIGN,
     CONDITIONING_CLUSTER_ONLY,
     CONDITIONING_LIMITED,
@@ -111,6 +112,31 @@ def _pr127_fixture() -> np.ndarray:
     return unitary @ block @ unitary.conj().T
 
 
+def _layer_cutoff(L: np.ndarray) -> float:
+    """The cutoff the spectral layer itself passes for ``L``.
+
+    PR #173 review: a call WITHOUT ``zero_tolerance`` abstains, so every test
+    that measures the conditioning of a fixture supplies the cutoff a report
+    would actually filter with -- the certificate's ``zero_set_tolerance`` of
+    its accepted spectrum, exactly as ``compute_spectral_layer`` does.
+    """
+    accepted, certificate = certified_eigvals(np.asarray(L, dtype=complex))
+    return float(certificate.zero_set_tolerance(accepted))
+
+
+#: ``np.longdouble`` is an alias of float64 on some platforms (Windows/MSVC,
+#: measured: ``finfo(longdouble).max == 1.797e308``). There ``1e400`` is not a
+#: wide finite value but an overflow at construction, so the two round-3/8
+#: fixtures below do not exist and are skipped rather than failing.
+WIDE_LONGDOUBLE = bool(
+    np.finfo(np.longdouble).max > np.finfo(np.float64).max
+)
+requires_wide_longdouble = pytest.mark.skipif(
+    not WIDE_LONGDOUBLE,
+    reason="np.longdouble has float64 range on this platform",
+)
+
+
 # --------------------------------------------------------------------------
 # The discriminating case: conditioning explains what the band cannot
 # --------------------------------------------------------------------------
@@ -137,7 +163,7 @@ def test_pr127_fixture_band_under_predicts_the_displacement() -> None:
 def test_conditioning_scaled_estimate_explains_the_pr127_displacement() -> None:
     """``defect / s`` lands on the observed displacement; the band does not."""
     L = _pr127_fixture()
-    evidence = zero_mode_conditioning(L)
+    evidence = zero_mode_conditioning(L, zero_tolerance=_layer_cutoff(L))
 
     assert evidence.available
     assert evidence.reciprocal_condition == pytest.approx(2.0e-7, rel=1e-3)
@@ -238,8 +264,8 @@ def test_conditioning_is_a_property_of_the_operator_as_written() -> None:
     )
     scaled = scaling @ A @ np.linalg.inv(scaling)
 
-    plain = zero_mode_conditioning(A)
-    similar = zero_mode_conditioning(scaled)
+    plain = zero_mode_conditioning(A, zero_tolerance=_layer_cutoff(A))
+    similar = zero_mode_conditioning(scaled, zero_tolerance=_layer_cutoff(scaled))
     # Same spectrum ...
     assert np.allclose(
         np.sort_complex(np.linalg.eigvals(A)),
@@ -263,8 +289,8 @@ def test_conditioning_is_invariant_under_a_unitary_change_of_basis() -> None:
     unitary, _ = np.linalg.qr(seed)
     rotated = unitary @ system @ unitary.conj().T
 
-    plain = zero_mode_conditioning(system)
-    turned = zero_mode_conditioning(rotated)
+    plain = zero_mode_conditioning(system, zero_tolerance=_layer_cutoff(system))
+    turned = zero_mode_conditioning(rotated, zero_tolerance=_layer_cutoff(rotated))
     assert turned.reciprocal_condition == pytest.approx(
         plain.reciprocal_condition, rel=1e-8
     )
@@ -283,8 +309,11 @@ def test_conditioning_is_invariant_under_a_change_of_rate_units(factor: float) -
     base = build_liouvillian(
         0.5 * SIGMA_X, [math.sqrt(0.6) * SIGMA_MINUS, math.sqrt(1e-3) * SIGMA_Z]
     )
-    plain = zero_mode_conditioning(base)
-    scaled = zero_mode_conditioning(factor * base)
+    # PR #173: a call without a cutoff abstains. ``0.0`` is scale invariant by
+    # construction and admits only an exact zero; there is none here, so the
+    # nearest unresolved group is conditioned -- the measurement this test pins.
+    plain = zero_mode_conditioning(base, zero_tolerance=0.0)
+    scaled = zero_mode_conditioning(factor * base, zero_tolerance=0.0)
     assert scaled.available
     assert scaled.reciprocal_condition == pytest.approx(
         plain.reciprocal_condition, rel=1e-8
@@ -330,7 +359,7 @@ def test_the_lost_zero_mode_is_not_visible_as_ill_conditioning() -> None:
     Pinned so no later change can start claiming conditioning detects #112.
     """
     L = _classical_network(STIFF_PAIRS, STIFF_RATES)
-    evidence = zero_mode_conditioning(L)
+    evidence = zero_mode_conditioning(L, zero_tolerance=_layer_cutoff(L))
 
     assert evidence.available
     # It is the SPURIOUS eigenvalue that is being conditioned.
@@ -636,6 +665,7 @@ def test_displacement_agreement_is_true_when_the_estimates_earn_it() -> None:
     assert evidence.displacement_explained is True
 
 
+@requires_wide_longdouble
 def test_a_wider_dtype_that_overflows_complex128_is_unavailable() -> None:
     """Round-3 review: the narrowing cast must not escape the totality contract.
 
@@ -689,26 +719,30 @@ def test_the_two_forward_errors_add_rather_than_compete() -> None:
     assert straddling.verdict == CONDITIONING_LIMITED
 
 
-def test_the_default_keeps_an_exactly_degenerate_stationary_manifold() -> None:
-    """Round-4 review: the default must not contradict "zero SET" conditioning.
+def test_an_exactly_degenerate_stationary_manifold_is_kept_whole() -> None:
+    """Round-4 review: the audit must not contradict "zero SET" conditioning.
 
-    Two-level pure dephasing has spectrum ``[0, 0, -2, -2]``. With no cutoff
-    supplied the fallback used to take the single smallest mode, conditioning
-    one arbitrary vector of a two-dimensional stationary subspace. Every mode
-    exactly tied with the smallest is kept instead -- exact ties need no
-    invented threshold, and a looser one would be a second zero-mode tolerance
-    competing with the certificate's.
+    Two-level pure dephasing has spectrum ``[0, 0, -2, -2]``. The fallback used
+    to take the single smallest mode, conditioning one arbitrary vector of a
+    two-dimensional stationary subspace. Every mode exactly tied with the
+    smallest is kept instead. Since PR #173 a call without a cutoff abstains
+    (no zero set at all), so the claim is pinned for the smallest admissible
+    cutoff, ``0.0``, and the layer's own.
     """
     L = build_liouvillian(np.zeros((2, 2), dtype=complex), [SIGMA_Z])
     accepted, certificate = certified_eigvals(L)
     assert int(np.count_nonzero(np.abs(accepted) == 0.0)) == 2  # the premise
 
     default = zero_mode_conditioning(L)
+    exact = zero_mode_conditioning(L, zero_tolerance=0.0)
     with_cutoff = zero_mode_conditioning(
         L, zero_tolerance=certificate.zero_set_tolerance(accepted)
     )
-    assert default.cluster_size == 2
-    assert default.cluster_size == with_cutoff.cluster_size
+    assert default.verdict == CONDITIONING_ABSTAIN
+    assert default.cluster_size == 0
+    assert exact.cluster_size == 2
+    assert exact.cluster_size == with_cutoff.cluster_size
+    assert exact.verdict == with_cutoff.verdict == CONDITIONING_CLUSTER_ONLY
 
 
 def test_spectrum_matching_is_permutation_invariant() -> None:
@@ -837,7 +871,7 @@ def test_abstains_outside_the_first_order_perturbative_regime() -> None:
     unitary = _basis_with_first(trace_vector(4))
     L = unitary @ companion @ unitary.conj().T
 
-    evidence = zero_mode_conditioning(L)
+    evidence = zero_mode_conditioning(L, zero_tolerance=_layer_cutoff(L))
     assert evidence.available
     # The premise: a genuine Jordan-chain displacement, not a solver artefact.
     assert evidence.observed_displacement == pytest.approx(1e-8 ** (1 / 16), rel=1e-6)
@@ -1014,7 +1048,9 @@ def test_displacement_abstains_when_the_perturbation_exceeds_the_separation() ->
 
 def test_a_zero_generator_reports_perfect_cluster_projector_only() -> None:
     """The whole operator space is one stationary cluster; no scalar root is singled out."""
-    evidence = zero_mode_conditioning(np.zeros((4, 4), dtype=complex))
+    evidence = zero_mode_conditioning(
+        np.zeros((4, 4), dtype=complex), zero_tolerance=0.0
+    )
 
     assert evidence.available
     assert evidence.cluster_size == 4
@@ -1049,16 +1085,21 @@ def test_a_wider_dtype_accepted_spectrum_does_not_raise() -> None:
     system = np.diag([0.0, -1.0, -2.0, -3.0]).astype(complex)
     wide = np.array([0.0, -1.0, -2.0, -3.0], dtype=np.clongdouble)
 
-    evidence = zero_mode_conditioning(system, eigenvalues=wide)
+    evidence = zero_mode_conditioning(
+        system, zero_tolerance=1.0e-8, eigenvalues=wide
+    )
     assert evidence.available
     assert evidence.reason == "ok"
     # It agrees with the same spectrum supplied at working precision.
     narrow = zero_mode_conditioning(
-        system, eigenvalues=np.array([0.0, -1.0, -2.0, -3.0], dtype=complex)
+        system,
+        zero_tolerance=1.0e-8,
+        eigenvalues=np.array([0.0, -1.0, -2.0, -3.0], dtype=complex),
     )
     assert evidence.reciprocal_condition == pytest.approx(narrow.reciprocal_condition)
 
 
+@requires_wide_longdouble
 def test_a_tolerance_that_is_finite_only_in_a_wider_dtype_is_refused() -> None:
     """Round-8 review: validate the cutoff AS NARROWED, not as supplied.
 
@@ -1079,20 +1120,31 @@ def test_a_tolerance_that_is_finite_only_in_a_wider_dtype_is_refused() -> None:
     assert wide.zero_tolerance == plain.zero_tolerance
 
 
-def test_the_default_call_still_answers_displacement_explained() -> None:
-    """Round-8 review: the documented default contract was wrong, not the code.
+def test_the_default_call_abstains_on_the_pr127_fixture() -> None:
+    """PR #173 review: without a cutoff the audit makes no claim at all.
 
-    The docstring promised ``displacement_explained=None`` when the cutoff is
-    omitted. It is not: the field compares the observed displacement against the
-    forward estimates and the separation, and none of those involves the cutoff.
-    Only ``conditioning_limited`` degrades, because only it reads ``tol``.
+    This replaces the round-8 contract under which a default call still
+    answered ``displacement_explained=True`` here. The observations survive --
+    they do not depend on which modes form the zero set -- and the answer the
+    round-8 test pinned is still given once the layer's cutoff is supplied.
     """
-    evidence = zero_mode_conditioning(_pr127_fixture())
+    L = _pr127_fixture()
+    evidence = zero_mode_conditioning(L)
 
     assert evidence.available
+    assert evidence.verdict == CONDITIONING_ABSTAIN
+    assert evidence.reason == "zero_tolerance_not_supplied"
+    assert evidence.cluster_size == 0
     assert math.isnan(evidence.zero_tolerance)
+    assert math.isnan(evidence.reciprocal_condition)
+    assert math.isnan(evidence.structural_forward_estimate)
     assert evidence.conditioning_limited is False
-    assert evidence.displacement_explained is True
+    assert evidence.displacement_explained is None
+    assert evidence.observed_displacement == pytest.approx(1.0e-7, rel=1e-3)
+    assert evidence.trace_defect == pytest.approx(1.0e-14, rel=1e-3)
+
+    supplied = zero_mode_conditioning(L, zero_tolerance=_layer_cutoff(L))
+    assert supplied.displacement_explained is True
 
 
 def test_spectrum_matching_tolerates_an_overflowing_unused_distance() -> None:

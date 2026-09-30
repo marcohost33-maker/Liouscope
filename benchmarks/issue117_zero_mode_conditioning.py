@@ -89,6 +89,12 @@ def _pr127_fixture() -> np.ndarray:
     return basis @ block @ basis.conj().T
 
 
+def _layer_cutoff(L: np.ndarray) -> float:
+    """The zero-set cutoff ``compute_spectral_layer`` would pass for ``L``."""
+    accepted, certificate = certified_eigvals(np.asarray(L, dtype=complex))
+    return float(certificate.zero_set_tolerance(accepted))
+
+
 def family_a() -> None:
     _rule("A  PR #127 non-normal fixture: band vs conditioning-scaled estimate")
     L = _pr127_fixture()
@@ -124,8 +130,10 @@ def family_b() -> None:
         np.float64([1e-6, 1e-4, 1e-2, 1.0, 1e2, 1e4, 1e6, 1e8, 1e9])
     )
     scaled = scaling @ A @ np.linalg.inv(scaling)
-    plain = zero_mode_conditioning(A)
-    similar = zero_mode_conditioning(scaled)
+    # PR #173: a call without a cutoff abstains, so each operator gets the
+    # cutoff the spectral layer would pass for it.
+    plain = zero_mode_conditioning(A, zero_tolerance=_layer_cutoff(A))
+    similar = zero_mode_conditioning(scaled, zero_tolerance=_layer_cutoff(scaled))
     drift = float(
         np.max(
             np.abs(
@@ -172,7 +180,12 @@ def family_d() -> None:
     print(f"    zero mode lost by zgeev?   {float(np.abs(raw).min()) > certificate.bound}")
     print(f"    accepted route             {certificate.solver}, "
           f"min|lambda| {float(np.abs(accepted).min()):.4e}")
-    evidence = zero_mode_conditioning(L)
+    # Deliberately WITHOUT ``eigenvalues``: the raw, wrong spectrum is the one
+    # being conditioned. The cutoff is the layer's own (PR #173: a call without
+    # one abstains).
+    evidence = zero_mode_conditioning(
+        L, zero_tolerance=certificate.zero_set_tolerance(accepted)
+    )
     print("  CONTROL -- what conditioning says about that WRONG spectrum:")
     print(f"    conditioned eigenvalue     {evidence.observed_displacement:.4e}")
     print(f"    s(lambda_0)                {evidence.reciprocal_condition:.4f}")
@@ -303,7 +316,8 @@ def family_g() -> None:
     print("  from coming back exactly tied.")
     print(f"  zero-set spread after rotation       {spread:.4e}")
     print(f"  round-off band (#108) for this scale {_agreement_band(spectrum, spectrum):.4e}")
-    print(f"  {'basis':>10} {'cluster':>9} {'sigma_min(Y^H X)':>18} {'divisor':>12}")
+    print(f"  {'basis':>10} {'cluster':>9} {'sigma_min(Y^H X)':>18} {'divisor':>12}"
+          f" {'verdict':>14}")
     for label, operator in (("as formed", plain), ("rotated", rotated)):
         for tol in (None, 1e-8):
             evidence = zero_mode_conditioning(operator, zero_tolerance=tol)
@@ -312,6 +326,7 @@ def family_g() -> None:
                 f"  {name:>18} {evidence.cluster_size:>4}"
                 f" {evidence.reciprocal_condition:18.6f}"
                 f" {evidence.per_mode_reciprocal_condition:12.6f}"
+                f" {evidence.verdict:>14}"
             )
     print("  -> grouping by EXACT eigenvalue equality (rounds 4-5) reported")
     print("     0.102562 for the rotated operator against 0.707107 for the same")
@@ -320,6 +335,8 @@ def family_g() -> None:
     print("     band restores the invariance. The band, not the backward error:")
     print("     a residual-scaled grouping broke s(cL) = s(L) at c = 1e200,")
     print("     where the decomposition itself degrades.")
+    print("  -> since PR #173 the 'default' rows (no zero_tolerance) ABSTAIN:")
+    print("     no cutoff, no zero set, so no figure that could depend on the basis.")
 
 
 def main() -> None:

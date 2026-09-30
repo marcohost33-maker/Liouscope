@@ -112,6 +112,19 @@ estimates are withheld (NaN / JSON null) and ``displacement_explained`` abstains
 A simple zero cluster keeps the scalar first-order path. Nothing downstream
 reads this audit, so the change affects no D1-D24 value, filter, certificate or
 classification tier.
+
+No cutoff, no claim (PR #173 review)
+------------------------------------
+Which modes form the zero set is decided by the caller's ``zero_tolerance``.
+Without one, a default call used to pick the group nearest to zero by
+proximity -- and on a defective double root ``?geev`` splits the pair by
+``~sqrt(eps) * ||L||``, so the same Jordan-block operator gave a two-mode
+``CLUSTER_ONLY`` in one orthonormal basis and a one-mode ``BENIGN`` in another.
+A default call therefore returns ``verdict="ABSTAIN"``: observations only
+(smallest eigenvalue, its magnitude, trace defect), every zero-set quantity
+withheld, never ``BENIGN``. The spectral layer always supplies its certified
+cutoff and is unaffected.
+
 What this instrument does NOT catch
 -----------------------------------
 The stiff deflation failure of issue #112 is invisible to conditioning. On the
@@ -148,12 +161,17 @@ from .linalg import require_finite_square_2d, trace_preservation_defect
 from .norms import scaled_euclidean_norm
 
 #: Verdict strings. ``BENIGN`` and ``CONDITIONING_LIMITED`` are scalar-mode
-#: outcomes. ``CLUSTER_ONLY`` means a valid Schur-projector cluster measurement
-#: exists but scalar first-order attribution is intentionally withheld;
-#: ``UNAVAILABLE`` means no trustworthy measurement exists.
+#: outcomes and are only ever issued against a caller-supplied
+#: ``zero_tolerance``. ``CLUSTER_ONLY`` means a valid Schur-projector cluster
+#: measurement exists but scalar first-order attribution is intentionally
+#: withheld. ``ABSTAIN`` means no cutoff was supplied, so no zero set is defined
+#: and the audit makes no conditioning claim at all (PR #173 review, see
+#: :func:`zero_mode_conditioning`); ``UNAVAILABLE`` means no trustworthy
+#: measurement exists.
 CONDITIONING_BENIGN = "BENIGN"
 CONDITIONING_LIMITED = "CONDITIONING_LIMITED"
 CONDITIONING_CLUSTER_ONLY = "CLUSTER_ONLY"
+CONDITIONING_ABSTAIN = "ABSTAIN"
 CONDITIONING_UNAVAILABLE = "UNAVAILABLE"
 
 
@@ -379,12 +397,15 @@ class ZeroModeConditioning:
     available: bool
     #: Measurement status. ``"ok"`` means scalar + cluster evidence is present;
     #: ``"cluster_conditioning_only"`` means only the Schur-projector cluster
-    #: measurement is claimable; other strings explain an unavailable audit.
+    #: measurement is claimable; ``"zero_tolerance_not_supplied"`` (verdict
+    #: ``ABSTAIN``) means the spectrum and the trace defect were measured but no
+    #: zero set exists to condition; other strings explain an unavailable audit.
     reason: str
     #: The stationary eigenvalue the evidence refers to (smallest ``|lambda|``).
     eigenvalue: complex
     #: How many eigenvalues the zero set holds. ``> 1`` is a degenerate
-    #: stationary manifold and is not by itself a defect.
+    #: stationary manifold and is not by itself a defect. ``0`` for ``ABSTAIN``
+    #: and ``UNAVAILABLE``: no zero set was selected.
     cluster_size: int
     #: Reciprocal 2-norm condition of the zero-cluster spectral projector,
     #: ``1 / ||P||_2``, obtained from a reordered Schur form and a Sylvester
@@ -423,7 +444,8 @@ class ZeroModeConditioning:
     structural_forward_estimate: float
     #: ``min |lambda|`` actually observed.
     observed_displacement: float
-    #: The cutoff the layer's filters apply, for comparison only.
+    #: The cutoff the layer's filters apply, for comparison only. NaN (JSON
+    #: null) for ``ABSTAIN``, where none was supplied.
     zero_tolerance: float
     #: Scalar-path verdict bit: ``structural + solver forward estimate >
     #: zero_tolerance``. The two estimates are summed because they represent
@@ -462,6 +484,41 @@ class ZeroModeConditioning:
             verdict=CONDITIONING_UNAVAILABLE,
         )
 
+    @classmethod
+    def abstained(
+        cls, *, eigenvalue: complex, observed: float, trace_defect: float
+    ) -> ZeroModeConditioning:
+        """No cutoff was supplied: observations only, no conditioning claim.
+
+        The three arguments are properties of the computed spectrum and of the
+        operator, not of a zero set. Every field that depends on WHICH modes
+        form the zero set -- the cluster, both condition figures, residuals,
+        separation and the two forward estimates -- is NaN, because without a
+        cutoff that set is not defined in a basis-independent way (PR #173
+        review: a numerically split defective root otherwise decided it).
+        """
+        nan = float("nan")
+        return cls(
+            available=True,
+            reason="zero_tolerance_not_supplied",
+            eigenvalue=complex(eigenvalue),
+            cluster_size=0,
+            reciprocal_condition=nan,
+            per_mode_reciprocal_condition=nan,
+            spectrum_min_reciprocal_condition=nan,
+            right_residual=nan,
+            left_residual=nan,
+            separation=nan,
+            trace_defect=float(trace_defect),
+            solver_forward_estimate=nan,
+            structural_forward_estimate=nan,
+            observed_displacement=float(observed),
+            zero_tolerance=nan,
+            conditioning_limited=False,
+            displacement_explained=None,
+            verdict=CONDITIONING_ABSTAIN,
+        )
+
     def as_dict(self) -> dict[str, object]:
         """JSON-serialisable view for the run report (RFC 8259: no NaN/inf)."""
 
@@ -492,6 +549,26 @@ class ZeroModeConditioning:
             "verdict": self.verdict,
             "audit_only": True,
         }
+
+
+def _scalar_verdict(budget: float, tol: float) -> str:
+    """The scalar-path verdict, with the ACCEPTANCE bound to a true comparison.
+
+    ``BENIGN`` is issued only when ``budget <= tol`` evaluates TRUE for a finite
+    cutoff. IEEE 754 makes every ordered comparison with NaN False, so the
+    orientation decides where a NaN lands: here an unbounded or NaN budget is
+    ``CONDITIONING_LIMITED`` and a missing (non-finite) cutoff is ``ABSTAIN``
+    -- neither can become ``BENIGN``. The previous form, ``limited = isfinite(
+    tol) and budget > tol`` with ``BENIGN`` as the fall-through, returned
+    ``BENIGN`` for every operator whenever the cutoff was NaN (PR #173 review).
+    :func:`_measure` never reaches this with a non-finite cutoff or a NaN
+    budget; the branches exist so that a future caller cannot either.
+    """
+    if not np.isfinite(tol):
+        return CONDITIONING_ABSTAIN
+    if bool(budget <= tol):
+        return CONDITIONING_BENIGN
+    return CONDITIONING_LIMITED
 
 
 def _divide_by_conditioning(numerator: float, s: float) -> float:
@@ -608,14 +685,35 @@ def zero_mode_conditioning(
     the report can state whether the conditioning-scaled displacement fits
     inside it. It must be non-negative: a negative cutoff admits no eigenvalue
     to the zero set at all and then labels even an exact, well-conditioned zero
-    mode ``CONDITIONING_LIMITED``, which is valid-looking nonsense. When it is
-    omitted, ``conditioning_limited`` degrades to ``False`` -- there is no
-    cutoff for the budget to fail to fit inside. ``displacement_explained``
-    does NOT degrade with it: it compares the observed displacement against the
-    forward estimates and the separation, none of which involves the cutoff, so
-    it still answers (round-8 review; this contract previously promised ``None``
-    here while the committed PR #127 fixture returns ``True`` from a default
-    call). Nothing downstream depends on either.
+    mode ``CONDITIONING_LIMITED``, which is valid-looking nonsense.
+
+    When it is omitted the audit ABSTAINS: ``verdict="ABSTAIN"``,
+    ``reason="zero_tolerance_not_supplied"``, ``cluster_size=0``, and every
+    zero-set quantity (both condition figures, residuals, separation, forward
+    estimates) is NaN / JSON null, ``conditioning_limited=False`` and
+    ``displacement_explained=None``. Only the smallest-magnitude eigenvalue,
+    its magnitude and the trace defect are reported, as observations. A
+    default call can therefore never return ``BENIGN`` (PR #173 review), for
+    two reasons:
+
+    * ``BENIGN`` is the statement that the forward-error budget FITS INSIDE the
+      cutoff. With no cutoff that comparison does not exist, and the previous
+      default -- an internal NaN cutoff that fell through to ``BENIGN`` --
+      published it for any operator, including one that is not trace
+      preserving at all (``diag(0, -1, -1, -2)``, trace defect ``1.414``).
+    * Without a cutoff the zero set had to be chosen by proximity, and
+      proximity is not basis invariant on a defective root: the exact
+      issue-#168 Jordan fixture gave ``CLUSTER_ONLY`` (two modes) in its plain
+      basis and ``BENIGN`` (one mode, ``s = 3.6e-8``) in a unitary
+      re-expression, because ``?geev`` splits the double root by
+      ``~sqrt(eps) * ||L||`` -- far outside any round-off band. No proximity
+      test separates that split from two genuine simple roots, so the default
+      makes no claim that depends on it.
+
+    Supply the cutoff the report actually filters with -- the spectral layer
+    passes its certified zero-set tolerance -- to obtain a verdict. The round-8
+    contract under which ``displacement_explained`` answered from a default
+    call is withdrawn with it; nothing downstream depended on it.
 
     ``eigenvalues`` is the spectrum the caller is actually going to report.
     Supply it whenever one exists: the audit then refuses rather than describe a
@@ -757,12 +855,34 @@ def _measure(
             dtype=np.intp,
         )
 
-    tol = (
-        float(zero_tolerance)
-        if zero_tolerance is not None and np.isfinite(zero_tolerance)
-        else float("nan")
-    )
-    cluster_from_cutoff = bool(np.isfinite(tol) and np.any(magnitudes <= tol))
+    # Structural evidence is a prerequisite for any audit statement, including
+    # an abstention. Check it before any independent Schur solve so an already
+    # unrepresentable trace-preservation correction has one deterministic,
+    # primary failure reason across LAPACK builds.
+    raw_defect, _scale = trace_preservation_defect(L)
+    defect = raw_defect / np.sqrt(float(dim))
+    if not np.isfinite(defect):
+        return ZeroModeConditioning.unavailable("forward_estimate_unavailable")
+
+    # PR #173 REVIEW (Codex P2 on the former ``tol = ... else nan`` line, and an
+    # independent audit finding on the same line). No cutoff used to become an
+    # internal NaN cutoff; every ordered comparison with NaN is False, so the
+    # scalar path could only ever answer ``BENIGN`` -- measured ``BENIGN`` for
+    # ``diag(0, -1, -1, -2)``, which is not trace preserving (defect 1.414). And
+    # the zero set was then chosen by proximity alone, which on a defective
+    # double root is decided by LAPACK's ``sqrt(eps)`` split and therefore by
+    # the basis: the issue-#168 pair gave ``CLUSTER_ONLY`` plain and ``BENIGN``
+    # rotated. Without a cutoff the audit therefore abstains before any zero
+    # set is chosen. See the docstring of :func:`zero_mode_conditioning`.
+    if zero_tolerance is None:
+        nearest = int(np.argmin(magnitudes))
+        return ZeroModeConditioning.abstained(
+            eigenvalue=complex(reported[nearest]),
+            observed=float(magnitudes[nearest]),
+            trace_defect=float(defect),
+        )
+    tol = float(zero_tolerance)
+    cluster_from_cutoff = bool(np.any(magnitudes <= tol))
     if cluster_from_cutoff:
         cluster = np.flatnonzero(magnitudes <= tol)
     else:
@@ -773,6 +893,8 @@ def _measure(
         # conditioning one arbitrary vector of a two-dimensional stationary
         # subspace. Every mode the solve cannot separate from the smallest is
         # kept instead.
+        #
+        # Reached only with a FINITE cutoff: the no-cutoff case abstained above.
         #
         # ROUND-9 REVIEW asked for this branch to withhold when a FINITE cutoff
         # admits no eigenvalue, on the grounds that the evidence then describes
@@ -812,14 +934,6 @@ def _measure(
 
     stationary = int(cluster[int(np.argmin(magnitudes[cluster]))])
 
-    # Structural evidence is a prerequisite for either the scalar or cluster
-    # audit. Check it before any independent Schur solve so an already
-    # unrepresentable trace-preservation correction has one deterministic,
-    # primary failure reason across LAPACK builds.
-    raw_defect, _scale = trace_preservation_defect(L)
-    defect = raw_defect / np.sqrt(float(dim))
-    if not np.isfinite(defect):
-        return ZeroModeConditioning.unavailable("forward_estimate_unavailable")
     if int(cluster.size) == 1:
         # A simple eigenvalue already has the exact scalar first-order
         # condition |y^H x| from the accepted eigendecomposition. Routing this
@@ -1004,10 +1118,15 @@ def _measure(
     # budget, and it is the same quantity ``displacement_explained`` measures
     # against, so the two fields cannot disagree about what the evidence allows.
     budget_estimate = structural_estimate + solver_estimate
-    limited = bool(
-        np.isfinite(tol)
-        and (budget_estimate > tol or not np.isfinite(budget_estimate))
-    )
+    # PR #173 REVIEW. ``BENIGN`` is an ACCEPTANCE, so it is bound to a
+    # comparison that must come out TRUE: ``budget <= tol``. An unbounded
+    # (``inf``) budget -- a defective pair, ``s == 0`` -- fails it and reads as
+    # limited, and so would any NaN that ever reached this line (both NaN
+    # estimates withhold above, and ``tol`` is finite by validation). The old
+    # form ``isfinite(tol) and budget > tol`` made BENIGN the fall-through of a
+    # False comparison, which is how the no-cutoff NaN became ``BENIGN``.
+    verdict = _scalar_verdict(budget_estimate, tol)
+    limited = verdict == CONDITIONING_LIMITED
     # PR #166 review, finding P2. ``tol`` used to enter this budget, which made
     # the answer tautological: cluster selection already guarantees
     # ``observed <= tol`` for every eigenvalue in the zero set, so the field
@@ -1084,5 +1203,5 @@ def _measure(
         zero_tolerance=tol,
         conditioning_limited=limited,
         displacement_explained=explained,
-        verdict=CONDITIONING_LIMITED if limited else CONDITIONING_BENIGN,
+        verdict=verdict,
     )
