@@ -397,11 +397,19 @@ def test_ar1_normalisation_does_not_raise_under_a_strict_underflow_policy() -> N
 
 
 def test_ar1_normalisation_matches_main_wherever_main_was_event_free() -> None:
-    """Bit-identical to main on every series main computes without an FP event.
+    """Bit-identical to main on every series main computes in range.
 
     Magnitudes span 1e-320 .. 1e300 so that the normalisation underflows
     entries in a large share of cases; the count is asserted so that this
     property cannot pass vacuously on series that never reach the fixed path.
+
+    "In range" is decided by MAGNITUDE, not by floating-point flags: whether
+    ``np.dot`` signals under/overflow depends on the NumPy/BLAS build
+    (measured in CI: NumPy 2.2.6 and 2.0.2 returned main's overflowed NaN
+    without raising; 2.4 raises). The mean and the subtraction are ufuncs,
+    which signal on every build; the dot products are in range when every
+    non-zero deviation lies in [1e-150, 1e150] (n <= 11 products of at most
+    1e300 each, none below 1e-300).
     """
 
     rng = np.random.default_rng(20260930)
@@ -411,9 +419,13 @@ def test_ar1_normalisation_matches_main_wherever_main_was_event_free() -> None:
         x = rng.standard_normal(n) * 10.0 ** rng.integers(-320, 300, size=n).astype(float)
         try:
             with np.errstate(all="raise"):
-                expected = _ar1_reference(x)
+                deviation = np.abs(x - float(np.mean(x)))
         except FloatingPointError:
             continue
+        nonzero = deviation[deviation != 0.0]
+        if nonzero.size == 0 or nonzero.max() > 1.0e150 or nonzero.min() < 1.0e-150:
+            continue
+        expected = _ar1_reference(x)
         peak = float(np.max(np.abs(x)))
         try:
             with np.errstate(under="raise"):
