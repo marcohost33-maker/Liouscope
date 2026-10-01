@@ -1,8 +1,14 @@
 """Static safety contract for the PyPI trusted-publishing workflow."""
 
+import re
 from pathlib import Path
 
 _WORKFLOW = Path(__file__).resolve().parents[1] / ".github" / "workflows" / "pypi.yml"
+# Any interpreter or package tool that could start code from dist/ (review of
+# #186: the substring list alone let `python3 -c`, `pip3`, `uv run` through).
+_INTERPRETER_RE = re.compile(
+    r"(?<![\w.-])(python[0-9.]*|pip[0-9.]*|pipx|uvx?|twine|node|ruby|perl|php)(?![\w.-])"
+)
 
 
 def test_manual_dispatch_is_build_only_without_oidc_permission():
@@ -89,8 +95,11 @@ def test_publish_job_is_sterile():
         "runpy",
     ):
         assert forbidden not in publish_block, forbidden
+    assert not _INTERPRETER_RE.findall(publish_block), _INTERPRETER_RE.findall(publish_block)
     assert "needs.build.outputs.sha256sums" in publish_block
     assert "sha256sum -c --strict" in publish_block
+    # Exact file set: an extra file in the artifact must fail the job.
+    assert "diff <(cd dist && ls -A | LC_ALL=C sort)" in publish_block
     match = publish_block.index("Match artifact against build digests")
     assert match < publish_block.index("Generate build provenance attestation")
     assert match < publish_block.index("Publish via Trusted Publishing")
