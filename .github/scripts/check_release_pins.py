@@ -1298,6 +1298,48 @@ _NESTED_SHELLS = frozenset({"sh", "bash", "dash", "zsh", "ksh", "ash"})
 _NESTED_DEPTH = 4
 
 
+_SHELL_OPTIONS_WITH_VALUE = frozenset({"--rcfile", "--init-file"})
+
+
+def _shell_c_script(segment: list[str], position: int) -> str | None:
+    """The ``-c`` script of the shell at ``segment[position]``, else None.
+
+    Follows bash option parsing: single-letter bundles (``-eo pipefail -c``,
+    ``-ec``, ``+o``), long options (``--noprofile``; ``--rcfile FILE`` and
+    ``--init-file FILE`` take a value), ``--`` ends the options, and the
+    first operand after a ``c`` flag is the script (``bash -c -- 'x'``).
+    A ``c`` flag without a following operand raises :class:`ValueError`
+    (fail-closed, review of #184/#185).
+    """
+    wants_script = False
+    options_done = False
+    at = position + 1
+    while at < len(segment):
+        word = segment[at]
+        if not options_done:
+            if word == "--":
+                options_done = True
+                at += 1
+                continue
+            if word in _SHELL_OPTIONS_WITH_VALUE:
+                at += 2
+                continue
+            if word.startswith("--"):
+                at += 1
+                continue
+            if word[:1] in {"-", "+"} and len(word) > 1:
+                letters = word[1:]
+                wants_script = wants_script or "c" in letters
+                at += 2 if ("o" in letters or "O" in letters) else 1
+                continue
+        if wants_script:
+            return word
+        return None
+    if wants_script:
+        raise ValueError("shell -c without an inspectable script")
+    return None
+
+
 def _command_segments(tokens: list[str], depth: int = 0) -> Iterator[list[str]]:
     """Every command segment of ``tokens``, descending into nested scripts.
 
@@ -1318,21 +1360,9 @@ def _command_segments(tokens: list[str], depth: int = 0) -> Iterator[list[str]]:
                 inner.append(" ".join(segment[position + 1 :]))
                 break
             if word in _NESTED_SHELLS:
-                flag_at = position + 1
-                while flag_at < len(segment) - 1:
-                    flag = segment[flag_at]
-                    if flag in {"-o", "+o", "-O", "+O"}:
-                        flag_at += 2
-                        continue
-                    if flag.startswith("--"):
-                        flag_at += 1
-                        continue
-                    if not flag.startswith(("-", "+")):
-                        break
-                    if "c" in flag[1:]:
-                        inner.append(segment[flag_at + 1])
-                        break
-                    flag_at += 1
+                script = _shell_c_script(segment, position)
+                if script is not None:
+                    inner.append(script)
                 break
         for script in inner:
             if depth >= _NESTED_DEPTH:
@@ -1416,7 +1446,11 @@ OIDC_ALLOWLIST: frozenset[tuple[str, str]] = frozenset(
 #: Allowlisted jobs in a release workflow must deploy to this environment, so
 #: the OIDC ``environment`` claim matches the Trusted Publisher binding.
 PUBLISH_ENVIRONMENT = "pypi"
-_PUBLISH_SECRET_RE = re.compile(r"secrets\.[A-Za-z0-9_]*(PYPI|TWINE|PUBLISH)", re.IGNORECASE)
+_PUBLISH_SECRET_RE = re.compile(
+    r"secrets\s*(?:\.\s*|\[\s*['\"])[A-Za-z0-9_]*(?:PYPI|TWINE|PUBLISH)"
+    r"|toJSON\(\s*secrets\s*\)",
+    re.IGNORECASE,
+)
 
 
 def _grants_id_token(permissions: Any) -> bool | None:
@@ -1431,7 +1465,12 @@ def _grants_id_token(permissions: Any) -> bool | None:
             return False
         return None
     if isinstance(permissions, dict):
-        grant = permissions.get("id-token")
+        # Scope keys compared case-insensitively: fail-closed if GitHub
+        # ever accepts `ID-Token` (review of #185).
+        grant = next(
+            (value for key, value in permissions.items() if str(key).lower() == "id-token"),
+            None,
+        )
         if grant is None:
             return False
         if isinstance(grant, YamlScalar) and grant.value.strip() in {"none", "read"}:
@@ -1467,6 +1506,12 @@ def oidc_violations(name: str, text: str) -> list[str]:
         if not isinstance(job, dict):
             errors.append(f"{shown}: job {job_id!r} is not a mapping")
             continue
+        secrets_node = job.get("secrets")
+        if isinstance(secrets_node, YamlScalar) and secrets_node.value.strip() == "inherit":
+            errors.append(
+                f"{shown}: job {job_id!r} passes `secrets: inherit`; name the secrets "
+                "a called workflow needs"
+            )
         grant = _grants_id_token(job.get("permissions"))
         if grant is None:
             errors.append(f"{shown}: job {job_id!r} has permissions this gate cannot read")
@@ -1479,6 +1524,11 @@ def oidc_violations(name: str, text: str) -> list[str]:
                 "OIDC_ALLOWLIST"
             )
             continue
+        if not isinstance(job.get("permissions"), dict):
+            errors.append(
+                f"{shown}: allowlisted job {job_id!r} must list its permissions "
+                "explicitly, not `write-all`"
+            )
         if name in RELEASE_WORKFLOWS:
             environment = job.get("environment")
             env_name = (

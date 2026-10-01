@@ -106,6 +106,12 @@ def _workflow(run: str) -> str:
         "/bin/bash --noprofile -c 'twine --verbose upload dist/*'",
         "eval 'twine --verbose upload dist/*'",
         "bash -c \"sh -c 'twine --verbose upload dist/*'\"",
+        "bash -eo pipefail -c 'twine --verbose upload dist/*'",
+        "bash --noprofile --norc -eo pipefail -c 'twine --verbose upload dist/*'",
+        "bash -c -- 'twine --verbose upload dist/*'",
+        "bash --rcfile /dev/null -c 'twine --verbose upload dist/*'",
+        "bash --init-file /dev/null -c 'twine --verbose upload dist/*'",
+        "bash -c -o pipefail 'twine --verbose upload dist/*'",
     ],
 )
 def test_nested_shell_publisher_is_evidence(run: str) -> None:
@@ -123,3 +129,43 @@ def test_nested_shell_without_publisher_is_clean() -> None:
 def test_untokenisable_nested_script_counts_as_publishing() -> None:
     evidence, _ = gate.publish_evidence(_workflow("bash -c \"twine --verbose upload 'dist\""))
     assert evidence
+
+
+def test_shell_c_without_script_counts_as_publishing() -> None:
+    evidence, _ = gate.publish_evidence(_workflow("bash -c"))
+    assert evidence == []  # no tool/verb on the line: pre-filter skips it
+    evidence, _ = gate.publish_evidence(_workflow("twine --verbose upload; bash -eo pipefail -c"))
+    assert any("cannot tokenise" in item for item in evidence), evidence
+
+
+def test_shell_script_file_is_not_a_nested_script() -> None:
+    evidence, unreadable = gate.publish_evidence(_workflow("bash scripts/upload_docs.sh"))
+    assert (evidence, unreadable) == ([], None)
+
+
+@pytest.mark.parametrize(
+    "secret",
+    [
+        "${{ secrets['PYPI_API_TOKEN'] }}",
+        '${{ secrets["TWINE_PASSWORD"] }}',
+        "${{ toJSON(secrets) }}",
+    ],
+)
+def test_publish_secret_access_forms_fail(secret: str) -> None:
+    text = f"jobs:\n  x:\n    runs-on: ubuntu-latest\n    steps:\n      - run: echo {secret}\n"
+    assert gate.oidc_violations("other.yml", text)
+
+
+def test_secrets_inherit_fails() -> None:
+    text = "jobs:\n  x:\n    uses: ./.github/workflows/ci.yml\n    secrets: inherit\n"
+    assert any("secrets: inherit" in e for e in gate.oidc_violations("other.yml", text))
+
+
+def test_id_token_key_is_case_insensitive() -> None:
+    text = "jobs:\n  x:\n    permissions:\n      ID-Token: write\n    runs-on: ubuntu-latest\n"
+    assert any("OIDC_ALLOWLIST" in e for e in gate.oidc_violations("other.yml", text))
+
+
+def test_allowlisted_job_with_write_all_fails() -> None:
+    text = "jobs:\n  analysis:\n    permissions: write-all\n    runs-on: ubuntu-latest\n"
+    assert any("explicitly" in e for e in gate.oidc_violations("scorecard.yml", text))
