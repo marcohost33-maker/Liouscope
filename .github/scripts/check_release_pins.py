@@ -52,7 +52,7 @@ import shlex
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
 
 try:  # pragma: no cover - exercised only on Python < 3.11
     import tomllib
@@ -1293,6 +1293,53 @@ def _python_versions(text: str) -> set[str]:
     return {scalar.value for key, scalar in _scalars(document) if key == "python-version"}
 
 
+#: Shells whose ``-c`` argument is itself a script (issue #184).
+_NESTED_SHELLS = frozenset({"sh", "bash", "dash", "zsh", "ksh", "ash"})
+_NESTED_DEPTH = 4
+
+
+def _command_segments(tokens: list[str], depth: int = 0) -> Iterator[list[str]]:
+    """Every command segment of ``tokens``, descending into nested scripts.
+
+    ``bash -c 'twine --verbose upload dist/*'`` is ONE shlex token for the
+    script, so the tool/verb check would never see ``twine`` (issue #184). The
+    argument of a shell's ``-c`` (also combined flags such as ``-ec``) and of
+    ``eval`` is tokenised again and its segments yielded as well. A nested
+    script that cannot be tokenised raises :class:`ValueError`, which the
+    caller already treats as publishing; nesting deeper than
+    :data:`_NESTED_DEPTH` raises it too, so depth cannot hide a command.
+    """
+    for segment in _segments(tokens):
+        yield segment
+        words = [word.rsplit("/", 1)[-1] for word in segment]
+        inner: list[str] = []
+        for position, word in enumerate(words):
+            if word == "eval":
+                inner.append(" ".join(segment[position + 1 :]))
+                break
+            if word in _NESTED_SHELLS:
+                flag_at = position + 1
+                while flag_at < len(segment) - 1:
+                    flag = segment[flag_at]
+                    if flag in {"-o", "+o", "-O", "+O"}:
+                        flag_at += 2
+                        continue
+                    if flag.startswith("--"):
+                        flag_at += 1
+                        continue
+                    if not flag.startswith(("-", "+")):
+                        break
+                    if "c" in flag[1:]:
+                        inner.append(segment[flag_at + 1])
+                        break
+                    flag_at += 1
+                break
+        for script in inner:
+            if depth >= _NESTED_DEPTH:
+                raise ValueError("nested shell scripts too deep to inspect")
+            yield from _command_segments(_tokens(script), depth + 1)
+
+
 def publish_evidence(text: str) -> tuple[list[str], str | None]:
     """Why a workflow counts as publishing to PyPI, and a read error if any.
 
@@ -1334,11 +1381,11 @@ def publish_evidence(text: str) -> tuple[list[str], str | None]:
             ):
                 continue
             try:
-                tokens = _tokens(line)
+                segments = list(_command_segments(_tokens(line)))
             except ValueError:
                 evidence.append(f"line {number}: cannot tokenise {line.strip()!r}")
                 continue
-            for segment in _segments(tokens):
+            for segment in segments:
                 words = [word.rsplit("/", 1)[-1] for word in segment]
                 for position, word in enumerate(words):
                     verb = _PUBLISH_TOOLS.get(word)
@@ -1355,6 +1402,95 @@ def publish_evidence(text: str) -> tuple[list[str], str | None]:
                             "through a shell expansion"
                         )
     return evidence, (uninspectable[0] if uninspectable else None)
+
+
+#: Jobs allowed to request an OIDC token (``id-token: write``), as
+#: ``(workflow file, job id)``. The PyPI credential boundary is the Trusted
+#: Publisher (workflow file + GitHub environment ``pypi`` + that environment's
+#: deployment rules); this allowlist makes any *new* OIDC grant a visible gate
+#: failure instead of relying on recognising publish commands in shell text,
+#: which cannot be complete (``curl`` to the upload API, wrappers, ``eval``).
+OIDC_ALLOWLIST: frozenset[tuple[str, str]] = frozenset(
+    {("pypi.yml", "publish"), ("scorecard.yml", "analysis")}
+)
+#: Allowlisted jobs in a release workflow must deploy to this environment, so
+#: the OIDC ``environment`` claim matches the Trusted Publisher binding.
+PUBLISH_ENVIRONMENT = "pypi"
+_PUBLISH_SECRET_RE = re.compile(r"secrets\.[A-Za-z0-9_]*(PYPI|TWINE|PUBLISH)", re.IGNORECASE)
+
+
+def _grants_id_token(permissions: Any) -> bool | None:
+    """True/False for a ``permissions`` node; None if its shape is unknown."""
+    if permissions is None:
+        return False
+    if isinstance(permissions, YamlScalar):
+        value = permissions.value.strip()
+        if value == "write-all":
+            return True
+        if value in {"read-all", ""}:
+            return False
+        return None
+    if isinstance(permissions, dict):
+        grant = permissions.get("id-token")
+        if grant is None:
+            return False
+        if isinstance(grant, YamlScalar) and grant.value.strip() in {"none", "read"}:
+            return False
+        if isinstance(grant, YamlScalar) and grant.value.strip() == "write":
+            return True
+        return None
+    return None
+
+
+def oidc_violations(name: str, text: str) -> list[str]:
+    """Every OIDC grant outside :data:`OIDC_ALLOWLIST`, fail-closed on doubt."""
+    shown = f".github/workflows/{name}"
+    errors = [
+        f"{shown}: references a publish credential secret ({match.group(0)!r}); "
+        "PyPI uploads must use Trusted Publishing"
+        for match in _PUBLISH_SECRET_RE.finditer(text)
+    ]
+    try:
+        document = load_workflow_yaml(text)
+    except WorkflowYamlError as exc:
+        return [*errors, f"{shown}: cannot check OIDC grants ({exc})"]
+    top = _grants_id_token(document.get("permissions"))
+    if top is not False:
+        errors.append(
+            f"{shown}: workflow-level permissions grant or may grant id-token: write; "
+            "grant it per job, and only to an allowlisted job"
+        )
+    jobs = document.get("jobs")
+    if not isinstance(jobs, dict):
+        return [*errors, f"{shown}: 'jobs' is not a mapping"]
+    for job_id, job in jobs.items():
+        if not isinstance(job, dict):
+            errors.append(f"{shown}: job {job_id!r} is not a mapping")
+            continue
+        grant = _grants_id_token(job.get("permissions"))
+        if grant is None:
+            errors.append(f"{shown}: job {job_id!r} has permissions this gate cannot read")
+            continue
+        if not grant:
+            continue
+        if (name, job_id) not in OIDC_ALLOWLIST:
+            errors.append(
+                f"{shown}: job {job_id!r} requests id-token: write but is not in "
+                "OIDC_ALLOWLIST"
+            )
+            continue
+        if name in RELEASE_WORKFLOWS:
+            environment = job.get("environment")
+            env_name = (
+                environment.get("name") if isinstance(environment, dict) else environment
+            )
+            if not (isinstance(env_name, YamlScalar) and env_name.value == PUBLISH_ENVIRONMENT):
+                errors.append(
+                    f"{shown}: job {job_id!r} holds id-token: write without "
+                    f"environment {PUBLISH_ENVIRONMENT!r}; the Trusted Publisher "
+                    "binding and its deployment rules would not apply"
+                )
+    return errors
 
 
 def check_workflow(path: Path, root: Path) -> list[str]:
@@ -1405,6 +1541,8 @@ def check(root: Path = ROOT) -> list[str]:
         errors.extend(check_workflow(path, root))
     if workflows.is_dir():
         for path in sorted(workflows.iterdir()):
+            if path.suffix in {".yml", ".yaml"}:
+                errors.extend(oidc_violations(path.name, path.read_text(encoding="utf-8")))
             if path.suffix not in {".yml", ".yaml"} or path.name in RELEASE_WORKFLOWS:
                 continue
             evidence, unreadable = publish_evidence(path.read_text(encoding="utf-8"))
