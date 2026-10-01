@@ -26,6 +26,8 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+    outputs:
+      sha256sums: ${{ steps.digests.outputs.sha256sums }}
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803  # v6.1.0
         with:
@@ -101,6 +103,22 @@ jobs:
           HEAD_SHA="$(git rev-parse HEAD)"
           test "$HEAD_SHA" = "$TAG_SHA"
           test "$EVENT_SHA" = "$TAG_SHA"
+      # The digests travel as a job OUTPUT (Actions control plane), not inside
+      # the artifact, so the publish job can check the artifact against a
+      # value the artifact store cannot change -- without starting Python on
+      # the distributions it is about to publish (a wheel may ship a .pth file
+      # whose `import` lines run at every later interpreter start).
+      - name: Record distribution digests
+        id: digests
+        run: |
+          set -euo pipefail
+          (cd dist && sha256sum -- * | LC_ALL=C sort -k2) > "$RUNNER_TEMP/SHA256SUMS"
+          cat "$RUNNER_TEMP/SHA256SUMS"
+          {
+            echo 'sha256sums<<SHA256SUMS_EOF'
+            cat "$RUNNER_TEMP/SHA256SUMS"
+            echo 'SHA256SUMS_EOF'
+          } >> "$GITHUB_OUTPUT"
       - name: Upload verified distributions
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
         with:
@@ -124,37 +142,25 @@ jobs:
       id-token: write
       attestations: write
       contents: read
+    # Sterile publish job (PyPI Trusted Publishing security model): it holds
+    # the OIDC token, so it runs no repository or distribution code. Source,
+    # version, tag and commit identity are proven in `build`; here only the
+    # bytes are matched against the digests `build` recorded.
     steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803  # v6.1.0
-        with:
-          ref: ${{ github.event.release.tag_name }}
-          fetch-depth: 0
-          persist-credentials: false
-      - name: Set up Python
-        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # v6.2.0
-        with:
-          python-version: "3.12"
       - name: Download verified distributions
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093  # v4.3.0
         with:
           name: pypi-distributions-${{ github.run_id }}
           path: dist/
-      - name: Re-verify release identity before upload
+      - name: Match artifact against build digests (exact file set)
         env:
-          RELEASE_TAG: ${{ github.event.release.tag_name }}
-          EVENT_SHA: ${{ github.sha }}
+          SHA256SUMS: ${{ needs.build.outputs.sha256sums }}
         run: |
           set -euo pipefail
-          python -m pip install --force-reinstall --no-deps dist/*.whl
-          SOURCE_VERSION="$(python -c 'import runpy; print(runpy.run_path("src/liouscope/_version.py")["__version__"])')"
-          DIST_VERSION="$(python -c 'import importlib.metadata as m; print(m.version("liouscope"))')"
-          EXPECTED_VERSION="${RELEASE_TAG#v}"
-          TAG_SHA="$(git rev-parse "${RELEASE_TAG}^{commit}")"
-          HEAD_SHA="$(git rev-parse HEAD)"
-          test "$SOURCE_VERSION" = "$DIST_VERSION"
-          test "$SOURCE_VERSION" = "$EXPECTED_VERSION"
-          test "$HEAD_SHA" = "$TAG_SHA"
-          test "$EVENT_SHA" = "$TAG_SHA"
+          test -n "$SHA256SUMS"
+          printf '%s\n' "$SHA256SUMS" > "$RUNNER_TEMP/SHA256SUMS"
+          (cd dist && sha256sum -c --strict -- "$RUNNER_TEMP/SHA256SUMS")
+          diff <(cd dist && ls -A | LC_ALL=C sort) <(awk '{print $2}' "$RUNNER_TEMP/SHA256SUMS" | LC_ALL=C sort)
       - name: Generate build provenance attestation
         uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373  # v4.1.1
         with:

@@ -49,17 +49,48 @@ def test_publish_job_is_release_only_and_feature_gated():
     assert "github.event_name == 'release'" in publish_block
     assert "github.event.action == 'published'" in publish_block
     assert "PYPI_PUBLISH_ENABLED" in publish_block
-    assert "ref: ${{ github.event.release.tag_name }}" in publish_block
+    assert "name: pypi" in publish_block
 
 
 def test_identity_is_checked_before_artifact_handoff_and_upload():
+    """Identity is proven once, in the OIDC-free build job, before the handoff."""
     text = _WORKFLOW.read_text(encoding="utf-8")
-    assert text.count("test \"$SOURCE_VERSION\" = \"$DIST_VERSION\"") == 2
-    assert text.count("test \"$HEAD_SHA\" = \"$TAG_SHA\"") == 2
-    assert text.count("test \"$EVENT_SHA\" = \"$TAG_SHA\"") == 2
-    assert text.index("Verify source, artifact, tag and commit identity") < text.index(
+    build_block, _ = text.split("\n  publish:\n", maxsplit=1)
+    for check in (
+        'test "$SOURCE_VERSION" = "$DIST_VERSION"',
+        'test "$HEAD_SHA" = "$TAG_SHA"',
+        'test "$EVENT_SHA" = "$TAG_SHA"',
+    ):
+        assert text.count(check) == 1
+        assert check in build_block
+    assert build_block.index(
+        "Verify source, artifact, tag and commit identity"
+    ) < build_block.index("Record distribution digests")
+    assert build_block.index("Record distribution digests") < build_block.index(
         "Upload verified distributions"
     )
-    assert text.index("Re-verify release identity before upload") < text.index(
-        "Publish via Trusted Publishing"
-    )
+
+
+def test_publish_job_is_sterile():
+    """The job holding id-token: write runs no repository or distribution code.
+
+    PyPI's Trusted Publishing security model: fetch the build job's artifacts,
+    publish, nothing else. A wheel can install a ``.pth`` file whose ``import``
+    lines run at every later interpreter start, so no Python may start after
+    the distributions are installed in this job -- here, none is installed.
+    """
+    text = _WORKFLOW.read_text(encoding="utf-8")
+    _, publish_block = text.split("\n  publish:\n", maxsplit=1)
+    for forbidden in (
+        "actions/checkout",
+        "actions/setup-python",
+        "pip install",
+        "python ",
+        "runpy",
+    ):
+        assert forbidden not in publish_block, forbidden
+    assert "needs.build.outputs.sha256sums" in publish_block
+    assert "sha256sum -c --strict" in publish_block
+    match = publish_block.index("Match artifact against build digests")
+    assert match < publish_block.index("Generate build provenance attestation")
+    assert match < publish_block.index("Publish via Trusted Publishing")
