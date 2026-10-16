@@ -87,3 +87,20 @@ def test_extreme_finite_Lt_fails_closed_when_expm_is_nonfinite() -> None:
 
     with pytest.raises(UnrepresentableTrajectoryError, match=r"scipy\.linalg\.expm"):
         _evolve(L, _RHO_PLUS, grid)
+
+
+def test_overflowing_state_product_raises_the_domain_error(monkeypatch) -> None:
+    """A finite propagator whose product with the state overflows float64."""
+    import liouscope.diagnostics.relaxation as relaxation
+
+    huge = np.full((4, 4), 1.0e308, dtype=complex)
+    monkeypatch.setattr(relaxation.sla, "expm", lambda _m: huge)
+    L = build_liouvillian(np.zeros((2, 2), dtype=complex), [_SM])
+    with pytest.raises(UnrepresentableTrajectoryError, match="propagated state"):
+        _evolve(L, _RHO_PLUS, np.array([0.0, 1.0]))
+
+
+def test_malformed_generator_shape_stays_a_value_error() -> None:
+    """A non-square L_super is an argument error, not a representability limit."""
+    with pytest.raises(ValueError, match="must have shape"):
+        _evolve(np.ones((4, 3), dtype=complex), _RHO_PLUS, np.array([0.0, 1.0]))

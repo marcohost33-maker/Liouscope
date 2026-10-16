@@ -516,6 +516,14 @@ def _evolve(L_super: np.ndarray, rho0: np.ndarray, t_grid: np.ndarray) -> np.nda
     """
     rho_vec0 = vec(rho0)
     d = rho0.shape[0]
+    L_super = np.asarray(L_super)
+    # A malformed generator is an argument error, not a float64 limit: check
+    # the shape here so the numerical guard below never relabels it.
+    if L_super.ndim != 2 or L_super.shape != (d * d, d * d):
+        raise ValueError(
+            f"relaxation trajectory: L_super must have shape ({d * d}, {d * d}) "
+            f"for a {d}x{d} state, got {L_super.shape}"
+        )
     traj = np.empty((t_grid.size, d, d), dtype=complex)
     for k, t in enumerate(t_grid):
         if t == 0.0:
@@ -555,7 +563,8 @@ def _evolve(L_super: np.ndarray, rho0: np.ndarray, t_grid: np.ndarray) -> np.nda
                 "or a structure/action-based propagation method; pure unit "
                 "rescaling leaves L*t unchanged."
             )
-        rho_vec_t = propagator @ rho_vec0
+        with np.errstate(over="ignore", invalid="ignore", under="ignore"):
+            rho_vec_t = propagator @ rho_vec0
         if not np.all(np.isfinite(rho_vec_t)):
             raise UnrepresentableTrajectoryError(
                 "relaxation trajectory: the propagated state became non-finite "
