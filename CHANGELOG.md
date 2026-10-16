@@ -63,6 +63,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     the change is not visible in `input_hash`.
 
 ### Fixed
+- **Extreme relaxation-scale failures are now separated and fail closed (PR #127 review).** When a finite decay rate times a blind interval overflows, `_resolution_detail` legitimately represents the sampling ratio as `0.0` samples per e-folding; the disclosure formatter now maps that representation to its mathematical 100% decay limit instead of dividing by zero. The same review fixture also exposed a separate boundary: `L*t` may remain elementwise finite while `scipy.linalg.expm(L*t)` returns non-finite values at extreme float64 dynamic range. `_evolve` now refuses a non-finite scaled generator, propagator, or propagated state with `UnrepresentableTrajectoryError` instead of passing NaNs into entropy, fitting and uncertainty calculations. Tests isolate the resolution arithmetic from the matrix-exponential failure so neither can mask the other.
 - **`residual_model` claimed a whitening for runs in which no fit succeeded
   (PR #127, round-21 external review).** `fit_gls_ar1` returns `success=False`
   from its flat-curve guard before it selects or applies any residual model,
