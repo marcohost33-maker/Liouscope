@@ -295,37 +295,19 @@ def fit_gls_ar1(
         # the exact and conditional likelihoods and biases cross-model AICc
         # (each model fits its own rho) toward under-fitting high-rho models.
         jac = 0.5 * float(np.log(max(1.0 - rho * rho, 1.0e-12)))
-    # OPEN FINDING (external review, PR #127), still open on purpose, with the
-    # mechanism now measured (2026-09-04). ``estimate_car1_theta`` minimises a
-    # CONDITIONAL likelihood that drops the first residual; the lines below
-    # report the EXACT stationary one, first residual included and ``sigma``
-    # re-estimated from all ``n`` whitened values. So the CAR(1) parameter
-    # counted by AICc was not fitted to the likelihood AICc consumes.
+    # PR #127 statistical-consistency repair. The CAR(1) rate estimator now
+    # maximises this SAME stationary exact likelihood: observation 0 is drawn
+    # from the stationary residual law, every transition uses its exact
+    # exp(-theta*dt) covariance, and the stationary variance is profiled over
+    # all n whitened residuals. This removes the former conditional-vs-exact
+    # mismatch in which theta was fitted after conditioning away observation 0
+    # but AICc consumed a joint stationary likelihood that included it.
     #
-    # What the measurement adds to the report is WHERE this bites, and it is
-    # not uniform. Comparing ``-2 log L`` at the conditional estimate against
-    # its minimum over theta, on exact-OU paths (exact transition density, not
-    # Euler) over grids this layer itself builds:
-    #
-    #     grid span    conditional theta_hat   median deficit   max   > 2
-    #     1e5, 1e7     interior                0.002 - 0.032    0.12  0/20
-    #     1e2          AT the search floor     2.541            13.2  13/20
-    #     1e1          AT the search floor     2.613            36.9  12/20
-    #
-    # The damaging regime is the one where the conditional search range
-    # ``[_THETA_LO_FRAC / span, _THETA_HI_FRAC / min(diff(t))]`` (car1.py:66-67,
-    # 215-216) CLAMPS: with span 100 the floor is exactly 1e-5, which is the
-    # value the review reported, and 8 of 20 estimates sat on it. Where theta
-    # is interior the mismatch is real but an order of magnitude below the
-    # conventional AICc-relevant threshold of 2.
-    #
-    # That opens a THIRD route beside the two the review offered (optimise the
-    # exact likelihood, or report a consistently conditional one): repair the
-    # search range so the estimate stops clamping. It would leave every
-    # interior fit bit for bit unchanged and so would not move the anchors,
-    # which is what makes the other two routes expensive. UNVERIFIED as a
-    # remedy -- it has not been implemented or shown sufficient; it is recorded
-    # because the choice among the three is a modelling decision.
+    # Keeping one probability model end-to-end matters here because theta is
+    # candidate-specific: a model-selection score is only interpretable when
+    # the nuisance parameters have been fitted to the likelihood being scored.
+    # The companion AICc change counts both CAR(1) nuisance parameters -- theta
+    # and the profiled stationary variance -- as estimated parameters.
     n = whitened.size
     log_rss = scaled_log_sum_squares(whitened)
     if log_rss == float("-inf") or not math.isfinite(log_rss):

@@ -1,13 +1,18 @@
 """Effective sample size via Geyer 1992 initial-positive-sequence (IPS) estimator.
 
-Anchor H: ODE trajectories are heavily autocorrelated. Standard AICc uses ``n``,
-which on n=200, k<=5 yields a correction of only 0.1-0.4 -- a dramatic
-under-correction. The IPS estimator gives
+Anchor H: ODE-trajectory residuals can be heavily autocorrelated.  N_eff is
+retained as correlation / uncertainty evidence:
 
     N_eff = n / (1 + 2 * sum_{k>=1} rho_k)
 
 where the autocorrelations ``rho_k`` are summed until the *initial positive
 sequence* of consecutive lag-pair sums turns negative (Geyer 1992).
+
+PR #157 deliberately removed the historical use of this number as a substitute
+for the observation count in AICc model selection.  The AR(1)/CAR(1) joint
+likelihood already models serial covariance; applying an ESS denominator there
+would be an additional heuristic dependence penalty.  This module therefore
+estimates dependence strength, not the model-selection sample size.
 
 Reference: Geyer, "Practical Markov Chain Monte Carlo", Statistical Science
 7(4), 473 (1992).

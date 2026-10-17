@@ -13,9 +13,10 @@ modules and broke in both directions under a pure change of rate units:
   floor and counts as genuine, producing a NEGATIVE spectral gap, which is
   impossible for a GKSL generator by definition.
 
-These tests pin the corrected contract: dimensionless quotients are invariant,
-rate-valued outputs scale by ``c``, and the end-to-end verdict does not move
-under a pure unit change.
+These tests pin the corrected contract: dimensionless quantities are invariant
+and rate-valued outputs scale by ``c``. They deliberately do NOT claim general
+end-to-end verdict invariance while legacy rate-dimensioned classifier evidence
+(such as ``henrici_eta``) remains open under issue #101.
 """
 
 from __future__ import annotations
@@ -263,21 +264,27 @@ def test_diagnose_spectral_and_mpemba_evidence_is_unit_invariant(c):
 
 @pytest.mark.parametrize("c", [1.0e-6, 1.0e-3, 1.0, 1.0e3, 1.0e6, 1.0e10])
 def test_diagnose_fitted_rates_scale_with_the_rate_unit(c):
-    """Fitted rates are rate-valued: they must scale by ``c``, not sit on a floor.
+    """Fitted rates must transform equivariantly under a pure rate-unit change.
 
-    Before the grid-relative seed floor, `c = 1e-10` returned
-    `beta_D == beta_D_linear == 1e-3` -- the absolute seed floor itself, 1e7
-    above the true rate -- so a report could carry corrupted D5/D17 evidence
-    while every spectral quantity looked healthy.
+    This is a metamorphic property, not an anchor to one historical model
+    selection. PR #157 intentionally changes AICc bookkeeping and can therefore
+    change the selected relaxation model and its absolute fitted rate. The
+    scientifically stable contract here is that the SAME methodology on
+    ``L -> cL, t -> t/c`` returns rates multiplied by ``c``.
 
-    `c = 1e-10` is deliberately outside this range: there the least-squares
-    convergence criteria (which carry their own absolute/relative mix) stop
-    tracking the rescaling, which is a separate limitation from #108 and is
-    tracked in its own issue rather than silently asserted away here.
+    `c = 1e-10` remains outside this assertion because the least-squares
+    convergence criteria have their own known scale limitation.
     """
+    ref = _diagnose_rescaled(1.0)
     rep = _diagnose_rescaled(c)
-    assert rep.relaxation.beta_D / c == pytest.approx(1.0592, rel=1e-3)
-    assert rep.relaxation.beta_D_linear / c == pytest.approx(0.7515, rel=1e-3)
+    assert np.isfinite(ref.relaxation.beta_D) and ref.relaxation.beta_D > 0.0
+    assert np.isfinite(ref.relaxation.beta_D_linear) and ref.relaxation.beta_D_linear > 0.0
+    assert rep.relaxation.beta_D / c == pytest.approx(
+        ref.relaxation.beta_D, rel=1e-3
+    )
+    assert rep.relaxation.beta_D_linear / c == pytest.approx(
+        ref.relaxation.beta_D_linear, rel=1e-3
+    )
 
 
 def test_seed_floor_no_longer_pins_the_rate_on_a_long_grid():
@@ -288,21 +295,25 @@ def test_seed_floor_no_longer_pins_the_rate_on_a_long_grid():
     assert 0.1 <= rep.relaxation.beta_D / 1.0e-10 <= 10.0
 
 
-def test_mechanism_class_is_NOT_claimed_invariant_under_rate_rescale():
-    """Pin the KNOWN limitation so nobody later claims invariance it lacks.
+def test_legacy_henrici_threshold_is_still_rate_unit_dependent():
+    """Pin the known #101 limitation without coupling it to ladder precedence.
 
-    The A10/F5 branch still gates on the rate-dimensioned `henrici_eta > 1.0`
-    (issue #101, stated in the README), so rescaling crosses that threshold and
-    moves the class -- measured here at `c = 10` and `c = 1e3`, which report
-    A10/F5 where `c = 1` reports A12. #108 removes the zero-mode-induced verdict
-    flips; it does not and must not be read as making the verdict unit-invariant
-    in general. When #101 slice C lands, this test should start failing and be
-    replaced by a genuine invariance assertion.
+    PR #157 can legitimately change an earlier, higher-priority A-class through
+    model selection, so exact end-to-end class labels are not a stable oracle
+    for the independent D8 defect. The underlying legacy Henrici quantity is
+    rate-dimensioned: it scales with ``c`` and can cross the absolute ``> 1``
+    classifier threshold under a pure unit change. Pin that fact directly.
     """
-    classes = {c: _diagnose_rescaled(c).classification.a_class for c in (1.0, 10.0, 1.0e3)}
-    assert classes[1.0] == "A12"
-    assert classes[10.0] == "A10", "the documented henrici_eta scale dependence"
-    assert classes[1.0e3] == "A10"
+    reps = {c: _diagnose_rescaled(c) for c in (0.1, 1.0, 10.0, 1.0e3)}
+    eta1 = float(reps[1.0].nonnorm.henrici_eta)
+    assert eta1 > 0.0
+    for scale in (0.1, 10.0, 1.0e3):
+        eta = float(reps[scale].nonnorm.henrici_eta)
+        assert eta / scale == pytest.approx(eta1, rel=RTOL_INV)
+    # The legacy absolute >1 gate can therefore change truth value under a
+    # pure rate-unit change even though the physics is identical.
+    assert float(reps[0.1].nonnorm.henrici_eta) < 1.0
+    assert float(reps[10.0].nonnorm.henrici_eta) > 1.0
 
 
 def test_legacy_absolute_floor_reproduces_the_pre_108_defect():

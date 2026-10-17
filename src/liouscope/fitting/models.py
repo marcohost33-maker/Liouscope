@@ -6,8 +6,10 @@
 * M3a : ``(A + B t) * exp(-alpha t)`` -- Jordan block / LEP signature
 * M3b : ``A * exp(-beta t) * cos(omega t + phi)`` -- oscillatory exponential
 
-These are **not nested** in general (anchor F). Use AICc (with N_eff
-correction) to compare them, never likelihood-ratio tests.
+These are **not nested** in general (anchor F). The relaxation layer compares
+successful candidates with its AICc-style score using the observed grid size;
+N_eff is separate uncertainty/correlation evidence. Never use likelihood-ratio
+tests for this non-nested hierarchy.
 """
 
 from __future__ import annotations
