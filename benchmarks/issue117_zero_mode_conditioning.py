@@ -145,13 +145,21 @@ def family_b() -> None:
     # Round-3 review: this is a round-off quantity and differs between BLAS
     # builds, so the documentation states a bound and the run prints the value.
     print(f"  spectrum drift (round-off, < 1e-14)   {drift:.3e}")
-    print(f"  min s over spectrum, A                "
-          f"{plain.spectrum_min_reciprocal_condition:.3e}")
-    print(f"  min s over spectrum, D A D^-1         "
-          f"{similar.spectrum_min_reciprocal_condition:.3e}")
+    def per_mode_min(M: np.ndarray) -> float:
+        _w, left, right = sla.eig(M, left=True, right=True)
+        return float(eigenvalue_conditioning(right, left).min())
+
+    print(f"  min s over spectrum, A                {per_mode_min(A):.3e}")
+    print(f"  min s over spectrum, D A D^-1         {per_mode_min(scaled):.3e}")
     print("  -> s follows the operator AS WRITTEN. LAPACK xGEEVX would have")
     print("     reported the BALANCED problem's numbers instead; ?geev's")
     print("     back-transformed vectors give the caller's.")
+    print(f"  audit, A                              {plain.verdict}")
+    print(f"  audit, D A D^-1                       {similar.verdict} "
+          f"({similar.reason})")
+    print("  -> issue #183: as written, one unit of round-off in ||D A D^-1||_F")
+    print("     cannot separate eigenvalues whose s is ~1e-15, so the audit")
+    print("     makes no scalar claim about a zero set there.")
 
 
 def family_c() -> None:

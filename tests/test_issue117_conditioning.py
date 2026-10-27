@@ -275,8 +275,25 @@ def test_conditioning_is_a_property_of_the_operator_as_written() -> None:
     )
     # ... radically different conditioning, and the measurement follows the
     # operator rather than the spectrum.
+    import scipy.linalg as sla
+
+    def per_mode_min(M: np.ndarray) -> float:
+        _values, left, right = sla.eig(M, left=True, right=True)
+        return float(eigenvalue_conditioning(right, left).min())
+
     assert plain.spectrum_min_reciprocal_condition > 1.0e-2
-    assert similar.spectrum_min_reciprocal_condition < 1.0e-10
+    assert plain.spectrum_min_reciprocal_condition == pytest.approx(
+        per_mode_min(A), rel=1e-12
+    )
+    assert per_mode_min(scaled) < 1.0e-10
+    # Issue #183. As written, ``||scaled||_F = 4.8e14`` puts one unit of
+    # round-off at ``0.1`` -- and the eigenvalues, with ``s ~ 1e-15``, cannot
+    # be separated by it: the audit used to publish scalar evidence here whose
+    # own ``solver_forward_estimate`` (1.22) exceeded the selected eigenvalue
+    # (0.608) and its distance to the next one. No zero set is resolvable, so
+    # no scalar conditioning claim may be made about one.
+    assert similar.reason != "ok"
+    assert similar.verdict in (CONDITIONING_CLUSTER_ONLY, CONDITIONING_UNAVAILABLE)
 
 
 def test_conditioning_is_invariant_under_a_unitary_change_of_basis() -> None:
@@ -1010,9 +1027,19 @@ def test_multi_mode_schur_spectrum_mismatch_fails_closed() -> None:
 
     narrow = zero_mode_conditioning(system, zero_tolerance=1.0e-11)
     wide = zero_mode_conditioning(system, zero_tolerance=1.0e-9)
-    assert narrow.available
-    assert narrow.cluster_size == 1
-    assert narrow.solver_forward_estimate == 0.0
+    # Issue #183. The narrow cutoff used to publish scalar evidence for the
+    # ``1e-12`` mode alone. ``||system||_F = 1e6`` puts one unit of round-off at
+    # ``2.2e-10``, and the near-defective block's pseudospectrum at that level
+    # is a disk of radius ``~1.5e-2`` that contains ``1e-12``: as written, the
+    # arithmetic cannot separate it from the pair. Measured on five unitary
+    # re-expressions of this operator, the old narrow call moved the pair to
+    # ``~5e-3``, changed WHICH eigenvalue it conditioned and reported ``s``
+    # anywhere from ``1.0`` to ``0.077`` -- a scalar claim decided by the basis.
+    # No scalar claim is made now, for either cutoff.
+    for run in (narrow, wide):
+        assert run.reason != "ok"
+        assert run.verdict in (CONDITIONING_CLUSTER_ONLY, CONDITIONING_UNAVAILABLE)
+        assert math.isnan(run.solver_forward_estimate)
     assert wide.available is False
     assert wide.reason == "schur_cluster_mismatch"
     assert wide.verdict == CONDITIONING_UNAVAILABLE

@@ -412,11 +412,40 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   **Breaking (public API):** a caller that relied on a verdict from a default call must now pass
   `zero_tolerance` or handle the new `ABSTAIN` verdict. Known limit: with a finite cutoff below
   the defective split the issue-#168 pair still differs by basis (`CLUSTER_ONLY` vs
-  `CONDITIONING_LIMITED`, never `BENIGN`); tracked in #183. With a
+  `CONDITIONING_LIMITED`, never `BENIGN`); fixed by the #183 entry below. With a
   cutoff, `BENIGN` is now issued only when `budget <= zero_tolerance` is TRUE, so a NaN budget
   can no longer fall through to it. The spectral layer always supplies its certified cutoff, so
   no `SpectralResult`, D1-D24 value or manifest field changes. Two round-3/8 regression tests
   that need `np.longdouble` wider than float64 now skip where it is not (Windows/MSVC).
+- **A finite cutoff below a defective split no longer decides the audited zero set by basis
+  (issue #183).** With a cutoff below the `~sqrt(eps * ||L||)` split of the issue-#168 Jordan
+  pair, the plain basis returned the double root exactly and the cutoff admitted both modes
+  (`CLUSTER_ONLY`, two modes), while a unitary re-expression split it to `+-1.5e-08` and the
+  empty-cutoff fallback conditioned ONE root (`CONDITIONING_LIMITED`,
+  `reciprocal_condition = 3.07e-08`) -- measured for every cutoff from `0` to `1e-8`. The audit
+  already kept "every mode the solve cannot separate" together, but decided that with the #108
+  round-off band, a FORWARD-error band that describes well-conditioned modes only. Two computed
+  eigenvalues now also count as unresolved when their midpoint lies in the pseudospectrum at one
+  unit of round-off, `sigma_min(L - m I) <= eps * ||L||_F`, and the selected group (cutoff or
+  fallback) is closed transitively under that relation. `sigma_min` is unitarily invariant and
+  scale covariant, so the grouping is too. The resolution is not tuned: 1000 random unitary
+  re-expressions of Jordan blocks (order 2-3, `d = 2..4`) measured the representation round-off
+  at `<= 0.54 * eps * ||L||_F`, and the PR #127 fixture -- a genuine `1e-14` split the audit
+  exists to explain -- sits at `18.4` and stays `CONDITIONING_LIMITED` in every basis. Only
+  neighbouring pairs are tested directly (a third eigenvalue at the midpoint would otherwise
+  join them), and the SVD is taken only where the first-order estimate
+  `min(s) * |gap| / 2` cannot already decide within `CONDITIONING_AGREEMENT_FACTOR`: on
+  physical generators no SVD is taken and nothing changes (pinned by a counting test). The
+  issue-#168 pair is now `CLUSTER_ONLY` with two modes in both bases at every cutoff below `1`.
+  Two pinned fixtures change, both from a scalar claim to none: a 1e15 diagonal similarity of a
+  random 9x9 and a 1e6-scaled near-defective block. In both, the old scalar evidence was
+  basis-dependent or self-contradictory (on the first, `solver_forward_estimate = 1.22` exceeded
+  the selected eigenvalue `0.608`; on the second, five unitary re-expressions moved `s` from
+  `1.0` to `0.077`). Residual, unchanged by this fix: on a defective pair the independent
+  Schur solve occasionally fails the pre-existing mode-for-mode agreement gate and the audit
+  fails closed as `UNAVAILABLE (schur_cluster_mismatch)` -- 6 of 400 rotation/cutoff pairs,
+  the same rate as before this change. Audit only: no D1-D24 value, filter, certificate, tier
+  or manifest field reads this evidence; MANIFEST_SCHEMA remains unchanged.
 - **`scipy.linalg.sqrtm`'s extended-precision result no longer reaches NumPy
   linalg (issue #177).** Up to SciPy 1.14, `sqrtm` returns a complex input's
   root as `complex256` (scipy/scipy#18250). `np.linalg.eigvalsh` rejects that

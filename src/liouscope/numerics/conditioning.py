@@ -125,6 +125,22 @@ A default call therefore returns ``verdict="ABSTAIN"``: observations only
 withheld, never ``BENIGN``. The spectral layer always supplies its certified
 cutoff and is unaffected.
 
+A cutoff is not enough either (issue #183)
+------------------------------------------
+With a FINITE cutoff below the defective split, the same pair still decided the
+group by the basis: the plain basis returns the double root exactly and the
+cutoff admits both modes, a unitary re-expression returns ``+-1.5e-08`` and the
+empty cutoff fell back to one of them. The group is therefore closed under the
+arithmetic's own resolution: two computed eigenvalues are kept together when
+the #108 round-off band cannot separate them OR their midpoint lies in the
+pseudospectrum at one unit of round-off, ``sigma_min(L - m I) <= eps *
+||L||_F``. The second test is the one a defective root needs, and it is a
+property of the operator rather than of the eigenvectors, so it is invariant
+under a unitary change of basis and covariant under a change of rate units. A
+genuinely split pair -- the PR #127 fixture, ``18.4`` units of round-off --
+stays resolved and keeps its scalar evidence. See
+:func:`_resolution_closure_factory`.
+
 What this instrument does NOT catch
 -----------------------------------
 The stiff deflation failure of issue #112 is invisible to conditioning. On the
@@ -148,7 +164,7 @@ reproduce: pass the accepted ``eigenvalues`` and a repaired spectrum yields
 from __future__ import annotations
 
 import warnings
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 
@@ -405,7 +421,10 @@ class ZeroModeConditioning:
     eigenvalue: complex
     #: How many eigenvalues the zero set holds. ``> 1`` is a degenerate
     #: stationary manifold and is not by itself a defect. ``0`` for ``ABSTAIN``
-    #: and ``UNAVAILABLE``: no zero set was selected.
+    #: and ``UNAVAILABLE``: no zero set was selected. The set is the cutoff's
+    #: (or, for an empty cutoff, the nearest mode's) closed over every mode the
+    #: arithmetic cannot separate from it (issue #183), so it can exceed the
+    #: number of eigenvalues inside ``zero_tolerance`` -- never fall short of it.
     cluster_size: int
     #: Reciprocal 2-norm condition of the zero-cluster spectral projector,
     #: ``1 / ||P||_2``, obtained from a reordered Schur form and a Sylvester
@@ -665,6 +684,104 @@ def _agreement_band(audit: np.ndarray, accepted: np.ndarray) -> float:
     return ZERO_MODE_EPS_FACTOR * float(np.finfo(float).eps) * scale
 
 
+def _smallest_singular_value(L: np.ndarray, z: complex) -> float:
+    """``sigma_min(L - z I)``, or NaN when the SVD does not deliver it."""
+    shifted = np.array(L, dtype=complex, copy=True)
+    shifted.flat[:: shifted.shape[0] + 1] -= z
+    try:
+        sv = sla.svdvals(shifted, check_finite=False)
+    except (ValueError, np.linalg.LinAlgError, sla.LinAlgError):
+        return float("nan")
+    smallest = float(sv[-1]) if sv.size else float("nan")
+    return smallest if np.isfinite(smallest) else float("nan")
+
+
+def _resolution_closure_factory(
+    L: np.ndarray,
+    reported: np.ndarray,
+    per_mode: np.ndarray,
+    band: float,
+) -> Callable[[np.ndarray], np.ndarray]:
+    """Close a group of modes under "the arithmetic cannot separate them".
+
+    Issue #183. Two computed eigenvalues are UNRESOLVED when either
+
+    * they lie inside the #108 round-off band of each other -- the old rule,
+      which describes well-conditioned modes; or
+    * their midpoint ``m`` lies in the ``delta``-pseudospectrum,
+      ``sigma_min(L - m I) <= delta``, with ``delta = eps * ||L||_F``: a
+      perturbation of one unit of round-off in the operator's own norm can
+      move an eigenvalue to the point half way between them.
+
+    The second test is what a defective root needs. A perturbation ``e``
+    splits a Jordan pair into ``+-sqrt(e)`` and ``sigma_min`` at their midpoint
+    is ``~e`` itself, so the test asks whether the split is larger than the
+    arithmetic's resolution rather than whether the roots are close, and it
+    reads the operator, not the eigenvectors: ``sigma_min`` is invariant under
+    a unitary change of basis and covariant under a change of rate units, so
+    the grouping inherits both invariances from it. ``delta`` is not a tuned
+    constant. Measured, 1000 random unitary re-expressions of Jordan blocks of
+    order 2 and 3 at ``d = 2..4`` put the representation round-off at
+    ``sigma_min <= 0.54 * eps * ||L||_F`` (median ``0.1``), which ``delta``
+    must merge, and the PR #127 fixture -- a GENUINE ``1e-14`` perturbation
+    whose ``+-1e-7`` split the audit exists to explain -- at ``18.4``, which
+    it must not.
+
+    The SVD is only taken where a first-order estimate cannot already decide:
+    near a simple mode ``sigma_min(L - z I) ~= s * |z - lambda|``, so a pair
+    whose ``min(s) * |gap| / 2`` exceeds ``delta`` by the module's first-order
+    headroom ``CONDITIONING_AGREEMENT_FACTOR`` is resolved without one. On a
+    healthy generator no pair reaches that, so the closure costs nothing there;
+    a NaN conditioning or a failed SVD counts as unresolved (fail-closed: a
+    larger group can only move the audit to ``CLUSTER_ONLY``, never to
+    ``BENIGN``).
+
+    The closure is transitive, so the group returned is the union of every
+    mode reachable from the seed through unresolved pairs.
+    """
+    n = int(reported.size)
+    resolution = float(np.finfo(float).eps) * scaled_euclidean_norm(L)
+    s_safe = np.where(np.isfinite(per_mode), per_mode, 0.0)
+    headroom = CONDITIONING_AGREEMENT_FACTOR * resolution
+
+    def _unresolved_from(anchor: int, candidates: np.ndarray) -> np.ndarray:
+        gap = np.abs(reported[candidates] - reported[anchor])
+        unresolved = gap <= band
+        first_order = np.minimum(s_safe[anchor], s_safe[candidates]) * (0.5 * gap)
+        # ``not (x > headroom)`` so a NaN estimate is probed, not skipped.
+        for k in np.flatnonzero(~unresolved & ~(first_order > headroom)):
+            mid = 0.5 * reported[anchor] + 0.5 * reported[int(candidates[k])]
+            # Only NEIGHBOURS are tested directly. A third eigenvalue nearer the
+            # midpoint than the pair's half-gap makes ``sigma_min`` small there
+            # on its own account -- measured on the plain #168 pair, whose
+            # ``0`` and ``-2`` have ``-1`` exactly at their midpoint and were
+            # joined through it. Connection via that mode is still found,
+            # transitively, through the two pairs it forms with the ends.
+            between = np.abs(reported - mid) < 0.5 * gap[k]
+            between[[anchor, int(candidates[k])]] = False
+            if np.any(between):
+                continue
+            sigma = _smallest_singular_value(L, complex(mid))
+            unresolved[k] = not (sigma > resolution)
+        return np.asarray(candidates[unresolved], dtype=np.intp)
+
+    def _close(seed: np.ndarray) -> np.ndarray:
+        if not np.isfinite(resolution):
+            # ``||L||_F`` itself is not representable, so no pair can be shown
+            # resolved: the whole spectrum is one group (fail-closed, as above).
+            return np.arange(n, dtype=np.intp)
+        member = np.zeros(n, dtype=bool)
+        member[np.asarray(seed, dtype=np.intp)] = True
+        frontier = [int(j) for j in np.flatnonzero(member)]
+        while frontier:
+            joined = _unresolved_from(frontier.pop(), np.flatnonzero(~member))
+            member[joined] = True
+            frontier.extend(int(j) for j in joined)
+        return np.flatnonzero(member)
+
+    return _close
+
+
 def zero_mode_conditioning(
     L_super: np.ndarray,
     *,
@@ -881,6 +998,7 @@ def _measure(
             observed=float(magnitudes[nearest]),
             trace_defect=float(defect),
         )
+    resolution_closure = _resolution_closure_factory(L, reported, per_mode, band)
     tol = float(zero_tolerance)
     cluster_from_cutoff = bool(np.any(magnitudes <= tol))
     if cluster_from_cutoff:
@@ -931,6 +1049,21 @@ def _measure(
         )
         if cluster.size == 0:  # pragma: no cover - anchor is always its own member
             cluster = np.flatnonzero(magnitudes == magnitudes.min())
+
+    # ISSUE #183. The round-off band above is a FORWARD-error band: it says
+    # when two well-conditioned eigenvalues cannot be told apart. A defective
+    # root is not well conditioned, and ``?geev`` splits it by
+    # ``~sqrt(eps * ||L||)`` -- seven orders of magnitude outside that band. On
+    # the issue-#168 Jordan pair a cutoff below the split therefore decided the
+    # group by the basis: the plain basis returns the double root exactly and
+    # the cutoff admitted both modes (``CLUSTER_ONLY``, two modes), while a
+    # unitary re-expression split it to ``+-1.5e-08`` and the empty cutoff fell
+    # back to ONE root (``CONDITIONING_LIMITED``, ``s = 3.1e-08``). The group is
+    # therefore closed under the arithmetic's own resolution -- see
+    # :func:`_resolution_closure_factory` -- so a pair the arithmetic cannot
+    # separate is conditioned whole whichever basis it was written in, exactly
+    # as the plain basis already did.
+    cluster = resolution_closure(cluster)
 
     stationary = int(cluster[int(np.argmin(magnitudes[cluster]))])
 

@@ -192,7 +192,12 @@ abstract: >-
 # defined in a basis-independent way (PR #173 review). The spectral layer always
 # passes its certified cutoff, so no reported number moves. When a diagnostic is
 # gated on this evidence, THAT change is the one that must be described as a
-# correction.
+# correction. Issue #183 closes the audited group under the arithmetic's own
+# resolution: two eigenvalues whose midpoint lies in the pseudospectrum at
+# eps * ||L||_F count as unresolved, so a defective pair split by round-off is
+# conditioned whole in every basis (CLUSTER_ONLY), while a genuinely split pair
+# such as the 1e-14 fixture above stays a scalar CONDITIONING_LIMITED. Audit
+# only; no reported number moves.
 # Also pending for the next cut: relaxation trajectories for d >= 8 may be
 # propagated by the Al-Mohy & Higham exponential action instead of a
 # materialised expm(L t) (#162). The backend is chosen by a deterministic

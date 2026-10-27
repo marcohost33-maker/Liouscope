@@ -10,6 +10,7 @@ import pytest
 import scipy.linalg as sla
 
 from liouscope.core.lindblad import build_liouvillian
+from liouscope.numerics import conditioning as conditioning_module
 from liouscope.numerics.conditioning import (
     CONDITIONING_ABSTAIN,
     CONDITIONING_BENIGN,
@@ -18,9 +19,11 @@ from liouscope.numerics.conditioning import (
     CONDITIONING_UNAVAILABLE,
     _scalar_verdict,
     _schur_cluster_projector_condition,
+    _smallest_singular_value,
     cluster_conditioning,
     zero_mode_conditioning,
 )
+from liouscope.numerics.linalg import certified_eigvals
 from liouscope.numerics.traceless import trace_vector
 
 
@@ -32,18 +35,25 @@ def _basis_with_first(q: np.ndarray) -> np.ndarray:
     return np.asarray(basis * (phase / abs(phase)), dtype=complex)
 
 
-def _issue168_pair() -> tuple[np.ndarray, np.ndarray]:
-    """The exact reproduction from issue #168 and a unitary re-expression."""
+def _issue168_pair(
+    seed: int = 3, block: np.ndarray | None = None
+) -> tuple[np.ndarray, np.ndarray]:
+    """The exact reproduction from issue #168 and a unitary re-expression.
+
+    ``block`` replaces the Jordan block (in the trace-vector basis) and ``seed``
+    the rotation, so the issue-#183 tests can sweep both.
+    """
     q = trace_vector(2)
     basis = _basis_with_first(q)
 
-    jordan = np.zeros((4, 4), dtype=complex)
-    jordan[1, 0] = 1.0
-    jordan[2, 2] = -1.0
-    jordan[3, 3] = -2.0
-    plain = basis @ jordan @ basis.conj().T
+    if block is None:
+        block = np.zeros((4, 4), dtype=complex)
+        block[1, 0] = 1.0
+        block[2, 2] = -1.0
+        block[3, 3] = -2.0
+    plain = basis @ block @ basis.conj().T
 
-    rng = np.random.default_rng(3)
+    rng = np.random.default_rng(seed)
     V, _ = np.linalg.qr(
         rng.standard_normal((3, 3)) + 1j * rng.standard_normal((3, 3))
     )
@@ -286,3 +296,205 @@ def test_scalar_verdict_accepts_only_on_a_true_comparison(
 ) -> None:
     """The ACCEPTANCE (``BENIGN``) is bound to ``budget <= tol`` being TRUE."""
     assert _scalar_verdict(budget, tol) == expected
+
+
+# --------------------------------------------------------------------------
+# Issue #183: a FINITE cutoff below the defective split
+# --------------------------------------------------------------------------
+
+#: The cutoffs from the issue table (layer cutoff ``4.44e-13``, ``1e-12``,
+#: ``1e-9``, ``>= 1e-7``) plus the gaps between them, the exact-zero cutoff and
+#: the band around the ``~1.5e-08`` split itself.
+_ISSUE183_CUTOFFS = (
+    0.0,
+    1.0e-16,
+    4.44e-13,
+    1.0e-12,
+    1.0e-9,
+    1.0e-8,
+    2.0e-8,
+    3.0e-8,
+    1.0e-7,
+    1.0e-6,
+    1.0e-3,
+    0.5,
+)
+
+
+@pytest.mark.parametrize("tol", _ISSUE183_CUTOFFS)
+def test_issue183_finite_cutoff_is_unitary_basis_invariant(tol: float) -> None:
+    """The invariance probe of the default-call test, over finite cutoffs.
+
+    Measured before the fix: for every cutoff below the split (``0`` to
+    ``1e-8``) the plain basis gave ``CLUSTER_ONLY`` with two modes and the
+    rotated one ``CONDITIONING_LIMITED`` with one mode and
+    ``reciprocal_condition = 3.07e-08``. The rotated basis now closes its group
+    over the pair the arithmetic cannot separate, as the plain basis did.
+    """
+    plain, rotated = _issue168_pair()
+    a = zero_mode_conditioning(plain, zero_tolerance=tol)
+    b = zero_mode_conditioning(rotated, zero_tolerance=tol)
+
+    # Premise: the rotated basis really carries the split.
+    assert b.observed_displacement > 1.0e-9
+
+    da, db = a.as_dict(), b.as_dict()
+    for key in (
+        "available",
+        "reason",
+        "verdict",
+        "cluster_size",
+        "conditioning_limited",
+        "displacement_explained",
+        "per_mode_reciprocal_condition",
+        "solver_forward_estimate",
+        "structural_forward_estimate",
+        "zero_tolerance",
+    ):
+        assert da[key] == db[key], key
+    assert a.verdict == CONDITIONING_CLUSTER_ONLY
+    assert a.cluster_size == 2
+    assert a.reciprocal_condition == pytest.approx(
+        b.reciprocal_condition, rel=2e-10, abs=2e-12
+    )
+    json.dumps(db, allow_nan=False)
+
+
+@pytest.mark.parametrize("seed", range(40))
+def test_issue183_no_rotation_publishes_a_scalar_claim_on_the_defective_pair(
+    seed: int,
+) -> None:
+    """Across rotations: never a scalar claim, and one cluster when measured.
+
+    ``UNAVAILABLE`` remains possible: the independent Schur solve must
+    reproduce the accepted spectrum inside the round-off band, and on a
+    defective pair it does not always (``schur_cluster_mismatch``). That gate
+    predates #183 and fails closed -- measured at the same rate (6 of 400
+    rotation/cutoff pairs) for cutoffs above the split before this change.
+    """
+    plain, rotated = _issue168_pair(seed=seed)
+    for tol in (0.0, 4.44e-13, 1.0e-9, 1.0e-7):
+        for evidence in (
+            zero_mode_conditioning(plain, zero_tolerance=tol),
+            zero_mode_conditioning(rotated, zero_tolerance=tol),
+        ):
+            assert evidence.verdict in (
+                CONDITIONING_CLUSTER_ONLY,
+                CONDITIONING_UNAVAILABLE,
+            )
+            if evidence.available:
+                assert evidence.cluster_size == 2
+                assert evidence.reciprocal_condition == pytest.approx(
+                    1.0, rel=2e-10, abs=2e-12
+                )
+
+
+def test_issue183_displaced_defective_pair_is_kept_whole() -> None:
+    """The same split, away from zero, on the EMPTY-cutoff fallback path.
+
+    A Jordan pair at ``1e-5`` with a cutoff of ``1e-12``: no eigenvalue is
+    admitted, so the group is the one nearest to zero. The plain basis ties
+    the pair exactly (round-off band); a rotation splits it by ``~1.5e-08``,
+    which the band cannot see but the pseudospectral test does.
+    """
+    block = np.zeros((4, 4), dtype=complex)
+    block[0, 0] = block[1, 1] = 1.0e-5
+    block[1, 0] = 1.0
+    block[2, 2] = -1.0
+    block[3, 3] = -2.0
+    plain, rotated = _issue168_pair(seed=0, block=block)
+    a = zero_mode_conditioning(plain, zero_tolerance=1.0e-12)
+    b = zero_mode_conditioning(rotated, zero_tolerance=1.0e-12)
+
+    values = np.sort(np.abs(np.linalg.eigvals(rotated) - 1.0e-5))
+    assert values[1] > 1.0e-9  # premise: the rotation splits the pair
+    for x in (a, b):
+        assert x.verdict == CONDITIONING_CLUSTER_ONLY
+        assert x.cluster_size == 2
+
+
+@pytest.mark.parametrize("split", [1.0e-14, 1.0e-13, 1.0e-12])
+@pytest.mark.parametrize("seed", range(3))
+def test_issue183_a_genuine_split_is_not_merged(split: float, seed: int) -> None:
+    """Negative control: a split the OPERATOR carries stays a scalar claim.
+
+    ``[[0, split], [1, 0]]`` has eigenvalues ``+-sqrt(split)``; at
+    ``split = 1e-14`` this is the PR #127 fixture, ``18.4`` units of round-off
+    above the resolution. Whatever the basis, the stationary mode is
+    conditioned alone and reported conditioning-limited, with the same
+    per-mode figure ``~2 sqrt(split)``.
+    """
+    block = np.zeros((4, 4), dtype=complex)
+    block[0, 1] = split
+    block[1, 0] = 1.0
+    block[2, 2] = -1.0
+    block[3, 3] = -2.0
+    plain, rotated = _issue168_pair(seed=seed, block=block)
+    for L in (plain, rotated):
+        evidence = zero_mode_conditioning(L, zero_tolerance=1.0e-12)
+        assert evidence.cluster_size == 1
+        assert evidence.verdict == CONDITIONING_LIMITED
+        assert evidence.per_mode_reciprocal_condition == pytest.approx(
+            2.0 * math.sqrt(split), rel=2e-2
+        )
+
+
+def test_issue183_resolution_costs_no_svd_on_healthy_generators(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The pseudospectral test is reached only where first order cannot decide.
+
+    On physical generators every pair is resolved by the first-order estimate,
+    so the closure must not take a single SVD -- and must not change the answer
+    the layer's own cutoff gives.
+    """
+    calls: list[complex] = []
+
+    def counting(L: np.ndarray, z: complex) -> float:
+        calls.append(z)
+        return _smallest_singular_value(L, z)
+
+    monkeypatch.setattr(conditioning_module, "_smallest_singular_value", counting)
+    sigma_x = np.array([[0.0, 1.0], [1.0, 0.0]], dtype=complex)
+    sigma_minus = np.array([[0.0, 1.0], [0.0, 0.0]], dtype=complex)
+    sigma_z = np.diag([1.0, -1.0]).astype(complex)
+    rng = np.random.default_rng(0)
+    generators = [
+        build_liouvillian(
+            0.5 * sigma_x, [math.sqrt(g) * sigma_minus, math.sqrt(w) * sigma_z]
+        )
+        for g in (1.0e-3, 1.0, 1.0e3)
+        for w in (1.0e-4, 1.0e-1, 10.0)
+    ]
+    for d in (3, 4):
+        H = rng.standard_normal((d, d)) + 1j * rng.standard_normal((d, d))
+        jumps = [
+            rng.standard_normal((d, d)) + 1j * rng.standard_normal((d, d))
+            for _ in range(2)
+        ]
+        generators.append(build_liouvillian(H + H.conj().T, jumps))
+    for L in generators:
+        accepted, certificate = certified_eigvals(L)
+        evidence = zero_mode_conditioning(
+            L,
+            zero_tolerance=certificate.zero_set_tolerance(accepted),
+            eigenvalues=accepted,
+        )
+        assert evidence.verdict == CONDITIONING_BENIGN
+        assert evidence.cluster_size == 1
+    assert calls == []
+
+
+def test_smallest_singular_value_is_unitarily_invariant_and_scale_covariant() -> None:
+    """The two invariances the grouping inherits from ``sigma_min``."""
+    _plain, rotated = _issue168_pair()
+    rng = np.random.default_rng(11)
+    U, _ = np.linalg.qr(rng.standard_normal((4, 4)) + 1j * rng.standard_normal((4, 4)))
+    z = 0.3 - 0.2j
+    base = _smallest_singular_value(rotated, z)
+    assert _smallest_singular_value(U @ rotated @ U.conj().T, z) == pytest.approx(
+        base, rel=1e-12
+    )
+    assert _smallest_singular_value(1.0e200 * rotated, 1.0e200 * z) == pytest.approx(
+        1.0e200 * base, rel=1e-12
+    )

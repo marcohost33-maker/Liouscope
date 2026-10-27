@@ -249,7 +249,11 @@ LiouScope is built for paper-grade reproducibility:
   cluster condition, residuals, separation and trace-preservation defect. Before a multi-mode
   projector is reported, the independent Schur spectrum must match the spectrum carried by the
   report mode-for-mode inside the existing round-off agreement band; otherwise the audit returns
-  `UNAVAILABLE` rather than conditioning a numerically different cluster. **Nothing reads this
+  `UNAVAILABLE` rather than conditioning a numerically different cluster. Which modes form the
+  conditioned group is closed under the arithmetic's own resolution (issue #183): two eigenvalues
+  whose midpoint lies in the pseudospectrum at one unit of round-off,
+  `sigma_min(L - m I) <= eps * ||L||_F`, are kept together, so a defective pair that round-off
+  splits differently in different bases is conditioned whole in all of them. **Nothing reads this
   audit** — no filter, gap, certificate, diagnostic or tier — and it is not a detector for stiff
   eigensolver failure (issues #117/#168). The public entry point is
   `liouscope.numerics.zero_mode_conditioning(L, zero_tolerance=..., eigenvalues=...)`. Called
