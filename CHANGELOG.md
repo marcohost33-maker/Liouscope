@@ -21,6 +21,172 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   RHS-scaled sub-stepping and global-RNG invariance have dedicated regression
   tests.
 
+- **Eigenvalue-conditioning evidence for the stationary mode, AUDIT ONLY
+  (issue #117).** `numerics.conditioning` measures the reciprocal condition
+  number of the zero set -- `sigma_min(Y^H X)` over orthonormal bases of the
+  left and right invariant subspaces, which reduces to `|y^H x|` for a simple
+  eigenvalue -- together with the left/right residuals, the separation, the
+  trace-preservation defect and the two first-order forward-error estimates
+  those imply. `SpectralResult.zero_mode_conditioning` carries it into the
+  report; `compute_spectral_layer(..., conditioning_audit=False)` switches it
+  off. CHANGES NO REPORTED NUMBER: no filter, gap, certificate, verdict or tier
+  reads any of it, and the run-manifest contract is unchanged (additive field
+  with a default).
+
+  Why a second instrument. For a NON-NORMAL generator a backward error does not
+  bound the forward eigenvalue displacement by the same number, so the
+  certificate band cannot say whether a stationary eigenvalue away from zero is
+  a failed eigensolve or the correctly located zero of an operator that is only
+  approximately trace preserving. Measured on the 4x4 fixture from the
+  2026-09-11 external review of PR #127: perturbation norm `||q^H L|| =
+  1.0000e-14` (the raw `||vec(I)^H L||` over `sqrt(d)`, which is the
+  minimum-norm correction that makes the operator trace preserving), certificate
+  band `4.4409e-13`, observed displacement `1.0000e-07` -- the band
+  under-predicts by `2.25e5x`, while `||q^H L|| / s` with `s = 2.0e-07` gives
+  `5.00e-08`, off by a factor of two.
+
+  Why `|y^H x|` and not LAPACK `RCONDE`, as issue #117 proposed. First, it is
+  unreachable: SciPy wraps no `?geevx` (measured on 1.17.1 --
+  `scipy.linalg.lapack.zgeevx` raises `AttributeError`). Second, it would answer
+  the wrong question: `xGEEVX` documents that its condition numbers refer to the
+  BALANCED matrix and that diagonal scaling changes them, whereas `?geev`
+  back-transforms its eigenvectors, so `|y^H x|` describes the operator as the
+  caller wrote it. Measured on a 9x9 operator under `D A D^-1` with
+  `D = diag(1e-6 .. 1e9)`, which leaves the spectrum invariant to round-off
+  (below `1e-14`; the exact difference is BLAS-dependent, so it is a bound): the
+  per-mode `s` range moves from `0.189..0.761` to `1.55e-15..1.18e-14`.
+
+  Why the subspace figure and not a per-mode one. Per-mode `s` collapses with
+  the splitting of a nearly degenerate pair while its invariant subspace stays
+  perfectly conditioned (measured on `[[0,1,0],[0,delta,0],[0,0,-1]]`: `s` falls
+  `1e-2 -> 1e-14` as `delta` does, `sigma_min(Y^H X) = 1.000` throughout). A
+  degenerate stationary manifold -- a conserved quantity or symmetry sector --
+  has exactly that shape and is physical, so a per-mode gate would withhold on a
+  healthy generator.
+
+  What it does NOT catch, pinned by a negative-control test whose premise is
+  established first: the stiff #112 deflation failure is invisible to
+  conditioning. On the canonical four-level network raw `zgeev` loses the zero
+  mode -- `7.28e-06` against a certificate band of `8.48e-08`, repaired by
+  `dgeev-real` to `4.08e-17` -- and conditioning that wrong spectrum gives
+  `s = 0.29` for the stationary mode and `0.040` at worst, i.e. condition
+  numbers between 1 and 25. That range independently reproduces the 2026-08-25
+  measurement already recorded in `linalg.py`. Conditioning is therefore
+  ADDITIVE to the structural certificate, which is also why this change promotes
+  it to no gate; issue #117 step 4 stays open until a
+  certified-yet-misconditioned generator is exhibited. Across sixteen physical
+  GKSL generators (`gamma` and `omega` each over four decades) the worst
+  reciprocal condition is `0.707` and no run is reported as
+  conditioning-limited, so the evidence costs no false alarm.
+
+  For the same reason the audit refuses to describe a spectrum it did not
+  reproduce. `zero_mode_conditioning(..., eigenvalues=...)` compares its own
+  solve against the spectrum the caller will report and returns
+  `available=False, reason="accepted_spectrum_mismatch"` when they disagree,
+  because `certified_eigvals` may have repaired through a different LAPACK
+  route: on that same network the audit would otherwise have published the
+  conditioning of `7.28e-06` beside a reported stationary eigenvalue of
+  `4.08e-17`. A side length that cannot be a superoperator, and a negative
+  `zero_tolerance`, are likewise refused rather than answered.
+  The forward estimates divide by the conditioning of the group of modes the
+  arithmetic does not SEPARATE from the selected stationary eigenvalue --
+  which is that eigenvalue's own `|y^H x|` when it is cleanly simple, and the
+  basis-invariant `sigma_min(Y^H X)` when it is repeated or unresolved. Both halves are measured: a per-mode
+  value is basis dependent for a repeated eigenvalue (rotating only the right
+  basis inside a degenerate stationary eigenspace moves it from `0.7206` to
+  `0.5408` while the subspace figure stays `0.7071`), and conversely the
+  subspace figure over the whole cluster, or the minimum over it, couples the
+  estimate to modes the stationary one has nothing to do with (measured: widening a cutoff from
+  `1e-9` to `2e-5` moved the structural estimate from `1e-10` to `1.0` under the
+  cluster minimum, with the selected eigenvalue unchanged). Membership of the
+  zero set is read from the ACCEPTED spectrum, matched to the audit's own solve
+  by a minimum-cost assignment rather than a lexicographic sort, so the evidence
+  conditions the set the report filtered and two numerically identical spectra
+  are not mispaired by a round-off-sized reordering. With no cutoff supplied,
+  every mode the arithmetic cannot separate from the smallest is kept, so a
+  degenerate stationary manifold is conditioned as the subspace it is.
+
+  Grouping is by the round-off band #108 already defines,
+  `ZERO_MODE_EPS_FACTOR * eps * max|lambda|`, not by exact eigenvalue
+  equality and not by the backward error. Exact equality holds only when
+  LAPACK happens to return bit-identical values, which it does not for the
+  same generator written in a rotated basis: measured on the two-sector
+  fixture under a unitary similarity -- which cannot change any conditioning
+  figure -- the zero set comes back spread by `2.9e-16`, the exact-tie group
+  collapses to one mode, and both the reported `reciprocal_condition` and the
+  divisor read `0.102562` against the operator's `0.707107`. The backward
+  error was the first candidate for the band and is wrong for a reason this
+  module has to respect: at `c = 1e200` the eigendecomposition degrades, the
+  relative residual rises to `1.0`, and a residual-scaled grouping merged the
+  whole spectrum -- breaking the `s(cL) = s(L)` invariance #108 and #130
+  require. The round-off band is scale covariant by construction.
+
+  `right_residual`, `left_residual` and `separation` are scoped to that same
+  group rather than to the whole cutoff cluster, so the numerator and the
+  divisor of `solver_forward_estimate` describe the same modes; previously an
+  unrelated in-cutoff mode's backward error entered an estimate that names the
+  selected eigenvalue, and a mode the cutoff admitted while the arithmetic
+  resolved it was neither conditioned nor counted as a neighbour -- measured on
+  a 4x4 with eigenvalues `[1e-6, 2e-6, -1, -2]` at `zero_tolerance=3e-6`, which
+  reported a separation of `1.000001` while the selected mode's neighbour sits
+  `1e-6` away, exactly its own structural budget.
+
+  KNOWN LIMITATION, recorded in the module docstring and tracked as #168: for a
+  DEFECTIVE repeated stationary eigenvalue no figure derived from an eigenvector
+  decomposition is basis invariant, because the decomposition does not exist.
+  Measured on a 2x2 Jordan block at zero, exactly trace preserving, re-expressed
+  by a unitary fixing `q`: `reciprocal_condition` moves `0.000000 -> 1.000000`
+  and the verdict `CONDITIONING_LIMITED -> BENIGN` for the same operator. The
+  evidence is audit-only, so nothing reads it, but it is not to be trusted on a
+  defective stationary manifold until #168 is closed.
+
+  Spectrum agreement accepts a pairing the minimum-TOTAL-cost assignment misses.
+  The caller rejects on the largest paired distance while the assignment
+  minimises the sum, and those are different optima: a sum-minimising pairing
+  can put one pair outside the band where another perfect matching keeps every
+  pair inside it. The min-sum pairing is still preferred when it fits; only when
+  it does not is feasibility decided by minimising the NUMBER of over-band
+  pairs, which is zero exactly when a within-band perfect matching exists.
+
+  The audit is total against wider numeric dtypes on both inputs. A finite
+  `np.clongdouble` accepted spectrum built a `float128` cost matrix and raised
+  `TypeError` out of `linear_sum_assignment`; it is now narrowed and rechecked
+  inside the protected block. A `zero_tolerance` finite only in a wider dtype
+  (`np.longdouble("1e400")`) passed the public gate, became `inf` in float64 and
+  was silently demoted to "no cutoff supplied"; the cutoff is now validated as
+  narrowed, so it is refused instead.
+
+  `displacement_explained` abstains outside the first-order perturbative
+  regime, rather than denying an attribution first-order theory cannot judge.
+  It abstains on the PERTURBATION as well as on the outcome: a combined
+  estimate that reaches the separation invalidates the local expansion
+  however small the displacement it happens to produce (measured on
+  `diag(1e-6, -1, -2, -3)` at a cutoff of `1e-5`: displacement `1e-06`
+  against a separation of `1.000001`, and a trace correction of `2.1213`
+  that has to be attributed).
+  `CONDITIONING_AGREEMENT_FACTOR` is headroom on a LOCAL expansion, and no fixed
+  factor can rescue a Jordan chain: on a 16x16 companion matrix whose
+  eigenvalues satisfy exactly `lambda**16 = 1e-8`, the displacement `0.3162` is
+  entirely caused by the `1e-8` perturbation yet misses the first-order estimate
+  `0.02196` by 14.4x, and the ratio grows without bound with the chain length.
+  The regime test is measured rather than tuned: a perturbation small enough for
+  a local expansion cannot move an eigenvalue as far as its nearest neighbour,
+  so `observed >= separation` abstains. Both quantities are report fields, so a
+  reader can see why.
+
+  The two forward-error contributions are SUCCESSIVE perturbations -- from the
+  exact zero of the nearest trace-preserving operator, to that operator's
+  eigenvalue, to the one the solver returned -- so the budget is their sum, not
+  the larger of the two.
+
+  `benchmarks/issue117_zero_mode_conditioning.py` reproduces every figure above
+  and carries the timing campaign. On cost: the audit's price at small `d` is
+  NOT the extra eigensolve (measured 0.02 ms of a 0.65 ms audit at `d = 2`) but
+  its Python-level per-mode work; in absolute terms that is well under a
+  millisecond there. The relative figure is not stable enough on a shared
+  machine to quote -- the same script measured the `d = 8` audit at 20 ms and
+  40 ms in consecutive runs -- so it is measured rather than documented.
+  `compute_spectral_layer(..., conditioning_audit=False)` switches it off.
 - **Relaxation trajectories can be propagated by the exponential ACTION instead
   of a materialised `expm(L t)` (issue #162).** The relaxation layer needs
   `exp(t L) vec(rho_0)`, not the `d^2 x d^2` propagator. The new
@@ -154,7 +320,117 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     model matters; the run manifest does not record per-model likelihoods, so
     the change is not visible in `input_hash`.
 
+### Security
+- **The release toolchain is installed from a hash lock, and a gate keeps it
+  that way (code-scanning alerts #14/#15, OpenSSF Scorecard
+  Pinned-Dependencies).** `pypi.yml` built and inspected the distribution PyPI
+  receives with `pip install build twine check-wheel-contents` after
+  `pip install --upgrade pip`: no version, no digest, so the toolchain was
+  whatever the index served that minute. It now installs
+  `.github/requirements/release.txt` (pip-compile `--generate-hashes`, Python
+  3.12: 39 exact pins, 533 SHA-256 digests) with `--require-hashes
+  --only-binary :all:`, and builds with `--no-isolation` so the locked
+  setuptools is the backend -- an isolated build would have fetched an
+  unpinned one. Measured locally: the
+  wheel is file-for-file identical to an isolated build (setuptools 84.0.0 in
+  both). Dependabot now tracks the lock directory, so the pins do not only age.
+  `check_release_pins.py` (stdlib only, run by the Quality Contract on merge
+  and head, and by `pytest` via `tests/test_release_pin_gate.py`) rejects any
+  release-workflow `pip install` that is neither hash-locked nor a local
+  `--no-deps` wheel, a lock entry without an exact pin or a well-formed digest,
+  a lock that misses a top-level requirement or was compiled for another Python
+  than the workflow runs, a locked backend below `[build-system] requires`, an
+  unlisted workflow that publishes to PyPI, and an inline YAML value the parser
+  would reject. That last check exists because this change's own first draft
+  wrote `--only-binary :all: -r ...` inline, which is not valid YAML -- and the
+  zizmor gate skipped the unparsable file with a warning and exit 0 (zizmor
+  1.30.1), so the release workflow would have failed first on release day. A
+  mutation probe kills 22 of 22 mutants of the gate. No runtime code, anchor,
+  reported number or run-manifest field changes.
+- **The release build is exercised on every pull request and proven
+  reproducible on every run.** `pypi.yml` ran only on a published release or
+  by hand, so its toolchain, build and QA gate were first tested on release day
+  (both `release` runs for v0.5.0 failed, there on the not-yet-registered
+  Trusted Publisher). Its `build` job now also runs as a dry-run on every pull
+  request and every push to `main`, as PyPA's publishing guide recommends; only
+  `publish` can upload, and only for a published release. Each run builds twice
+  from the same commit with `SOURCE_DATE_EPOCH` set to the commit time and
+  refuses to continue unless the wheels are byte-identical and the sdists
+  content-identical (`.github/scripts/compare_dists.py`). Measured before the
+  change: without the variable neither artifact repeated; with it the wheel was
+  byte-identical, while the sdist still differed in gzip header, member mtimes
+  and owner fields, because setuptools' sdist does not read `SOURCE_DATE_EPOCH`
+  (pypa/setuptools#2133, open) -- so only those fields are disregarded. The
+  artifacts' SHA-256 go to the job summary. `check_release_pins.py` now also
+  checks every `release.in` specifier against the locked version (name coverage
+  alone accepted `build<1.6` against a lock pinning 1.6.1), refuses markers,
+  option lines and direct references in `release.in`, and recognises `uv`,
+  `poetry`, `flit`, `hatch` and `pdm` publish commands. Mutation probe over both
+  scripts: 38 of 38 mutants killed, controls green. Independent check of the
+  published release: the PyPI files of 0.5.0 match their recorded digests, and
+  a rebuild from tag `v0.5.0` reproduces every packaged file and all 103 sdist
+  members; only the wheel's `Generator: setuptools (83.0.0)` line (and hence
+  `RECORD`) differs from today's 84.0.0 -- the drift the lock now removes.
+- **The release gate reads workflows structurally and fails closed on what it
+  cannot read (PR #170 review).** Four review findings, each reproduced as a
+  silent pass: a `pip install` split across a folded `>-` block, a
+  `--no-deps "$BASE/pkg.whl"` install (pip also installs remote archives), a
+  lock entry whose marker (`python_version < "3"`) keeps pip from installing it
+  on 3.12, and a publisher spelled `twine  upload`. `check_release_pins.py` now
+  decodes workflows with a strict, stdlib-only YAML subset reader -- block
+  mappings and sequences, one-line scalars and flow collections, `|`/`|-`/`>`/
+  `>-` blocks with YAML's folding rules -- and refuses anchors, aliases, tags,
+  multi-line plain or quoted scalars, duplicate keys and tabs; a refused
+  workflow fails the gate. Measured against PyYAML 6.0.3 `BaseLoader`: all ten
+  workflows decode identically, and in 45,000 randomly mutated workflows plus
+  40,000 generated block scalars no accepted input decoded differently or was
+  rejected by PyYAML. Shell text is tokenised with `shlex`: a line naming
+  `pip` and `install` without a recognised invocation (`bash -c "pip install
+  x"`) fails, the local-wheel exception accepts only literal `dist/*.whl`
+  paths, lock markers are evaluated for the lock's Python (`python_version`
+  only; anything else fails), and publishers are found on tokens. Two further
+  findings: `compare_dists.py` compares every sdist PAX record except the
+  time and owner ones, and `pypi.yml` runs the second build in a fresh
+  `git worktree` of the same commit instead of the first build's tree.
+
 ### Fixed
+- **Zero-cluster conditioning is now basis invariant on defective repeated modes (issue #168).**
+  The audit-only #117 instrument previously formed `sigma_min(Y^H X)` from eigenvectors returned
+  by `?geev`. For a defective repeated eigenvalue no eigenspace of that dimension exists, so a
+  unitary re-expression of the same Jordan-block fixture moved the reported condition from
+  `0.000000` to `1.000000` and flipped its audit verdict. A multi-mode zero cluster is now
+  reordered in a complex Schur form with LAPACK `xTRSEN`; after reordering the code solves
+  `T11 R - R T22 = T12` and reports the reciprocal projector 2-norm
+  `1/sqrt(1 + ||R||_2^2)`. `xTRSEN.S` itself is deliberately not reported as that value: LAPACK
+  defines it with `||R||_F` as a lower bound. Multi-mode zero clusters now return
+  `CLUSTER_ONLY`: cluster condition, residuals, separation and trace defect remain evidence, while
+  scalar first-order eigenvalue-displacement estimates are withheld because semisimple versus
+  defective multiplicity cannot be decided safely from numerical proximity. The Schur spectrum
+  must also agree mode-for-mode with the spectrum the report carries before a multi-mode projector
+  is published; a same-size but numerically different Schur cluster now fails closed as
+  `schur_cluster_mismatch`. Simple zero modes retain the scalar path. Audit only: no D1-D24
+  number, filter, certificate, mechanism verdict or
+  run-manifest field consumes this evidence; MANIFEST_SCHEMA therefore remains unchanged.
+- **A conditioning audit called without `zero_tolerance` now abstains instead of answering
+  `BENIGN` (PR #173 review).** `zero_mode_conditioning(L)` used to turn the missing cutoff into
+  an internal NaN; every ordered comparison with NaN is False, so the scalar path could only say
+  `BENIGN` -- measured for `diag(0, -1, -1, -2)`, which is not trace preserving (defect `1.414`).
+  The zero set was then chosen by proximity, which a defective double root split by
+  `~sqrt(eps) * ||L||` makes basis dependent: the exact issue-#168 Jordan pair gave
+  `CLUSTER_ONLY` (two modes) in its plain basis and `BENIGN` (one mode, `s = 3.6e-8`) under a
+  unitary re-expression. A call without a cutoff now returns the new verdict `ABSTAIN`
+  (`reason="zero_tolerance_not_supplied"`, `cluster_size=0`): smallest eigenvalue, its magnitude
+  and the trace defect as observations, every zero-set figure NaN / JSON null,
+  `conditioning_limited=False`, `displacement_explained=None`. This withdraws the round-8
+  contract under which `displacement_explained` still answered from a default call.
+  **Breaking (public API):** a caller that relied on a verdict from a default call must now pass
+  `zero_tolerance` or handle the new `ABSTAIN` verdict. Known limit: with a finite cutoff below
+  the defective split the issue-#168 pair still differs by basis (`CLUSTER_ONLY` vs
+  `CONDITIONING_LIMITED`, never `BENIGN`); tracked in #183. With a
+  cutoff, `BENIGN` is now issued only when `budget <= zero_tolerance` is TRUE, so a NaN budget
+  can no longer fall through to it. The spectral layer always supplies its certified cutoff, so
+  no `SpectralResult`, D1-D24 value or manifest field changes. Two round-3/8 regression tests
+  that need `np.longdouble` wider than float64 now skip where it is not (Windows/MSVC).
 - **`scipy.linalg.sqrtm`'s extended-precision result no longer reaches NumPy
   linalg (issue #177).** Up to SciPy 1.14, `sqrtm` returns a complex input's
   root as `complex256` (scipy/scipy#18250). `np.linalg.eigvalsh` rejects that
@@ -266,6 +542,57 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   documented agent prefix, and `.github/scripts/check_agent_branch_triggers.py`
   reads those prefixes from `AGENTS.md` and fails the quality gate if workflow
   trigger coverage drifts again. Main branch-protection semantics are unchanged.
+- **GLS optimiser residuals are divided by the curve's own scale, and fall
+  back to the raw residuals where that rescaling is not representable (issue
+  #124, PR #134).** Rescaling makes SciPy's termination amplitude-invariant
+  for a model whose amplitude is not a fitted parameter: `1e-40*exp(-1.3 t)`
+  no longer returns its seed rate as a converged fit. For a FREE amplitude
+  parameter that alone was not enough -- its Jacobian column outweighs the
+  rate column by the curve's scale, and `_fit_with_model("M0")` returned its
+  seed rate with `success=True` at 1e-40 and 1e+40 -- so `least_squares` now
+  scales each variable by its Jacobian column norm (`x_scale="jac"`, PR #134
+  round 4). Measured on M0 with 1e-3 noise: the same rate to 1e-8 relative at
+  every scale from 1e-150 to 1e100. Outside that range the limits below still
+  apply: at or below ~1e-155 the fit falls back to the raw residuals (announced),
+  and above 1e100 the model magnitude guard (`_MODEL_CLIP = 1e100`) binds
+  (measured: `success=False` at 1e150). Because the
+  variable scaling applies at every scale, fitted values can move within the
+  optimiser's tolerance for curves at unit scale too.
+  SciPy's finite-difference probes, however, step in absolute parameter
+  units, so for a tiny scale the rescaled residual, Jacobian or cost can leave
+  float64 -- measured at `max|y| = 5e-324` (the #147 fixture) and, through
+  `_fit_with_model("M0")`, at 1e-150 and 1e-310, where the fit was reported
+  unsuccessful and dropped from AICc selection. A floating-point exception
+  raised by the rescaled arithmetic itself (the division, the whitening, or
+  SciPy's own computation on the rescaled values -- NOT the evaluation of the
+  model, which keeps the caller's floating-point policy) or a non-finite
+  cost/residual/Jacobian of the rescaled solve now sends that iteration to the
+  raw residuals, evaluated exactly as before #124, with a `RuntimeWarning`
+  stating that the #124 invariance does not hold for the curve. A finite
+  rescaled solve that did not converge, and an exception with no
+  floating-point event, are still reported unsuccessful. For a FREE amplitude
+  parameter at `max|y| >= ~1e150` the fallback fires as well (measured at
+  1e150, 1e200 and 1e300; a fixed-amplitude model does not fall back there and
+  fits rate 1.3) and the fit fails closed exactly as on main (`success=False`),
+  without leaking the private exception that an earlier revision of this fix
+  raised there (PR #134 review). Unlike main, such a fit now emits the fallback
+  warning. It has the dedicated category
+  `liouscope.fitting.gls.AmplitudeRescalingFallbackWarning`, a `RuntimeWarning`
+  subclass, so a caller running with `-W error` can filter it by class. Raw residuals, rho, sigma and
+  the likelihood remain in the caller's data units.
+- **The AR(1) lag-1 autocorrelation is formed from residuals normalised by an
+  exact power of two (PR #134, round-3 review).** `ar1_correlation` took its dot
+  products on unscaled residuals, which underflow to 0 below ~1e-162 -- the
+  corrected rho then collapses to its floor `1/(n-3)` -- and overflow to NaN
+  above ~1e154. Measured through `fit_gls_ar1` with `n_iters=3` on one AR(1)
+  correlated curve: rho 0.012987 at 1e-170, 0.44637 at 1e0 and NaN with
+  `success=False` at 1e160. Scaling by `2**k` is exact, so rho is bit-identical
+  wherever the old computation stayed in range (200/200 random series between
+  1e-100 and 1e100). An entry that the normalisation pushes below the normal
+  range underflows harmlessly; that underflow no longer raises under a
+  caller's `np.errstate(under="raise")` (round-4 review: `[1e150, 1e-200]`
+  raised `FloatingPointError`, main returns -0.5). Overflow and invalid
+  operations keep the caller's policy.
 - **The trace-preservation defect overflowed on the way to a column sum that is
   exactly zero (issue #139, P2 review).** `trace_preservation_defect` assembled
   `vec(I)^H L` with an ordinary matrix product, which accumulates in ordinary

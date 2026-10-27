@@ -3,15 +3,31 @@ name: Publish to PyPI
 on:
   release:
     types: [published]
+  # Release dry-run. The build job below runs on every pull request and every
+  # push to main, so the hash-locked toolchain, the build, the QA gate and the
+  # reproducibility check are exercised long before a release depends on them
+  # (PyPA's publishing guide builds on every push for the same reason). Only
+  # `publish` can upload, and it runs solely for a published release.
+  pull_request:
+  push:
+    branches: [main]
   workflow_dispatch:  # build/QA dry-run only; never grants an OIDC publish token
 
 permissions: {}
+
+# Superseded dry-runs of the same pull request are cancelled; a release run is
+# never cancelled (cancel-in-progress is false for every other event).
+concurrency:
+  group: pypi-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   build:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+    outputs:
+      sha256sums: ${{ steps.digests.outputs.sha256sums }}
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803  # v6.1.0
         with:
@@ -22,12 +38,47 @@ jobs:
         uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # v6.2.0
         with:
           python-version: "3.12"
-      - name: Install build + QA tools
+      # The release toolchain installs from a hash lock: every distribution,
+      # transitive ones included, must match a recorded SHA-256, and
+      # --only-binary keeps an sdist's build script from running here. The
+      # unpinned `pip install --upgrade pip` is gone rather than pinned: the
+      # interpreter's bundled pip already supports hash-checking mode.
+      # Block scalar, not an inline value: `:all: ` inside a plain YAML scalar
+      # is a mapping indicator and makes the whole file unparsable.
+      - name: Install build + QA tools (hash-locked)
         run: |
-          python -m pip install --upgrade pip
-          pip install build twine check-wheel-contents
-      - name: Build sdist + wheel
-        run: python -m build
+          python -m pip install --require-hashes --only-binary :all: -r .github/requirements/release.txt
+      # --no-isolation builds with the setuptools locked above. An isolated
+      # build would download whatever setuptools satisfies pyproject.toml at
+      # that moment -- the one unpinned input left in the artifact's build.
+      #
+      # SOURCE_DATE_EPOCH (the commit time) makes the wheel byte-reproducible,
+      # and the second, clean build proves it on every run: the wheel must be
+      # byte-identical and the sdist content-identical (setuptools' sdist
+      # ignores SOURCE_DATE_EPOCH, pypa/setuptools#2133, so its mtimes and
+      # owner fields are the only thing the comparison disregards). A build
+      # that is not a deterministic function of commit + lock cannot publish.
+      #
+      # The second build runs in a fresh worktree of the same commit, not in
+      # the first build's tree (PR #170 review): deleting known output
+      # directories left every other file the first build created or changed,
+      # so a build step that generates a file only when it is absent would
+      # have agreed with itself here and differed from a fresh clone. A
+      # worktree holds exactly the tracked files of HEAD.
+      - name: Build sdist + wheel twice and verify reproducibility
+        run: |
+          set -euo pipefail
+          SOURCE_DATE_EPOCH="$(git log -1 --format=%ct HEAD)"
+          export SOURCE_DATE_EPOCH
+          python -m build --no-isolation --outdir dist
+          git worktree add --detach "$RUNNER_TEMP/rebuild-src" HEAD
+          (cd "$RUNNER_TEMP/rebuild-src" && python -m build --no-isolation --outdir "$RUNNER_TEMP/rebuild")
+          {
+            echo "### Release artifacts (event: $GITHUB_EVENT_NAME, commit: $(git rev-parse HEAD), SOURCE_DATE_EPOCH: $SOURCE_DATE_EPOCH)"
+            echo '```'
+            python .github/scripts/compare_dists.py dist "$RUNNER_TEMP/rebuild"
+            echo '```'
+          } | tee -a "$GITHUB_STEP_SUMMARY"
       - name: Release QA gate
         run: |
           twine check --strict dist/*
@@ -43,7 +94,7 @@ jobs:
           DIST_VERSION="$(python -c 'import importlib.metadata as m; print(m.version("liouscope"))')"
           test "$SOURCE_VERSION" = "$DIST_VERSION"
           if [ -z "$RELEASE_TAG" ]; then
-            echo "Manual dry-run verified version=$SOURCE_VERSION at commit=$EVENT_SHA; no publish credentials exist in this job."
+            echo "Dry-run ($GITHUB_EVENT_NAME) verified version=$SOURCE_VERSION at commit=$EVENT_SHA; no publish credentials exist in this job."
             exit 0
           fi
           EXPECTED_VERSION="${RELEASE_TAG#v}"
@@ -52,12 +103,30 @@ jobs:
           HEAD_SHA="$(git rev-parse HEAD)"
           test "$HEAD_SHA" = "$TAG_SHA"
           test "$EVENT_SHA" = "$TAG_SHA"
+      # The digests travel as a job OUTPUT (Actions control plane), not inside
+      # the artifact, so the publish job can check the artifact against a
+      # value the artifact store cannot change -- without starting Python on
+      # the distributions it is about to publish (a wheel may ship a .pth file
+      # whose `import` lines run at every later interpreter start).
+      - name: Record distribution digests
+        id: digests
+        run: |
+          set -euo pipefail
+          (cd dist && sha256sum -- * | LC_ALL=C sort -k2) > "$RUNNER_TEMP/SHA256SUMS"
+          cat "$RUNNER_TEMP/SHA256SUMS"
+          {
+            echo 'sha256sums<<SHA256SUMS_EOF'
+            cat "$RUNNER_TEMP/SHA256SUMS"
+            echo 'SHA256SUMS_EOF'
+          } >> "$GITHUB_OUTPUT"
       - name: Upload verified distributions
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
         with:
           name: pypi-distributions-${{ github.run_id }}
           path: dist/
           if-no-files-found: error
+          # Dry-run artifacts are evidence for a few days; a release keeps 90.
+          retention-days: ${{ github.event_name == 'release' && 90 || 7 }}
 
   publish:
     needs: build
@@ -73,37 +142,25 @@ jobs:
       id-token: write
       attestations: write
       contents: read
+    # Sterile publish job (PyPI Trusted Publishing security model): it holds
+    # the OIDC token, so it runs no repository or distribution code. Source,
+    # version, tag and commit identity are proven in `build`; here only the
+    # bytes are matched against the digests `build` recorded.
     steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803  # v6.1.0
-        with:
-          ref: ${{ github.event.release.tag_name }}
-          fetch-depth: 0
-          persist-credentials: false
-      - name: Set up Python
-        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405  # v6.2.0
-        with:
-          python-version: "3.12"
       - name: Download verified distributions
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093  # v4.3.0
         with:
           name: pypi-distributions-${{ github.run_id }}
           path: dist/
-      - name: Re-verify release identity before upload
+      - name: Match artifact against build digests (exact file set)
         env:
-          RELEASE_TAG: ${{ github.event.release.tag_name }}
-          EVENT_SHA: ${{ github.sha }}
+          SHA256SUMS: ${{ needs.build.outputs.sha256sums }}
         run: |
           set -euo pipefail
-          python -m pip install --force-reinstall --no-deps dist/*.whl
-          SOURCE_VERSION="$(python -c 'import runpy; print(runpy.run_path("src/liouscope/_version.py")["__version__"])')"
-          DIST_VERSION="$(python -c 'import importlib.metadata as m; print(m.version("liouscope"))')"
-          EXPECTED_VERSION="${RELEASE_TAG#v}"
-          TAG_SHA="$(git rev-parse "${RELEASE_TAG}^{commit}")"
-          HEAD_SHA="$(git rev-parse HEAD)"
-          test "$SOURCE_VERSION" = "$DIST_VERSION"
-          test "$SOURCE_VERSION" = "$EXPECTED_VERSION"
-          test "$HEAD_SHA" = "$TAG_SHA"
-          test "$EVENT_SHA" = "$TAG_SHA"
+          test -n "$SHA256SUMS"
+          printf '%s\n' "$SHA256SUMS" > "$RUNNER_TEMP/SHA256SUMS"
+          (cd dist && sha256sum -c --strict -- "$RUNNER_TEMP/SHA256SUMS")
+          diff <(cd dist && ls -A | LC_ALL=C sort) <(awk '{print $2}' "$RUNNER_TEMP/SHA256SUMS" | LC_ALL=C sort)
       - name: Generate build provenance attestation
         uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373  # v4.1.1
         with:

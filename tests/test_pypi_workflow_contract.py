@@ -1,8 +1,14 @@
 """Static safety contract for the PyPI trusted-publishing workflow."""
 
+import re
 from pathlib import Path
 
 _WORKFLOW = Path(__file__).resolve().parents[1] / ".github" / "workflows" / "pypi.yml"
+# Any interpreter or package tool that could start code from dist/ (review of
+# #186: the substring list alone let `python3 -c`, `pip3`, `uv run` through).
+_INTERPRETER_RE = re.compile(
+    r"(?<![\w.-])(python[0-9.]*|pip[0-9.]*|pipx|uvx?|twine|node|ruby|perl|php)(?![\w.-])"
+)
 
 
 def test_manual_dispatch_is_build_only_without_oidc_permission():
@@ -10,8 +16,37 @@ def test_manual_dispatch_is_build_only_without_oidc_permission():
     build_block, publish_block = text.split("\n  publish:\n", maxsplit=1)
     assert "workflow_dispatch:" in build_block
     assert "id-token: write" not in build_block
-    assert "Manual dry-run verified" in build_block
+    assert "Dry-run ($GITHUB_EVENT_NAME) verified" in build_block
+    assert "no publish credentials exist in this job" in build_block
     assert "id-token: write" in publish_block
+
+
+def test_dry_run_triggers_reach_the_build_job_only():
+    """Pull requests and pushes to main exercise the release build, never publish.
+
+    The build job carries no OIDC permission and no deployment environment, and
+    only the release-gated publish job has either; the concurrency group cancels
+    superseded pull-request dry-runs but never a release run.
+    """
+    text = _WORKFLOW.read_text(encoding="utf-8")
+    build_block, publish_block = text.split("\n  publish:\n", maxsplit=1)
+    on_block = text.split("\npermissions:", maxsplit=1)[0]
+    assert "\n  pull_request:\n" in on_block
+    assert "\n  push:\n    branches: [main]\n" in on_block
+    assert "environment:" not in build_block
+    assert "environment:" in publish_block
+    assert "cancel-in-progress: ${{ github.event_name == 'pull_request' }}" in text
+
+
+def test_reproducibility_is_verified_before_qa_and_upload():
+    text = _WORKFLOW.read_text(encoding="utf-8")
+    build_block, _ = text.split("\n  publish:\n", maxsplit=1)
+    assert 'SOURCE_DATE_EPOCH="$(git log -1 --format=%ct HEAD)"' in build_block
+    assert "python -m build --no-isolation --outdir dist" in build_block
+    assert 'python .github/scripts/compare_dists.py dist "$RUNNER_TEMP/rebuild"' in build_block
+    step = build_block.index("Build sdist + wheel twice and verify reproducibility")
+    assert step < build_block.index("Release QA gate")
+    assert step < build_block.index("Upload verified distributions")
 
 
 def test_publish_job_is_release_only_and_feature_gated():
@@ -20,17 +55,51 @@ def test_publish_job_is_release_only_and_feature_gated():
     assert "github.event_name == 'release'" in publish_block
     assert "github.event.action == 'published'" in publish_block
     assert "PYPI_PUBLISH_ENABLED" in publish_block
-    assert "ref: ${{ github.event.release.tag_name }}" in publish_block
+    assert "name: pypi" in publish_block
 
 
 def test_identity_is_checked_before_artifact_handoff_and_upload():
+    """Identity is proven once, in the OIDC-free build job, before the handoff."""
     text = _WORKFLOW.read_text(encoding="utf-8")
-    assert text.count("test \"$SOURCE_VERSION\" = \"$DIST_VERSION\"") == 2
-    assert text.count("test \"$HEAD_SHA\" = \"$TAG_SHA\"") == 2
-    assert text.count("test \"$EVENT_SHA\" = \"$TAG_SHA\"") == 2
-    assert text.index("Verify source, artifact, tag and commit identity") < text.index(
+    build_block, _ = text.split("\n  publish:\n", maxsplit=1)
+    for check in (
+        'test "$SOURCE_VERSION" = "$DIST_VERSION"',
+        'test "$HEAD_SHA" = "$TAG_SHA"',
+        'test "$EVENT_SHA" = "$TAG_SHA"',
+    ):
+        assert text.count(check) == 1
+        assert check in build_block
+    assert build_block.index(
+        "Verify source, artifact, tag and commit identity"
+    ) < build_block.index("Record distribution digests")
+    assert build_block.index("Record distribution digests") < build_block.index(
         "Upload verified distributions"
     )
-    assert text.index("Re-verify release identity before upload") < text.index(
-        "Publish via Trusted Publishing"
-    )
+
+
+def test_publish_job_is_sterile():
+    """The job holding id-token: write runs no repository or distribution code.
+
+    PyPI's Trusted Publishing security model: fetch the build job's artifacts,
+    publish, nothing else. A wheel can install a ``.pth`` file whose ``import``
+    lines run at every later interpreter start, so no Python may start after
+    the distributions are installed in this job -- here, none is installed.
+    """
+    text = _WORKFLOW.read_text(encoding="utf-8")
+    _, publish_block = text.split("\n  publish:\n", maxsplit=1)
+    for forbidden in (
+        "actions/checkout",
+        "actions/setup-python",
+        "pip install",
+        "python ",
+        "runpy",
+    ):
+        assert forbidden not in publish_block, forbidden
+    assert not _INTERPRETER_RE.findall(publish_block), _INTERPRETER_RE.findall(publish_block)
+    assert "needs.build.outputs.sha256sums" in publish_block
+    assert "sha256sum -c --strict" in publish_block
+    # Exact file set: an extra file in the artifact must fail the job.
+    assert "diff <(cd dist && ls -A | LC_ALL=C sort)" in publish_block
+    match = publish_block.index("Match artifact against build digests")
+    assert match < publish_block.index("Generate build provenance attestation")
+    assert match < publish_block.index("Publish via Trusted Publishing")
