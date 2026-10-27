@@ -172,8 +172,10 @@ def initial_state_sensitivity(
     """D18: std of relaxation distance over a Haar-random initial-state ensemble.
 
     The Haar states are evolved as one RHS block. Automatic selection keeps the
-    historical dense formula for small/medium dense systems and only considers
-    the deterministic exponential action beyond the D18-specific crossover.
+    historical dense formula for every system with ``n = d**2 < 64`` and above
+    that compares the two backends' deterministic cost estimates, the action
+    charged at the measured efficiency of a block of this width
+    (:func:`liouscope.numerics.propagation.select_block_backend`, issue #178).
     """
     value, _backend = _initial_state_sensitivity_with_backend(
         L_super,

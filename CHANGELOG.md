@@ -10,16 +10,31 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - **D18 initial-state sensitivity can use one deterministic block exponential
   action instead of materialising a full propagator (issue #178).** The Haar
   ensemble is collected as right-hand-side columns and evolved by
-  `propagate_block_at_time`. The automatic D18 path uses a separate,
-  conservative block crossover (`n >= 512`) because D18 forms only one dense
-  exponential and level-3 BLAS changes the small/medium crossover; below it the
-  historical dense formula and column-wise multiplication order are retained.
-  Beyond it, action still has to satisfy the equivalent-matvec budget/estimate. The sub-step threshold scales as `1 / n_rhs`, matching
+  `propagate_block_at_time`. The sub-step threshold scales as `1 / n_rhs` like
   SciPy's condition (3.13), so multi-column `expm_multiply` stays on the exact
   1-norm branch and does not consume global `np.random` state. The backend is
   persisted as `LepResult.initial_state_backend`; dense/action parity,
   RHS-scaled sub-stepping and global-RNG invariance have dedicated regression
   tests.
+  The automatic choice is a deterministic cost comparison, not a dimension
+  threshold. Both estimates count one-vector matrix-vector products, but the
+  dense path spends them as level-3 BLAS while the action's block products are
+  only as wide as the block. The action is therefore charged
+  `block_action_efficiency(n_rhs) = 1 + 8 / n_rhs` times its counted products.
+  Measured single-threaded on damped TFIM chains and dissipative ladders
+  (n = 64..1024, rate scale 0.3..10, n_rhs = 1/10/30), the observed ratio was
+  2.6-11.5 / 1.2-2.7 / 0.8-1.5 (n >= 144). The rule matched the faster backend
+  in 65 of 72 cases, at 1.2 % total excess time over an oracle (0.0 % at D18's
+  n_rhs = 10) and a worst single case of 1.58x. On an independent hold-out set
+  (random GKSL generators, t = 0.5/2, n_rhs = 5/20) it matched 29 of 32, at
+  3.6 % excess and worst 1.38x.
+  A fixed threshold cannot do this: the same n = 256 block is 4.5x faster by
+  action at rate scale 0.3 and 4.4x slower at scale 10. The `n >= 512` gate
+  first proposed for this change would have left the d = 22 hold-out cases
+  7x slower; an uncharged comparison above n = 64 picked a 5x slower backend
+  in the worst case. Below n = 64 the dense formula is kept regardless, so
+  every anchor and every system with `n < 64` is bit-for-bit the pre-#178 D18.
+  `benchmarks/issue178_d18_crossover.py` reproduces both sets.
 
 - **Eigenvalue-conditioning evidence for the stationary mode, AUDIT ONLY
   (issue #117).** `numerics.conditioning` measures the reciprocal condition

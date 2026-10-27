@@ -105,13 +105,27 @@ TRAJECTORY_BACKENDS: tuple[str, ...] = (BACKEND_DENSE, BACKEND_ACTION)
 # action backend (d = 8). Measured crossover, see the module docstring.
 ACTION_MIN_DIM: int = 64
 
-# D18 forms ONE dense expm and applies it to a small RHS block, unlike
-# the relaxation trajectory which forms one expm per grid point. The crossover
-# is therefore different and non-monotone at small n because level-3 BLAS makes
-# the dense Pade path very efficient. Keep auto conservative until the
-# asymptotic advantage is large; forced expm_action remains available for
-# experiments and sparse/future callers.
-BLOCK_ACTION_MIN_DIM: int = 512
+# Issue #178. D18 forms ONE dense expm and applies it to a small RHS block,
+# unlike the relaxation trajectory, which forms one per grid point. Both cost
+# estimates below are counted in "one-vector matrix-vector products", but the
+# two paths do not spend a counted product at the same speed: the dense path
+# is level-3 BLAS throughout, while the action's block products are as wide as
+# the block -- a single vector is a memory-bound GEMV, a 30-column block is
+# nearly GEMM efficient. The action is therefore charged
+# ``block_action_efficiency(n_rhs) = 1 + _BLOCK_ACTION_OVERHEAD / n_rhs`` times
+# its counted products. Measured single-threaded (OpenBLAS, the convention of
+# #178) on damped TFIM chains and dissipative ladders, n = 64..1024,
+# ``||L|| t`` over 1.5 decades, n_rhs = 1/10/30: the observed ratio was
+# 2.6-11.5 / 1.2-2.7 / 0.8-1.5 (n >= 144), and this rule left 1.2 % total
+# time on the table against an oracle choosing the faster backend per case
+# (0.0 % at D18's n_rhs = 10, worst single case 1.58x). A fixed dimension
+# threshold cannot do this: the same n = 256 TFIM block is 4.5x faster by
+# action at rate scale 0.3 and 4.4x slower at scale 10.
+# ``benchmarks/issue178_d18_crossover.py``
+# reproduces the measurement. Below ``ACTION_MIN_DIM`` the dense formula is
+# kept regardless, so every system with ``n < 64`` -- every anchor -- is
+# bit-for-bit the pre-#178 D18.
+_BLOCK_ACTION_OVERHEAD: float = 8.0
 
 # Default ceiling on the action backend's matrix-vector-product bound. At
 # n = 1024 a benign 80-point trajectory needs ~1.5e3 products, so the ceiling
@@ -480,6 +494,19 @@ def dense_block_matvec_estimate(
     return float((_DENSE_BASE_MATMULS + squarings) * L.shape[0] + n_rhs)
 
 
+def block_action_efficiency(n_rhs: int) -> float:
+    """How much more a counted action product costs than a dense one (issue #178).
+
+    ``1 + _BLOCK_ACTION_OVERHEAD / n_rhs``: about 9 for a single vector, whose
+    product is a memory-bound GEMV, falling towards 1 as the block widens
+    towards level-3 BLAS efficiency. A pure function of the block width, so
+    the backend choice stays a deterministic function of ``(L, t, n_rhs)``.
+    """
+    if n_rhs < 1:
+        raise ValueError("n_rhs must be >= 1")
+    return 1.0 + _BLOCK_ACTION_OVERHEAD / float(n_rhs)
+
+
 def select_block_backend(
     L: np.ndarray | sp.spmatrix,
     t: float,
@@ -503,12 +530,12 @@ def select_block_backend(
             "path is ineligible or over budget"
         )
 
-    # D18 has a different crossover from the multi-point trajectory: it
-    # materialises only one dense expm. Keep auto conservative below the
-    # separately measured block threshold; forced action remains available.
-    if n < BLOCK_ACTION_MIN_DIM or float(t) < 0.0 or not action_affordable:
+    # Issue #178: a deterministic cost comparison, charged at the measured
+    # efficiency of a block of this width (see ``_BLOCK_ACTION_OVERHEAD``).
+    if n < ACTION_MIN_DIM or float(t) < 0.0 or not action_affordable:
         return BACKEND_DENSE, bound
-    if bound <= dense_block_matvec_estimate(L, t, n_rhs):
+    charged = block_action_efficiency(n_rhs) * bound
+    if charged <= dense_block_matvec_estimate(L, t, n_rhs):
         return BACKEND_ACTION, bound
     return BACKEND_DENSE, bound
 

@@ -231,11 +231,53 @@ def test_compute_lep_layer_records_d18_action_backend():
     assert result.initial_state_backend == "expm_action"
 
 
-def test_d18_auto_uses_separate_conservative_block_crossover():
-    """Single-expm D18 must not inherit the trajectory's n=64 crossover."""
-    mid = -0.1 * np.eye(256, dtype=complex)
-    backend_mid, _ = propagation_module.select_block_backend(mid, 1.0, 10)
-    assert backend_mid == "dense_expm"
+def test_d18_auto_keeps_every_system_below_n64_on_the_dense_formula(pauli):
+    """Whatever the cost comparison says, n < 64 stays the pre-#178 D18."""
+    for n_rhs in (1, 10, 30):
+        for scale in (1e-6, 1.0, 1e6):
+            L = scale * build_liouvillian(0.5 * pauli["X"], [pauli["Z"]], [0.3])
+            backend, _ = propagation_module.select_block_backend(L, 1.0, n_rhs)
+            assert backend == "dense_expm"
+
+
+def test_block_action_efficiency_charges_narrow_blocks_more():
+    """Issue #178: a single-vector product is a GEMV, a wide block nearly GEMM."""
+    eff = propagation_module.block_action_efficiency
+    assert eff(1) == pytest.approx(9.0)
+    assert eff(10) == pytest.approx(1.8)
+    assert eff(1) > eff(10) > eff(30) > 1.0
+    with pytest.raises(ValueError):
+        eff(0)
+
+
+def test_d18_auto_follows_the_charged_cost_not_a_dimension():
+    """The same n = 256 picks either backend, by ``||L|| t``, not by n.
+
+    Issue #178: a fixed dimension threshold cannot be right for D18 -- measured
+    single-threaded on a damped TFIM chain (d = 16), the 10-column block was
+    4.5x faster by action at rate scale 0.3 and 4.4x slower at scale 10. The rule
+    compares ``block_action_efficiency(n_rhs) * bound`` with the dense
+    estimate, both deterministic functions of ``(L, t, n_rhs)``.
+    """
+    n = 256
+    mild = np.diag(np.linspace(-0.05, 0.0, n)).astype(complex)
+    stiff = np.diag(np.linspace(-200.0, 0.0, n)).astype(complex)
+    for L, expected in ((mild, "expm_action"), (stiff, "dense_expm")):
+        backend, bound = propagation_module.select_block_backend(L, 1.0, 10)
+        charged = propagation_module.block_action_efficiency(10) * bound
+        estimate = propagation_module.dense_block_matvec_estimate(L, 1.0, 10)
+        assert backend == expected
+        assert (charged <= estimate) == (expected == "expm_action")
+
+    # The efficiency factor is what moves the decision: at this norm a bare
+    # product count would pick the action, the charged one does not.
+    middle = np.diag(np.linspace(-150.0, 0.0, n)).astype(complex)
+    bound = propagation_module.block_action_matvec_bound(middle, 1.0, 1)
+    estimate = propagation_module.dense_block_matvec_estimate(middle, 1.0, 1)
+    assert bound <= estimate
+    assert propagation_module.block_action_efficiency(1) * bound > estimate
+    backend, _ = propagation_module.select_block_backend(middle, 1.0, 1)
+    assert backend == "dense_expm"
 
     large = -0.1 * sp.eye(1024, dtype=complex, format="csr")
     backend_large, _ = propagation_module.select_block_backend(large, 1.0, 10)
