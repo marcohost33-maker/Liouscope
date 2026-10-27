@@ -618,3 +618,37 @@ def test_schur_gate_still_refuses_a_resolvably_different_spectrum() -> None:
             )
             is None
         )
+
+
+@pytest.mark.parametrize("factor", [1.0e-200, 1.0e200, 1.0e300])
+def test_audit_lapack_calls_are_power_of_two_rescaled(factor: float) -> None:
+    """Every rate-valued output follows ``c L``; nothing else moves.
+
+    The CI's Python 3.11 job (SciPy 1.17.1, scipy-openblas 0.3.31) returned
+    the eigenvalues of ``1e200 * L`` near ``1e138`` -- ``xGEEV`` scaled the
+    operator down and failed to scale the eigenvalues back (``DLASCL ...
+    illegal value``) -- and the resolution closure then correctly found that
+    garbage spectrum unresolved. The audit now makes every LAPACK call on an
+    exactly power-of-two rescaled operator, so the build's internal scaling
+    path is never taken.
+    """
+    sigma_x = np.array([[0.0, 1.0], [1.0, 0.0]], dtype=complex)
+    sigma_minus = np.array([[0.0, 1.0], [0.0, 0.0]], dtype=complex)
+    base = build_liouvillian(0.5 * sigma_x, [math.sqrt(0.6) * sigma_minus])
+    scaled = factor * base
+
+    unit, exponent = conditioning_module._unit_scaled(scaled)
+    assert 0.5 <= float(np.max(np.abs(np.r_[unit.real.ravel(), unit.imag.ravel()]))) < 1.0
+    np.testing.assert_array_equal(
+        conditioning_module._ldexp_complex(unit, exponent), scaled
+    )
+
+    a = zero_mode_conditioning(base, zero_tolerance=0.0)
+    b = zero_mode_conditioning(scaled, zero_tolerance=0.0)
+    assert a.verdict == b.verdict
+    assert a.cluster_size == b.cluster_size
+    assert b.reciprocal_condition == pytest.approx(a.reciprocal_condition, rel=1e-8)
+    assert b.separation == pytest.approx(factor * a.separation, rel=1e-8)
+    assert _smallest_singular_value(scaled, factor * (0.1 + 0.2j)) == pytest.approx(
+        factor * _smallest_singular_value(base, 0.1 + 0.2j), rel=1e-10
+    )

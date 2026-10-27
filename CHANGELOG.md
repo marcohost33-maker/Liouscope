@@ -469,6 +469,15 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   was `UNAVAILABLE` in 69 of 100 re-expressions and `CLUSTER_ONLY` in 31. Audit only: no D1-D24
   value, filter, certificate, tier or manifest field reads this evidence; MANIFEST_SCHEMA remains
   unchanged.
+  Every LAPACK call of the audit (`eig`, `schur`, `svdvals`) is now made on the operator rescaled
+  by an exact power of two to unit size, with rate-valued results scaled back by the same factor.
+  The CI's Python 3.11 job (NumPy 2.4.6, SciPy 1.17.1, scipy-openblas 0.3.31) returned the
+  eigenvalues of the packaged two-level generator times `1e200` near `1e138` -- `xGEEV` scaled the
+  operator down and failed to scale the eigenvalues back (`DLASCL ... illegal value`) -- which the
+  old audit did not notice (it compared eigenvectors only) and the resolution closure correctly
+  read as an unresolved spectrum. The rescaling is exact in binary floating point; pinned at
+  `1e-200`, `1e200` and `1e300`, and verified on Python 3.11 at the declared floors
+  (NumPy 2.0.2, SciPy 1.13.1) and on current NumPy/SciPy.
 - **`scipy.linalg.sqrtm`'s extended-precision result no longer reaches NumPy
   linalg (issue #177).** Up to SciPy 1.14, `sqrtm` returns a complex input's
   root as `complex256` (scipy/scipy#18250). `np.linalg.eigvalsh` rejects that

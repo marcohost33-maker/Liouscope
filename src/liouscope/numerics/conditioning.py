@@ -229,6 +229,42 @@ def _unit(v: np.ndarray) -> np.ndarray | None:
     return np.asarray(out, dtype=complex)
 
 
+def _ldexp_complex(values: np.ndarray, exponent: int) -> np.ndarray:
+    """``values * 2**exponent`` for a complex array, exactly (no rounding)."""
+    arr = np.asarray(values)
+    return np.asarray(
+        np.ldexp(np.real(arr), exponent) + 1j * np.ldexp(np.imag(arr), exponent),
+        dtype=complex,
+    )
+
+
+def _unit_scaled(L: np.ndarray) -> tuple[np.ndarray, int]:
+    """``(L * 2**-e, e)`` with the largest component of the result in ``[0.5, 1)``.
+
+    Every LAPACK call in this audit is made on the power-of-two rescaled
+    operator, and every result with the units of a rate is scaled back by the
+    same exact factor; eigenvectors, ``s``, Schur vectors and the Sylvester
+    solution ``R`` of a scaled triangle are scale invariant. Measured on the
+    CI's Python 3.11 job (NumPy 2.4.6, SciPy 1.17.1, scipy-openblas 0.3.31):
+    ``sla.eig`` of the packaged two-level generator times ``1e200`` returned
+    eigenvalues near ``1e138`` -- off by ``bignum / ||A||`` -- with
+    ``DLASCL ... illegal value`` on stderr, because that build's
+    ``xGEEV`` scales an operator above ``~1e146`` down and then fails to scale
+    the eigenvalues back; ``svdvals`` failed the same way. Multiplying by a
+    power of two is exact in binary floating point, so this costs nothing in
+    accuracy and removes the dependency on that internal path.
+    """
+    arr = np.asarray(L)
+    scale = float(
+        max(np.max(np.abs(np.real(arr)), initial=0.0),
+            np.max(np.abs(np.imag(arr)), initial=0.0))
+    )
+    if not np.isfinite(scale) or scale == 0.0:
+        return np.asarray(arr, dtype=complex), 0
+    exponent = int(np.frexp(scale)[1])
+    return _ldexp_complex(arr, -exponent), exponent
+
+
 def eigenvalue_conditioning(
     right_vectors: np.ndarray, left_vectors: np.ndarray
 ) -> np.ndarray:
@@ -348,10 +384,13 @@ def _schur_cluster_projector_condition(
     from the report's is still refused.
     """
     try:
-        T, Q = sla.schur(L, output="complex", check_finite=False)
+        L_unit, exponent = _unit_scaled(L)
+        T, Q = sla.schur(L_unit, output="complex", check_finite=False)
     except (ValueError, np.linalg.LinAlgError, sla.LinAlgError):
         return None
-    w = np.asarray(np.diag(T), dtype=complex)
+    # ``T`` stays in the rescaled units: the Sylvester solution ``R`` of
+    # ``T11 R - R T22 = T12`` is invariant under scaling all three blocks.
+    w = _ldexp_complex(np.diag(T), exponent)
     if w.size == 0 or not np.all(np.isfinite(w)):
         return None
 
@@ -796,13 +835,14 @@ def _agreement_band(audit: np.ndarray, accepted: np.ndarray) -> float:
 
 def _smallest_singular_value(L: np.ndarray, z: complex) -> float:
     """``sigma_min(L - z I)``, or NaN when the SVD does not deliver it."""
-    shifted = np.array(L, dtype=complex, copy=True)
-    shifted.flat[:: shifted.shape[0] + 1] -= z
+    L_unit, exponent = _unit_scaled(L)
+    shifted = np.array(L_unit, dtype=complex, copy=True)
+    shifted.flat[:: shifted.shape[0] + 1] -= _ldexp_complex(np.asarray(z), -exponent)
     try:
         sv = sla.svdvals(shifted, check_finite=False)
     except (ValueError, np.linalg.LinAlgError, sla.LinAlgError):
         return float("nan")
-    smallest = float(sv[-1]) if sv.size else float("nan")
+    smallest = float(np.ldexp(float(sv[-1]), exponent)) if sv.size else float("nan")
     return smallest if np.isfinite(smallest) else float("nan")
 
 
@@ -1087,7 +1127,9 @@ def _measure(
 ) -> ZeroModeConditioning:
     """The measurement itself, always called inside :func:`_quiet_arithmetic`."""
     try:
-        values, left, right = sla.eig(L, left=True, right=True)
+        L_unit, exponent = _unit_scaled(L)
+        values, left, right = sla.eig(L_unit, left=True, right=True)
+        values = _ldexp_complex(values, exponent)
     except (ValueError, np.linalg.LinAlgError, sla.LinAlgError):
         return ZeroModeConditioning.unavailable("eigensolve_failed")
     values = np.asarray(values)
