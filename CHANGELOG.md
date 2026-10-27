@@ -433,19 +433,42 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   at `<= 0.54 * eps * ||L||_F`, and the PR #127 fixture -- a genuine `1e-14` split the audit
   exists to explain -- sits at `18.4` and stays `CONDITIONING_LIMITED` in every basis. Only
   neighbouring pairs are tested directly (a third eigenvalue at the midpoint would otherwise
-  join them), and the SVD is taken only where the first-order estimate
-  `min(s) * |gap| / 2` cannot already decide within `CONDITIONING_AGREEMENT_FACTOR`: on
-  physical generators no SVD is taken and nothing changes (pinned by a counting test). The
-  issue-#168 pair is now `CLUSTER_ONLY` with two modes in both bases at every cutoff below `1`.
-  Two pinned fixtures change, both from a scalar claim to none: a 1e15 diagonal similarity of a
-  random 9x9 and a 1e6-scaled near-defective block. In both, the old scalar evidence was
-  basis-dependent or self-contradictory (on the first, `solver_forward_estimate = 1.22` exceeded
-  the selected eigenvalue `0.608`; on the second, five unitary re-expressions moved `s` from
-  `1.0` to `0.077`). Residual, unchanged by this fix: on a defective pair the independent
-  Schur solve occasionally fails the pre-existing mode-for-mode agreement gate and the audit
-  fails closed as `UNAVAILABLE (schur_cluster_mismatch)` -- 6 of 400 rotation/cutoff pairs,
-  the same rate as before this change. Audit only: no D1-D24 value, filter, certificate, tier
-  or manifest field reads this evidence; MANIFEST_SCHEMA remains unchanged.
+  join them), and the SVD is skipped only where a RIGOROUS bound decides: for a diagonalisable
+  operator the resolvent is `sum_j P_j / (lambda_j - z)` with `||P_j|| = 1/s_j`, so
+  `sigma_min(L - z I) >= 1 / sum_j 1/(s_j |lambda_j - z|)` -- the inequality behind the
+  pseudospectral Bauer-Fike inclusion (Embree & Trefethen 2001; Trefethen & Embree 2005). A point
+  is certified resolved when that bound exceeds the resolution by `CONDITIONING_AGREEMENT_FACTOR`
+  (headroom for the error in the COMPUTED `s_j`, `lambda_j`); a property test over 30 random
+  dense, strongly non-normal and GKSL operators pins `bound <= sigma_min`. The one-term estimate
+  `min(s) * |gap| / 2` used in the first revision of this fix is not a bound -- it overstates
+  `sigma_min` by `50x` beside an order-8 Jordan block -- so it is gone. On physical generators no
+  SVD is taken and nothing changes (pinned by a counting test; single-thread timing of the audit
+  at `d = 4/8/12` matches `main` within noise, the cost being `?geev` and the eigenvector
+  normalisation as before).
+  The Schur agreement gate is aligned with the same notion. It required the independent Schur
+  spectrum to agree with the report's MODE FOR MODE inside the #108 round-off band, which a
+  defective pair cannot meet (`?gees` and `?geev` place its `+-sqrt(eps)` roots differently) and
+  which a strongly non-normal operator's separated modes need not meet either (the `-1` mode of
+  the 1e6-scaled block below came back `4.3e-11` apart against a band of `2.2e-13`). The strict
+  pairing is still tried first and is unchanged; only when it fails, the pairing is retried with
+  "agrees" meaning "the arithmetic cannot separate them" -- for a cluster column against any
+  member of that column's unresolved COMPONENT of the cluster (members the arithmetic does
+  separate are not interchangeable), for a complement column against that mode -- and it must
+  still be a bijection. A Schur spectrum the arithmetic DOES separate from the report's, inside
+  the cluster or out of it, is still refused (pinned). The issue-#168 pair is now `CLUSTER_ONLY`
+  with two modes in every basis at every cutoff below `1`: 1400 of 1400 rotation/cutoff pairs,
+  where the strict gate had answered `UNAVAILABLE (schur_cluster_mismatch)` in 21 -- also
+  reached by cutoffs above the split on `main`. An order-3 Jordan block (`d = 3`) is kept whole as
+  a three-mode cluster in every basis.
+  Two pinned fixtures change. A 1e15 diagonal similarity of a random 9x9 moves from a scalar
+  claim to none: its `solver_forward_estimate = 1.22` exceeded the selected eigenvalue `0.608`,
+  i.e. as written no zero set is resolvable there. A 1e6-scaled near-defective block moves to
+  `CLUSTER_ONLY` with three modes and the exact projector condition `1.0` (the operator is block
+  diagonal) at both of its cutoffs and in every basis: before, the narrow cutoff published scalar
+  evidence whose `s` five unitary re-expressions moved from `1.0` to `0.077`, and the wide cutoff
+  was `UNAVAILABLE` in 69 of 100 re-expressions and `CLUSTER_ONLY` in 31. Audit only: no D1-D24
+  value, filter, certificate, tier or manifest field reads this evidence; MANIFEST_SCHEMA remains
+  unchanged.
 - **`scipy.linalg.sqrtm`'s extended-precision result no longer reaches NumPy
   linalg (issue #177).** Up to SciPy 1.14, `sqrtm` returns a complex input's
   root as `complex256` (scipy/scipy#18250). `np.linalg.eigvalsh` rejects that

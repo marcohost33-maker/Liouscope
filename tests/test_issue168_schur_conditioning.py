@@ -17,10 +17,12 @@ from liouscope.numerics.conditioning import (
     CONDITIONING_CLUSTER_ONLY,
     CONDITIONING_LIMITED,
     CONDITIONING_UNAVAILABLE,
+    _Resolution,
     _scalar_verdict,
     _schur_cluster_projector_condition,
     _smallest_singular_value,
     cluster_conditioning,
+    eigenvalue_conditioning,
     zero_mode_conditioning,
 )
 from liouscope.numerics.linalg import certified_eigvals
@@ -361,16 +363,15 @@ def test_issue183_finite_cutoff_is_unitary_basis_invariant(tol: float) -> None:
 
 
 @pytest.mark.parametrize("seed", range(40))
-def test_issue183_no_rotation_publishes_a_scalar_claim_on_the_defective_pair(
-    seed: int,
-) -> None:
-    """Across rotations: never a scalar claim, and one cluster when measured.
+def test_issue183_every_rotation_reports_the_same_cluster(seed: int) -> None:
+    """Across rotations: one statement, including from the Schur gate.
 
-    ``UNAVAILABLE`` remains possible: the independent Schur solve must
-    reproduce the accepted spectrum inside the round-off band, and on a
-    defective pair it does not always (``schur_cluster_mismatch``). That gate
-    predates #183 and fails closed -- measured at the same rate (6 of 400
-    rotation/cutoff pairs) for cutoffs above the split before this change.
+    The independent Schur solve places a defective pair's ``+-sqrt(eps)`` roots
+    differently from ``?geev``; with a mode-for-mode round-off agreement the
+    projector was refused (``schur_cluster_mismatch``) in 6 of 400
+    rotation/cutoff pairs -- an ``UNAVAILABLE`` in one basis and a
+    ``CLUSTER_ONLY`` in another. Inside a cluster the arithmetic cannot
+    resolve, agreement is now required only to that resolution.
     """
     plain, rotated = _issue168_pair(seed=seed)
     for tol in (0.0, 4.44e-13, 1.0e-9, 1.0e-7):
@@ -378,15 +379,11 @@ def test_issue183_no_rotation_publishes_a_scalar_claim_on_the_defective_pair(
             zero_mode_conditioning(plain, zero_tolerance=tol),
             zero_mode_conditioning(rotated, zero_tolerance=tol),
         ):
-            assert evidence.verdict in (
-                CONDITIONING_CLUSTER_ONLY,
-                CONDITIONING_UNAVAILABLE,
+            assert evidence.verdict == CONDITIONING_CLUSTER_ONLY
+            assert evidence.cluster_size == 2
+            assert evidence.reciprocal_condition == pytest.approx(
+                1.0, rel=2e-10, abs=2e-12
             )
-            if evidence.available:
-                assert evidence.cluster_size == 2
-                assert evidence.reciprocal_condition == pytest.approx(
-                    1.0, rel=2e-10, abs=2e-12
-                )
 
 
 def test_issue183_displaced_defective_pair_is_kept_whole() -> None:
@@ -498,3 +495,126 @@ def test_smallest_singular_value_is_unitarily_invariant_and_scale_covariant() ->
     assert _smallest_singular_value(1.0e200 * rotated, 1.0e200 * z) == pytest.approx(
         1.0e200 * base, rel=1e-12
     )
+
+
+def _resolvent_bound(L: np.ndarray, z: complex) -> float:
+    """``1 / sum_j 1 / (s_j |lambda_j - z|)`` from the eigendecomposition."""
+    values, left, right = sla.eig(L, left=True, right=True)
+    s = eigenvalue_conditioning(right, left)
+    return float(1.0 / np.sum(1.0 / (s * np.abs(values - z))))
+
+
+@pytest.mark.parametrize("seed", range(30))
+def test_resolvent_bound_never_exceeds_sigma_min(seed: int) -> None:
+    """The pre-filter is a PROOF, not an estimate: bound <= sigma_min.
+
+    Random dense, strongly non-normal (scaled upper-triangular) and GKSL
+    operators, probed at points near and far from the spectrum.
+    """
+    rng = np.random.default_rng(seed)
+    n = (4, 9, 16)[seed % 3]
+    kind = (seed // 3) % 3
+    if kind == 0:
+        L = rng.standard_normal((n, n)) + 1j * rng.standard_normal((n, n))
+    elif kind == 1:
+        L = np.triu(rng.standard_normal((n, n)), 1) * 10.0 ** rng.uniform(0, 4)
+        L = L + np.diag(rng.standard_normal(n) + 1j * rng.standard_normal(n))
+    else:
+        d = math.isqrt(n)
+        H = rng.standard_normal((d, d)) + 1j * rng.standard_normal((d, d))
+        jumps = [rng.standard_normal((d, d)) + 1j * rng.standard_normal((d, d))]
+        L = build_liouvillian(H + H.conj().T, jumps)
+    values = np.linalg.eigvals(L)
+    probes = list(rng.standard_normal(6) + 1j * rng.standard_normal(6))
+    probes += [v + 1.0e-3 * (1 + 1j) for v in values[:3]]
+    for z in probes:
+        sigma = float(sla.svdvals(L - z * np.eye(n))[-1])
+        assert _resolvent_bound(L, z) <= sigma * (1.0 + 1.0e-6)
+
+
+def test_first_order_estimate_is_not_a_bound() -> None:
+    """Why the one-term estimate was replaced: it is not a lower bound.
+
+    The first version of the pre-filter skipped the SVD when
+    ``min(s_i, s_j) * |gap| / 2`` exceeded the resolution by 10x. That ignores
+    every OTHER mode's share of the resolvent at the midpoint. Here a
+    well-conditioned pair ``0, 1e-6`` sits beside an order-8 Jordan block at
+    ``0.1`` -- no eigenvalue between them -- and the estimate overstates
+    ``sigma_min`` at their midpoint by ``50x``, beyond its headroom. (In the
+    fixtures examined the closure still reached the right group, transitively
+    through the Jordan modes, whose own ``s ~ 0`` forced a probe; nothing
+    guaranteed that.) The summed resolvent bound stays below ``sigma_min``.
+    """
+    n = 16
+    L = np.zeros((n, n), dtype=complex)
+    L[1, 1] = 1.0e-6
+    for k in range(2, 10):
+        L[k, k] = 0.1
+    for k in range(2, 9):
+        L[k, k + 1] = 1.0
+    for k in range(10, n):
+        L[k, k] = -float(k - 9)
+    values, left, right = sla.eig(L, left=True, right=True)
+    s = eigenvalue_conditioning(right, left)
+    i = int(np.argmin(np.abs(values)))
+    j = int(np.argmin(np.abs(values - 1.0e-6)))
+    mid = 0.5 * (values[i] + values[j])
+    gap = abs(values[i] - values[j])
+    assert not np.any(np.delete(np.abs(values - mid), [i, j]) < 0.5 * gap)
+    one_term = float(min(s[i], s[j]) * gap / 2.0)
+    sigma = float(sla.svdvals(L - mid * np.eye(n))[-1])
+    assert one_term > 10.0 * sigma
+    assert _resolvent_bound(L, mid) <= sigma * (1.0 + 1.0e-6)
+
+
+@pytest.mark.parametrize("seed", range(10))
+def test_issue183_order_three_jordan_block_is_kept_whole(seed: int) -> None:
+    """A defective triple (d = 3) splits into a triangle; it is one cluster."""
+    d = 3
+    n = d * d
+    q = trace_vector(d)
+    basis = _basis_with_first(q)
+    block = np.zeros((n, n), dtype=complex)
+    block[1, 0] = block[2, 1] = 1.0
+    for k in range(3, n):
+        block[k, k] = -float(k - 2)
+    plain = basis @ block @ basis.conj().T
+    rng = np.random.default_rng(seed)
+    V, _ = np.linalg.qr(
+        rng.standard_normal((n - 1, n - 1)) + 1j * rng.standard_normal((n - 1, n - 1))
+    )
+    U = np.outer(q, q.conj()) + basis[:, 1:] @ V @ basis[:, 1:].conj().T
+    rotated = U @ plain @ U.conj().T
+    assert np.sort(np.abs(np.linalg.eigvals(rotated)))[2] > 1.0e-7  # premise
+    for L in (plain, rotated):
+        for tol in (0.0, 1.0e-12, 1.0e-8):
+            evidence = zero_mode_conditioning(L, zero_tolerance=tol)
+            assert evidence.verdict == CONDITIONING_CLUSTER_ONLY
+            assert evidence.cluster_size == 3
+            assert evidence.reciprocal_condition == pytest.approx(1.0, rel=1e-8)
+
+
+def test_schur_gate_still_refuses_a_resolvably_different_spectrum() -> None:
+    """The relaxed pairing is "to the arithmetic's resolution", not "any".
+
+    ``diag(0, 0, -1, -2)`` is normal, so its resolution is ``~eps``: a report
+    claiming ``1e-8`` for the second zero, or ``-2.001`` for the last mode,
+    describes a spectrum the arithmetic separates from this one, and the
+    projector must be refused whether the difference is inside the cluster or
+    in its complement.
+    """
+    T = np.diag([0.0, 0.0, -1.0, -2.0]).astype(complex)
+    for reference in (
+        np.array([0.0, 1.0e-8, -1.0, -2.0], dtype=complex),
+        np.array([0.0, 0.0, -1.0, -2.001], dtype=complex),
+    ):
+        resolution = _Resolution(T, reference, np.ones(4), 0.0)
+        assert (
+            _schur_cluster_projector_condition(
+                T,
+                reference_eigenvalues=reference,
+                cluster_indices=np.array([0, 1], dtype=np.intp),
+                resolution=resolution,
+            )
+            is None
+        )

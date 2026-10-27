@@ -248,7 +248,8 @@ LiouScope is built for paper-grade reproducibility:
   safely distinguish a Jordan block from a genuinely split pair. The report still carries the
   cluster condition, residuals, separation and trace-preservation defect. Before a multi-mode
   projector is reported, the independent Schur spectrum must match the spectrum carried by the
-  report mode-for-mode inside the existing round-off agreement band; otherwise the audit returns
+  report mode-for-mode inside the existing round-off agreement band, or -- where that strict
+  pairing fails -- to the arithmetic's own resolution (issue #183); otherwise the audit returns
   `UNAVAILABLE` rather than conditioning a numerically different cluster. Which modes form the
   conditioned group is closed under the arithmetic's own resolution (issue #183): two eigenvalues
   whose midpoint lies in the pseudospectrum at one unit of round-off,
