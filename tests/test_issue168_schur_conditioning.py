@@ -517,7 +517,10 @@ def test_resolvent_bound_never_exceeds_sigma_min(seed: int) -> None:
     if kind == 0:
         L = rng.standard_normal((n, n)) + 1j * rng.standard_normal((n, n))
     elif kind == 1:
-        L = np.triu(rng.standard_normal((n, n)), 1) * 10.0 ** rng.uniform(0, 4)
+        # Departure from normality up to ~30x: strong, yet sigma_min stays
+        # above the SVD's absolute accuracy somewhere, so the bound is tested
+        # rather than compared against round-off (10**4 left it nowhere).
+        L = np.triu(rng.standard_normal((n, n)), 1) * 10.0 ** rng.uniform(0, 1.5)
         L = L + np.diag(rng.standard_normal(n) + 1j * rng.standard_normal(n))
     else:
         d = math.isqrt(n)
@@ -527,9 +530,23 @@ def test_resolvent_bound_never_exceeds_sigma_min(seed: int) -> None:
     values = np.linalg.eigvals(L)
     probes = list(rng.standard_normal(6) + 1j * rng.standard_normal(6))
     probes += [v + 1.0e-3 * (1 + 1j) for v in values[:3]]
+    # Two points outside the numerical range, where sigma_min >= |z| - ||L||_2
+    # is always resolvable, so no seed leaves the property untested.
+    radius = 2.0 * float(np.linalg.norm(L, 2))
+    probes += [radius * np.exp(1j * t) for t in (0.3, 2.1)]
+    eps = float(np.finfo(float).eps)
+    meaningful = 0
     for z in probes:
-        sigma = float(sla.svdvals(L - z * np.eye(n))[-1])
-        assert _resolvent_bound(L, z) <= sigma * (1.0 + 1.0e-6)
+        shifted = L - z * np.eye(n)
+        sigma = float(sla.svdvals(shifted)[-1])
+        # A backward-stable SVD gets sigma_min to an ABSOLUTE accuracy of
+        # ~n eps ||A||, not a relative one: CI's Python 3.10-3.14 jobs compared
+        # 4.65e-23 against 4.31e-23 on a matrix of norm ~1e4, i.e. two numbers
+        # eleven orders below what either computation resolves.
+        floor = n * eps * float(np.linalg.norm(shifted))
+        assert _resolvent_bound(L, z) <= sigma * (1.0 + 1.0e-6) + floor
+        meaningful += int(sigma > 1.0e3 * floor)
+    assert meaningful >= 1  # the property was tested, not only its noise
 
 
 def test_first_order_estimate_is_not_a_bound() -> None:
@@ -560,7 +577,8 @@ def test_first_order_estimate_is_not_a_bound() -> None:
     j = int(np.argmin(np.abs(values - 1.0e-6)))
     mid = 0.5 * (values[i] + values[j])
     gap = abs(values[i] - values[j])
-    assert not np.any(np.delete(np.abs(values - mid), [i, j]) < 0.5 * gap)
+    others = np.abs(np.delete(values, [i, j]) - mid)
+    assert bool(np.all(others >= 0.5 * gap))  # premise: no eigenvalue between
     one_term = float(min(s[i], s[j]) * gap / 2.0)
     sigma = float(sla.svdvals(L - mid * np.eye(n))[-1])
     assert one_term > 10.0 * sigma
@@ -585,7 +603,8 @@ def test_issue183_order_three_jordan_block_is_kept_whole(seed: int) -> None:
     )
     U = np.outer(q, q.conj()) + basis[:, 1:] @ V @ basis[:, 1:].conj().T
     rotated = U @ plain @ U.conj().T
-    assert np.sort(np.abs(np.linalg.eigvals(rotated)))[2] > 1.0e-7  # premise
+    split = float(np.sort(np.abs(np.linalg.eigvals(rotated)))[2])
+    assert split > 1.0e-7  # premise: the rotation splits the triple
     for L in (plain, rotated):
         for tol in (0.0, 1.0e-12, 1.0e-8):
             evidence = zero_mode_conditioning(L, zero_tolerance=tol)

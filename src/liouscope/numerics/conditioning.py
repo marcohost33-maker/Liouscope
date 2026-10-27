@@ -955,7 +955,7 @@ class _Resolution:
             return True
         mid = 0.5 * complex(a) + 0.5 * complex(b)
         between = np.abs(self.reported - mid) < 0.5 * gap
-        between[list(skip)] = False
+        between[np.asarray(skip, dtype=np.intp)] = False
         if np.any(between):
             return False
         if bool(self._certified_resolved(np.asarray([mid]))[0]):
@@ -984,7 +984,7 @@ class _Resolution:
             # joined through it. Connection via that mode is still found,
             # transitively, through the two pairs it forms with the ends.
             between = np.abs(values - mids[k]) < 0.5 * gap[k]
-            between[[anchor, j]] = False
+            between[np.asarray((anchor, j), dtype=np.intp)] = False
             if np.any(between):
                 continue
             hit[k] = self._point_in_pseudospectrum(mids[k])
