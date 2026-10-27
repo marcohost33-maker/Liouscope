@@ -478,6 +478,15 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   read as an unresolved spectrum. The rescaling is exact in binary floating point; pinned at
   `1e-200`, `1e200` and `1e300`, and verified on Python 3.11 at the declared floors
   (NumPy 2.0.2, SciPy 1.13.1) and on current NumPy/SciPy.
+  The resolution test is bounded. Healthy generators -- including non-reciprocal (skin-effect)
+  hopping chains up to `d = 12` -- spend no SVD, but an adversarial `D A D^-1` with a `1e8` spread
+  leaves the resolvent bound unable to certify anything and spent 251 SVDs at `n = 64`, a count
+  that grows with `n`; since the spectral layer runs this audit by default, an audit may now spend
+  at most `_SVD_BUDGET = 64` evaluations (a compute budget, deterministic, about a fixed multiple
+  of the audit's own eigendecomposition) and otherwise ends as `UNAVAILABLE`
+  (`resolution_budget_exhausted`), fail-closed. The whole test suite peaks at 20, the 1400-pair
+  rotation sweep at 3. Measured SVDs are also reused: `sigma_min(L - z I)` is 1-Lipschitz in `z`,
+  so a probe settles every nearby point it decides either way (pinned against fresh SVDs).
 - **`scipy.linalg.sqrtm`'s extended-precision result no longer reaches NumPy
   linalg (issue #177).** Up to SciPy 1.14, `sqrtm` returns a complex input's
   root as `complex256` (scipy/scipy#18250). `np.linalg.eigvalsh` rejects that

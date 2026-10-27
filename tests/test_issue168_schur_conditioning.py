@@ -671,3 +671,57 @@ def test_audit_lapack_calls_are_power_of_two_rescaled(factor: float) -> None:
     assert _smallest_singular_value(scaled, factor * (0.1 + 0.2j)) == pytest.approx(
         factor * _smallest_singular_value(base, 0.1 + 0.2j), rel=1e-10
     )
+
+
+def test_resolution_svd_budget_bounds_the_audit_and_fails_closed() -> None:
+    """A strongly non-normal operator ends as UNAVAILABLE, never as a hang.
+
+    ``D A D^-1`` with a ``1e8`` spread leaves the resolvent bound unable to
+    certify anything, so every candidate needs an SVD; the count grows with
+    ``n`` (251 at ``n = 64`` without a budget). The audit runs by default in
+    the spectral layer, so it stops at ``_SVD_BUDGET`` and says so.
+    """
+    n = 64
+    rng = np.random.default_rng(n)
+    A = rng.standard_normal((n, n)) + 1j * rng.standard_normal((n, n))
+    D = np.diag(np.logspace(0.0, 8.0, n))
+    M = D @ A @ np.linalg.inv(D)
+
+    calls: list[complex] = []
+    original = conditioning_module._smallest_singular_value
+
+    def counting(L: np.ndarray, z: complex) -> float:
+        calls.append(z)
+        return original(L, z)
+
+    conditioning_module._smallest_singular_value = counting
+    try:
+        evidence = zero_mode_conditioning(M, zero_tolerance=1.0)
+    finally:
+        conditioning_module._smallest_singular_value = original
+    assert evidence.verdict == CONDITIONING_UNAVAILABLE
+    assert evidence.reason == "resolution_budget_exhausted"
+    assert len(calls) <= conditioning_module._Resolution._SVD_BUDGET
+
+
+@pytest.mark.parametrize("seed", range(5))
+def test_lipschitz_reuse_never_contradicts_a_direct_svd(seed: int) -> None:
+    """Reused decisions agree with the SVD they replace.
+
+    ``sigma_min(L - z I)`` is 1-Lipschitz in ``z``, so an earlier probe may
+    decide a nearby point. Every decision the cache makes is checked here
+    against a fresh SVD at the same point.
+    """
+    rng = np.random.default_rng(seed)
+    n = 9
+    L = np.triu(rng.standard_normal((n, n)), 1) * 3.0 + np.diag(
+        rng.standard_normal(n) + 1j * rng.standard_normal(n)
+    )
+    values = np.linalg.eigvals(L)
+    resolution = _Resolution(L, values, np.ones(n), 0.0)
+    resolution.delta = 0.05 * float(np.linalg.norm(L))  # wide enough to matter
+    for z in values[0] + 0.3 * (rng.standard_normal(40) + 1j * rng.standard_normal(40)):
+        decided = resolution._point_in_pseudospectrum(z)
+        direct = not (_smallest_singular_value(L, z) > resolution.delta)
+        assert decided == direct
+    assert resolution.svd_calls < 40  # the reuse actually decided some points

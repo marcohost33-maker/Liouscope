@@ -846,6 +846,10 @@ def _smallest_singular_value(L: np.ndarray, z: complex) -> float:
     return smallest if np.isfinite(smallest) else float("nan")
 
 
+class _ResolutionBudgetExhaustedError(Exception):
+    """Raised inside the audit when :attr:`_Resolution._SVD_BUDGET` is spent."""
+
+
 class _Resolution:
     """Which computed eigenvalues the arithmetic can tell apart (issue #183).
 
@@ -898,6 +902,18 @@ class _Resolution:
     #: large superoperator does not materialise an ``n x n`` distance matrix.
     _CHUNK_ENTRIES = 1 << 22
 
+    #: How many ``sigma_min`` evaluations one audit may spend. A compute budget,
+    #: not a numerical threshold: no answer depends on it except whether one is
+    #: given. Each evaluation is an ``O(n^3)`` SVD, the same order as the audit's
+    #: own eigendecomposition, so a constant keeps the worst case a fixed
+    #: multiple of that solve at every size and is deterministic, unlike a
+    #: wall-clock limit. Healthy generators spend none; an adversarial
+    #: ``D A D^-1`` with a ``1e8`` spread spent 251 at ``n = 64`` and the count
+    #: grows with ``n``, so the default ``spectral`` layer, which runs this audit
+    #: on every call, needs the bound. Exhausting it ends the audit as
+    #: ``UNAVAILABLE`` (``resolution_budget_exhausted``) -- fail-closed, no claim.
+    _SVD_BUDGET = 64
+
     def __init__(
         self,
         L: np.ndarray,
@@ -913,6 +929,9 @@ class _Resolution:
         self.band = float(band)
         self.delta = float(np.finfo(float).eps) * scaled_euclidean_norm(L)
         self.finite = bool(np.isfinite(self.delta))
+        self.svd_calls = 0
+        self._probe_points: list[complex] = []
+        self._probe_sigmas: list[float] = []
 
     def _certified_resolved(self, points: np.ndarray) -> np.ndarray:
         """Where ``sigma_min(L - z I) > delta`` is PROVEN by the resolvent bound.
@@ -936,7 +955,31 @@ class _Resolution:
         return out
 
     def _point_in_pseudospectrum(self, z: complex) -> bool:
-        sigma = _smallest_singular_value(self.L, complex(z))
+        """``sigma_min(L - z I) <= delta``, reusing earlier SVDs where they decide.
+
+        ``sigma_min(L - z I)`` is 1-Lipschitz in ``z`` (Trefethen & Embree,
+        *Spectra and Pseudospectra*, 2005), so one measured ``sigma`` at ``w``
+        settles every ``z`` with ``sigma - |z - w| > delta`` (outside) or
+        ``sigma + |z - w| <= delta`` (inside) without another SVD. Midpoints of
+        neighbouring pairs cluster, so this is what keeps a strongly non-normal
+        operator inside :attr:`_SVD_BUDGET`. A NaN ``sigma`` decides nothing and
+        reads as inside (fail-closed).
+        """
+        z = complex(z)
+        if self._probe_points:
+            dist = np.abs(np.asarray(self._probe_points) - z)
+            sig = np.asarray(self._probe_sigmas)
+            if bool(np.any(sig - dist > self.delta)):
+                return False
+            if bool(np.any(sig + dist <= self.delta)):
+                return True
+        if self.svd_calls >= self._SVD_BUDGET:
+            raise _ResolutionBudgetExhaustedError
+        self.svd_calls += 1
+        sigma = _smallest_singular_value(self.L, z)
+        if np.isfinite(sigma):
+            self._probe_points.append(z)
+            self._probe_sigmas.append(float(sigma))
         return not (sigma > self.delta)
 
     def unresolved(
@@ -1288,7 +1331,10 @@ def _measure(
     # :class:`_Resolution` -- so a pair the arithmetic cannot
     # separate is conditioned whole whichever basis it was written in, exactly
     # as the plain basis already did.
-    cluster = resolution.close(cluster)
+    try:
+        cluster = resolution.close(cluster)
+    except _ResolutionBudgetExhaustedError:
+        return ZeroModeConditioning.unavailable("resolution_budget_exhausted")
 
     stationary = int(cluster[int(np.argmin(magnitudes[cluster]))])
 
@@ -1300,12 +1346,15 @@ def _measure(
         # Schur-projector conditioning is reserved for size > 1.
         s_cluster = float(per_mode[stationary])
     else:
-        schur_condition = _schur_cluster_projector_condition(
-            L,
-            reference_eigenvalues=reported,
-            cluster_indices=cluster,
-            resolution=resolution,
-        )
+        try:
+            schur_condition = _schur_cluster_projector_condition(
+                L,
+                reference_eigenvalues=reported,
+                cluster_indices=cluster,
+                resolution=resolution,
+            )
+        except _ResolutionBudgetExhaustedError:
+            return ZeroModeConditioning.unavailable("resolution_budget_exhausted")
         if schur_condition is None:
             return ZeroModeConditioning.unavailable("schur_cluster_mismatch")
         s_cluster = float(schur_condition)
