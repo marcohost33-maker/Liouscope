@@ -35,6 +35,17 @@ _DENSE_NORM_CUTOFF = 128
 _LANCZOS_MAX_STEPS = 128
 _LANCZOS_RTOL = 1.0e-10
 _LANCZOS_CHECK_EVERY = 4
+# A Ritz residual certifies SOME eigenvalue. If the start vector carries
+# (almost) no component of the dominant eigenvector -- e.g. it lies in an
+# invariant subspace of subdominant modes -- the residual is small for the
+# wrong one (PR #189 review). Before a Ritz value is accepted, an independent
+# probe takes this many power steps; a Rayleigh quotient above the Ritz value
+# by more than the relative margin means a larger mode was missed, and the
+# point is recomputed by the dense SVD. The margin sits far above rounding of
+# the Rayleigh quotient, so a missed mode closer than it to the accepted value
+# is not detected -- the value is then wrong by at most that margin.
+_PROBE_STEPS = 3
+_PROBE_RTOL = 1.0e-8
 _DENSE_SOLVE_CUTOFF = 256
 # Power-iteration budget for the largest singular value of the resolvent. 200
 # lets moderately clustered top singular values (sigma_2/sigma_1 >~ 0.98)
@@ -163,36 +174,75 @@ def _lanczos_top_eigenvalue(
     residual ``beta_k |y_k|`` is at most ``rtol`` times that value -- a Ritz
     value of a Hermitian operator lies within its residual of an eigenvalue,
     and never above the largest one -- or once the Krylov space is invariant
-    (``beta = 0``). Returns ``None`` when the budget runs out or a product is
-    not finite.
+    (``beta = 0``). Returns ``None`` when the budget runs out or any
+    intermediate quantity is not finite.
+
+    Floating-point exceptions are suppressed and replaced by explicit
+    finiteness checks (PR #189 review): for a strongly non-normal operator the
+    products stay finite while a sum of squares such as ``||w||`` overflows,
+    and that must send the point to the dense fallback, not raise.
     """
     n = start.size
     k_max = min(max_steps, n)
     basis = np.empty((n, k_max), dtype=complex, order="F")
     tri = np.zeros((k_max, k_max))
     basis[:, 0] = start
-    for k in range(k_max):
-        w = apply(basis[:, k])
-        if not np.all(np.isfinite(w)):
-            return None
-        span = basis[:, : k + 1]
-        coeff = span.conj().T @ w
-        w = w - span @ coeff
-        again = span.conj().T @ w
-        w = w - span @ again
-        tri[k, k] = float(np.real(coeff[k] + again[k]))
-        beta = float(np.linalg.norm(w))
-        if (k + 1) % check_every == 0 or k + 1 == k_max or beta == 0.0:
-            values, vectors = np.linalg.eigh(tri[: k + 1, : k + 1])
-            theta = float(values[-1])
-            if theta <= 0.0:
+    with np.errstate(over="ignore", invalid="ignore", divide="ignore"):
+        for k in range(k_max):
+            w = apply(basis[:, k])
+            if not np.all(np.isfinite(w)):
                 return None
-            if beta * abs(vectors[-1, -1]) <= rtol * theta:
-                return theta
-        if k + 1 < k_max:
-            basis[:, k + 1] = w / beta
-            tri[k, k + 1] = tri[k + 1, k] = beta
+            span = basis[:, : k + 1]
+            coeff = span.conj().T @ w
+            w = w - span @ coeff
+            again = span.conj().T @ w
+            w = w - span @ again
+            tri[k, k] = float(np.real(coeff[k] + again[k]))
+            beta = float(np.linalg.norm(w))
+            if not (np.isfinite(beta) and np.isfinite(tri[k, k])):
+                return None
+            if (k + 1) % check_every == 0 or k + 1 == k_max or beta == 0.0:
+                values, vectors = np.linalg.eigh(tri[: k + 1, : k + 1])
+                theta = float(values[-1])
+                if not np.isfinite(theta) or theta <= 0.0:
+                    return None
+                if beta * abs(vectors[-1, -1]) <= rtol * theta:
+                    return theta
+            if k + 1 < k_max:
+                basis[:, k + 1] = w / beta
+                tri[k, k + 1] = tri[k + 1, k] = beta
     return None
+
+
+def _probe_finds_larger_mode(
+    apply: Callable[[np.ndarray], np.ndarray],
+    probe: np.ndarray,
+    theta: float,
+    *,
+    steps: int,
+    rtol: float,
+) -> bool:
+    """Whether power steps from ``probe`` exceed the accepted Ritz value ``theta``.
+
+    Every Rayleigh quotient of a Hermitian operator is at most its largest
+    eigenvalue, so a quotient above ``theta * (1 + rtol)`` proves that Lanczos
+    converged to a smaller mode. Non-finite intermediates also count as
+    "found", which sends the point to the dense fallback.
+    """
+    v = probe
+    with np.errstate(over="ignore", invalid="ignore", divide="ignore"):
+        for _ in range(steps):
+            w = apply(v)
+            if not np.all(np.isfinite(w)):
+                return True
+            quotient = float(np.real(np.vdot(v, w)))
+            norm = float(np.linalg.norm(w))
+            if not (np.isfinite(quotient) and np.isfinite(norm)) or norm == 0.0:
+                return True
+            if quotient > theta * (1.0 + rtol):
+                return True
+            v = w / norm
+    return False
 
 
 class ShiftedSchurResolvent:
@@ -212,17 +262,22 @@ class ShiftedSchurResolvent:
     so ``sigma(zI - L) = sigma(zI - T)``, and the smallest one is the inverse
     square root of the largest eigenvalue of ``(zI - T)^{-1} (zI - T)^{-H}``,
     which inverse Lanczos reaches with two triangular solves, ``O(n^2)``, per
-    step. A point whose Krylov iteration does not converge within
-    :data:`_LANCZOS_MAX_STEPS` is recomputed by a dense SVD of the shifted
-    triangle, so every returned value is converged, not a capped lower bound,
-    and no :class:`ResolventConvergenceWarning` is emitted.
+    step. A converged Ritz value is accepted only if an independent probe
+    finds no larger Rayleigh quotient (:data:`_PROBE_STEPS` power steps). A
+    point that fails either test, does not converge within
+    :data:`_LANCZOS_MAX_STEPS`, or meets a non-finite intermediate is
+    recomputed by a dense SVD of the shifted triangle: no value is a capped
+    lower bound, and no :class:`ResolventConvergenceWarning` is emitted. Like
+    any Krylov method with deterministic start vectors, a dominant mode
+    orthogonal to BOTH fixed vectors would go unnoticed; physical generators
+    do not single out those two random directions.
 
     The operator is rescaled by an exact power of two before the Schur
     decomposition and the result scaled back, for the same LAPACK reason as in
     :func:`liouscope.numerics.conditioning._unit_scaled` (issue #183). The
-    Krylov start vector comes from a private ``default_rng(0)``; the global
-    NumPy random state is never touched, and each value is a pure function of
-    ``(L, z)``.
+    Krylov start vector and the probe come from a private ``default_rng(0)``;
+    the global NumPy random state is never touched, and each value is a pure
+    function of ``(L, z)``.
     """
 
     def __init__(self, L: np.ndarray) -> None:
@@ -235,6 +290,8 @@ class ShiftedSchurResolvent:
         rng = np.random.default_rng(0)
         start = rng.standard_normal(self.n) + 1j * rng.standard_normal(self.n)
         self._start = start / np.linalg.norm(start)
+        probe = rng.standard_normal(self.n) + 1j * rng.standard_normal(self.n)
+        self._probe = probe / np.linalg.norm(probe)
         self.evaluations = 0
         self.dense_fallbacks = 0
 
@@ -264,6 +321,10 @@ class ShiftedSchurResolvent:
             rtol=_LANCZOS_RTOL,
             check_every=_LANCZOS_CHECK_EVERY,
         )
+        if theta is not None and _probe_finds_larger_mode(
+            apply, self._probe, theta, steps=_PROBE_STEPS, rtol=_PROBE_RTOL
+        ):
+            theta = None
         if theta is None:
             self.dense_fallbacks += 1
             smallest = float(sla.svdvals(A)[-1])

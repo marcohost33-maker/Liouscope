@@ -242,3 +242,52 @@ def test_each_value_is_a_function_of_the_operator_and_the_point_only():
     fresh = [ShiftedSchurResolvent(L).sigma_min(z) for z in points[:3]]
     assert forward == backward
     assert fresh == forward[:3]
+
+
+def test_an_overflowing_krylov_norm_falls_back_instead_of_raising():
+    # PR #189 review: for a Jordan-like operator the triangular solves stay
+    # finite while ||w||^2 overflows. That raised under the repository's
+    # warnings-as-errors filter; it must reach the dense fallback instead.
+    n = CUTOFF + 16
+    L = -np.eye(n) + np.diag(np.ones(n - 1), 1)
+    ref = _dense_sigma_min(L, -0.8)
+    schur = ShiftedSchurResolvent(L)
+    assert schur.sigma_min(-0.8) == pytest.approx(ref, rel=1e-9)
+    assert schur.dense_fallbacks == 1
+
+
+def _operator_hiding_its_dominant_mode(n: int) -> np.ndarray:
+    """Upper-triangular ``T`` whose ``(-T)^{-1}(-T)^{-H}`` has eigenvalues
+    ``10, 2, 1.7, 1.4, 1.1, 1, ...`` with the fixed Krylov start inside the
+    invariant subspace of ``2 .. 1.1`` (PR #189 review)."""
+    start = ShiftedSchurResolvent(-np.diag(np.arange(1.0, n + 1)))._start
+    rng = np.random.default_rng(1)
+    X = np.column_stack(
+        [start] + [rng.standard_normal(n) + 1j * rng.standard_normal(n) for _ in range(n - 1)]
+    )
+    Q, _ = np.linalg.qr(X)
+    W, _ = np.linalg.qr(rng.standard_normal((4, 4)) + 1j * rng.standard_normal((4, 4)))
+    Q[:, :4] = Q[:, :4] @ W
+    lam = np.ones(n)
+    lam[:5] = [2.0, 1.7, 1.4, 1.1, 10.0]
+    M = (Q * lam) @ Q.conj().T
+    flip = np.eye(n)[::-1]
+    B = flip @ np.linalg.cholesky(flip @ M @ flip) @ flip  # upper, B B^H = M
+    return -np.triu(np.linalg.inv(B))
+
+
+def test_a_dominant_mode_hidden_from_the_krylov_start_is_caught_by_the_probe():
+    # Lanczos alone certifies 2 (sigma = 0.707) by a small residual; the probe
+    # sees a larger Rayleigh quotient and the dense SVD returns 1/sqrt(10).
+    T = _operator_hiding_its_dominant_mode(CUTOFF + 16)
+    schur = ShiftedSchurResolvent(T)
+    assert schur.sigma_min(0.0) == pytest.approx(1.0 / np.sqrt(10.0), rel=1e-9)
+    assert schur.dense_fallbacks == 1
+
+
+def test_the_probe_raises_no_false_alarm_on_physical_generators():
+    L = _ladder(12)
+    schur = ShiftedSchurResolvent(L)
+    for z in _probe_points(L):
+        schur.sigma_min(z)
+    assert schur.dense_fallbacks == 0

@@ -309,8 +309,15 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     invariant, and the smallest one comes from inverse Lanczos with full
     reorthogonalisation on `(zI - T)^{-1} (zI - T)^{-H}`, i.e. two triangular
     solves per step;
-  - a point that does not converge in 128 steps is recomputed by a dense SVD of
-    the shifted triangle, so every value is converged, never a capped bound.
+  - a converged Ritz value is accepted only if an independent fixed probe
+    finds no larger Rayleigh quotient in three power steps (a Ritz residual
+    alone can certify a subdominant mode when the start vector misses the
+    dominant one; PR #189 review);
+  - a point that fails that check, does not converge in 128 steps, or meets a
+    non-finite intermediate (e.g. an overflowing Krylov norm for a Jordan-like
+    operator) is recomputed by a dense SVD of the shifted triangle, so no value
+    is a capped bound. A dominant mode orthogonal to both fixed vectors would
+    still go unnoticed, as with any deterministic Krylov start.
 
   Result: `diagnose()` at `d = 16` takes **19.2 s instead of 81.5 s**, and the
   five sweeps the benchmark times (D10, D10b, both D11b curves, the D13
