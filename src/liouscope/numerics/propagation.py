@@ -444,7 +444,13 @@ def _block_substep_count(scaled_norm: float, n_rhs: int) -> float:
     threshold = _SUBSTEP_NORM / n_rhs
     if threshold == 0.0:
         return math.inf
-    return max(1.0, float(math.ceil(scaled_norm / threshold)))
+    # Dividing by threshold multiplies by n_rhs, so a finite norm near the
+    # float64 limit can overflow the quotient; ceil(inf) would raise. That
+    # block is simply unaffordable, and the dense backend takes it.
+    quotient = scaled_norm / threshold
+    if not math.isfinite(quotient):
+        return math.inf
+    return max(1.0, float(math.ceil(quotient)))
 
 
 def block_action_matvec_bound(

@@ -10,6 +10,7 @@ import scipy.sparse as sp
 import liouscope.numerics.propagation as propagation_module
 from liouscope import build_liouvillian, steady_state
 from liouscope.diagnostics.lep import (
+    _initial_state_sensitivity_with_backend,
     compute_lep_layer,
     gap_rate_consistency,
     initial_state_sensitivity,
@@ -248,6 +249,19 @@ def test_block_action_efficiency_charges_narrow_blocks_more():
     assert eff(1) > eff(10) > eff(30) > 1.0
     with pytest.raises(ValueError):
         eff(0)
+
+
+def test_a_block_substep_count_that_overflows_is_unaffordable_not_an_error():
+    """PR #188 review: ``norm / (threshold / n_rhs)`` overflowed to inf for a
+    finite norm near the float64 limit, and ``ceil(inf)`` raised, which also
+    broke the dense backend because its action bound is computed first."""
+    assert propagation_module._block_substep_count(1.6e308, 100) == float("inf")
+    L = np.diag([0.0, 1.6e308j, -1.6e308j, 0.0])
+    value, backend = _initial_state_sensitivity_with_backend(
+        L, np.eye(2) / 2, n_samples=100
+    )
+    assert backend == propagation_module.BACKEND_DENSE
+    assert np.isfinite(value)
 
 
 def test_d18_auto_follows_the_charged_cost_not_a_dimension():
