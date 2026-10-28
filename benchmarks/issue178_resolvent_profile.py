@@ -35,7 +35,6 @@ from typing import ClassVar
 
 import numpy as np
 
-import liouscope.diagnostics.nonnormality as nonnormality
 import liouscope.numerics.resolvent as resolvent
 from liouscope.core.lindblad import build_liouvillian
 from liouscope.diagnostics.nonnormality import kreiss_constant, kreiss_grid_lower_bound
@@ -98,7 +97,6 @@ def main() -> None:
     args = parser.parse_args()
 
     resolvent.ShiftedSchurResolvent = _Counting  # type: ignore[misc]
-    nonnormality.ShiftedSchurResolvent = _Counting  # type: ignore[misc]
     cutoff = resolvent._DENSE_NORM_CUTOFF
     for n_sites in args.sites:
         L = tfim(n_sites)
@@ -114,11 +112,11 @@ def main() -> None:
             if args.no_dense or n <= cutoff:
                 print(f"{name:26s} {t_new:7.2f}s {'-':>8s} {'-':>12s} {evals:6d} {fallbacks:5d}")
                 continue
-            resolvent._DENSE_NORM_CUTOFF = nonnormality._DENSE_NORM_CUTOFF = 10**9
+            resolvent._DENSE_NORM_CUTOFF = 10**9
             try:
                 ref, t_dense = _timed(fn)
             finally:
-                resolvent._DENSE_NORM_CUTOFF = nonnormality._DENSE_NORM_CUTOFF = cutoff
+                resolvent._DENSE_NORM_CUTOFF = cutoff
             dev = float(np.max(np.abs(value - ref) / np.maximum(np.abs(ref), 1e-300)))
             print(f"{name:26s} {t_new:7.2f}s {t_dense:7.2f}s {dev:12.1e} {evals:6d} {fallbacks:5d}")
 

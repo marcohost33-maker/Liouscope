@@ -22,7 +22,6 @@ import numpy as np
 import pytest
 import scipy.linalg as sla
 
-import liouscope.diagnostics.nonnormality as nonnormality
 import liouscope.numerics.resolvent as resolvent
 from liouscope.core.lindblad import build_liouvillian
 from liouscope.diagnostics.nonnormality import kreiss_constant, kreiss_grid_lower_bound
@@ -32,13 +31,13 @@ from liouscope.diagnostics.resolvent import (
     resolvent_peak_curve_scaled,
 )
 from liouscope.numerics.pseudospec import pseudospectral_radius, pseudospectrum_extent
-from liouscope.numerics.resolvent import (
-    ShiftedSchurResolvent,
-    resolvent_norm_evaluator,
-    sigma_min_evaluator,
-)
 
+# Module attributes are read at call time, so monkeypatching the module (the
+# cutoff, the Schur class, the Krylov budget) reaches every consumer.
 CUTOFF = resolvent._DENSE_NORM_CUTOFF
+ShiftedSchurResolvent = resolvent.ShiftedSchurResolvent
+resolvent_norm_evaluator = resolvent.resolvent_norm_evaluator
+sigma_min_evaluator = resolvent.sigma_min_evaluator
 
 
 def _random_gksl(d: int, seed: int) -> np.ndarray:
@@ -100,7 +99,6 @@ def test_nothing_below_the_cutoff_builds_a_schur_form(monkeypatch):
         raise AssertionError("ShiftedSchurResolvent must not be built for n <= 128")
 
     monkeypatch.setattr(resolvent, "ShiftedSchurResolvent", refuse)
-    monkeypatch.setattr(nonnormality, "ShiftedSchurResolvent", refuse)
     L = _random_gksl(8, 2)
     assert L.shape[0] <= CUTOFF
     compute_resolvent_layer(L)
@@ -138,7 +136,6 @@ def test_every_consumer_above_the_cutoff_matches_its_dense_formula(monkeypatch):
 
     fast = measure()
     monkeypatch.setattr(resolvent, "_DENSE_NORM_CUTOFF", 10**9)
-    monkeypatch.setattr(nonnormality, "_DENSE_NORM_CUTOFF", 10**9)
     dense = measure()
     np.testing.assert_allclose(fast["peak"], dense["peak"], rtol=1e-9)
     np.testing.assert_allclose(fast["peak_scaled"], dense["peak_scaled"], rtol=1e-9)

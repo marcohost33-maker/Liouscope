@@ -60,11 +60,7 @@ import scipy.linalg as sla
 from .._consts import EPS_DIV
 from .._types import KreissGridEstimate, NonNormalityResult
 from ..numerics.linalg import certified_eig, certified_eigvals, require_finite_square_2d
-from ..numerics.resolvent import (
-    _DENSE_NORM_CUTOFF,
-    ShiftedSchurResolvent,
-    resolvent_norm_evaluator,
-)
+from ..numerics.resolvent import resolvent_norm_evaluator
 from ..numerics.scale import rate_scale
 
 # Fail-closed ceiling for the dimensionless Henrici index: mathematically
@@ -386,9 +382,9 @@ def kreiss_constant(
     # Default n_omega ist ungerade -> Gitter enthaelt omega=0 (wo der sup oft sitzt;
     # ein gerades Gitter springt 0 ueber). Explizite n_omega bleiben respektiert.
     omegas = np.linspace(-omega_max, omega_max, n_omega)
-    n = L_super.shape[0]
-    eye = np.eye(n, dtype=complex)
-    schur = ShiftedSchurResolvent(L_super) if n > _DENSE_NORM_CUTOFF else None
+    # For n <= 128 the evaluator is resolvent_norm's dense branch, the same
+    # solve(zI - L, I) and largest singular value this loop always computed.
+    norm_at = resolvent_norm_evaluator(L_super)
 
     K = 0.0
     for sigma in sigmas:
@@ -399,11 +395,7 @@ def kreiss_constant(
         for omega in omegas:
             z = shift + 1j * omega
             try:
-                if schur is not None:
-                    norm = schur.norm(z)
-                else:
-                    Ainv = sla.solve(z * eye - L_super, eye)
-                    norm = float(sla.svdvals(Ainv)[0])
+                norm = norm_at(z)
             except np.linalg.LinAlgError:
                 continue
             cand = float(sigma * norm)
