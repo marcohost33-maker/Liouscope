@@ -211,6 +211,16 @@ abstract: >-
 # (xtol = 1e-8; <= 3e-8 relative measured). d < 8 (every anchor fixture) is
 # unchanged bit-for-bit. It must be described as a numerical-method change,
 # not as a change of any diagnostic's definition.
+# Also pending for the next cut: D18 (initial-state sensitivity) may evolve its
+# Haar block by the same exponential action instead of one materialised
+# expm(L t) (#178 item 1). The backend is a deterministic function of
+# (L, t, n_rhs) -- n = d**2 < 64 always dense, above that the action's counted
+# products charged 1 + 8 / n_rhs against the dense estimate -- and is recorded
+# in LepResult.initial_state_backend; condition (3.13) is scaled by 1/n_rhs so
+# the global NumPy random state stays untouched. Every n < 64 system (every
+# anchor fixture) is unchanged bit-for-bit; above that the two backends agree
+# within the existing dense/action tolerance tests. It must be described as a
+# numerical-method change, not as a change of D18's definition.
 # Also pending for the next cut: for n = d**2 > 128 the D10, D10b, D11b and D13
 # grid sweeps evaluate sigma_min(zI - L) from one shared complex Schur form by
 # inverse Lanczos on the shifted triangle (Trefethen 1999; Wright & Trefethen
