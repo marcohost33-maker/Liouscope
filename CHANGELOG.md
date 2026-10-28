@@ -441,11 +441,81 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   **Breaking (public API):** a caller that relied on a verdict from a default call must now pass
   `zero_tolerance` or handle the new `ABSTAIN` verdict. Known limit: with a finite cutoff below
   the defective split the issue-#168 pair still differs by basis (`CLUSTER_ONLY` vs
-  `CONDITIONING_LIMITED`, never `BENIGN`); tracked in #183. With a
+  `CONDITIONING_LIMITED`, never `BENIGN`); fixed by the #183 entry below. With a
   cutoff, `BENIGN` is now issued only when `budget <= zero_tolerance` is TRUE, so a NaN budget
   can no longer fall through to it. The spectral layer always supplies its certified cutoff, so
   no `SpectralResult`, D1-D24 value or manifest field changes. Two round-3/8 regression tests
   that need `np.longdouble` wider than float64 now skip where it is not (Windows/MSVC).
+- **A finite cutoff below a defective split no longer decides the audited zero set by basis
+  (issue #183).** With a cutoff below the `~sqrt(eps * ||L||)` split of the issue-#168 Jordan
+  pair, the plain basis returned the double root exactly and the cutoff admitted both modes
+  (`CLUSTER_ONLY`, two modes), while a unitary re-expression split it to `+-1.5e-08` and the
+  empty-cutoff fallback conditioned ONE root (`CONDITIONING_LIMITED`,
+  `reciprocal_condition = 3.07e-08`) -- measured for every cutoff from `0` to `1e-8`. The audit
+  already kept "every mode the solve cannot separate" together, but decided that with the #108
+  round-off band, a FORWARD-error band that describes well-conditioned modes only. Two computed
+  eigenvalues now also count as unresolved when their midpoint lies in the pseudospectrum at one
+  unit of round-off, `sigma_min(L - m I) <= eps * ||L||_F`, and the selected group (cutoff or
+  fallback) is closed transitively under that relation. `sigma_min` is unitarily invariant and
+  scale covariant, so the grouping is too. The resolution is not tuned: 1000 random unitary
+  re-expressions of Jordan blocks (order 2-3, `d = 2..4`) measured the representation round-off
+  at `<= 0.54 * eps * ||L||_F`, and the PR #127 fixture -- a genuine `1e-14` split the audit
+  exists to explain -- sits at `18.4` and stays `CONDITIONING_LIMITED` in every basis. Only
+  neighbouring pairs are tested directly (a third eigenvalue at the midpoint would otherwise
+  join them), and the SVD is skipped only where a RIGOROUS bound decides: for a diagonalisable
+  operator the resolvent is `sum_j P_j / (lambda_j - z)` with `||P_j|| = 1/s_j`, so
+  `sigma_min(L - z I) >= 1 / sum_j 1/(s_j |lambda_j - z|)` -- the inequality behind the
+  pseudospectral Bauer-Fike inclusion (Embree & Trefethen 2001; Trefethen & Embree 2005). A point
+  is certified resolved when that bound exceeds the resolution by `CONDITIONING_AGREEMENT_FACTOR`
+  (headroom for the error in the COMPUTED `s_j`, `lambda_j`); a property test over 30 random
+  dense, strongly non-normal and GKSL operators pins `bound <= sigma_min`. The one-term estimate
+  `min(s) * |gap| / 2` used in the first revision of this fix is not a bound -- it overstates
+  `sigma_min` by `50x` beside an order-8 Jordan block -- so it is gone. On physical generators no
+  SVD is taken and nothing changes (pinned by a counting test; single-thread timing of the audit
+  at `d = 4/8/12` matches `main` within noise, the cost being `?geev` and the eigenvector
+  normalisation as before).
+  The Schur agreement gate is aligned with the same notion. It required the independent Schur
+  spectrum to agree with the report's MODE FOR MODE inside the #108 round-off band, which a
+  defective pair cannot meet (`?gees` and `?geev` place its `+-sqrt(eps)` roots differently) and
+  which a strongly non-normal operator's separated modes need not meet either (the `-1` mode of
+  the 1e6-scaled block below came back `4.3e-11` apart against a band of `2.2e-13`). The strict
+  pairing is still tried first and is unchanged; only when it fails, the pairing is retried with
+  "agrees" meaning "the arithmetic cannot separate them" -- for a cluster column against any
+  member of that column's unresolved COMPONENT of the cluster (members the arithmetic does
+  separate are not interchangeable), for a complement column against that mode -- and it must
+  still be a bijection. A Schur spectrum the arithmetic DOES separate from the report's, inside
+  the cluster or out of it, is still refused (pinned). The issue-#168 pair is now `CLUSTER_ONLY`
+  with two modes in every basis at every cutoff below `1`: 1400 of 1400 rotation/cutoff pairs,
+  where the strict gate had answered `UNAVAILABLE (schur_cluster_mismatch)` in 21 -- also
+  reached by cutoffs above the split on `main`. An order-3 Jordan block (`d = 3`) is kept whole as
+  a three-mode cluster in every basis.
+  Two pinned fixtures change. A 1e15 diagonal similarity of a random 9x9 moves from a scalar
+  claim to none: its `solver_forward_estimate = 1.22` exceeded the selected eigenvalue `0.608`,
+  i.e. as written no zero set is resolvable there. A 1e6-scaled near-defective block moves to
+  `CLUSTER_ONLY` with three modes and the exact projector condition `1.0` (the operator is block
+  diagonal) at both of its cutoffs and in every basis: before, the narrow cutoff published scalar
+  evidence whose `s` five unitary re-expressions moved from `1.0` to `0.077`, and the wide cutoff
+  was `UNAVAILABLE` in 69 of 100 re-expressions and `CLUSTER_ONLY` in 31. Audit only: no D1-D24
+  value, filter, certificate, tier or manifest field reads this evidence; MANIFEST_SCHEMA remains
+  unchanged.
+  Every LAPACK call of the audit (`eig`, `schur`, `svdvals`) is now made on the operator rescaled
+  by an exact power of two to unit size, with rate-valued results scaled back by the same factor.
+  The CI's Python 3.11 job (NumPy 2.4.6, SciPy 1.17.1, scipy-openblas 0.3.31) returned the
+  eigenvalues of the packaged two-level generator times `1e200` near `1e138` -- `xGEEV` scaled the
+  operator down and failed to scale the eigenvalues back (`DLASCL ... illegal value`) -- which the
+  old audit did not notice (it compared eigenvectors only) and the resolution closure correctly
+  read as an unresolved spectrum. The rescaling is exact in binary floating point; pinned at
+  `1e-200`, `1e200` and `1e300`, and verified on Python 3.11 at the declared floors
+  (NumPy 2.0.2, SciPy 1.13.1) and on current NumPy/SciPy.
+  The resolution test is bounded. Healthy generators -- including non-reciprocal (skin-effect)
+  hopping chains up to `d = 12` -- spend no SVD, but an adversarial `D A D^-1` with a `1e8` spread
+  leaves the resolvent bound unable to certify anything and spent 251 SVDs at `n = 64`, a count
+  that grows with `n`; since the spectral layer runs this audit by default, an audit may now spend
+  at most `_SVD_BUDGET = 64` evaluations (a compute budget, deterministic, about a fixed multiple
+  of the audit's own eigendecomposition) and otherwise ends as `UNAVAILABLE`
+  (`resolution_budget_exhausted`), fail-closed. The whole test suite peaks at 20, the 1400-pair
+  rotation sweep at 3. Measured SVDs are also reused: `sigma_min(L - z I)` is 1-Lipschitz in `z`,
+  so a probe settles every nearby point it decides either way (pinned against fresh SVDs).
 - **`scipy.linalg.sqrtm`'s extended-precision result no longer reaches NumPy
   linalg (issue #177).** Up to SciPy 1.14, `sqrtm` returns a complex input's
   root as `complex256` (scipy/scipy#18250). `np.linalg.eigvalsh` rejects that

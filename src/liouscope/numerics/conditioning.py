@@ -125,6 +125,22 @@ A default call therefore returns ``verdict="ABSTAIN"``: observations only
 withheld, never ``BENIGN``. The spectral layer always supplies its certified
 cutoff and is unaffected.
 
+A cutoff is not enough either (issue #183)
+------------------------------------------
+With a FINITE cutoff below the defective split, the same pair still decided the
+group by the basis: the plain basis returns the double root exactly and the
+cutoff admits both modes, a unitary re-expression returns ``+-1.5e-08`` and the
+empty cutoff fell back to one of them. The group is therefore closed under the
+arithmetic's own resolution: two computed eigenvalues are kept together when
+the #108 round-off band cannot separate them OR their midpoint lies in the
+pseudospectrum at one unit of round-off, ``sigma_min(L - m I) <= eps *
+||L||_F``. The second test is the one a defective root needs, and it is a
+property of the operator rather than of the eigenvectors, so it is invariant
+under a unitary change of basis and covariant under a change of rate units. A
+genuinely split pair -- the PR #127 fixture, ``18.4`` units of round-off --
+stays resolved and keeps its scalar evidence. See
+:class:`_Resolution`.
+
 What this instrument does NOT catch
 -----------------------------------
 The stiff deflation failure of issue #112 is invisible to conditioning. On the
@@ -213,6 +229,42 @@ def _unit(v: np.ndarray) -> np.ndarray | None:
     return np.asarray(out, dtype=complex)
 
 
+def _ldexp_complex(values: np.ndarray, exponent: int) -> np.ndarray:
+    """``values * 2**exponent`` for a complex array, exactly (no rounding)."""
+    arr = np.asarray(values)
+    return np.asarray(
+        np.ldexp(np.real(arr), exponent) + 1j * np.ldexp(np.imag(arr), exponent),
+        dtype=complex,
+    )
+
+
+def _unit_scaled(L: np.ndarray) -> tuple[np.ndarray, int]:
+    """``(L * 2**-e, e)`` with the largest component of the result in ``[0.5, 1)``.
+
+    Every LAPACK call in this audit is made on the power-of-two rescaled
+    operator, and every result with the units of a rate is scaled back by the
+    same exact factor; eigenvectors, ``s``, Schur vectors and the Sylvester
+    solution ``R`` of a scaled triangle are scale invariant. Measured on the
+    CI's Python 3.11 job (NumPy 2.4.6, SciPy 1.17.1, scipy-openblas 0.3.31):
+    ``sla.eig`` of the packaged two-level generator times ``1e200`` returned
+    eigenvalues near ``1e138`` -- off by ``bignum / ||A||`` -- with
+    ``DLASCL ... illegal value`` on stderr, because that build's
+    ``xGEEV`` scales an operator above ``~1e146`` down and then fails to scale
+    the eigenvalues back; ``svdvals`` failed the same way. Multiplying by a
+    power of two is exact in binary floating point, so this costs nothing in
+    accuracy and removes the dependency on that internal path.
+    """
+    arr = np.asarray(L)
+    scale = float(
+        max(np.max(np.abs(np.real(arr)), initial=0.0),
+            np.max(np.abs(np.imag(arr)), initial=0.0))
+    )
+    if not np.isfinite(scale) or scale == 0.0:
+        return np.asarray(arr, dtype=complex), 0
+    exponent = int(np.frexp(scale)[1])
+    return _ldexp_complex(arr, -exponent), exponent
+
+
 def eigenvalue_conditioning(
     right_vectors: np.ndarray, left_vectors: np.ndarray
 ) -> np.ndarray:
@@ -297,6 +349,7 @@ def _schur_cluster_projector_condition(
     *,
     reference_eigenvalues: np.ndarray,
     cluster_indices: np.ndarray,
+    resolution: _Resolution | None = None,
 ) -> float | None:
     """Reciprocal 2-norm condition of the selected Schur spectral projector.
 
@@ -317,12 +370,27 @@ def _schur_cluster_projector_condition(
     ``cluster_indices`` then selects exactly the report's cluster through that
     pairing. A disagreement fails closed instead of conditioning a numerically
     different Schur cluster.
+
+    Issue #183. Inside a cluster the arithmetic cannot resolve, a mode-for-mode
+    agreement is not a meaningful requirement: the individual eigenvalues are
+    not determined by the data, and ``?gees`` and ``?geev`` place a defective
+    pair's ``+-sqrt(eps)`` roots differently -- measured on 6 of 400 rotated
+    issue-#168 fixtures, which then failed closed in one basis and not in
+    another. When ``resolution`` is supplied and the strict pairing fails, the
+    pairing is retried with the CLUSTER columns relaxed to "not separated by
+    the arithmetic" (:meth:`_Resolution.unresolved`); every complement mode
+    must still agree inside the round-off band, and the pairing must still be
+    a bijection, so a Schur cluster whose members the arithmetic DOES separate
+    from the report's is still refused.
     """
     try:
-        T, Q = sla.schur(L, output="complex", check_finite=False)
+        L_unit, exponent = _unit_scaled(L)
+        T, Q = sla.schur(L_unit, output="complex", check_finite=False)
     except (ValueError, np.linalg.LinAlgError, sla.LinAlgError):
         return None
-    w = np.asarray(np.diag(T), dtype=complex)
+    # ``T`` stays in the rescaled units: the Sylvester solution ``R`` of
+    # ``T11 R - R T22 = T12`` is invariant under scaling all three blocks.
+    w = _ldexp_complex(np.diag(T), exponent)
     if w.size == 0 or not np.all(np.isfinite(w)):
         return None
 
@@ -335,6 +403,8 @@ def _schur_cluster_projector_condition(
     if np.any(idx < 0) or np.any(idx >= reference.size):
         return None
     matched = _match_spectra(w, reference, _agreement_band(w, reference))
+    if matched is None and resolution is not None:
+        matched = _match_cluster_unresolved(w, reference, idx, resolution)
     if matched is None:
         return None
     perm, _worst = matched
@@ -405,7 +475,10 @@ class ZeroModeConditioning:
     eigenvalue: complex
     #: How many eigenvalues the zero set holds. ``> 1`` is a degenerate
     #: stationary manifold and is not by itself a defect. ``0`` for ``ABSTAIN``
-    #: and ``UNAVAILABLE``: no zero set was selected.
+    #: and ``UNAVAILABLE``: no zero set was selected. The set is the cutoff's
+    #: (or, for an empty cutoff, the nearest mode's) closed over every mode the
+    #: arithmetic cannot separate from it (issue #183), so it can exceed the
+    #: number of eigenvalues inside ``zero_tolerance`` -- never fall short of it.
     cluster_size: int
     #: Reciprocal 2-norm condition of the zero-cluster spectral projector,
     #: ``1 / ||P||_2``, obtained from a reordered Schur form and a Sylvester
@@ -657,12 +730,322 @@ def _match_spectra(
     return perm, worst
 
 
+def _match_cluster_unresolved(
+    schur: np.ndarray,
+    reference: np.ndarray,
+    cluster: np.ndarray,
+    resolution: _Resolution,
+) -> tuple[np.ndarray, float] | None:
+    """Pair ``schur`` with ``reference``, relaxing only the cluster columns.
+
+    A complement column accepts a Schur eigenvalue inside the round-off band,
+    exactly as :func:`_match_spectra` does. A cluster column accepts one the
+    arithmetic cannot separate from its component of the cluster -- from ANY
+    member of it: inside an unresolved component the members are
+    interchangeable, and a
+    pairwise test against one fixed member would miss a connection that runs
+    through another (the neighbour rule of :meth:`_Resolution.unresolved`
+    leaves that to transitivity, which a single pairing does not have).
+    Measured on the 1e6-scaled near-defective block under 100 unitary
+    re-expressions, the member-by-member form still refused 69. A perfect matching
+    inside those feasibility sets must exist; the 0/1 assignment decides it,
+    as in round 8 of :func:`_match_spectra`. The returned distance is the
+    largest one actually paired.
+    """
+    n = int(reference.size)
+    if schur.size != n or n == 0:
+        return None
+    cost = np.abs(schur[:, None] - reference[None, :])
+    feasible = np.isfinite(cost) & (cost <= _agreement_band(schur, reference))
+    cluster = np.asarray(cluster, dtype=np.intp)
+    nearest = np.argmin(np.abs(schur[:, None] - resolution.reported[None, :]), axis=1)
+    # Complement columns. The round-off band is scaled by the spectral radius
+    # (#108), and for a strongly non-normal operator the arithmetic's actual
+    # resolution, ``eps * ||L||_F``, is far wider: on the 1e6-scaled block the
+    # well-separated mode at ``-1`` came back from the two solvers ``4.3e-11``
+    # apart against a band of ``2.2e-13``, and that single complement mode --
+    # not the cluster -- refused the pairing. A complement column therefore also
+    # accepts a Schur eigenvalue the arithmetic cannot separate from it. Only
+    # the natural candidates are tested (each Schur value against its nearest
+    # reference and each reference against its nearest Schur value), which keeps
+    # the cost linear; the bijection below still has to exist.
+    in_cluster = np.zeros(n, dtype=bool)
+    in_cluster[np.asarray(cluster, dtype=np.intp)] = True
+    nearest_ref = np.argmin(cost, axis=1)
+    nearest_schur = np.argmin(cost, axis=0)
+    pairs = {(int(k), int(nearest_ref[k])) for k in range(n)}
+    pairs |= {(int(nearest_schur[j]), int(j)) for j in range(n)}
+    for k, j in sorted(pairs):
+        if in_cluster[j] or feasible[k, j]:
+            continue
+        feasible[k, j] = resolution.unresolved(
+            schur[k], reference[j], skip=(j, int(nearest[k]))
+        )
+    # Interchangeable are only cluster members the arithmetic cannot separate
+    # from EACH OTHER: a cutoff may admit two members that are well resolved
+    # (``0`` and ``1e-8`` in a normal operator), and a Schur value equal to the
+    # first must not stand in for the second. The cluster is split into the
+    # components of the unresolved relation, and a Schur value is feasible for
+    # every column of a component it cannot be separated from.
+    label = {int(c): int(c) for c in cluster}
+
+    def _root(c: int) -> int:
+        while label[c] != c:
+            label[c] = label[label[c]]
+            c = label[c]
+        return c
+
+    members = [int(c) for c in cluster]
+    for a_pos, a in enumerate(members):
+        for b in members[a_pos + 1 :]:
+            if _root(a) != _root(b) and resolution.unresolved(
+                reference[a], reference[b], skip=(a, b)
+            ):
+                label[_root(a)] = _root(b)
+    components: dict[int, list[int]] = {}
+    for c in members:
+        components.setdefault(_root(c), []).append(c)
+    for k in range(n):
+        for component in components.values():
+            if feasible[k, component].all():
+                continue
+            if any(
+                bool(feasible[k, c])
+                or resolution.unresolved(
+                    schur[k], reference[c], skip=(c, int(nearest[k]))
+                )
+                for c in component
+            ):
+                feasible[k, component] = True
+    rows, cols = linear_sum_assignment((~feasible).astype(float))
+    if not feasible[rows, cols].all():
+        return None
+    perm = np.empty(n, dtype=int)
+    perm[rows] = cols
+    return perm, float(cost[rows, cols].max())
+
+
 def _agreement_band(audit: np.ndarray, accepted: np.ndarray) -> float:
     """The library's own "indistinguishable at double precision" band (#108)."""
     scale = max(float(np.abs(audit).max()), float(np.abs(accepted).max()))
     if not np.isfinite(scale) or scale == 0.0:
         return 0.0
     return ZERO_MODE_EPS_FACTOR * float(np.finfo(float).eps) * scale
+
+
+def _smallest_singular_value(L: np.ndarray, z: complex) -> float:
+    """``sigma_min(L - z I)``, or NaN when the SVD does not deliver it."""
+    L_unit, exponent = _unit_scaled(L)
+    shifted = np.array(L_unit, dtype=complex, copy=True)
+    shifted.flat[:: shifted.shape[0] + 1] -= _ldexp_complex(np.asarray(z), -exponent)
+    try:
+        sv = sla.svdvals(shifted, check_finite=False)
+    except (ValueError, np.linalg.LinAlgError, sla.LinAlgError):
+        return float("nan")
+    smallest = float(np.ldexp(float(sv[-1]), exponent)) if sv.size else float("nan")
+    return smallest if np.isfinite(smallest) else float("nan")
+
+
+class _ResolutionBudgetExhaustedError(Exception):
+    """Raised inside the audit when :attr:`_Resolution._SVD_BUDGET` is spent."""
+
+
+class _Resolution:
+    """Which computed eigenvalues the arithmetic can tell apart (issue #183).
+
+    Two computed eigenvalues are UNRESOLVED when either
+
+    * they lie inside the #108 round-off band of each other -- the old rule,
+      which describes well-conditioned modes; or
+    * their midpoint ``m`` lies in the ``delta``-pseudospectrum,
+      ``sigma_min(L - m I) <= delta``, with ``delta = eps * ||L||_F``: a
+      perturbation of one unit of round-off in the operator's own norm can
+      move an eigenvalue to the point half way between them.
+
+    The second test is what a defective root needs. A perturbation ``e``
+    splits a Jordan pair into ``+-sqrt(e)`` and ``sigma_min`` at their midpoint
+    is ``~e`` itself, so the test asks whether the split is larger than the
+    arithmetic's resolution rather than whether the roots are close, and it
+    reads the operator, not the eigenvectors: ``sigma_min`` is invariant under
+    a unitary change of basis and covariant under a change of rate units, so
+    the grouping inherits both invariances from it. ``delta`` is not a tuned
+    constant. Measured, 1000 random unitary re-expressions of Jordan blocks of
+    order 2 and 3 at ``d = 2..4`` put the representation round-off at
+    ``sigma_min <= 0.54 * eps * ||L||_F`` (median ``0.1``), which ``delta``
+    must merge, and the PR #127 fixture -- a GENUINE ``1e-14`` perturbation
+    whose ``+-1e-7`` split the audit exists to explain -- at ``18.4``, which
+    it must not.
+
+    The SVD is skipped only where a RIGOROUS bound already decides. For a
+    diagonalisable ``L = sum_j lambda_j P_j`` the resolvent is
+    ``sum_j P_j / (lambda_j - z)`` with ``||P_j|| = 1 / s_j`` (unit
+    eigenvectors), so the triangle inequality gives
+
+        ``sigma_min(L - z I) >= 1 / sum_j 1 / (s_j |lambda_j - z|)``
+
+    -- the inequality behind the pseudospectral Bauer-Fike inclusion
+    (Embree & Trefethen 2001; Trefethen & Embree, *Spectra and Pseudospectra*,
+    2005). A point is certified resolved when that bound exceeds ``delta`` by
+    the module's headroom ``CONDITIONING_AGREEMENT_FACTOR``, which absorbs the
+    error in the COMPUTED ``s_j`` and ``lambda_j`` the bound is evaluated with.
+    The first version of this test used the one-term first-order estimate
+    ``min(s) |gap| / 2`` instead; that ignores every other mode's contribution
+    and so could skip an unresolved pair -- the fail-open direction this module
+    exists to avoid. A defective mode has ``s ~ 0``, its term diverges and the
+    point is always probed. On a healthy generator the bound certifies every
+    pair and no SVD is taken. A NaN conditioning or a failed SVD counts as
+    unresolved (fail-closed: a larger group can only move the audit to
+    ``CLUSTER_ONLY``, never to ``BENIGN``).
+    """
+
+    #: Upper bound on the entries of one vectorised bound evaluation, so a
+    #: large superoperator does not materialise an ``n x n`` distance matrix.
+    _CHUNK_ENTRIES = 1 << 22
+
+    #: How many ``sigma_min`` evaluations one audit may spend. A compute budget,
+    #: not a numerical threshold: no answer depends on it except whether one is
+    #: given. Each evaluation is an ``O(n^3)`` SVD, the same order as the audit's
+    #: own eigendecomposition, so a constant keeps the worst case a fixed
+    #: multiple of that solve at every size and is deterministic, unlike a
+    #: wall-clock limit. Healthy generators spend none; an adversarial
+    #: ``D A D^-1`` with a ``1e8`` spread spent 251 at ``n = 64`` and the count
+    #: grows with ``n``, so the default ``spectral`` layer, which runs this audit
+    #: on every call, needs the bound. Exhausting it ends the audit as
+    #: ``UNAVAILABLE`` (``resolution_budget_exhausted``) -- fail-closed, no claim.
+    _SVD_BUDGET = 64
+
+    def __init__(
+        self,
+        L: np.ndarray,
+        reported: np.ndarray,
+        per_mode: np.ndarray,
+        band: float,
+    ) -> None:
+        self.L = L
+        self.reported = np.asarray(reported, dtype=complex)
+        self.inv_s = np.where(
+            np.isfinite(per_mode) & (per_mode > 0.0), 1.0 / per_mode, np.inf
+        )
+        self.band = float(band)
+        self.delta = float(np.finfo(float).eps) * scaled_euclidean_norm(L)
+        self.finite = bool(np.isfinite(self.delta))
+        self.svd_calls = 0
+        self._probe_points: list[complex] = []
+        self._probe_sigmas: list[float] = []
+
+    def _certified_resolved(self, points: np.ndarray) -> np.ndarray:
+        """Where ``sigma_min(L - z I) > delta`` is PROVEN by the resolvent bound.
+
+        Evaluated as ``K * delta * sum_j 1 / (s_j |lambda_j - z|) < 1``: both
+        factors scale inversely with the rate unit, so the product is invariant
+        under ``L -> c L`` and does not overflow where ``1 / |lambda - z|``
+        alone would. Any non-finite term (``s = 0``, ``z`` on an eigenvalue)
+        leaves the point uncertified.
+        """
+        points = np.asarray(points, dtype=complex).ravel()
+        out = np.zeros(points.size, dtype=bool)
+        weight = CONDITIONING_AGREEMENT_FACTOR * self.delta
+        step = max(1, self._CHUNK_ENTRIES // max(1, self.reported.size))
+        for start in range(0, points.size, step):
+            z = points[start : start + step]
+            dist = np.abs(self.reported[None, :] - z[:, None])
+            terms = (weight * self.inv_s[None, :]) / dist
+            total = np.sum(terms, axis=1)
+            out[start : start + step] = np.isfinite(total) & (total < 1.0)
+        return out
+
+    def _point_in_pseudospectrum(self, z: complex) -> bool:
+        """``sigma_min(L - z I) <= delta``, reusing earlier SVDs where they decide.
+
+        ``sigma_min(L - z I)`` is 1-Lipschitz in ``z`` (Trefethen & Embree,
+        *Spectra and Pseudospectra*, 2005), so one measured ``sigma`` at ``w``
+        settles every ``z`` with ``sigma - |z - w| > delta`` (outside) or
+        ``sigma + |z - w| <= delta`` (inside) without another SVD. Midpoints of
+        neighbouring pairs cluster, so this is what keeps a strongly non-normal
+        operator inside :attr:`_SVD_BUDGET`. A NaN ``sigma`` decides nothing and
+        reads as inside (fail-closed).
+        """
+        z = complex(z)
+        if self._probe_points:
+            dist = np.abs(np.asarray(self._probe_points) - z)
+            sig = np.asarray(self._probe_sigmas)
+            if bool(np.any(sig - dist > self.delta)):
+                return False
+            if bool(np.any(sig + dist <= self.delta)):
+                return True
+        if self.svd_calls >= self._SVD_BUDGET:
+            raise _ResolutionBudgetExhaustedError
+        self.svd_calls += 1
+        sigma = _smallest_singular_value(self.L, z)
+        if np.isfinite(sigma):
+            self._probe_points.append(z)
+            self._probe_sigmas.append(float(sigma))
+        return not (sigma > self.delta)
+
+    def unresolved(
+        self, a: complex, b: complex, skip: tuple[int, ...]
+    ) -> bool:
+        """Whether the arithmetic separates the two values ``a`` and ``b``.
+
+        ``skip`` names the indices of the reported spectrum that ``a`` and
+        ``b`` stand for, so they are not mistaken for a third eigenvalue at
+        the midpoint (see :meth:`unresolved_from`).
+        """
+        gap = abs(complex(a) - complex(b))
+        if gap <= self.band:
+            return True
+        if not self.finite:
+            return True
+        mid = 0.5 * complex(a) + 0.5 * complex(b)
+        between = np.abs(self.reported - mid) < 0.5 * gap
+        between[np.asarray(skip, dtype=np.intp)] = False
+        if np.any(between):
+            return False
+        if bool(self._certified_resolved(np.asarray([mid]))[0]):
+            return False
+        return self._point_in_pseudospectrum(mid)
+
+    def unresolved_from(self, anchor: int, candidates: np.ndarray) -> np.ndarray:
+        """Those ``candidates`` the arithmetic cannot separate from ``anchor``."""
+        candidates = np.asarray(candidates, dtype=np.intp)
+        values = self.reported
+        gap = np.abs(values[candidates] - values[anchor])
+        hit = gap <= self.band
+        if not self.finite:
+            # ``||L||_F`` itself is not representable, so no pair can be shown
+            # resolved: every candidate joins (fail-closed, as above).
+            return candidates
+        mids = 0.5 * values[anchor] + 0.5 * values[candidates]
+        open_ = np.flatnonzero(~hit)
+        certified = self._certified_resolved(mids[open_])
+        for k in open_[~certified]:
+            j = int(candidates[k])
+            # Only NEIGHBOURS are tested directly. A third eigenvalue nearer the
+            # midpoint than the pair's half-gap makes ``sigma_min`` small there
+            # on its own account -- measured on the plain #168 pair, whose
+            # ``0`` and ``-2`` have ``-1`` exactly at their midpoint and were
+            # joined through it. Connection via that mode is still found,
+            # transitively, through the two pairs it forms with the ends.
+            between = np.abs(values - mids[k]) < 0.5 * gap[k]
+            between[np.asarray((anchor, j), dtype=np.intp)] = False
+            if np.any(between):
+                continue
+            hit[k] = self._point_in_pseudospectrum(mids[k])
+        return np.asarray(candidates[hit], dtype=np.intp)
+
+    def close(self, seed: np.ndarray) -> np.ndarray:
+        """The seed plus every mode reachable from it through unresolved pairs."""
+        n = int(self.reported.size)
+        if not self.finite:
+            return np.arange(n, dtype=np.intp)
+        member = np.zeros(n, dtype=bool)
+        member[np.asarray(seed, dtype=np.intp)] = True
+        frontier = [int(j) for j in np.flatnonzero(member)]
+        while frontier:
+            joined = self.unresolved_from(frontier.pop(), np.flatnonzero(~member))
+            member[joined] = True
+            frontier.extend(int(j) for j in joined)
+        return np.flatnonzero(member)
 
 
 def zero_mode_conditioning(
@@ -787,7 +1170,9 @@ def _measure(
 ) -> ZeroModeConditioning:
     """The measurement itself, always called inside :func:`_quiet_arithmetic`."""
     try:
-        values, left, right = sla.eig(L, left=True, right=True)
+        L_unit, exponent = _unit_scaled(L)
+        values, left, right = sla.eig(L_unit, left=True, right=True)
+        values = _ldexp_complex(values, exponent)
     except (ValueError, np.linalg.LinAlgError, sla.LinAlgError):
         return ZeroModeConditioning.unavailable("eigensolve_failed")
     values = np.asarray(values)
@@ -881,6 +1266,7 @@ def _measure(
             observed=float(magnitudes[nearest]),
             trace_defect=float(defect),
         )
+    resolution = _Resolution(L, reported, per_mode, band)
     tol = float(zero_tolerance)
     cluster_from_cutoff = bool(np.any(magnitudes <= tol))
     if cluster_from_cutoff:
@@ -932,6 +1318,24 @@ def _measure(
         if cluster.size == 0:  # pragma: no cover - anchor is always its own member
             cluster = np.flatnonzero(magnitudes == magnitudes.min())
 
+    # ISSUE #183. The round-off band above is a FORWARD-error band: it says
+    # when two well-conditioned eigenvalues cannot be told apart. A defective
+    # root is not well conditioned, and ``?geev`` splits it by
+    # ``~sqrt(eps * ||L||)`` -- seven orders of magnitude outside that band. On
+    # the issue-#168 Jordan pair a cutoff below the split therefore decided the
+    # group by the basis: the plain basis returns the double root exactly and
+    # the cutoff admitted both modes (``CLUSTER_ONLY``, two modes), while a
+    # unitary re-expression split it to ``+-1.5e-08`` and the empty cutoff fell
+    # back to ONE root (``CONDITIONING_LIMITED``, ``s = 3.1e-08``). The group is
+    # therefore closed under the arithmetic's own resolution -- see
+    # :class:`_Resolution` -- so a pair the arithmetic cannot
+    # separate is conditioned whole whichever basis it was written in, exactly
+    # as the plain basis already did.
+    try:
+        cluster = resolution.close(cluster)
+    except _ResolutionBudgetExhaustedError:
+        return ZeroModeConditioning.unavailable("resolution_budget_exhausted")
+
     stationary = int(cluster[int(np.argmin(magnitudes[cluster]))])
 
     if int(cluster.size) == 1:
@@ -942,11 +1346,15 @@ def _measure(
         # Schur-projector conditioning is reserved for size > 1.
         s_cluster = float(per_mode[stationary])
     else:
-        schur_condition = _schur_cluster_projector_condition(
-            L,
-            reference_eigenvalues=reported,
-            cluster_indices=cluster,
-        )
+        try:
+            schur_condition = _schur_cluster_projector_condition(
+                L,
+                reference_eigenvalues=reported,
+                cluster_indices=cluster,
+                resolution=resolution,
+            )
+        except _ResolutionBudgetExhaustedError:
+            return ZeroModeConditioning.unavailable("resolution_budget_exhausted")
         if schur_condition is None:
             return ZeroModeConditioning.unavailable("schur_cluster_mismatch")
         s_cluster = float(schur_condition)

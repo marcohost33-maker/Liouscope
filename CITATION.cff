@@ -192,7 +192,16 @@ abstract: >-
 # defined in a basis-independent way (PR #173 review). The spectral layer always
 # passes its certified cutoff, so no reported number moves. When a diagnostic is
 # gated on this evidence, THAT change is the one that must be described as a
-# correction.
+# correction. Issue #183 closes the audited group under the arithmetic's own
+# resolution: two eigenvalues whose midpoint lies in the pseudospectrum at
+# eps * ||L||_F count as unresolved, so a defective pair split by round-off is
+# conditioned whole in every basis (CLUSTER_ONLY), while a genuinely split pair
+# such as the 1e-14 fixture above stays a scalar CONDITIONING_LIMITED. The SVD is
+# skipped only where the resolvent bound sigma_min(L - zI) >= 1/sum_j
+# 1/(s_j |lambda_j - z|) (Embree & Trefethen 2001) proves the pair resolved, and
+# the Schur agreement gate, when its strict mode-for-mode pairing fails, accepts
+# agreement to that same resolution (still a bijection; a resolvably different
+# spectrum is refused). Audit only; no reported number moves.
 # Also pending for the next cut: relaxation trajectories for d >= 8 may be
 # propagated by the Al-Mohy & Higham exponential action instead of a
 # materialised expm(L t) (#162). The backend is chosen by a deterministic
