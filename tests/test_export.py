@@ -92,6 +92,16 @@ def test_dump_then_load_roundtrip_string_path(tmp_path: Path):
     assert loaded["spectral"]["gap"] == report.spectral.gap
 
 
+def test_dump_report_persists_d18_backend(tmp_path: Path):
+    """Issue #178: the method behind D18 must survive report persistence."""
+    report = _report()
+    assert report.lep.initial_state_backend == "dense_expm"
+    out = tmp_path / "d18-backend.json"
+    dump_report(report, out)
+    loaded = load_report(out)
+    assert loaded["lep"]["initial_state_backend"] == "dense_expm"
+
+
 # --- RFC 8259 validity (non-finite floats) -----------------------------------
 
 
