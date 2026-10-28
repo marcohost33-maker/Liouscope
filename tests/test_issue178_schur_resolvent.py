@@ -304,3 +304,22 @@ def test_a_shift_outside_the_operators_scale_is_evaluated_unscaled(monkeypatch):
     assert schur.dense_fallbacks == 1
     monkeypatch.setattr(resolvent, "_DENSE_NORM_CUTOFF", 10**9)
     assert fast == pseudospectral_radius(L)
+
+
+def test_a_shift_that_underflows_under_the_scale_is_evaluated_unscaled():
+    # PR #189 review: against a 1e200 operator whose other eigenvalues are 0,
+    # z = 1e-200 is not negligible, but ldexp(z, -665) underflowed to 0 and
+    # reported an exactly singular zI - L (sigma 0, LinAlgError in norm()).
+    L = np.diag(np.r_[-1e200, np.zeros(CUTOFF + 15)]).astype(complex)
+    schur = ShiftedSchurResolvent(L)
+    assert schur.sigma_min(1e-200) == pytest.approx(1e-200, rel=1e-12)
+    assert schur.norm(1e-200) == pytest.approx(1e200, rel=1e-12)
+
+
+def test_an_operator_the_rescale_would_round_is_used_unscaled():
+    # Scaling diag(-1e10, -1e-300, ...) down by 2**-34 would make -1e-300
+    # subnormal and round it; the operator is then factorised as given.
+    L = np.diag(np.r_[-1e10, -1e-300, -np.ones(CUTOFF + 14)]).astype(complex)
+    schur = ShiftedSchurResolvent(L)
+    assert schur._exponent == 0
+    assert schur.sigma_min(0.0) == pytest.approx(1e-300, rel=1e-12)

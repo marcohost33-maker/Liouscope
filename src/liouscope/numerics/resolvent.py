@@ -16,7 +16,7 @@ import scipy.sparse as sp
 import scipy.sparse.linalg as spla
 from scipy.linalg.lapack import ztrtrs
 
-from .conditioning import _unit_scaled
+from .conditioning import _ldexp_complex, _unit_scaled
 from .linalg import require_finite_square_2d
 
 # Dense explicit-inverse + SVD is exact and O(n^3); used up to this size. Above
@@ -272,9 +272,12 @@ class ShiftedSchurResolvent:
     orthogonal to BOTH fixed vectors would go unnoticed; physical generators
     do not single out those two random directions.
 
-    The operator is rescaled by an exact power of two before the Schur
-    decomposition and the result scaled back, for the same LAPACK reason as in
-    :func:`liouscope.numerics.conditioning._unit_scaled` (issue #183). The
+    The operator is rescaled by a power of two before the Schur decomposition
+    and the result scaled back, for the same LAPACK reason as in
+    :func:`liouscope.numerics.conditioning._unit_scaled` (issue #183) -- but
+    only where that rescale is exact: an operator whose small entries would
+    leave the normal range is used unscaled, and a shift that does not survive
+    the scale round trip is evaluated by the unscaled dense expression. The
     Krylov start vector and the probe come from a private ``default_rng(0)``;
     the global NumPy random state is never touched, and each value is a pure
     function of ``(L, z)``.
@@ -284,6 +287,14 @@ class ShiftedSchurResolvent:
         L = require_finite_square_2d(L, name="L")
         self._operator = np.asarray(L, dtype=complex)
         scaled, self._exponent = _unit_scaled(L)
+        # The rescale is meant to be exact. An operator whose small entries
+        # would leave the normal range under it (huge dynamic range) is used
+        # unscaled instead, exactly as the dense path always did.
+        with np.errstate(under="ignore"):
+            if self._exponent and not np.array_equal(
+                _ldexp_complex(scaled, self._exponent), self._operator
+            ):
+                scaled, self._exponent = self._operator, 0
         T, _ = sla.schur(scaled, output="complex")
         self._minus_T = np.asfortranarray(-T)
         self.n = int(T.shape[0])
@@ -299,14 +310,16 @@ class ShiftedSchurResolvent:
     def sigma_min(self, z: complex) -> float:
         """Smallest singular value of ``zI - L``."""
         z = complex(z)
-        with np.errstate(over="ignore"):
-            shift = complex(
-                np.ldexp(z.real, -self._exponent), np.ldexp(z.imag, -self._exponent)
-            )
-        if not (np.isfinite(shift.real) and np.isfinite(shift.imag)):
-            # |z| is too large for the operator's power-of-two scale (e.g. a
-            # 1e-320 operator on a grid with an absolute 1e-3 floor; PR #189
-            # review): evaluate the historical dense expression unscaled.
+        e = self._exponent
+        with np.errstate(over="ignore", under="ignore"):
+            shift = complex(np.ldexp(z.real, -e), np.ldexp(z.imag, -e))
+            exact = np.ldexp(shift.real, e) == z.real and np.ldexp(shift.imag, e) == z.imag
+        if not exact:
+            # The shift does not survive the operator's power-of-two scale:
+            # it overflowed (a 1e-320 operator on a grid with an absolute 1e-3
+            # floor) or underflowed (z = 1e-200 against a 1e200 operator whose
+            # other eigenvalues are 0, where z is NOT negligible). PR #189
+            # review. Evaluate the historical dense expression unscaled.
             self.evaluations += 1
             self.dense_fallbacks += 1
             eye = np.eye(self.n, dtype=complex)
