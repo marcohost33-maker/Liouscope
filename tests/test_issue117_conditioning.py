@@ -275,8 +275,25 @@ def test_conditioning_is_a_property_of_the_operator_as_written() -> None:
     )
     # ... radically different conditioning, and the measurement follows the
     # operator rather than the spectrum.
+    import scipy.linalg as sla
+
+    def per_mode_min(M: np.ndarray) -> float:
+        _values, left, right = sla.eig(M, left=True, right=True)
+        return float(eigenvalue_conditioning(right, left).min())
+
     assert plain.spectrum_min_reciprocal_condition > 1.0e-2
-    assert similar.spectrum_min_reciprocal_condition < 1.0e-10
+    assert plain.spectrum_min_reciprocal_condition == pytest.approx(
+        per_mode_min(A), rel=1e-12
+    )
+    assert per_mode_min(scaled) < 1.0e-10
+    # Issue #183. As written, ``||scaled||_F = 4.8e14`` puts one unit of
+    # round-off at ``0.1`` -- and the eigenvalues, with ``s ~ 1e-15``, cannot
+    # be separated by it: the audit used to publish scalar evidence here whose
+    # own ``solver_forward_estimate`` (1.22) exceeded the selected eigenvalue
+    # (0.608) and its distance to the next one. No zero set is resolvable, so
+    # no scalar conditioning claim may be made about one.
+    assert similar.reason != "ok"
+    assert similar.verdict in (CONDITIONING_CLUSTER_ONLY, CONDITIONING_UNAVAILABLE)
 
 
 def test_conditioning_is_invariant_under_a_unitary_change_of_basis() -> None:
@@ -994,13 +1011,27 @@ def test_a_genuine_two_mode_zero_cluster_stays_cluster_only() -> None:
 
 
 def test_multi_mode_schur_spectrum_mismatch_fails_closed() -> None:
-    """A same-size Schur cluster is not enough if it is a different spectrum.
+    """A Schur cluster must be the report's cluster -- to the arithmetic's resolution.
 
     This badly scaled 2x2 block has exact/eig roots +-1e-10, while unbalanced
-    GEES moves them by O(1e-11). A wide cutoff contains three modes in both
-    decompositions, so a count-only guard would accept and publish the
-    projector of a numerically different cluster. The simple narrow case keeps
-    the direct eigenvector path; the multi-mode Schur path must withhold.
+    GEES moves them by O(1e-11). The original concern stands: a count-only
+    guard would publish the projector of a numerically different cluster, and
+    a Schur spectrum the arithmetic DOES separate from the report's is still
+    refused (``test_schur_gate_still_refuses_a_resolvably_different_spectrum``
+    in the issue-#168 file pins that).
+
+    Issue #183 changes what "different" means here. ``||system||_F = 1e6`` puts
+    one unit of round-off at ``2.2e-10``; at that level the near-defective
+    block's pseudospectrum is a disk of radius ``~1.5e-2`` containing the whole
+    cluster ``{1e-12, +-1e-10}``, so the GEES-versus-GEEV displacement is inside
+    what the data determine, and so is the ``4.3e-11`` drift of the separated
+    mode at ``-1``. Before this change the outcome was decided by the basis:
+    the narrow cutoff published SCALAR evidence for ``1e-12`` alone (five
+    unitary re-expressions moved its ``s`` from ``1.0`` to ``0.077``), and the
+    wide cutoff was ``UNAVAILABLE`` in 69 of 100 re-expressions and
+    ``CLUSTER_ONLY`` in 31. Both cutoffs now condition the same three-mode
+    cluster, whose projector is exactly orthogonal (the operator is block
+    diagonal), so the reported figure is the exact ``1.0``.
     """
     system = np.zeros((4, 4), dtype=complex)
     system[0, 0] = 1.0e-12
@@ -1008,14 +1039,17 @@ def test_multi_mode_schur_spectrum_mismatch_fails_closed() -> None:
     system[2, 1] = (1.0e-10) ** 2 / 1.0e6
     system[3, 3] = -1.0
 
-    narrow = zero_mode_conditioning(system, zero_tolerance=1.0e-11)
-    wide = zero_mode_conditioning(system, zero_tolerance=1.0e-9)
-    assert narrow.available
-    assert narrow.cluster_size == 1
-    assert narrow.solver_forward_estimate == 0.0
-    assert wide.available is False
-    assert wide.reason == "schur_cluster_mismatch"
-    assert wide.verdict == CONDITIONING_UNAVAILABLE
+    rng = np.random.default_rng(5)
+    U, _ = np.linalg.qr(rng.standard_normal((4, 4)) + 1j * rng.standard_normal((4, 4)))
+    rotated = U @ system @ U.conj().T
+    for L in (system, rotated):
+        for tol in (1.0e-11, 1.0e-9):
+            run = zero_mode_conditioning(L, zero_tolerance=tol)
+            assert run.verdict == CONDITIONING_CLUSTER_ONLY
+            assert run.cluster_size == 3
+            assert run.reciprocal_condition == pytest.approx(1.0, rel=1e-8)
+            assert math.isnan(run.solver_forward_estimate)
+            assert run.displacement_explained is None
 
 
 def test_displacement_abstains_when_the_perturbation_exceeds_the_separation() -> None:

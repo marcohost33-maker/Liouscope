@@ -248,8 +248,15 @@ LiouScope is built for paper-grade reproducibility:
   safely distinguish a Jordan block from a genuinely split pair. The report still carries the
   cluster condition, residuals, separation and trace-preservation defect. Before a multi-mode
   projector is reported, the independent Schur spectrum must match the spectrum carried by the
-  report mode-for-mode inside the existing round-off agreement band; otherwise the audit returns
-  `UNAVAILABLE` rather than conditioning a numerically different cluster. **Nothing reads this
+  report mode-for-mode inside the existing round-off agreement band, or -- where that strict
+  pairing fails -- to the arithmetic's own resolution (issue #183); otherwise the audit returns
+  `UNAVAILABLE` rather than conditioning a numerically different cluster. Which modes form the
+  conditioned group is closed under the arithmetic's own resolution (issue #183): two eigenvalues
+  whose midpoint lies in the pseudospectrum at one unit of round-off,
+  `sigma_min(L - m I) <= eps * ||L||_F`, are kept together, so a defective pair that round-off
+  splits differently in different bases is conditioned whole in all of them; that test is bounded
+  by a fixed SVD budget and ends as `UNAVAILABLE` rather than running long on a pathologically
+  non-normal operator. **Nothing reads this
   audit** — no filter, gap, certificate, diagnostic or tier — and it is not a detector for stiff
   eigensolver failure (issues #117/#168). The public entry point is
   `liouscope.numerics.zero_mode_conditioning(L, zero_tolerance=..., eigenvalues=...)`. Called
