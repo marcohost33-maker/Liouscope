@@ -60,7 +60,11 @@ import scipy.linalg as sla
 from .._consts import EPS_DIV
 from .._types import KreissGridEstimate, NonNormalityResult
 from ..numerics.linalg import certified_eig, certified_eigvals, require_finite_square_2d
-from ..numerics.resolvent import resolvent_norm
+from ..numerics.resolvent import (
+    _DENSE_NORM_CUTOFF,
+    ShiftedSchurResolvent,
+    resolvent_norm_evaluator,
+)
 from ..numerics.scale import rate_scale
 
 # Fail-closed ceiling for the dimensionless Henrici index: mathematically
@@ -188,6 +192,9 @@ def kreiss_grid_lower_bound(
     sigma_rel_lo = 1.0e-3
     sigma_rel_hi = max(1.0, abs(re_min_rel) + 1.0)
     omega_rel_max = max(1.0, im_abs_rel + 1.0)
+    # One evaluator serves the coarse sweep and every refinement pass: for
+    # n > 128 it holds the Schur form all ~1200 points share (issue #178).
+    norm_at = resolvent_norm_evaluator(L_super)
 
     def _k_value(sigma_rel: float, omega_rel: float) -> float:
         # sigma is measured from the spectral abscissa (legacy D10 semantics);
@@ -197,7 +204,7 @@ def kreiss_grid_lower_bound(
             return 0.0
         z_abs = complex(shift_rel * scale, omega_rel * scale)
         try:
-            norm = resolvent_norm(L_super, z_abs)
+            norm = norm_at(z_abs)
         except np.linalg.LinAlgError:
             return 0.0
         return float(sigma_rel * scale * norm)
@@ -359,6 +366,12 @@ def kreiss_constant(
     ``L -> cL``. It is preserved byte-identically for backward compatibility;
     use :func:`kreiss_grid_lower_bound` (D10b) for the scale-relative,
     metadata-carrying successor.
+
+    Byte-identical for ``n <= 128``. Larger operators evaluate the same grid
+    from one shared Schur decomposition
+    (:class:`liouscope.numerics.resolvent.ShiftedSchurResolvent`, issue #178)
+    instead of an explicit inverse and an SVD per point; the two agree to the
+    solver's tolerance.
     """
     L_super = np.asarray(L_super, dtype=complex)  # complex128: scipy dispatches by dtype; the double-solve contract (#108) must hold
     eigvals = sla.eigvals(L_super)
@@ -375,6 +388,7 @@ def kreiss_constant(
     omegas = np.linspace(-omega_max, omega_max, n_omega)
     n = L_super.shape[0]
     eye = np.eye(n, dtype=complex)
+    schur = ShiftedSchurResolvent(L_super) if n > _DENSE_NORM_CUTOFF else None
 
     K = 0.0
     for sigma in sigmas:
@@ -385,10 +399,13 @@ def kreiss_constant(
         for omega in omegas:
             z = shift + 1j * omega
             try:
-                Ainv = sla.solve(z * eye - L_super, eye)
+                if schur is not None:
+                    norm = schur.norm(z)
+                else:
+                    Ainv = sla.solve(z * eye - L_super, eye)
+                    norm = float(sla.svdvals(Ainv)[0])
             except np.linalg.LinAlgError:
                 continue
-            norm = float(sla.svdvals(Ainv)[0])
             cand = float(sigma * norm)
             if cand > K:
                 K = cand
