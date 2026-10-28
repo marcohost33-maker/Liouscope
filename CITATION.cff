@@ -221,6 +221,16 @@ abstract: >-
 # anchor fixture) is unchanged bit-for-bit; above that the two backends agree
 # within the existing dense/action tolerance tests. It must be described as a
 # numerical-method change, not as a change of D18's definition.
+# Also pending for the next cut: for n = d**2 > 128 the D10, D10b, D11b and D13
+# grid sweeps evaluate sigma_min(zI - L) from one shared complex Schur form by
+# inverse Lanczos on the shifted triangle (Trefethen 1999; Wright & Trefethen
+# 2001), with a dense SVD of the triangle for any point that does not converge,
+# instead of a dense SVD or a capped SuperLU power iteration per point (#178
+# item 2). Measured values agree with the dense formulas to <= 1.8e-13
+# relative and the D13 membership decisions are identical; D10b and D11b no
+# longer return capped lower bounds. n <= 128 (every anchor fixture) is
+# unchanged bit-for-bit. It must be described as a numerical-method change,
+# not as a change of any diagnostic's definition.
 # Also pending for the next cut: the GLS AR(1) fit presents the optimiser with
 # residuals divided by the curve's own scale max|y| (issue #124), so SciPy's
 # termination no longer turns the seed rate into a "converged" estimate for a

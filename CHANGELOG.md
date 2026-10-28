@@ -289,6 +289,49 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   eigensolver paths use, so one quantity is not measured two different ways.
 
 ### Changed
+- **Resolvent and non-normality grid sweeps share one Schur decomposition above
+  `n = 128` (issue #178, item 2).** D10, D10b, D11b and D13 evaluate
+  `sigma_min(zI - L)`, or its reciprocal, on grids of one operator: 600, 1200,
+  2 x 201 and 2 x 625 points. Measured at `d = 16` (`n = 256`, single-threaded
+  BLAS, damped transverse-field Ising chain), those sweeps were about 90 % of a
+  `diagnose()` call, which took 81.5 s. D10b and D11b refactorised the dense
+  matrix with SuperLU for every point and ran a power iteration: on average 106
+  steps, and 272 of the 1602 calls stopped at the 200-step cap with a
+  `ResolventConvergenceWarning`, returning a lower bound. D10 and D13 took a
+  dense SVD per point at every size.
+
+  `numerics.resolvent.ShiftedSchurResolvent` follows the pseudospectrum
+  algorithm of Trefethen (Acta Numerica 1999) and EigTool (Wright & Trefethen,
+  SISC 2001):
+  - the complex Schur form `L = U T U^H` is computed once, on the operator
+    rescaled by an exact power of two (the #183 LAPACK guard);
+  - `sigma(zI - L) = sigma(zI - T)` because singular values are unitarily
+    invariant, and the smallest one comes from inverse Lanczos with full
+    reorthogonalisation on `(zI - T)^{-1} (zI - T)^{-H}`, i.e. two triangular
+    solves per step;
+  - a converged Ritz value is accepted only if an independent fixed probe
+    finds no larger Rayleigh quotient in three power steps (a Ritz residual
+    alone can certify a subdominant mode when the start vector misses the
+    dominant one; PR #189 review);
+  - a point that fails that check, does not converge in 128 steps, or meets a
+    non-finite intermediate (e.g. an overflowing Krylov norm for a Jordan-like
+    operator) is recomputed by a dense SVD of the shifted triangle, so no value
+    is a capped bound. A dominant mode orthogonal to both fixed vectors would
+    still go unnoticed, as with any deterministic Krylov start.
+
+  Result: `diagnose()` at `d = 16` takes **19.2 s instead of 81.5 s**, and the
+  five sweeps the benchmark times (D10, D10b, both D11b curves, the D13
+  radius) take 7.2 s instead of 55.8 s with the dense formulas. The values
+  agree with the dense formulas to <= 1.8e-13 relative. Against the previous
+  code path, every D10, D10b, D11b, D12 and D13 field of four operators
+  (`n = 144` and `256`) agrees to <= 5e-12, with identical D13 membership
+  decisions and D10b edge flags. The sweeps emit no
+  `ResolventConvergenceWarning` any more. **Nothing changes for `n <= 128`:**
+  every sweep there is its historical dense formula, bit-for-bit, so every
+  anchor fixture is untouched. The single-point `resolvent_norm` is unchanged
+  at every size. The largest remaining cost at `d = 16` is the transient layer
+  (item 3, 6 s). `benchmarks/issue178_resolvent_profile.py` reproduces the
+  comparison.
 - **Dependency floors raised to the lowest TESTED combination: `numpy>=2.0`,
   `scipy>=1.13` (was `numpy>=1.24`, `scipy>=1.10`; issue #177).** The old
   floors were never tested and did not hold. On the declared minimum the
