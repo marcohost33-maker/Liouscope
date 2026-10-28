@@ -282,6 +282,7 @@ class ShiftedSchurResolvent:
 
     def __init__(self, L: np.ndarray) -> None:
         L = require_finite_square_2d(L, name="L")
+        self._operator = np.asarray(L, dtype=complex)
         scaled, self._exponent = _unit_scaled(L)
         T, _ = sla.schur(scaled, output="complex")
         self._minus_T = np.asfortranarray(-T)
@@ -298,9 +299,18 @@ class ShiftedSchurResolvent:
     def sigma_min(self, z: complex) -> float:
         """Smallest singular value of ``zI - L``."""
         z = complex(z)
-        shift = complex(
-            np.ldexp(z.real, -self._exponent), np.ldexp(z.imag, -self._exponent)
-        )
+        with np.errstate(over="ignore"):
+            shift = complex(
+                np.ldexp(z.real, -self._exponent), np.ldexp(z.imag, -self._exponent)
+            )
+        if not (np.isfinite(shift.real) and np.isfinite(shift.imag)):
+            # |z| is too large for the operator's power-of-two scale (e.g. a
+            # 1e-320 operator on a grid with an absolute 1e-3 floor; PR #189
+            # review): evaluate the historical dense expression unscaled.
+            self.evaluations += 1
+            self.dense_fallbacks += 1
+            eye = np.eye(self.n, dtype=complex)
+            return float(sla.svdvals(z * eye - self._operator)[-1])
         A = self._minus_T.copy(order="F")
         A[self._diagonal] += shift
         self.evaluations += 1

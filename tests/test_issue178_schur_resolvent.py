@@ -291,3 +291,16 @@ def test_the_probe_raises_no_false_alarm_on_physical_generators():
     for z in _probe_points(L):
         schur.sigma_min(z)
     assert schur.dense_fallbacks == 0
+
+
+def test_a_shift_outside_the_operators_scale_is_evaluated_unscaled(monkeypatch):
+    # PR #189 review: for a 1e-320 operator the legacy D13 grid (absolute
+    # 1e-3 floor) puts z far outside the operator's power-of-two scale, and
+    # ldexp(z, 1062) overflowed. Such a point is the historical dense SVD.
+    L = -1e-320 * np.eye(CUTOFF + 16)
+    fast = pseudospectral_radius(L)
+    schur = ShiftedSchurResolvent(L)
+    assert schur.sigma_min(1e-3) == _dense_sigma_min(L, 1e-3)
+    assert schur.dense_fallbacks == 1
+    monkeypatch.setattr(resolvent, "_DENSE_NORM_CUTOFF", 10**9)
+    assert fast == pseudospectral_radius(L)
