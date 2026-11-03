@@ -511,6 +511,26 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
       `1e300/sqrt(3)` survives the cancellation (`1.3964842080734432e+283`, reproduced bit for
       bit with `math.fma`). That is `0.044` arithmetic units, and the identity is now asserted
       to one unit.
+  - The probe's first full-suite run found a third class: spectra compared after
+    `np.sort_complex`.
+    - `sort_complex` orders by real part first, so a conjugate pair whose exact real parts are
+      equal is ordered by its rounding.
+    - On Accelerate, `-0.3000000000000003 +- 0.954i` came back against QuTiP's
+      `-0.2999999999999998 -+ 0.954i`, and the QuTiP oracle failed by `1.9`.
+    - The fix is a shared `conftest.assert_spectra_match`, which compares eigenvalue multisets
+      order-free. It decides whether any pairing satisfies the `assert_allclose` criterion,
+      using a perfect matching on the feasibility graph (`linear_sum_assignment`, the same
+      primitive `numerics.conditioning` uses).
+    - It replaces all seven order-dependent spectrum comparisons in the suite, including the
+      rounded-sort-key workaround in `test_metamorphic_spectral.py`, which only moved the tie to
+      the rounding boundary.
+    - `tests/test_spectra_matching.py` pins the helper on the exact macOS values, on
+      multiplicity, and on a tie in total distance.
+    - `benchmarks/issue117_zero_mode_conditioning.py` pairs its "spectrum drift" the same way.
+  - `pyyaml` joins the `dev` extra, for the same reason `jsonschema` is there.
+    `test_reader_matches_pyyaml_live`, the cross-check of the release gate's own workflow-YAML
+    reader against PyYAML, was skipped on every CI run (`could not import 'yaml'`). The gate
+    itself stays dependency-free.
 - **Zero-cluster conditioning is now basis invariant on defective repeated modes (issue #168).**
   The audit-only #117 instrument previously formed `sigma_min(Y^H X)` from eigenvectors returned
   by `?geev`. For a defective repeated eigenvalue no eigenspace of that dimension exists, so a

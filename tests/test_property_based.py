@@ -23,6 +23,7 @@ because eigensolver wall time varies across CI hosts, not with input size.
 from __future__ import annotations
 
 import numpy as np
+from conftest import assert_spectra_match
 from hypothesis import assume, given, settings
 from hypothesis import strategies as st
 
@@ -126,9 +127,11 @@ def test_spectrum_unitary_similarity_property(L, data):
     assume(np.linalg.norm(B) > 1e-3)
     U, _ = np.linalg.qr(B + 1e-3 * np.eye(n))
     assume(np.allclose(U @ U.conj().T, np.eye(n), atol=1e-10))
-    z_orig = np.sort_complex(np.round(eig_nonhermitian(L).eigenvalues, 6))
-    z_sim = np.sort_complex(np.round(eig_nonhermitian(U @ L @ U.conj().T).eigenvalues, 6))
-    np.testing.assert_allclose(z_sim, z_orig, atol=1e-5)
+    z_orig = eig_nonhermitian(L).eigenvalues
+    z_sim = eig_nonhermitian(U @ L @ U.conj().T).eigenvalues
+    # Order-free multiset comparison (issue #180): rounding the values before
+    # ``sort_complex`` only moves a tie to the rounding boundary.
+    assert_spectra_match(z_sim, z_orig, atol=1e-5)
 
 
 # ---------------------------------------------------------------------------

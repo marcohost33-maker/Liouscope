@@ -9,6 +9,7 @@ from fractions import Fraction
 import numpy as np
 import pytest
 import scipy.linalg as scipy_linalg
+from conftest import assert_spectra_match
 
 from liouscope import build_liouvillian
 from liouscope._consts import ZERO_MODE_EPS_FACTOR
@@ -91,12 +92,7 @@ def test_restriction_preserves_the_nonzero_spectrum_for_unique_steady_state() ->
     full_nonzero = np.delete(full, int(np.argmin(np.abs(full))))
     restricted = np.linalg.eigvals(reduced.operator)
 
-    assert np.allclose(
-        np.sort_complex(restricted),
-        np.sort_complex(full_nonzero),
-        rtol=2.0e-13,
-        atol=2.0e-13,
-    )
+    assert_spectra_match(restricted, full_nonzero, rtol=2.0e-13, atol=2.0e-13)
     assert reduced.invariance_defect <= 1.0e-13 * reduced.operator_scale
     assert reduced.reconstruction_defect <= 1.0e-13 * reduced.operator_scale
 
