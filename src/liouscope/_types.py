@@ -232,7 +232,9 @@ class RelaxationResult:
     fits: dict[str, FitResult]
     aicc_model: str                       # winning model
     beta_D: float                         # fitted exponential rate of best model
-    bca_ci_beta: tuple[float, float]      # BCa 95% CI
+    # 95% bootstrap CI on beta_D. Despite the historical field name it is BCa
+    # only when ``interval_method`` says so; on the default grid it is BC.
+    bca_ci_beta: tuple[float, float]
     # F-018 (LIOU-F-018): half trace-norm distance to rho_ss along the
     # trajectory, the observable relaxation metric alongside D5/D6/D7. Optional
     # and defaulted so the field is purely additive (older callers/serialised
@@ -257,6 +259,20 @@ class RelaxationResult:
     # eigenvalue of the Hermitian part along the trajectory. Audit measurements
     # only -- nothing is repaired. NaN for results that carry no trajectory.
     trajectory_max_trace_error: float = float("nan")
+    # Issue #116: which estimator actually produced ``bca_ci_beta`` -- one of
+    # ``liouscope._consts.INTERVAL_METHODS``:
+    #   "BC"          acceleration a = 0, the bias-corrected percentile interval
+    #                 (the default 80-point grid lands here);
+    #   "BCa-delete1" acceleration from the leave-one-out jackknife (grids of
+    #                 <= JACKKNIFE_MAX_GRID_POINTS points); Efron's iid
+    #                 construction, not calibrated for the serially correlated
+    #                 residuals this fit models;
+    #   "unavailable" no finite interval: bootstrap failure, non-finite point
+    #                 estimate, or a degenerate bootstrap distribution (#125).
+    # Defaulted to "unreported" so pre-#116 constructor calls and deserialised
+    # reports stay valid -- for them the estimator genuinely was not recorded,
+    # and guessing one would be the very defect this field removes.
+    interval_method: str = "unreported"
     trajectory_max_hermiticity_defect: float = float("nan")
     trajectory_min_eigenvalue: float = float("nan")
 

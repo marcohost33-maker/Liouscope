@@ -7,6 +7,44 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Added
+- **The relaxation-rate interval now says which estimator produced it:
+  `RelaxationResult.interval_method` (issue #116, stage 1, `claim_status: pending`).**
+  - **The defect.** The default pipeline computed a bias-corrected (BC)
+    interval and published it as "BCa". The leave-one-out jackknife that
+    supplies the BCa acceleration term `a` runs only on grids of at most 60
+    points, a latency guard, while the default grid has 80. `bca_ci` then uses
+    `a = 0`, and its quantiles reduce to `Phi(2 z0 + z_alpha)`: Efron's BC
+    interval. The v0.5.0 README promised BCa four times. The error is not
+    conservative by construction, because `a` can move both endpoints either
+    way.
+  - **The field.** Additive and closed, see `liouscope._consts.INTERVAL_METHODS`:
+    - `"BC"`: the default grid.
+    - `"BCa-delete1"`: grids of at most `JACKKNIFE_MAX_GRID_POINTS = 60`
+      points. The name is deliberately precise: the acceleration is Efron's
+      iid delete-one construction applied to a serially correlated series
+      whose bootstrap is parametric AR(1)/CAR(1), so it is not calibrated for
+      dependent data (2026-09-19 triage).
+    - `"unavailable"`: no finite interval, whether from bootstrap failure, a
+      non-finite point estimate, or a degenerate bootstrap distribution (#125).
+    - `"unreported"`: the default, for pre-#116 constructor calls and
+      deserialised reports, which genuinely carry no record.
+  - **What changed against PR #119.** This builds on the disclosure design of
+    PR #119 and closes two gaps that opened after it was written. Under #125,
+    #119 would have labelled a withheld (NaN) interval `"BC"`. And the
+    jackknife path is no longer called plain BCa.
+  - **What did not change.** No number changes. The 60-point gate is lifted
+    into a named constant with its rationale, and its value is unchanged.
+    README, tutorial and `no-single-number.md` no longer promise BCa
+    unconditionally. U0 inherits the label. The run-manifest and
+    StabilityReport contracts are unchanged, since neither enumerates the
+    relaxation fields.
+  - **Not included, still open in #116 stages 2-4.** Raising or dropping the
+    gate, or a dependence-aware acceleration (block jackknife,
+    empirical-influence regression). Each changes reported intervals and needs
+    the preregistered coverage study the issue describes.
+  - **Tests.** `tests/test_interval_method.py`, 13 tests: every reachable label,
+    the gate boundary, the #125 degenerate case, an independent closed-form
+    oracle for BC, a liveness check of the acceleration, and U0 consistency.
 - **D18 initial-state sensitivity can use one deterministic block exponential
   action instead of materialising a full propagator (issue #178).** The Haar
   ensemble is collected as right-hand-side columns and evolved by

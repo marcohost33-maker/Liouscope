@@ -120,6 +120,34 @@ TIER_PUBLICATION: Final[str] = "PUBLICATION_GRADE"
 TIER_CONFIRMATION: Final[str] = "CONFIRMATION"
 TIER_EXPLORATION: Final[str] = "EXPLORATION"
 
+# Issue #116: which interval estimator produced ``RelaxationResult.bca_ci_beta``.
+# With acceleration ``a = 0`` the BCa quantiles ``Phi(z0 + (z0 + z)/(1 - a(z0 + z)))``
+# reduce to ``Phi(2 z0 + z)``: the bias-corrected (BC) percentile interval, not
+# BCa (Efron 1987). The acceleration is estimated only by the leave-one-out
+# jackknife, and only on grids of at most JACKKNIFE_MAX_GRID_POINTS points.
+# That jackknife deletes single points of a SERIALLY CORRELATED series whose
+# bootstrap is parametric AR(1)/CAR(1), so its ``a`` follows Efron's iid
+# construction and is not calibrated for dependent data. Hence the precise
+# label "BCa-delete1" rather than a bare "BCa". A later, calibrated estimator
+# gets its own label instead of silently inheriting this one.
+INTERVAL_METHOD_BC: Final[str] = "BC"
+INTERVAL_METHOD_BCA_DELETE1: Final[str] = "BCa-delete1"
+INTERVAL_METHOD_UNAVAILABLE: Final[str] = "unavailable"
+INTERVAL_METHOD_UNREPORTED: Final[str] = "unreported"
+INTERVAL_METHODS: Final[tuple[str, ...]] = (
+    INTERVAL_METHOD_BC,
+    INTERVAL_METHOD_BCA_DELETE1,
+    INTERVAL_METHOD_UNAVAILABLE,
+    INTERVAL_METHOD_UNREPORTED,
+)
+# Latency guard, not a statistical choice. The jackknife refits the winning
+# model once per grid point, on top of ``bootstrap_B`` refits, so it is skipped
+# on longer grids. The default grid has 80 points, so ``diagnose()`` reports
+# INTERVAL_METHOD_BC by default (issue #116). Raising this value changes
+# reported intervals and needs its own anchor and coverage review; it is
+# deliberately not changed here.
+JACKKNIFE_MAX_GRID_POINTS: Final[int] = 60
+
 QUALITY_STABLE: Final[str] = "stable"
 QUALITY_MODERATE: Final[str] = "moderate"
 QUALITY_EXPLORATORY: Final[str] = "exploratory"

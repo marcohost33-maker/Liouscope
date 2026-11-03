@@ -250,6 +250,16 @@ abstract: >-
 # values within the optimiser's tolerance at unit scale too. MANIFEST_SCHEMA
 # is deliberately unchanged -- none of these quantities
 # is a run-manifest field, so `input_hash` does not move.
+# Also pending for the next cut (issue #116), a labelling CORRECTION and not an
+# addition. The v0.5.0 README (not this abstract) described the
+# relaxation-rate interval unconditionally as BCa, four times. On the default 80-point grid no acceleration
+# is estimated (a = 0), so that interval is the bias-corrected (BC) percentile
+# interval. BCa, with delete-one jackknife acceleration, applies only to grids
+# of <= 60 points. Each run now records which estimator it computed
+# (`RelaxationResult.interval_method`: "BC" | "BCa-delete1" | "unavailable").
+# NO NUMBER CHANGES. It must NOT be described as making the interval BCa, or as
+# calibrating its coverage under the serially correlated residuals the fit
+# models: that is a separate, open coverage study (issue #116, stages 2-4).
 keywords:
   - open quantum systems
   - Lindblad
