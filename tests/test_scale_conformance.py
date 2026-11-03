@@ -53,6 +53,23 @@ def _rabi_dephasing_L() -> np.ndarray:
     return build_liouvillian(0.5 * X, [Z], [0.3])
 
 
+def _strongly_driven_weakly_dephased_L() -> np.ndarray:
+    """A Liouvillian whose eps-pseudospectral abscissa is NOT zero.
+
+    Its real spectral spread is far below ``1e-3 * ||L||_F``, so the abscissa
+    grid uses its scale-relative span floor; the eps-ball around the
+    stationary eigenvalue then reaches positive grid nodes and the abscissa
+    is ``5e-4 * rate_scale``. Both other fixtures have an abscissa of exactly
+    0 (issue #180 review). Against that, "scales by c" carries no signal: a
+    build that dropped the rate unit from the abscissa failed only where a
+    ``1e-16`` rounding residue happened to exceed the tolerance, i.e. by
+    noise. Here it fails by ``5e-4 * rate_scale``.
+    """
+    X = np.array([[0.0, 1.0], [1.0, 0.0]], dtype=complex)
+    Z = np.diag([1.0, -1.0]).astype(complex)
+    return build_liouvillian(50.0 * X, [Z], [0.01])
+
+
 def _amplitude_damping_L() -> np.ndarray:
     sm = np.array([[0.0, 1.0], [0.0, 0.0]], dtype=complex)
     return build_liouvillian(np.zeros((2, 2), dtype=complex), [sm], [0.7])
@@ -218,7 +235,12 @@ def test_kreiss_scaled_unitary_similarity_invariant(rng):
 
 
 def test_resolvent_layer_scaled_fields_invariant_under_rate_rescale():
-    for L in (_rabi_dephasing_L(), _amplitude_damping_L()):
+    fixtures = (_rabi_dephasing_L(), _amplitude_damping_L(), _strongly_driven_weakly_dephased_L())
+    # Non-vacuity premise: at least one fixture has an abscissa far from 0,
+    # so the "rate-valued outputs scale by c" check below can fail at all.
+    driven = compute_resolvent_layer(fixtures[-1])
+    assert driven.pseudospectral_abscissa_rel == pytest.approx(5.0e-4, rel=1.0e-6)
+    for L in fixtures:
         base = compute_resolvent_layer(L)
         for c in C_SET:
             r = compute_resolvent_layer(c * L)

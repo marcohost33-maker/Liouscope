@@ -38,9 +38,24 @@ def _amplitude_damped_qubit(rate: float = 1.0) -> np.ndarray:
     )
 
 
+#: ``(to, from)`` jumps of the stiff classical network and their rates; the
+#: entry ``None`` is the fast ``2 -> 3`` transition.
+_STIFF_JUMPS: tuple[tuple[int, int, float | None], ...] = (
+    (0, 3, 7.28e-6),
+    (0, 2, 3.67e-5),
+    (1, 0, 1.53e-5),
+    (3, 2, None),
+    (2, 1, 1.42e-5),
+)
+
+
+def _stiff_rates(fast_rate: float) -> list[float]:
+    return [fast_rate if rate is None else rate for _, _, rate in _STIFF_JUMPS]
+
+
 def _classical_stiff_network(fast_rate: float) -> np.ndarray:
-    pairs = [(0, 3), (0, 2), (1, 0), (3, 2), (2, 1)]
-    rates = [7.28e-6, 3.67e-5, 1.53e-5, fast_rate, 1.42e-5]
+    pairs = [(to, frm) for to, frm, _ in _STIFF_JUMPS]
+    rates = _stiff_rates(fast_rate)
     jumps: list[np.ndarray] = []
     for to, frm in pairs:
         jump = np.zeros((4, 4), dtype=complex)
@@ -129,6 +144,22 @@ _STIFF_COHERENCE_MODE = -1.074e-5
 _STIFF_REL = 2.0e-8
 
 
+def _stiff_coherence_spectrum(fast_rate: float) -> np.ndarray:
+    """Closed-form coherence eigenvalues ``-(Gamma_i + Gamma_j) / 2``, i != j.
+
+    Ordered like the off-diagonal matrix units of :func:`traceless_basis`
+    (column-stacked ``|i><j|``), so it can be compared entry by entry with the
+    diagonal of the restricted coherence block.
+    """
+    d = 4
+    out_rate = [0.0] * d
+    for (_, frm, _), rate in zip(_STIFF_JUMPS, _stiff_rates(fast_rate)):
+        out_rate[frm] += rate
+    return np.array(
+        [-(out_rate[i] + out_rate[j]) / 2.0 for j in range(d) for i in range(d) if i != j]
+    )
+
+
 def _stiff_population_slow_pair() -> np.ndarray:
     """Slow population pair of the stiff network, fast-rate independent.
 
@@ -185,12 +216,18 @@ def test_stiff_network_keeps_the_known_slow_mode_without_zero_filter(
     float64 data do not determine that number. The competitor is the slow
     population pair at ``Re = -1.839e-5``, which lies only ``7.65e-6`` below
     the coherence mode. The first-order error of that pair is
-    ``eps * ||A||_1 / s = 3.6e-4`` there, 47x the separation. A one-ulp change of the reduced
-    operator (5 of 225 entries, measured between NumPy 1.26 and 2.x) moved the
-    pair to ``Re >= 0`` and the "gap" to ``-0.0``. Over 400 random one-ulp
-    perturbations, 19 % flipped it. The assertion therefore depended on
-    summation order (BLAS build, SIMD path, platform), not on the code under
-    test.
+    ``eps * ||A||_1 / s = 3.6e-4`` there, 47x the separation.
+
+    Measured between NumPy 1.26.4 and 2.5.3, the reduced operators differ in
+    5 of 225 entries. Four differ by exactly one ulp. The fifth, ``(14, 12)``,
+    is pure rounding noise around an exact 0: ``-8.5e-22`` against
+    ``-4.0e-22``. That was enough to put an eigenvalue at exactly ``0.0`` and
+    make the "gap" ``-0.0`` on 1.26. Neither build resolves the pair. Where
+    the old assertion passed, NumPy 2.5.3 returned the real values
+    ``-2.24e-5`` and ``-3.52e-5`` instead of ``-1.839e-5 +- 9.69e-6 i``. Over
+    400 random one-ulp perturbations, 19 % flipped the assertion. It
+    therefore depended on summation order (BLAS build, SIMD path, platform),
+    not on the code under test.
 
     What is asserted now, for every fast rate:
 
@@ -226,6 +263,16 @@ def test_stiff_network_keeps_the_known_slow_mode_without_zero_filter(
        instead of silently weakening the test. In the undetermined cases the
        computed gap still equals ``1.074e-5`` on every build measured so far.
        It is not asserted there, because the data do not guarantee it.
+
+    Measured sensitivity, by mutating the restricted operator:
+    - Caught at every rate: a coherence mode off by 1 %, the slow mode
+      replaced by a fast one (#113), a spurious slow coherence mode, and any
+      coherence-population coupling.
+    - Caught only at 1e8: a stationary zero that reappears inside the
+      POPULATION block. At 1e10 and 1e12 such a zero lies inside the band, so
+      no float64 test of this fixture can tell it from the unresolved pair.
+      The invariance and reconstruction defect tests in this module cover the
+      restriction itself against that regression at every scale.
     """
     L_super = _classical_stiff_network(fast_rate)
     with warnings.catch_warnings():
@@ -244,6 +291,17 @@ def test_stiff_network_keeps_the_known_slow_mode_without_zero_filter(
     assert np.count_nonzero(coherence - np.diag(np.diag(coherence))) == 0
     assert np.count_nonzero(A[:n_coh, n_coh:]) == 0
     assert np.count_nonzero(A[n_coh:, :n_coh]) == 0
+
+    # The decoupled coherence block must also carry the right numbers: all 12
+    # coherence eigenvalues against their closed form. Each diagonal entry is
+    # a sum of at most three rates, so 1e-12 is far above its rounding and far
+    # below any physical change. Without this, a regression that moved only
+    # one member of the degenerate (1, 3) / (3, 1) pair would pass claim 1 on
+    # the strength of its untouched partner.
+    np.testing.assert_allclose(
+        np.diag(coherence).real, _stiff_coherence_spectrum(fast_rate), rtol=1.0e-12, atol=0.0
+    )
+    assert np.count_nonzero(np.diag(coherence).imag) == 0
 
     # Claim 1: the known slow mode is in the spectrum at every fast rate, and
     # therefore no reported slowest mode is faster than it.

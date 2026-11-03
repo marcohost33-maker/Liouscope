@@ -81,19 +81,28 @@ jobs:
         run: pytest -q
 
   test-numerics-platform:
-    # Issue #180: two tests passed on one NumPy/SciPy build and failed on the
-    # next because they asserted accuracy below the float64 backward error.
-    # The Linux matrix shares one BLAS family, so that class of fragility can
-    # only show up elsewhere. This job runs the numerically delicate tests on
-    # macOS arm64. NumPy's macOS >= 14 arm64 wheels link Apple Accelerate
-    # rather than OpenBLAS, and the install step prints the BLAS that NumPy
-    # and SciPy actually loaded, so that a different rounding shows up in CI
-    # with its provenance on record instead of in the field. It is deliberately NOT a required check: it is a diversity
-    # probe, and a failure here is a finding about a test's error model.
-    name: numerics platform probe (macos arm64, python 3.12)
-    runs-on: macos-14
+    # Issue #180: tests passed on one NumPy/SciPy build and failed on the next
+    # because they asserted accuracy below the float64 rounding level. The
+    # required matrix runs on one CPU architecture and one BLAS family, so that
+    # class of fragility only surfaces elsewhere. This probe runs the FULL
+    # suite (anchors first) on two other BLAS stacks:
+    #   * macos-14: NumPy and SciPy wheels link Apple Accelerate (verified in
+    #     this job's own show_config output), which uses FMA and multiple
+    #     partial sums in its dot products;
+    #   * ubuntu-24.04-arm: OpenBLAS with its arm64 kernels instead of x86-64.
+    # Its first run found two more tests of exactly that class. The install
+    # step prints the BLAS NumPy and SciPy actually loaded, so any difference
+    # arrives with its provenance on record. Deliberately NOT a required check:
+    # it is a diversity probe, and a failure here is a finding about a test's
+    # error model, to be root-caused rather than retried.
+    name: numerics platform probe (${{ matrix.os }}, python 3.12)
+    runs-on: ${{ matrix.os }}
     permissions:
       contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-14, ubuntu-24.04-arm]
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803  # v6.1.0
         with:
@@ -105,16 +114,12 @@ jobs:
       - name: Install package
         run: |
           python -m pip install --upgrade pip
-          pip install -e .[dev]
+          pip install -e .[dev,qutip]
           python -c "import numpy, scipy; print('numpy', numpy.__version__, 'scipy', scipy.__version__); numpy.show_config(); scipy.show_config()"
-      - name: Run anchor regressions
+      - name: Run anchor regressions (QuTiP installed, so none are skipped)
         run: pytest tests/test_anchors.py -v
-      - name: Run numerically delicate tests
-        run: >-
-          pytest -v
-          tests/test_traceless_restriction.py
-          tests/test_scale_conformance.py
-          tests/test_issue117_conditioning.py
+      - name: Run full test suite
+        run: pytest -q -rs
 
   test-head:
     if: ${{ github.event_name == 'pull_request' }}
