@@ -242,13 +242,25 @@ def test_resolvent_layer_scaled_fields_invariant_under_rate_rescale():
                 rtol=RTOL_INV,
                 atol=ATOL_INV,
             )
-            # Rate-valued outputs scale by c.
+            # Rate-valued outputs scale by c -- and so does every tolerance
+            # placed on them (issue #180). The abscissa of these fixtures is
+            # the grid node that sits on the stationary eigenvalue, so its
+            # exact value is 0 and the computed one is the round-off of the
+            # node arithmetic, ~eps * ||cL||. A dimensionless ``ATOL_INV`` on a
+            # RATE is not unit-covariant: at c = 1e10 (rate_scale 1.65e10) the
+            # same node legitimately reads 1.157e-16 * rate_scale = 1.907e-6
+            # on NumPy 1.26 / SciPy 1.12 and 0.0 on NumPy 2.x, which the bare
+            # 1e-12 rejected. ``ATOL_INV * rate_scale`` is the same 1e-12 in
+            # the operator's own units. The grid spacing is at least
+            # (2/24) * 1e-3 * rate_scale, so this tolerance is below 1.2e-8 of
+            # one spacing: it still pins WHICH node was selected, not only its
+            # value.
             np.testing.assert_allclose(r.rate_scale, c * base.rate_scale, rtol=RTOL_INV)
             np.testing.assert_allclose(
                 r.pseudospectral_abscissa,
                 c * base.pseudospectral_abscissa,
                 rtol=RTOL_INV,
-                atol=ATOL_INV,
+                atol=ATOL_INV * r.rate_scale,
             )
 
 

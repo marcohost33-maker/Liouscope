@@ -452,6 +452,41 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `git worktree` of the same commit instead of the first build's tree.
 
 ### Fixed
+- **Two tests no longer assert accuracy below the float64 backward error (issue #180).**
+  Test-only change. No library code, reported number, anchor or manifest field changes.
+  - `test_stiff_network_keeps_the_known_slow_mode_without_zero_filter[1e12]` used to assert
+    `gap == 1.074e-5`, a value the data do not determine.
+    - The competitor is the slow population pair at `Re = -1.839e-5`, only `7.65e-6` away from
+      that mode. Its LAPACK first-order error estimate (`eps * ||A||_1 / s`, LAPACK Users'
+      Guide section 4.8) is `3.6e-4`.
+    - A one-ulp difference in 5 of 225 entries of the reduced operator (NumPy 1.26 vs 2.x)
+      moved the gap to `-0.0`, and 19 % of random one-ulp perturbations flipped it.
+  - The test now asserts three things:
+    1. The coherence mode survives at every rate. This is structural: the coherence block is
+       decoupled by exact zeros, which the test checks bit for bit, so the gap can never exceed
+       the true slow mode. That bound is the #113 failure.
+    2. Anything that outranks the coherence mode lies within `n` times that estimate of the
+       closed-form population pair. The factor `n` covers the formation error of `B^H L B`.
+    3. `gap == 1.074e-5` holds exactly wherever that same band is narrower than the
+       separation. A parameter pins which regime each rate falls in.
+  - Under that band only 1e8 is arithmetically determined. 1e10 still computes the exact gap on
+    every build measured, but the bare estimate cleared the separation by only 1.7x, and 16-ulp
+    perturbations then flipped it in up to 59 of 400 runs. 1e10 therefore moves to the
+    undetermined branch, where claims 1 and 2 still apply in full.
+  - No failure in 4 perturbation regimes x 3 rates x 400 runs (up to 16 ulp in every entry).
+  - `test_resolvent_layer_scaled_fields_invariant_under_rate_rescale` compared the RATE-VALUED
+    `pseudospectral_abscissa` with a dimensionless `atol=1e-12`. The root cause is not a tie
+    effect, as #180 suspected. On these fixtures the abscissa is the grid node on the stationary
+    eigenvalue, so it is exactly 0, and its computed value is round-off of `~eps * ||cL||`. At
+    `c = 1e10` that was `1.157e-16 * rate_scale = 1.907e-6` on SciPy 1.12. The tolerance is now
+    `ATOL_INV * rate_scale`, the same 1e-12 in the operator's own units. That is below `1.2e-8`
+    of one grid spacing, so it still pins which node was selected.
+  - Both tests pass on NumPy 1.26.4 / SciPy 1.12.0 (where both failed before) and on
+    NumPy 2.5.3 / SciPy 1.18.1.
+  - New non-required CI job `test-numerics-platform`, which is #180 item 3. It runs the anchors
+    and the numerically delicate tests on macOS 14 arm64. NumPy's wheels there link Apple
+    Accelerate, not OpenBLAS, and the job prints both libraries' BLAS configuration, so
+    rounding-order fragility shows up in CI instead of in the field.
 - **Zero-cluster conditioning is now basis invariant on defective repeated modes (issue #168).**
   The audit-only #117 instrument previously formed `sigma_min(Y^H X)` from eigenvectors returned
   by `?geev`. For a defective repeated eigenvalue no eigenspace of that dimension exists, so a

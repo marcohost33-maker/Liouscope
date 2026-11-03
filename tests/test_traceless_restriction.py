@@ -8,10 +8,12 @@ from fractions import Fraction
 
 import numpy as np
 import pytest
+import scipy.linalg as scipy_linalg
 
 from liouscope import build_liouvillian
 from liouscope._consts import ZERO_MODE_EPS_FACTOR
 from liouscope.numerics import traceless as traceless_module
+from liouscope.numerics.conditioning import eigenvalue_conditioning
 from liouscope.numerics.linalg import (
     trace_preservation_componentwise_error,
     trace_preservation_defect,
@@ -118,25 +120,154 @@ def test_non_trace_preserving_input_is_refused_before_restriction() -> None:
         restrict_to_traceless(bad)
 
 
-@pytest.mark.parametrize("fast_rate", [1.0e8, 1.0e10, 1.0e12])
+#: Slowest coherence mode of :func:`_classical_stiff_network`. Classical jumps
+#: ``|to><frm|`` map a coherence ``|i><j|`` (``i != j``) only onto itself, with
+#: eigenvalue ``-(Gamma_i + Gamma_j) / 2``, ``Gamma`` the total out-rate; for the
+#: pair (1, 3) that is ``-(1.42e-5 + 7.28e-6) / 2``. The fast rate leaves
+#: state 2 only, so this value does not depend on it.
+_STIFF_COHERENCE_MODE = -1.074e-5
+_STIFF_REL = 2.0e-8
+
+
+def _stiff_population_slow_pair() -> np.ndarray:
+    """Slow population pair of the stiff network, fast-rate independent.
+
+    State 2 empties into 3 at the fast rate, so the slow dynamics is the
+    three-state cycle 0 -> 1 -> (2 ->) 3 -> 0 with rates ``a, b, c``; its non-zero
+    eigenvalues solve ``x^2 + (a+b+c) x + (ab+bc+ca) = 0``. The neglected
+    branching ``2 -> 0`` is ``3.67e-5 / fast_rate`` of the ``1 -> 3`` flux, so
+    the closed form agrees with a 60-digit eigensolve of the full rate matrix
+    to below 1e-12 relative already at 1e8 (``-1.839e-5 +- 9.6864803e-6 i`` at
+    1e8, 1e10 and 1e12 alike).
+    """
+    a, b, c = 1.53e-5, 1.42e-5, 7.28e-6
+    s1 = a + b + c
+    s2 = a * b + b * c + c * a
+    root = np.sqrt(complex(s1 * s1 - 4.0 * s2))
+    return np.array([(-s1 + root) / 2.0, (-s1 - root) / 2.0])
+
+
+def _lapack_eigenvalue_error_estimate(A: np.ndarray, target: complex) -> float:
+    """``eps * ||A||_1 / s`` for the eigenvalue of ``A`` nearest ``target``.
+
+    This is the first-order estimate the LAPACK Users' Guide prescribes for
+    ``xGEEV`` output (section 4.8, "Error Bounds for the Nonsymmetric
+    Eigenproblem": ``EERRBD = EPSMCH * ABNRM / RCONDE``) -- asymptotic, not
+    rigorous. ``numpy.finfo(float).eps`` is twice LAPACK's ``EPSMCH``, and the
+    unbalanced ``||A||_1`` is not smaller than LAPACK's balanced ``ABNRM`` on
+    this fixture, so both choices err on the wide side. ``s = |y^H x|`` is the
+    reciprocal condition number of that eigenvalue on ``A`` as written. Where
+    the solve does not resolve the eigenvalue (the 1e12 case) the measured
+    ``s`` is that of whatever was computed (1.0 there, against ~0.82 at the
+    resolved rates). Since ``s <= 1`` the estimate never drops below
+    ``eps * ||A||_1``, and an overstated ``s`` only narrows the band.
+    """
+    w, left, right = scipy_linalg.eig(A, left=True, right=True)
+    s = eigenvalue_conditioning(right, left)
+    j = int(np.argmin(np.abs(w - target)))
+    if s[j] <= 0.0:
+        return math.inf
+    return float(_EPS * np.linalg.norm(A, 1) / s[j])
+
+
+@pytest.mark.parametrize(
+    ("fast_rate", "ordering_determined"),
+    [(1.0e8, True), (1.0e10, False), (1.0e12, False)],
+)
 def test_stiff_network_keeps_the_known_slow_mode_without_zero_filter(
     fast_rate: float,
+    ordering_determined: bool,
 ) -> None:
-    """#113 discrimination: no spectral-radius threshold can swallow the gap."""
+    """#113 discrimination: no spectral-radius threshold can swallow the gap.
+
+    Issue #180 restated this test against the float64 backward-error level.
+    It used to assert ``gap == 1.074e-5`` at every fast rate, but at 1e12 the
+    float64 data do not determine that number. The competitor is the slow
+    population pair at ``Re = -1.839e-5``, which lies only ``7.65e-6`` below
+    the coherence mode. The first-order error of that pair is
+    ``eps * ||A||_1 / s = 3.6e-4`` there, 47x the separation. A one-ulp change of the reduced
+    operator (5 of 225 entries, measured between NumPy 1.26 and 2.x) moved the
+    pair to ``Re >= 0`` and the "gap" to ``-0.0``. Over 400 random one-ulp
+    perturbations, 19 % flipped it. The assertion therefore depended on
+    summation order (BLAS build, SIMD path, platform), not on the code under
+    test.
+
+    What is asserted now, for every fast rate:
+
+    1. The coherence mode is retained to ``2e-8``, for a structural reason
+       rather than by float64 accuracy. The coherence block of the restricted
+       operator is decoupled by exact zeros, which is a premise the test
+       checks bit for bit, so LAPACK's balancing isolates those eigenvalues
+       as 1x1 blocks. Hence the reported gap can never exceed the true slow
+       mode, which is the #113 failure, where a fast mode was reported.
+    2. Every eigenvalue that outranks the coherence mode lies within the
+       error band of the exact population slow pair, so it is the unresolved
+       slow pair and not a spurious mode. The band is ``n`` times the LAPACK
+       estimate, with ``n = 15``. The factor covers the formation of
+       ``B^H L B`` itself: its entries are length-``n`` inner products and
+       carry up to ``n * u`` relative error before the eigensolver adds its
+       own. Without the factor, 3 of 400 four-ulp perturbations at 1e12
+       escaped the bare estimate. With it, the band is still about 1e14 times
+       narrower than the distance to the fast mode at ``-fast_rate``, the
+       failure #113 is about.
+    3. Where that SAME band is narrower than the separation, the arithmetic
+       determines the ordering, no eigenvalue may outrank the coherence mode,
+       and ``gap == 1.074e-5`` is exact. One band serves both claims on
+       purpose: a looser band for containment and a tighter one for the
+       regime would assert an ordering the containment model does not
+       guarantee. Measured: at 1e8 the band is ``6.5e-7``, 12x below the
+       separation. At 1e10 it is ``6.6e-5``, 8.6x above. With the bare
+       estimate, 1e10 would have counted as determined by only 1.7x, and
+       16-ulp perturbations then flipped its gap in up to 59 of 400 runs. At
+       1e12 the band is 700x above the separation, and even
+       ``eps * ||A||_2 = 2.7e-4`` exceeds the pair's whole modulus.
+       ``ordering_determined`` pins the regime of each rate, so a fixture or
+       solver change that moves a case across the boundary fails loudly
+       instead of silently weakening the test. In the undetermined cases the
+       computed gap still equals ``1.074e-5`` on every build measured so far.
+       It is not asserted there, because the data do not guarantee it.
+    """
     L_super = _classical_stiff_network(fast_rate)
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
         reduced = restrict_to_traceless(L_super)
         eigenvalues = np.linalg.eigvals(reduced.operator)
-
-    # The slowest physical Liouvillian modes for this classical-jump fixture
-    # are coherence modes at 1.074e-5. The value is independent of the separate
-    # fast population edge. The old zero filter reports a fast mode once its
-    # radius-derived cutoff grows past this scale; the restricted operator has
-    # no unique stationary eigenvalue to filter in the first place.
-    gap = -float(np.max(np.real(eigenvalues)))
-    assert gap == pytest.approx(1.074e-5, rel=2.0e-8, abs=0.0)
+    A = reduced.operator
     assert reduced.invariance_defect <= 1.0e-12 * reduced.operator_scale
+
+    # Premise of claim 1, checked exactly: the first d(d-1) = 12 basis columns
+    # are off-diagonal matrix units (see ``traceless_basis``), and classical
+    # jumps couple no coherence to anything but itself, so the coherence block
+    # is diagonal and every entry linking it to the populations is exactly 0.
+    n_coh = 12
+    coherence = A[:n_coh, :n_coh]
+    assert np.count_nonzero(coherence - np.diag(np.diag(coherence))) == 0
+    assert np.count_nonzero(A[:n_coh, n_coh:]) == 0
+    assert np.count_nonzero(A[n_coh:, :n_coh]) == 0
+
+    # Claim 1: the known slow mode is in the spectrum at every fast rate, and
+    # therefore no reported slowest mode is faster than it.
+    distance = np.min(np.abs(eigenvalues - _STIFF_COHERENCE_MODE))
+    assert distance <= _STIFF_REL * abs(_STIFF_COHERENCE_MODE)
+    gap = -float(np.max(np.real(eigenvalues)))
+    assert gap <= abs(_STIFF_COHERENCE_MODE) * (1.0 + _STIFF_REL)
+
+    # Claim 2: whatever outranks it is the slow population pair, within the
+    # LAPACK first-order estimate widened by the formation error of A.
+    pair = _stiff_population_slow_pair()
+    band = A.shape[0] * max(_lapack_eigenvalue_error_estimate(A, z) for z in pair)
+    separation = float(np.min(np.real(_STIFF_COHERENCE_MODE - pair)))
+    assert separation == pytest.approx(7.65e-6, rel=1.0e-3)
+    threshold = _STIFF_COHERENCE_MODE * (1.0 - _STIFF_REL)
+    outranking = eigenvalues[np.real(eigenvalues) > threshold]
+    for z in outranking:
+        assert np.min(np.abs(pair - z)) <= band, (z, band)
+
+    # Claim 3: regime pin, then exactness where the arithmetic decides it.
+    assert (band < separation) is ordering_determined, (band, separation)
+    if ordering_determined:
+        assert outranking.size == 0
+        assert gap == pytest.approx(abs(_STIFF_COHERENCE_MODE), rel=_STIFF_REL, abs=0.0)
 
 
 def _diluted_trace_violation() -> np.ndarray:
