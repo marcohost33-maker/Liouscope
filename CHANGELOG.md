@@ -527,6 +527,15 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     - `tests/test_spectra_matching.py` pins the helper on the exact macOS values, on
       multiplicity, and on a tie in total distance.
     - `benchmarks/issue117_zero_mode_conditioning.py` pairs its "spectrum drift" the same way.
+  - The Linux arm64 probe found a fourth case.
+    - `test_issue183_a_genuine_split_is_not_merged[split=1e-14]` asserted the per-mode
+      reciprocal condition `2 sqrt(split)` to a fixed `rel=2e-2`.
+    - A backward error `e` acts on that block like `split -> split + e`, so `ds/s ~ e/(2 split)`.
+      One unit (`eps * ||L||_2`) is already 2.2 % at `1e-14`, which put the old tolerance at
+      0.90 units. OpenBLAS arm64 returned `2.0400567e-07`, which is 0.90 units off.
+    - Measured over seeds, bases and 1- and 4-ulp perturbations, the deviation stays below 1.5
+      units. The tolerance is now 4 units: 8.9 % at `1e-14`, and tighter than before at `1e-13`
+      (0.89 %) and `1e-12` (0.089 %, previously a lax 90 units).
   - `pyyaml` joins the `dev` extra, for the same reason `jsonschema` is there.
     `test_reader_matches_pyyaml_live`, the cross-check of the release gate's own workflow-YAML
     reader against PyYAML, was skipped on every CI run (`could not import 'yaml'`). The gate
