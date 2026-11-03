@@ -417,11 +417,23 @@ def test_exactly_cancelling_large_column_is_no_longer_refused() -> None:
     L_super = _exactly_cancelling_large_column()
     d = 16
 
-    # The rejected evidence, as the helper used to assemble it.
+    # The rejected evidence, as the helper used to assemble it: the trace
+    # equation of column 0 accumulated left to right, which is what the old
+    # ``vec(I)^H @ L`` did under OpenBLAS. Its partial sums reach
+    # ``d/2 * upper = 2e308`` before the negative half cancels them.
+    #
+    # Issue #180: the premise is stated for that summation order explicitly
+    # rather than through the platform BLAS. On macOS arm64 (Apple Accelerate)
+    # the same ``@`` keeps several partial sums and pairs ``+upper`` with
+    # ``-upper`` before either overflows, so it returned ``0j`` and this guard
+    # reported a fixture failure that was really a BLAS property. The hazard
+    # the fix addresses -- some summation order overflows on an exactly
+    # trace-preserving operator -- is what the fixture must exhibit, and
+    # ``np.add.accumulate`` is sequential by definition on every platform.
     vec_i = np.eye(d, dtype=complex).reshape(-1, order="F")
     with np.errstate(over="ignore", invalid="ignore"):
-        old_reading = (vec_i.conj() @ L_super)[0]
-    assert not np.isfinite(old_reading), (
+        partial_sums = np.add.accumulate(vec_i.conj() * L_super[:, 0])
+    assert not np.all(np.isfinite(partial_sums)), (
         "fixture no longer reproduces the intermediate overflow it was built for"
     )
 
@@ -648,11 +660,23 @@ def test_the_issue_150_fixture_is_admitted_because_its_defects_are_round_off() -
     the invariance defect sits ON its projection bound ``||q^H L||``, and the
     reconstruction defect exceeds it by about ``1.3 * eps * ||L||_F`` -- the
     rounding of forming ``B^H L B``, not a subspace that fails to be invariant.
+
+    Issue #180: "ON its projection bound" holds to rounding, not bit for bit.
+    The trace equation ``(1e300 - 1e300 + 1) / sqrt(3)`` is the projection of
+    one exact cancellation. Summed left to right without FMA (OpenBLAS) it
+    yields ``0.577`` exactly. A fused multiply-add (Apple Accelerate) carries
+    the rounding residue of the first product into the second, giving
+    ``1.3964842080734432e+283`` -- reproduced bit for bit with ``math.fma``.
+    That residue is ``0.044`` arithmetic units, and the reconstruction excess
+    stays ``1.30..1.34`` units under every order measured (sequential,
+    reversed, with and without FMA). The identity is therefore asserted to one
+    arithmetic unit, the rounding of a single product of this operator.
     """
     reduced = restrict_to_traceless(_within_column_dilution())
 
     projection_bound = reduced.trace_defect / math.sqrt(3.0)
-    assert reduced.invariance_defect == pytest.approx(projection_bound, rel=1.0e-12)
+    deviation = abs(reduced.invariance_defect - projection_bound) / _arithmetic_unit(reduced)
+    assert deviation <= 1.0, f"invariance defect {deviation:.3g} units off its bound"
     excess = (reduced.reconstruction_defect - reduced.invariance_defect) / _arithmetic_unit(reduced)
     assert 0.0 < excess < 10.0, f"reconstruction excess {excess:.3g} x arithmetic unit"
 

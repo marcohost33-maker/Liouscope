@@ -487,6 +487,15 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     and the numerically delicate tests on macOS 14 arm64. NumPy's wheels there link Apple
     Accelerate, not OpenBLAS, and the job prints both libraries' BLAS configuration, so
     rounding-order fragility shows up in CI instead of in the field.
+  - Its first run found two more tests of the same class, both now fixed:
+    - `test_exactly_cancelling_large_column_is_no_longer_refused` checked its overflow premise
+      through the platform `@`. Accelerate keeps several partial sums and returns `0j`, so the
+      premise is now checked with a sequential `np.add.accumulate`.
+    - `test_the_issue_150_fixture_is_admitted_because_its_defects_are_round_off` required the
+      invariance defect to sit on its projection bound to `rel=1e-12`. With FMA the residue of
+      `1e300/sqrt(3)` survives the cancellation (`1.3964842080734432e+283`, reproduced bit for
+      bit with `math.fma`). That is `0.044` arithmetic units, and the identity is now asserted
+      to one unit.
 - **Zero-cluster conditioning is now basis invariant on defective repeated modes (issue #168).**
   The audit-only #117 instrument previously formed `sigma_min(Y^H X)` from eigenvectors returned
   by `?geev`. For a defective repeated eigenvalue no eigenspace of that dimension exists, so a
