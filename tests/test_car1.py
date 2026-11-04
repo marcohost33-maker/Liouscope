@@ -26,6 +26,7 @@ import warnings
 
 import numpy as np
 import pytest
+from scipy.optimize import minimize_scalar
 
 from liouscope.diagnostics.relaxation import _fit_with_model
 from liouscope.fitting.aicc import aicc, gaussian_log_likelihood
@@ -145,6 +146,53 @@ def test_car1_rho_reduces_to_a_single_constant_on_a_uniform_grid():
     t = np.linspace(0.0, 7.0, 50)
     a = car1_rho(t, 0.4)
     np.testing.assert_allclose(a, a[0], rtol=1.0e-12)
+
+
+def test_car1_theta_is_invariant_to_residual_amplitude_without_recentering():
+    """Scale changes may not move theta; subtracting the sample mean would."""
+    t = np.concatenate(
+        [np.linspace(0.0, 0.1, 40, endpoint=False), np.linspace(0.1, 10.0, 40)]
+    )
+    residuals = car1_resample(np.random.default_rng(3), t, 1.0e-4, 1.0)
+    reference = estimate_car1_theta(t, residuals)
+    assert np.isfinite(reference)
+    for scale in (1.0e-170, 1.0e-100, 1.0e-20, 1.0, 1.0e100):
+        assert estimate_car1_theta(t, residuals * scale) == pytest.approx(
+            reference, rel=2.0e-6
+        )
+
+
+def test_car1_theta_maximises_the_stationary_likelihood_reported_to_aicc():
+    """Theta and AICc must refer to one stationary probability model (from #157)."""
+    t = np.concatenate(
+        [np.linspace(0.0, 0.1, 40, endpoint=False), np.linspace(0.1, 10.0, 40)]
+    )
+    residuals = car1_resample(np.random.default_rng(1), t, 1.0e-4, 1.0)
+
+    theta_hat = estimate_car1_theta(t, residuals)
+    assert np.isfinite(theta_hat) and theta_hat > 0.0
+
+    def reported_log_likelihood(log_theta: float) -> float:
+        theta = float(np.exp(log_theta))
+        whitened = whiten_car1(residuals, t, theta)
+        sigma = float(np.sqrt(np.mean(whitened * whitened)))
+        return gaussian_log_likelihood(whitened, sigma=sigma) + (
+            whiten_car1_log_jacobian(t, theta)
+        )
+
+    reference = minimize_scalar(
+        lambda u: -reported_log_likelihood(float(u)),
+        bounds=(float(np.log(1.0e-4)), float(np.log(1.0e-2))),
+        method="bounded",
+        options={"xatol": 1.0e-11},
+    )
+    assert reference.success
+    ll_hat = reported_log_likelihood(float(np.log(theta_hat)))
+    ll_reference = reported_log_likelihood(float(reference.x))
+    # The profile is very flat at this optimum: pin the objective AICc consumes,
+    # with a loose parameter check only to reject a different basin.
+    assert ll_hat == pytest.approx(ll_reference, rel=1.0e-11, abs=1.0e-10)
+    assert theta_hat == pytest.approx(float(np.exp(float(reference.x))), rel=1.0e-4)
 
 
 # ---------------------------------------------------------------------------
@@ -402,8 +450,8 @@ def _decaying_series(t: np.ndarray) -> np.ndarray:
     return np.exp(-1.0 * t) + 1.0e-3 * rng.standard_normal(t.size)
 
 
-def test_aicc_counts_the_fitted_car1_rate_on_a_non_uniform_grid():
-    """``theta`` is estimated from THIS data set, so it belongs in ``k``.
+def test_aicc_counts_car1_rate_and_variance_on_a_non_uniform_grid():
+    """``theta`` and the stationary variance are estimated from THIS data set.
 
     It is re-fitted for every candidate model and enters that model's maximised
     likelihood through the whitening. Because the small-sample correction
@@ -425,12 +473,12 @@ def test_aicc_counts_the_fitted_car1_rate_on_a_non_uniform_grid():
     assert np.isfinite(fit.residual_theta_car1), "fixture must fit a CAR(1) rate"
     p = int(np.asarray(fit.params).size)
     assert fit.aicc == pytest.approx(
-        aicc(fit.log_likelihood, p + 1, fit.n_eff), rel=0.0, abs=0.0
+        aicc(fit.log_likelihood, p + 2, fit.n_eff), rel=0.0, abs=0.0
     )
     # DISCRIMINATION: the pre-fix count must be a DIFFERENT number here, or the
     # assertion above would pass without the repair.
-    assert aicc(fit.log_likelihood, p, fit.n_eff) != aicc(
-        fit.log_likelihood, p + 1, fit.n_eff
+    assert aicc(fit.log_likelihood, p + 1, fit.n_eff) != aicc(
+        fit.log_likelihood, p + 2, fit.n_eff
     )
 
 

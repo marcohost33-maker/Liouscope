@@ -722,30 +722,30 @@ def _fit_with_model(
     model = fns[model_name]
     p0 = seeds[model_name](t, y)
     fit = fit_gls_ar1(model, t, y, p0)
-    # ROUND-18 REVIEW (external, PR #127). ``k`` is the number of parameters
-    # ESTIMATED from this data set, and on a non-uniform grid the CAR(1) rate
-    # ``theta`` is one of them: it is re-fitted for every candidate model and
-    # enters that model's maximised likelihood through the whitening. Counting
-    # only ``p0.size`` there is not a harmless constant offset, because the
-    # small-sample correction ``2k(k+1)/(N_eff-k-1)`` is NONLINEAR in ``k`` --
-    # omitting the nuisance parameter therefore under-penalises the
-    # higher-dimensional candidates (M2/M3b) relative to M0/M1 exactly when
-    # ``N_eff`` is small, which can move the selected relaxation model and with
-    # it the reported A-class.
+    # ``k`` is the number of parameters ESTIMATED from this data set, and on a
+    # non-uniform grid that includes two residual parameters besides the mean
+    # function (PR #127 review, three findings resolved together):
     #
-    # The predicate is ``isfinite(theta_car1)``, i.e. "was theta actually
-    # fitted", not "is the grid non-uniform": ``fit_gls_ar1`` falls back to the
-    # discrete AR(1) treatment when the CAR(1) estimate is degenerate, and no
-    # parameter is estimated in that case that was not estimated before.
+    # * a correlation parameter. CAR(1) fits ``theta``; the AR(1) fallback of
+    #   ``fit_gls_ar1`` fits ``rho``. Counting only the first gave the fallback
+    #   candidates of a ``car1_mixed`` comparison a smaller penalty for the same
+    #   number of fitted parameters;
+    # * the stationary variance, profiled per candidate from all ``n`` whitened
+    #   residuals. Theta now maximises that same likelihood
+    #   (``estimate_car1_theta``), so the count and the likelihood describe one
+    #   probability model.
     #
-    # The discrete ``rho`` of the uniform path is deliberately NOT counted
-    # here. That is the historical convention (``k`` = mean-function
-    # parameters) and it is self-consistent within one selection, because
-    # uniformity is a property of the GRID and therefore fixed across all
-    # candidates of a single comparison. Changing it would re-rank every
-    # existing uniform-grid result and belongs in its own PR with its own
-    # anchor evidence.
-    k = int(p0.size) + (1 if np.isfinite(fit.theta_car1) else 0)
+    # The small-sample correction ``2k(k+1)/(N_eff-k-1)`` is nonlinear in ``k``,
+    # so an omission is not a constant offset: it favours the higher-dimensional
+    # candidates exactly when ``N_eff`` is small. The predicate is the GRID, the
+    # one property fixed across all candidates of a selection, not
+    # ``isfinite(theta_car1)``, which varies between them.
+    #
+    # A UNIFORM grid keeps the historical ``k`` = mean-function parameters on
+    # purpose. It is self-consistent within one selection, and changing it
+    # re-ranks every existing uniform-grid result, which is the separate
+    # methodology change of PR #157 (with its anchor evidence).
+    k = int(p0.size) + (0 if is_uniform_grid(t) else 2)
     # N_eff must be computed under the SAME residual model the fit whitened
     # with, or the AICc it feeds compares likelihoods from one model against a
     # sample size from another. The Geyer IPS estimator sums autocorrelations
@@ -1157,7 +1157,17 @@ def compute_relaxation_layer(
             # default 80-point grid included) no acceleration is estimated and
             # bca_ci returns the BC interval; ``interval_method`` says so.
             if t_grid.size <= JACKKNIFE_MAX_GRID_POINTS:
-                jk = _jackknife(winner_fn, t_grid, rel_entropy, theta_hat, None)
+                # The refits keep the family of the fit they estimate the
+                # acceleration for, also where a deletion changes the grid's
+                # uniformity (PR #127 review).
+                jk = _jackknife(
+                    winner_fn, t_grid, rel_entropy, theta_hat, None,
+                    residual_family=(
+                        "car1"
+                        if np.isfinite(fits[winner].residual_theta_car1)
+                        else "ar1"
+                    ),
+                )
             cis = bca_ci(samples, theta_hat, jackknife_estimates=jk)
             beta_idx = _beta_index(winner, fits[winner].params)
             bca_lo, bca_hi = float(cis[beta_idx, 0]), float(cis[beta_idx, 1])

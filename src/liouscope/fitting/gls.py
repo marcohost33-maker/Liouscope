@@ -125,6 +125,7 @@ def fit_gls_ar1(
     bounds: tuple[np.ndarray, np.ndarray] | None = None,
     n_iters: int = 3,
     max_nfev: int = 2000,
+    residual_family: str = "auto",
 ) -> GLSFitOutput:
     """Fit ``y = model(t, theta) + eps`` with AR(1) residuals.
 
@@ -142,7 +143,20 @@ def fit_gls_ar1(
         Number of Cochrane-Orcutt-style iterations.
     max_nfev
         Max function evaluations per inner least-squares solve.
+    residual_family
+        ``"auto"`` picks the residual model from the grid: discrete AR(1) on a
+        uniform grid, CAR(1) otherwise. ``"ar1"`` / ``"car1"`` fix it, for a
+        refit that has to estimate the same quantity as a base fit on a grid
+        of its own: a leave-one-out replicate of a uniform grid is not uniform,
+        and re-detecting would mix two estimators in one jackknife (PR #127
+        review). ``"car1"`` keeps the documented AR(1) fallback if ``theta``
+        cannot be estimated.
     """
+    if residual_family not in ("auto", "ar1", "car1"):
+        raise ValueError(
+            "fit_gls_ar1: residual_family must be 'auto', 'ar1' or 'car1'; got "
+            f"{residual_family!r}"
+        )
     t = np.asarray(t, dtype=float)
     y = np.asarray(y, dtype=float)
     p = np.asarray(p0, dtype=float).copy()
@@ -233,8 +247,11 @@ def fit_gls_ar1(
     # A uniform grid keeps the historical discrete AR(1) path bit-for-bit; a
     # grid whose step varies gets the continuous-time CAR(1) model, whose
     # per-step correlation exp(-theta dt_k) is the only whitening that is
-    # actually valid there (see :mod:`liouscope.fitting.car1`).
-    uniform = is_uniform_grid(t)
+    # actually valid there (see :mod:`liouscope.fitting.car1`). A caller may fix
+    # the family instead, see ``residual_family``.
+    discrete_ar1 = (
+        is_uniform_grid(t) if residual_family == "auto" else residual_family == "ar1"
+    )
 
     # Issue #124: the mathematical least-squares optimum is unchanged when an
     # observable is multiplied by a positive constant, but SciPy's numerical
@@ -268,7 +285,7 @@ def fit_gls_ar1(
         # One whitening for both problems below, so the raw and the rescaled
         # objective can never disagree about the residual model (merge of
         # PR #127 with #124/#134).
-        if uniform:
+        if discrete_ar1:
             return _whiten(r, rho_local)
         if not np.isfinite(theta_local):
             # First pass (and any pass after a failed estimate): plain least
@@ -405,7 +422,7 @@ def fit_gls_ar1(
         # small n, which makes AR(1)-whitened CIs too narrow. Suppress the
         # per-iteration small-n warning here; we emit it once below so a
         # B-fold bootstrap does not raise B identical warnings.
-        if uniform:
+        if discrete_ar1:
             rho = ar1_correlation_corrected(residuals_raw, warn_small_n=False)
         else:
             theta = estimate_car1_theta(t, residuals_raw)
@@ -432,7 +449,7 @@ def fit_gls_ar1(
             RuntimeWarning,
             stacklevel=2,
         )
-    if not uniform and not np.isfinite(theta):
+    if not discrete_ar1 and not np.isfinite(theta):
         # CAR(1) estimation is fail-closed (NaN on a degenerate series). Fall
         # back to the historical AR(1) treatment rather than shipping
         # unwhitened residuals as if they were white -- the fallback is
@@ -452,37 +469,9 @@ def fit_gls_ar1(
         # the exact and conditional likelihoods and biases cross-model AICc
         # (each model fits its own rho) toward under-fitting high-rho models.
         jac = 0.5 * float(np.log(max(1.0 - rho * rho, 1.0e-12)))
-    # OPEN FINDING (external review, PR #127), still open on purpose, with the
-    # mechanism now measured (2026-09-04). ``estimate_car1_theta`` minimises a
-    # CONDITIONAL likelihood that drops the first residual; the lines below
-    # report the EXACT stationary one, first residual included and ``sigma``
-    # re-estimated from all ``n`` whitened values. So the CAR(1) parameter
-    # counted by AICc was not fitted to the likelihood AICc consumes.
-    #
-    # What the measurement adds to the report is WHERE this bites, and it is
-    # not uniform. Comparing ``-2 log L`` at the conditional estimate against
-    # its minimum over theta, on exact-OU paths (exact transition density, not
-    # Euler) over grids this layer itself builds:
-    #
-    #     grid span    conditional theta_hat   median deficit   max   > 2
-    #     1e5, 1e7     interior                0.002 - 0.032    0.12  0/20
-    #     1e2          AT the search floor     2.541            13.2  13/20
-    #     1e1          AT the search floor     2.613            36.9  12/20
-    #
-    # The damaging regime is the one where the conditional search range
-    # ``[_THETA_LO_FRAC / span, _THETA_HI_FRAC / min(diff(t))]`` (car1.py:66-67,
-    # 215-216) CLAMPS: with span 100 the floor is exactly 1e-5, which is the
-    # value the review reported, and 8 of 20 estimates sat on it. Where theta
-    # is interior the mismatch is real but an order of magnitude below the
-    # conventional AICc-relevant threshold of 2.
-    #
-    # That opens a THIRD route beside the two the review offered (optimise the
-    # exact likelihood, or report a consistently conditional one): repair the
-    # search range so the estimate stops clamping. It would leave every
-    # interior fit bit for bit unchanged and so would not move the anchors,
-    # which is what makes the other two routes expensive. UNVERIFIED as a
-    # remedy -- it has not been implemented or shown sufficient; it is recorded
-    # because the choice among the three is a modelling decision.
+    # ``estimate_car1_theta`` maximises the stationary likelihood reported
+    # below, first residual included (PR #127 review, route taken from PR #157),
+    # so the rate AICc counts was fitted to the likelihood AICc consumes.
     n = whitened.size
     log_rss = scaled_log_sum_squares(whitened)
     if log_rss == float("-inf") or not math.isfinite(log_rss):
