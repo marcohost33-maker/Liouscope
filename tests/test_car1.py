@@ -472,14 +472,11 @@ def test_aicc_counts_car1_rate_and_variance_on_a_non_uniform_grid():
 
     assert np.isfinite(fit.residual_theta_car1), "fixture must fit a CAR(1) rate"
     p = int(np.asarray(fit.params).size)
-    assert fit.aicc == pytest.approx(
-        aicc(fit.log_likelihood, p + 2, fit.n_eff), rel=0.0, abs=0.0
-    )
+    n = float(t.size)
+    assert fit.aicc == pytest.approx(aicc(fit.log_likelihood, p + 2, n), rel=0.0, abs=0.0)
     # DISCRIMINATION: the pre-fix count must be a DIFFERENT number here, or the
     # assertion above would pass without the repair.
-    assert aicc(fit.log_likelihood, p + 1, fit.n_eff) != aicc(
-        fit.log_likelihood, p + 2, fit.n_eff
-    )
+    assert aicc(fit.log_likelihood, p + 1, n) != aicc(fit.log_likelihood, p + 2, n)
 
 
 def test_aicc_parameter_count_is_unchanged_on_a_uniform_grid():

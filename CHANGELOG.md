@@ -490,6 +490,21 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `git worktree` of the same commit instead of the first build's tree.
 
 ### Fixed
+- **PR #127 against current `main`: one residual family, one likelihood, one count
+  on non-uniform grids (four review findings; uniform grids bit-identical).** The
+  jackknife holds the base fit's family (`fit_gls_ar1(residual_family=...)`): a
+  deleted interior point used to switch that replicate to CAR(1), so the BCa
+  acceleration mixed two estimators. `estimate_car1_theta` maximises the stationary
+  likelihood the layer reports, first residual included and without recentering
+  (objective from PR #157). On a non-uniform grid AICc counts correlation and
+  variance for every candidate, the AR(1) fallback included, and uses the observed
+  point count: with `N_eff` the correction was infinite on correlated residuals.
+  Measured with known ground truth (40 seeds, default two-scale grid, CAR(1) noise
+  at theta 2): truth M0, `p+2, N_eff` left 36-40 of 40 runs without any finite
+  score, `p+2, n_obs` 0 of 40 and selected M0 in 29; truth two-rate, `N_eff` selected
+  M0 in 40 of 40, `n_obs` M2 in 40 of 40. This CHANGES selected models and rates on
+  non-uniform grids; `tests/test_anchors.py` is byte-identical to `main` and passes.
+  The same change on uniform grids stays in PR #157.
 - **Extreme relaxation-scale failures are now separated and fail closed (PR #127 review).** When a finite decay rate times a blind interval overflows, `_resolution_detail` legitimately represents the sampling ratio as `0.0` samples per e-folding; the disclosure formatter now maps that representation to its mathematical 100% decay limit instead of dividing by zero. The same review fixture also exposed a separate boundary: `L*t` may remain elementwise finite while `scipy.linalg.expm(L*t)` returns non-finite values at extreme float64 dynamic range. `_evolve` now refuses a non-finite scaled generator, propagator, or propagated state with `UnrepresentableTrajectoryError` instead of passing NaNs into entropy, fitting and uncertainty calculations. Tests isolate the resolution arithmetic from the matrix-exponential failure so neither can mask the other.
 - **`residual_model` claimed a whitening for runs in which no fit succeeded
   (PR #127, round-21 external review).** `fit_gls_ar1` returns `success=False`

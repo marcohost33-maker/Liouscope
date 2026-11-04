@@ -153,8 +153,14 @@ def test_car1_fit_counts_rate_and_variance() -> None:
         fit, _ = _fit_with_model("M0", _TWO_SCALE, y)
     assert np.isfinite(fit.residual_theta_car1)
     p = int(np.asarray(fit.params).size)
-    assert fit.aicc == aicc(fit.log_likelihood, p + 2, fit.n_eff)
-    assert fit.aicc != aicc(fit.log_likelihood, p + 1, fit.n_eff)
+    n = float(_TWO_SCALE.size)
+    assert fit.aicc == aicc(fit.log_likelihood, p + 2, n)
+    assert fit.aicc != aicc(fit.log_likelihood, p + 1, n)
+    # DISCRIMINATION: on this correlated fixture the legacy denominator is not the
+    # same number, it is no number at all.
+    assert fit.n_eff < p + 3
+    assert aicc(fit.log_likelihood, p + 2, fit.n_eff) == float("inf")
+    assert np.isfinite(fit.aicc)
 
 
 def test_ar1_fallback_on_a_non_uniform_grid_counts_the_same(
@@ -168,8 +174,9 @@ def test_ar1_fallback_on_a_non_uniform_grid_counts_the_same(
         fit, _ = _fit_with_model("M0", _TWO_SCALE, y)
     assert not np.isfinite(fit.residual_theta_car1), "fixture must fall back"
     p = int(np.asarray(fit.params).size)
-    assert fit.aicc == aicc(fit.log_likelihood, p + 2, fit.n_eff)
-    assert fit.aicc != aicc(fit.log_likelihood, p, fit.n_eff)
+    n = float(_TWO_SCALE.size)
+    assert fit.aicc == aicc(fit.log_likelihood, p + 2, n)
+    assert fit.aicc != aicc(fit.log_likelihood, p, n)
 
 
 def test_uniform_grid_keeps_the_historical_count() -> None:
@@ -192,10 +199,13 @@ def test_uniform_grid_keeps_the_historical_count() -> None:
 def test_non_uniform_fit_is_amplitude_invariant_under_car1(scale: float) -> None:
     """The rescaled objective has to whiten with CAR(1), as the raw one does.
 
-    Whitening the rescaled residuals with plain AR(1) instead returned a
-    different rate at every scale except the one the raw path handles.
+    The reference has ``max|y| == 1``, which takes the raw path, while every other
+    scale takes the rescaled one: a family lost on either path shows up as a
+    disagreement between the two.
     """
     y = _noisy_decay(_TWO_SCALE)
+    y = y / float(np.max(np.abs(y)))
+    assert float(np.max(np.abs(y))) == 1.0, "fixture must exercise the raw path"
     p0 = np.array([1.0, 1.0])
     reference = fit_gls_ar1(M0, _TWO_SCALE, y, p0)
     assert reference.success and np.isfinite(reference.theta_car1)

@@ -134,6 +134,11 @@ abstract: >-
 # unresolved case is still unresolved, only no longer reported as measured.
 # D2/D2b are unaffected -- they are computed from the operator and the steady
 # state rather than from the candidate spectrum.
+# Also pending for the next cut, non-uniform grids only (PR #127 review): CAR(1)
+# theta maximises the stationary likelihood reported to AICc, every candidate
+# counts correlation and variance, and AICc uses the observed point count instead
+# of N_eff. This can change the selected model, its rates and the A-class on those
+# grids. Uniform grids are untouched; the same change there is PR #157.
 # Also pending for the next cut: the Gaussian likelihood behind AICc is
 # evaluated in log-RSS space rather than by forming the residual sum of squares
 # in ordinary units, and an exact-zero RSS is an explicit abstention rather than

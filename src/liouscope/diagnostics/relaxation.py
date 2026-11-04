@@ -745,7 +745,8 @@ def _fit_with_model(
     # purpose. It is self-consistent within one selection, and changing it
     # re-ranks every existing uniform-grid result, which is the separate
     # methodology change of PR #157 (with its anchor evidence).
-    k = int(p0.size) + (0 if is_uniform_grid(t) else 2)
+    uniform_grid = is_uniform_grid(t)
+    k = int(p0.size) + (0 if uniform_grid else 2)
     # N_eff must be computed under the SAME residual model the fit whitened
     # with, or the AICc it feeds compares likelihoods from one model against a
     # sample size from another. The Geyer IPS estimator sums autocorrelations
@@ -773,7 +774,18 @@ def _fit_with_model(
     # drops non-finite entries, so ``inf`` is the existing vocabulary for
     # "not a candidate"; the fit itself stays in ``fits`` so the report still
     # shows that the model was tried and why it lost.
-    aic = aicc(fit.log_likelihood, k, n_eff) if fit.success else float("inf")
+    # AICc sample size on a non-uniform grid: the OBSERVED count, not N_eff. The
+    # joint CAR(1) likelihood already models the serial covariance, so an ESS
+    # derived from that same dependence would count it twice (Hurvich & Tsai
+    # 1989; route of PR #157). This is what makes ``k = p + 2`` safe to count:
+    # with N_eff below ``k + 1`` the correction is infinite. Measured with known
+    # ground truth, 40 seeds on the default two-scale grid, CAR(1) noise at
+    # theta = 2: truth M0, ``p+2, N_eff``: 36-40/40 runs had NO finite score;
+    # ``p+2, n_obs``: 0/40 and M0 selected 29/40. Truth two-rate at theta = 0.05:
+    # ``N_eff`` selected M0 40/40, ``n_obs`` M2 40/40. N_eff stays in the report
+    # as uncertainty evidence. A uniform grid keeps N_eff, see above.
+    aicc_n = n_eff if uniform_grid else float(t.size)
+    aic = aicc(fit.log_likelihood, k, aicc_n) if fit.success else float("inf")
     fit_result = FitResult(
         model=model_name,
         params=fit.params,
