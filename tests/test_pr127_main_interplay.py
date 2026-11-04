@@ -23,7 +23,7 @@ import liouscope.fitting.gls as gls
 from liouscope.core.lindblad import build_liouvillian
 from liouscope.diagnostics.relaxation import _fit_with_model, compute_relaxation_layer
 from liouscope.fitting.aicc import aicc
-from liouscope.fitting.car1 import car1_resample, is_uniform_grid
+from liouscope.fitting.car1 import car1_resample, estimate_car1_theta, is_uniform_grid
 from liouscope.fitting.gls import fit_gls_ar1
 from liouscope.fitting.models import M0
 
@@ -139,6 +139,15 @@ def test_uniform_family_on_a_uniform_grid_equals_auto() -> None:
     fixed = fit_gls_ar1(M0, t, y, p0, residual_family="ar1")
     np.testing.assert_array_equal(auto.params, fixed.params)
     assert auto.log_likelihood == fixed.log_likelihood
+
+
+@pytest.mark.parametrize("level", [0.25, -3.0, 1.0e-170, 1.0e100])
+def test_constant_residuals_identify_no_rate(level: float) -> None:
+    """No recentering any more, so a constant series needs its own refusal."""
+    assert np.isnan(estimate_car1_theta(_TWO_SCALE, np.full(_TWO_SCALE.size, level)))
+    varied = np.full(_TWO_SCALE.size, level)
+    varied[::2] *= 1.5
+    assert np.isfinite(estimate_car1_theta(_TWO_SCALE, varied)), "positive control"
 
 
 # ---------------------------------------------------------------------------
