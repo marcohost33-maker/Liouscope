@@ -8,7 +8,13 @@ import warnings
 
 import numpy as np
 
-from .._consts import EPS_SUPP
+from .._consts import (
+    EPS_SUPP,
+    INTERVAL_METHOD_BC,
+    INTERVAL_METHOD_BCA_DELETE1,
+    INTERVAL_METHOD_UNAVAILABLE,
+    JACKKNIFE_MAX_GRID_POINTS,
+)
 from .._types import FitResult, RelaxationResult
 from ..core.lindblad import steady_state
 from ..fitting.aicc import aicc, choose_model
@@ -440,6 +446,7 @@ def compute_relaxation_layer(
     # Bootstrap on the winning model for beta_D
     beta_D = _beta_from_params(winner, fits[winner].params) if winner in fits else float("nan")
     bca_lo, bca_hi = beta_D, beta_D
+    jk = None
     if winner in fits and np.isfinite(beta_D):
         winner_fn = {"M0": M0, "M1": M1, "M2": M2, "M3a": M3a, "M3b": M3b}[winner]
         try:
@@ -447,8 +454,10 @@ def compute_relaxation_layer(
                 winner_fn, t_grid, rel_entropy, fits[winner].params,
                 B=bootstrap_B, rng=np.random.default_rng(seed),
             )
-            jk = None
-            if t_grid.size <= 60:
+            # Issue #116: on grids longer than JACKKNIFE_MAX_GRID_POINTS (the
+            # default 80-point grid included) no acceleration is estimated and
+            # bca_ci returns the BC interval; ``interval_method`` says so.
+            if t_grid.size <= JACKKNIFE_MAX_GRID_POINTS:
                 jk = _jackknife(winner_fn, t_grid, rel_entropy, theta_hat, None)
             cis = bca_ci(samples, theta_hat, jackknife_estimates=jk)
             beta_idx = _beta_index(winner, fits[winner].params)
@@ -466,6 +475,17 @@ def compute_relaxation_layer(
                 RuntimeWarning,
             )
             bca_lo, bca_hi = float("nan"), float("nan")
+
+    # Issue #116: name the estimator that actually produced the interval. A
+    # non-finite endpoint covers every no-interval outcome (bootstrap failure,
+    # non-finite point estimate, degenerate bootstrap distribution, #125), so
+    # an interval is never credited to an estimator that produced no interval.
+    if not (np.isfinite(bca_lo) and np.isfinite(bca_hi)):
+        interval_method = INTERVAL_METHOD_UNAVAILABLE
+    elif jk is not None:
+        interval_method = INTERVAL_METHOD_BCA_DELETE1
+    else:
+        interval_method = INTERVAL_METHOD_BC
 
     try:
         ent_asym = entanglement_asymmetry(final_rho)
@@ -497,6 +517,7 @@ def compute_relaxation_layer(
         bca_ci_beta=(bca_lo, bca_hi),
         beta_D_linear=float(beta_D_linear),
         linear_fit_model=linear_fit_model,
+        interval_method=interval_method,
         trajectory_backend=used_backend,
         trajectory_max_trace_error=trace_error,
         trajectory_max_hermiticity_defect=hermiticity_defect,

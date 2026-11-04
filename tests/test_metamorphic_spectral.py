@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import numpy as np
 import pytest
+from conftest import assert_spectra_match
 
 from liouscope import build_liouvillian
 from liouscope.diagnostics.spectral import liouvillian_gap
@@ -39,16 +40,15 @@ def _gap(L: np.ndarray) -> float:
     return liouvillian_gap(eig_nonhermitian(L).eigenvalues)
 
 
-def _spectrum_sorted(L: np.ndarray) -> np.ndarray:
-    """Eigenvalues sorted by a rounded (real, imag) key.
+def _spectrum(L: np.ndarray) -> np.ndarray:
+    """Eigenvalues in solver order; compared as a multiset.
 
     A plain ``sort_complex`` is unstable for near-degenerate / conjugate-pair
-    eigenvalues, so two numerically-equal spectra can come out in different
-    order. Rounding the sort key makes the multiset comparison order-stable.
+    eigenvalues. A ROUNDED sort key, which this module used before, only moves
+    that instability to the rounding boundary (issue #180), so the comparison
+    goes through the order-free ``assert_spectra_match`` instead.
     """
-    z = eig_nonhermitian(L).eigenvalues
-    zr = np.round(z, 7)
-    return z[np.lexsort((zr.imag, zr.real))]
+    return eig_nonhermitian(L).eigenvalues
 
 
 @pytest.mark.parametrize("c", [0.5, 2.0, 7.3])
@@ -74,8 +74,8 @@ def test_spectrum_invariant_under_unitary_similarity():
         U, _ = np.linalg.qr(a)  # Haar-ish unitary
         assert np.allclose(U @ U.conj().T, np.eye(n), atol=1e-10)
         L_transformed = U @ L @ U.conj().T
-        spec_orig = _spectrum_sorted(L)
-        spec_trans = _spectrum_sorted(L_transformed)
-        np.testing.assert_allclose(spec_trans, spec_orig, atol=1e-7)
+        spec_orig = _spectrum(L)
+        spec_trans = _spectrum(L_transformed)
+        assert_spectra_match(spec_trans, spec_orig, atol=1e-7)
         # The gap, being a spectral functional, is likewise invariant.
         assert _gap(L_transformed) == pytest.approx(_gap(L), abs=1e-9)

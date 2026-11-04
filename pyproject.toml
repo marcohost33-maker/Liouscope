@@ -73,6 +73,14 @@ dev = [
     # Draft202012Validator structural-conformance path is actually exercised
     # instead of silently skipped.
     "jsonschema>=4.18",
+    # Same reasoning as jsonschema (issue #180 review): the release gate parses
+    # workflow YAML with its own restricted reader, and
+    # tests/test_release_gate_review_findings.py::test_reader_matches_pyyaml_live
+    # cross-checks that reader against PyYAML's BaseLoader on every workflow.
+    # Without PyYAML in the dev/CI env that oracle was skipped on every CI run
+    # ("could not import 'yaml'"). Test-only: the gate itself stays
+    # dependency-free.
+    "pyyaml>=6.0",
 ]
 
 [project.urls]

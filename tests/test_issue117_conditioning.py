@@ -26,6 +26,7 @@ import warnings
 
 import numpy as np
 import pytest
+from conftest import assert_spectra_match
 
 from liouscope._consts import CONDITIONING_AGREEMENT_FACTOR
 from liouscope.core.lindblad import build_liouvillian
@@ -267,11 +268,8 @@ def test_conditioning_is_a_property_of_the_operator_as_written() -> None:
     plain = zero_mode_conditioning(A, zero_tolerance=_layer_cutoff(A))
     similar = zero_mode_conditioning(scaled, zero_tolerance=_layer_cutoff(scaled))
     # Same spectrum ...
-    assert np.allclose(
-        np.sort_complex(np.linalg.eigvals(A)),
-        np.sort_complex(np.linalg.eigvals(scaled)),
-        rtol=1e-6,
-        atol=1e-8,
+    assert_spectra_match(
+        np.linalg.eigvals(A), np.linalg.eigvals(scaled), rtol=1e-6, atol=1e-8
     )
     # ... radically different conditioning, and the measurement follows the
     # operator rather than the spectrum.

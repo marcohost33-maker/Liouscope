@@ -7,6 +7,44 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Added
+- **The relaxation-rate interval now says which estimator produced it:
+  `RelaxationResult.interval_method` (issue #116, stage 1, `claim_status: pending`).**
+  - **The defect.** The default pipeline computed a bias-corrected (BC)
+    interval and published it as "BCa". The leave-one-out jackknife that
+    supplies the BCa acceleration term `a` runs only on grids of at most 60
+    points, a latency guard, while the default grid has 80. `bca_ci` then uses
+    `a = 0`, and its quantiles reduce to `Phi(2 z0 + z_alpha)`: Efron's BC
+    interval. The v0.5.0 README promised BCa four times. The error is not
+    conservative by construction, because `a` can move both endpoints either
+    way.
+  - **The field.** Additive and closed, see `liouscope._consts.INTERVAL_METHODS`:
+    - `"BC"`: the default grid.
+    - `"BCa-delete1"`: grids of at most `JACKKNIFE_MAX_GRID_POINTS = 60`
+      points. The name is deliberately precise: the acceleration is Efron's
+      iid delete-one construction applied to a serially correlated series
+      whose bootstrap is parametric AR(1)/CAR(1), so it is not calibrated for
+      dependent data (2026-09-19 triage).
+    - `"unavailable"`: no finite interval, whether from bootstrap failure, a
+      non-finite point estimate, or a degenerate bootstrap distribution (#125).
+    - `"unreported"`: the default, for pre-#116 constructor calls and
+      deserialised reports, which genuinely carry no record.
+  - **What changed against PR #119.** This builds on the disclosure design of
+    PR #119 and closes two gaps that opened after it was written. Under #125,
+    #119 would have labelled a withheld (NaN) interval `"BC"`. And the
+    jackknife path is no longer called plain BCa.
+  - **What did not change.** No number changes. The 60-point gate is lifted
+    into a named constant with its rationale, and its value is unchanged.
+    README, tutorial and `no-single-number.md` no longer promise BCa
+    unconditionally. U0 inherits the label. The run-manifest and
+    StabilityReport contracts are unchanged, since neither enumerates the
+    relaxation fields.
+  - **Not included, still open in #116 stages 2-4.** Raising or dropping the
+    gate, or a dependence-aware acceleration (block jackknife,
+    empirical-influence regression). Each changes reported intervals and needs
+    the preregistered coverage study the issue describes.
+  - **Tests.** `tests/test_interval_method.py`, 13 tests: every reachable label,
+    the gate boundary, the #125 degenerate case, an independent closed-form
+    oracle for BC, a liveness check of the acceleration, and U0 consistency.
 - **D18 initial-state sensitivity can use one deterministic block exponential
   action instead of materialising a full propagator (issue #178).** The Haar
   ensemble is collected as right-hand-side columns and evolved by
@@ -452,6 +490,94 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `git worktree` of the same commit instead of the first build's tree.
 
 ### Fixed
+- **Four tests no longer assert accuracy below the float64 rounding level (issue #180).**
+  Test and CI change only. No library code, reported number, anchor or manifest field changes.
+  - `test_stiff_network_keeps_the_known_slow_mode_without_zero_filter[1e12]` used to assert
+    `gap == 1.074e-5`, a value the data do not determine.
+    - The competitor is the slow population pair at `Re = -1.839e-5`, only `7.65e-6` away from
+      that mode. Its LAPACK first-order error estimate (`eps * ||A||_1 / s`, LAPACK Users'
+      Guide section 4.8) is `3.6e-4`.
+    - The reduced operators of NumPy 1.26.4 and 2.5.3 differ in 5 of 225 entries. Four differ
+      by one ulp; the fifth is rounding noise around an exact 0. That put an eigenvalue at
+      exactly `0.0` (gap `-0.0`) on 1.26.
+    - Neither build resolves the pair. Where the old assertion passed, 2.5.3 returned the real
+      values `-2.24e-5, -3.52e-5` instead of `-1.839e-5 +- 9.69e-6 i`.
+    - 19 % of random one-ulp perturbations flipped the old assertion.
+  - The test now asserts:
+    1. The coherence block is decoupled by exact zeros (checked bit for bit). Its 12
+       eigenvalues match the closed form `-(Gamma_i + Gamma_j) / 2` to `1e-12`, and the slow
+       mode is retained. The gap therefore cannot exceed the true slow mode, which was the #113
+       failure.
+    2. Anything that outranks the slow mode lies within `n` times that estimate of the
+       closed-form population pair. The factor `n` covers the formation error of `B^H L B`.
+    3. `gap == 1.074e-5` holds exactly wherever that same band is narrower than the separation.
+       A parameter pins which regime each rate falls in.
+  - Under that band only 1e8 is arithmetically determined. 1e10 still computes the exact gap on
+    every build measured, but the bare estimate cleared the separation by only 1.7x, and 16-ulp
+    perturbations then flipped it in up to 59 of 400 runs. 1e10 therefore moves to the
+    undetermined branch, where claims 1 and 2 still apply in full.
+  - No failure in 4 perturbation regimes x 3 rates x 400 runs (up to 16 ulp in every entry).
+  - Mutation check: five of six injected regression classes are caught at every rate. The
+    sixth is a stationary zero reappearing inside the population block. At 1e10 and 1e12 it is
+    caught only by the module's invariance and reconstruction defect tests, because float64 does
+    not separate it from the unresolved pair there.
+  - `test_resolvent_layer_scaled_fields_invariant_under_rate_rescale` compared the RATE-VALUED
+    `pseudospectral_abscissa` with a dimensionless `atol=1e-12`. The root cause is not a tie
+    effect, as #180 suspected.
+    - On both fixtures the abscissa is the grid node on the stationary eigenvalue. Its exact
+      value is 0 and its computed value is round-off of `~eps * ||cL||`. At `c = 1e10` that
+      was `1.157e-16 * rate_scale = 1.907e-6` on SciPy 1.12.
+    - The tolerance is now `ATOL_INV * rate_scale`, the same 1e-12 in the operator's own units.
+      That is below `1.2e-8` of one grid spacing, so it still pins which node was selected.
+    - A third fixture (strongly driven, weakly dephased qubit) has abscissa
+      `5e-4 * rate_scale`. Without it the "scales by c" check carried no signal: a build that
+      dropped the rate unit failed only through a `1e-16` rounding residue.
+  - Both #180 tests pass on NumPy 1.26.4 / SciPy 1.12.0 (where both failed before) and on
+    NumPy 2.5.3 / SciPy 1.18.1.
+  - New non-required CI job `test-numerics-platform` (#180 item 3). It runs the anchors and the
+    full suite on two more BLAS stacks:
+    - `macos-14`: NumPy and SciPy both link Apple Accelerate, verified in the job's own
+      `show_config` output.
+    - `ubuntu-24.04-arm`: OpenBLAS with its arm64 kernels.
+    QuTiP is installed so that no anchor is skipped.
+  - Its first run found two more tests of the same class, both now fixed:
+    - `test_exactly_cancelling_large_column_is_no_longer_refused` checked its overflow premise
+      through the platform `@`. Accelerate keeps several partial sums and returns `0j`, so the
+      premise is now checked with a sequential `np.add.accumulate`.
+    - `test_the_issue_150_fixture_is_admitted_because_its_defects_are_round_off` required the
+      invariance defect to sit on its projection bound to `rel=1e-12`. With FMA the residue of
+      `1e300/sqrt(3)` survives the cancellation (`1.3964842080734432e+283`, reproduced bit for
+      bit with `math.fma`). That is `0.044` arithmetic units, and the identity is now asserted
+      to one unit.
+  - The probe's first full-suite run found a third class: spectra compared after
+    `np.sort_complex`.
+    - `sort_complex` orders by real part first, so a conjugate pair whose exact real parts are
+      equal is ordered by its rounding.
+    - On Accelerate, `-0.3000000000000003 +- 0.954i` came back against QuTiP's
+      `-0.2999999999999998 -+ 0.954i`, and the QuTiP oracle failed by `1.9`.
+    - The fix is a shared `conftest.assert_spectra_match`, which compares eigenvalue multisets
+      order-free. It decides whether any pairing satisfies the `assert_allclose` criterion,
+      using a perfect matching on the feasibility graph (`linear_sum_assignment`, the same
+      primitive `numerics.conditioning` uses).
+    - It replaces all seven order-dependent spectrum comparisons in the suite, including the
+      rounded-sort-key workaround in `test_metamorphic_spectral.py`, which only moved the tie to
+      the rounding boundary.
+    - `tests/test_spectra_matching.py` pins the helper on the exact macOS values, on
+      multiplicity, and on a tie in total distance.
+    - `benchmarks/issue117_zero_mode_conditioning.py` pairs its "spectrum drift" the same way.
+  - The Linux arm64 probe found a fourth case.
+    - `test_issue183_a_genuine_split_is_not_merged[split=1e-14]` asserted the per-mode
+      reciprocal condition `2 sqrt(split)` to a fixed `rel=2e-2`.
+    - A backward error `e` acts on that block like `split -> split + e`, so `ds/s ~ e/(2 split)`.
+      One unit (`eps * ||L||_2`) is already 2.2 % at `1e-14`, which put the old tolerance at
+      0.90 units. OpenBLAS arm64 returned `2.0400567e-07`, which is 0.90 units off.
+    - Measured over seeds, bases and 1- and 4-ulp perturbations, the deviation stays below 1.5
+      units. The tolerance is now 4 units: 8.9 % at `1e-14`, and tighter than before at `1e-13`
+      (0.89 %) and `1e-12` (0.089 %, previously a lax 90 units).
+  - `pyyaml` joins the `dev` extra, for the same reason `jsonschema` is there.
+    `test_reader_matches_pyyaml_live`, the cross-check of the release gate's own workflow-YAML
+    reader against PyYAML, was skipped on every CI run (`could not import 'yaml'`). The gate
+    itself stays dependency-free.
 - **Zero-cluster conditioning is now basis invariant on defective repeated modes (issue #168).**
   The audit-only #117 instrument previously formed `sigma_min(Y^H X)` from eigenvectors returned
   by `?geev`. For a defective repeated eigenvalue no eigenspace of that dimension exists, so a

@@ -37,7 +37,7 @@ from __future__ import annotations
 
 import numpy as np
 import pytest
-from conftest import qutip_required
+from conftest import assert_spectra_match, qutip_required
 
 from liouscope import build_liouvillian, steady_state
 from liouscope.diagnostics.spectral import compute_spectral_layer
@@ -57,7 +57,12 @@ _SM = _LOWER  # amplitude-damping decay channel (index 1 -> 0)
 
 
 def _sorted_spectrum(L: np.ndarray) -> np.ndarray:
-    """LiouScope eigenvalues, lexicographically sorted for stable comparison."""
+    """LiouScope eigenvalues, sorted for readable failure output only.
+
+    Sorting is NOT a stable pairing: a conjugate pair with equal exact real
+    parts is ordered by its rounding (issue #180, macOS probe). Every spectrum
+    comparison in this module goes through ``assert_spectra_match``.
+    """
     return np.sort_complex(eig_nonhermitian(L).eigenvalues)
 
 
@@ -72,10 +77,8 @@ _GAMMA_AD = 0.4
 def test_amplitude_damping_gap_matches_analytic():
     L = build_liouvillian(np.zeros((2, 2), dtype=complex), [_SM], [_GAMMA_AD])
     spectrum = _sorted_spectrum(L)
-    expected = np.sort_complex(
-        np.array([0.0, -_GAMMA_AD, -_GAMMA_AD / 2, -_GAMMA_AD / 2], dtype=complex)
-    )
-    np.testing.assert_allclose(spectrum, expected, atol=1e-12)
+    expected = np.array([0.0, -_GAMMA_AD, -_GAMMA_AD / 2, -_GAMMA_AD / 2], dtype=complex)
+    assert_spectra_match(spectrum, expected, atol=1e-12)
 
     layer = compute_spectral_layer(L)
     # Analytic gap is exactly gamma/2 — pins what the loose existing test left open.
@@ -133,7 +136,7 @@ def test_driven_dephasing_spectrum_and_oscillation_match_qutip():
 
     ls = _sorted_spectrum(L)
     qt = np.sort_complex(L_qt.eigenenergies())
-    np.testing.assert_allclose(ls, qt, atol=1e-9)
+    assert_spectra_match(ls, qt, atol=1e-9)
 
     layer = compute_spectral_layer(L)
     qt_nonzero = qt[np.abs(qt) > 1e-9]
@@ -207,7 +210,7 @@ def test_thermal_qubit_matches_qutip_spectrum_and_steady_state():
 
     ls = _sorted_spectrum(L)
     qt = np.sort_complex(L_qt.eigenenergies())
-    np.testing.assert_allclose(ls, qt, atol=1e-9)
+    assert_spectra_match(ls, qt, atol=1e-9)
 
     ss_ls = steady_state(L)
     ss_qt = qutip.steadystate(qutip.Qobj(_H_TH), c_ops).full()

@@ -53,6 +53,23 @@ def _rabi_dephasing_L() -> np.ndarray:
     return build_liouvillian(0.5 * X, [Z], [0.3])
 
 
+def _strongly_driven_weakly_dephased_L() -> np.ndarray:
+    """A Liouvillian whose eps-pseudospectral abscissa is NOT zero.
+
+    Its real spectral spread is far below ``1e-3 * ||L||_F``, so the abscissa
+    grid uses its scale-relative span floor; the eps-ball around the
+    stationary eigenvalue then reaches positive grid nodes and the abscissa
+    is ``5e-4 * rate_scale``. Both other fixtures have an abscissa of exactly
+    0 (issue #180 review). Against that, "scales by c" carries no signal: a
+    build that dropped the rate unit from the abscissa failed only where a
+    ``1e-16`` rounding residue happened to exceed the tolerance, i.e. by
+    noise. Here it fails by ``5e-4 * rate_scale``.
+    """
+    X = np.array([[0.0, 1.0], [1.0, 0.0]], dtype=complex)
+    Z = np.diag([1.0, -1.0]).astype(complex)
+    return build_liouvillian(50.0 * X, [Z], [0.01])
+
+
 def _amplitude_damping_L() -> np.ndarray:
     sm = np.array([[0.0, 1.0], [0.0, 0.0]], dtype=complex)
     return build_liouvillian(np.zeros((2, 2), dtype=complex), [sm], [0.7])
@@ -218,7 +235,12 @@ def test_kreiss_scaled_unitary_similarity_invariant(rng):
 
 
 def test_resolvent_layer_scaled_fields_invariant_under_rate_rescale():
-    for L in (_rabi_dephasing_L(), _amplitude_damping_L()):
+    fixtures = (_rabi_dephasing_L(), _amplitude_damping_L(), _strongly_driven_weakly_dephased_L())
+    # Non-vacuity premise: at least one fixture has an abscissa far from 0,
+    # so the "rate-valued outputs scale by c" check below can fail at all.
+    driven = compute_resolvent_layer(fixtures[-1])
+    assert driven.pseudospectral_abscissa_rel == pytest.approx(5.0e-4, rel=1.0e-6)
+    for L in fixtures:
         base = compute_resolvent_layer(L)
         for c in C_SET:
             r = compute_resolvent_layer(c * L)
@@ -242,13 +264,25 @@ def test_resolvent_layer_scaled_fields_invariant_under_rate_rescale():
                 rtol=RTOL_INV,
                 atol=ATOL_INV,
             )
-            # Rate-valued outputs scale by c.
+            # Rate-valued outputs scale by c -- and so does every tolerance
+            # placed on them (issue #180). The abscissa of these fixtures is
+            # the grid node that sits on the stationary eigenvalue, so its
+            # exact value is 0 and the computed one is the round-off of the
+            # node arithmetic, ~eps * ||cL||. A dimensionless ``ATOL_INV`` on a
+            # RATE is not unit-covariant: at c = 1e10 (rate_scale 1.65e10) the
+            # same node legitimately reads 1.157e-16 * rate_scale = 1.907e-6
+            # on NumPy 1.26 / SciPy 1.12 and 0.0 on NumPy 2.x, which the bare
+            # 1e-12 rejected. ``ATOL_INV * rate_scale`` is the same 1e-12 in
+            # the operator's own units. The grid spacing is at least
+            # (2/24) * 1e-3 * rate_scale, so this tolerance is below 1.2e-8 of
+            # one spacing: it still pins WHICH node was selected, not only its
+            # value.
             np.testing.assert_allclose(r.rate_scale, c * base.rate_scale, rtol=RTOL_INV)
             np.testing.assert_allclose(
                 r.pseudospectral_abscissa,
                 c * base.pseudospectral_abscissa,
                 rtol=RTOL_INV,
-                atol=ATOL_INV,
+                atol=ATOL_INV * r.rate_scale,
             )
 
 

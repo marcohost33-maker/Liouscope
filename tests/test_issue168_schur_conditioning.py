@@ -420,6 +420,18 @@ def test_issue183_a_genuine_split_is_not_merged(split: float, seed: int) -> None
     above the resolution. Whatever the basis, the stationary mode is
     conditioned alone and reported conditioning-limited, with the same
     per-mode figure ``~2 sqrt(split)``.
+
+    Issue #180 (Linux arm64 probe): the figure is asserted to its rounding
+    level, not to a fixed 2 %. A backward error ``e`` acts on this block like
+    ``split -> split + e``, and ``s ~ 2 sqrt(split)``, so ``ds / s ~ e / (2 split)``.
+    One unit ``e = eps * ||L||_2`` is therefore already ``2.2 %`` at
+    ``split = 1e-14``. The old ``rel=2e-2`` was 0.90 units there, and OpenBLAS
+    on arm64 returned ``2.0400567e-07``, 0.90 units off. At ``1e-12`` the old
+    tolerance was a lax 90 units. Measured over three seeds, both bases and
+    random 1- and 4-ulp perturbations, the deviation stays below 1.5 units.
+    Four units, the length of the inner products that form ``L``, leaves 2.7x
+    margin. That relaxes ``1e-14`` to 8.9 % and tightens ``1e-13`` / ``1e-12``
+    to 0.89 % / 0.089 %.
     """
     block = np.zeros((4, 4), dtype=complex)
     block[0, 1] = split
@@ -431,8 +443,9 @@ def test_issue183_a_genuine_split_is_not_merged(split: float, seed: int) -> None
         evidence = zero_mode_conditioning(L, zero_tolerance=1.0e-12)
         assert evidence.cluster_size == 1
         assert evidence.verdict == CONDITIONING_LIMITED
+        rounding_unit = np.finfo(float).eps * np.linalg.norm(L, 2) / (2.0 * split)
         assert evidence.per_mode_reciprocal_condition == pytest.approx(
-            2.0 * math.sqrt(split), rel=2e-2
+            2.0 * math.sqrt(split), rel=4.0 * rounding_unit
         )
 
 

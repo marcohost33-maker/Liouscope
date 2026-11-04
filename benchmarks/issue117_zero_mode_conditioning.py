@@ -33,6 +33,7 @@ from functools import partial
 
 import numpy as np
 import scipy.linalg as sla
+from scipy.optimize import linear_sum_assignment
 
 from liouscope.core.lindblad import build_liouvillian
 from liouscope.diagnostics.spectral import compute_spectral_layer
@@ -134,14 +135,14 @@ def family_b() -> None:
     # cutoff the spectral layer would pass for it.
     plain = zero_mode_conditioning(A, zero_tolerance=_layer_cutoff(A))
     similar = zero_mode_conditioning(scaled, zero_tolerance=_layer_cutoff(scaled))
-    drift = float(
-        np.max(
-            np.abs(
-                np.sort_complex(np.linalg.eigvals(A))
-                - np.sort_complex(np.linalg.eigvals(scaled))
-            )
-        )
-    )
+    # Issue #180: pair the two spectra by minimum total distance instead of
+    # ``sort_complex``, which orders a rounding-level tie in the real part by
+    # its rounding and would then report a spurious O(1) "drift".
+    w_plain = np.linalg.eigvals(A)
+    w_scaled = np.linalg.eigvals(scaled)
+    distance = np.abs(w_plain[:, None] - w_scaled[None, :])
+    rows, cols = linear_sum_assignment(distance)
+    drift = float(np.max(distance[rows, cols]))
     # Round-3 review: this is a round-off quantity and differs between BLAS
     # builds, so the documentation states a bound and the run prints the value.
     print(f"  spectrum drift (round-off, < 1e-14)   {drift:.3e}")

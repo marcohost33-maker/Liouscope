@@ -52,7 +52,8 @@ figures/                  # generated diagnostic plots
 CITATION.cff              # DOI / academic citation
 codemeta.json             # CodeMeta 3.0 metadata
 .github/workflows/
-  ├── ci.yml              # test + lint + mypy + anchor regressions (required)
+  ├── ci.yml              # test + lint + mypy + anchor regressions (required);
+  │                       #   + non-required numerics platform probe (#180)
   ├── ci-qutip.yml        # optional-dependency QuTiP cross-checks (required)
   ├── scorecard.yml       # OpenSSF Scorecard (public-repo active)
   ├── encoding-guard.yml  # UTF-8 / line-ending guard
@@ -166,6 +167,15 @@ python examples/quickstart.py   # smoke run
   enter the run input hash and the full payload must remain serialisable in the
   report. Do not weaken the single-state floor to CANDIDATE and do not strengthen
   it to EXCLUDED.
+- **Numerical test tolerances follow the arithmetic, not one platform (issue #180).**
+  - State an assertion at or above the rounding level of every operation that produced
+    the value: the formation error of the operator and the solver's backward error.
+  - Put a tolerance on a rate-valued quantity in the operator's own units
+    (`atol * rate_scale`), never as a bare constant.
+  - Premises about summation order or overflow are checked with an explicitly sequential
+    reduction (`np.add.accumulate`, `math.fma`), not with the platform BLAS.
+  - A red `numerics platform probe` job (macOS/Accelerate, Linux arm64) is a finding about
+    a test's error model: root-cause it, never retry it into green.
 - For any branch / history-touching operation, reference the 2026-05-16
   incident in the PR body as a reminder of why Backup-First
   exists (the backup-triple recovered ~20 files after an unverified

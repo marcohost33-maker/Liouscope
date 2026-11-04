@@ -14,6 +14,7 @@ import warnings
 import numpy as np
 import pytest
 import scipy.linalg as sla
+from conftest import assert_spectra_match
 
 from liouscope._consts import ZERO_MODE_AMBIGUITY_FACTOR
 from liouscope.core.lindblad import build_liouvillian
@@ -164,9 +165,7 @@ def test_healthy_generator_keeps_the_incumbent_solver(scale: float) -> None:
     )
     ev, cert = certified_eigvals(lsup)
     assert cert.certified and cert.solver == "zgeev"
-    np.testing.assert_allclose(
-        np.sort_complex(ev), np.sort_complex(eig_nonhermitian(lsup).eigenvalues)
-    )
+    assert_spectra_match(ev, eig_nonhermitian(lsup).eigenvalues)
 
 
 def test_sweep_of_random_networks_never_degrades_the_gap() -> None:
@@ -213,9 +212,7 @@ def test_certificate_is_not_applicable_to_a_non_trace_preserving_operator() -> N
     arbitrary = rng.normal(size=(4, 4)) + 1j * rng.normal(size=(4, 4))
     ev, cert = certified_eigvals(arbitrary)
     assert cert.applicable is False
-    np.testing.assert_allclose(
-        np.sort_complex(ev), np.sort_complex(eig_nonhermitian(arbitrary).eigenvalues)
-    )
+    assert_spectra_match(ev, eig_nonhermitian(arbitrary).eigenvalues)
 
 
 def test_uncertified_spectrum_warns_instead_of_reporting_silently(
