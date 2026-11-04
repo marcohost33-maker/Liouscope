@@ -1,0 +1,31 @@
+# Release toolchain for .github/workflows/pypi.yml (build + release QA gate).
+#
+# Top-level requirements only; release.txt is the hash lock the workflow
+# installs with `--require-hashes`. Regenerate it from THIS directory with the
+# release job's interpreter (Python 3.12, see pypi.yml), so the resolved
+# environment markers are the ones the job evaluates:
+#
+#   pip-compile --allow-unsafe --generate-hashes --strip-extras release.in
+#
+# Use click<8.3 with pip-tools 7.6.1: with a newer click, pip-compile writes a
+# spurious `--no-index` into the header of release.txt (measured 2026-09-25).
+# The header is the documented regeneration command a maintainer copies, and
+# with `--no-index` it resolves against no package index at all. The quality
+# contract rejects such a header.
+#
+# Dependabot (the /.github/requirements entry in dependabot.yml) infers
+# --generate-hashes / --allow-unsafe from this lock's CONTENT and takes the
+# interpreter from the header's "with Python X.Y" (dependabot-core#14137). If a
+# refresh ever resolves for another Python, the quality contract's
+# python-version check turns that update red instead of letting a lock with
+# the wrong environment markers through.
+#
+# `--allow-unsafe` is required: setuptools is the build backend and is locked
+# here because pypi.yml builds with `--no-isolation` (an isolated build would
+# download an unpinned setuptools at build time).
+build
+check-wheel-contents
+# Must satisfy [build-system] requires in pyproject.toml; the quality contract
+# checks the locked version against it.
+setuptools>=77.0
+twine

@@ -7,9 +7,14 @@ from __future__ import annotations
 import warnings
 
 import numpy as np
-import scipy.linalg as sla
 
-from .._consts import EPS_SUPP
+from .._consts import (
+    EPS_SUPP,
+    INTERVAL_METHOD_BC,
+    INTERVAL_METHOD_BCA_DELETE1,
+    INTERVAL_METHOD_UNAVAILABLE,
+    JACKKNIFE_MAX_GRID_POINTS,
+)
 from .._types import FitResult, RelaxationResult
 from ..core.lindblad import steady_state
 from ..fitting.aicc import aicc, choose_model
@@ -31,7 +36,34 @@ from ..fitting.neff import estimate_neff_geyer
 from ..fitting.prony import prony_seed
 from ..numerics.kronecker import unvec, vec
 from ..numerics.linalg import support_check
+from ..numerics.propagation import (
+    BACKEND_AUTO,
+    UnrepresentableTrajectoryError,
+    propagate_trajectory,
+)
 from .spectral import compute_spectral_layer
+
+# ``UnrepresentableTrajectoryError`` is re-exported: it is raised through
+# ``compute_relaxation_layer`` and callers catch it from this module.
+__all__ = [
+    "MIN_SAMPLES_PER_FAST_EFOLD",
+    "RELAXATION_HORIZON",
+    "RELAXATION_N_POINTS",
+    "UnderResolvedTransientWarning",
+    "UnrepresentableRelaxationWindowError",
+    "UnrepresentableTrajectoryError",
+    "compute_relaxation_layer",
+    "decay_rates",
+    "default_relaxation_grid",
+    "entanglement_asymmetry",
+    "fastest_decay_rate",
+    "fidelity",
+    "relative_entropy",
+    "samples_per_fast_efolding",
+    "trace_distance",
+    "von_neumann_entropy",
+]
+
 
 # Default relaxation window, expressed in the system's OWN slowest relaxation
 # time ``1 / Delta`` (D1) rather than in absolute time units.
@@ -141,18 +173,6 @@ class UnrepresentableRelaxationWindowError(ValueError):
     documented absolute-window fallback. Modelled on
     :class:`liouscope.core.lindblad.DegenerateSteadyStateError`, the repo's
     existing fail-closed domain error.
-    """
-
-
-class UnrepresentableTrajectoryError(RuntimeError):
-    """The requested propagation cannot be represented reliably in float64.
-
-    This is distinct from an unrepresentable GRID: the times and ``L*t`` may
-    all be finite while the matrix-exponential algorithm still produces a
-    non-finite propagator at an extreme dynamic range. Returning that trajectory
-    would launder a numerical failure into downstream entropy, fitting and
-    confidence calculations, so the relaxation layer fails closed and asks the
-    caller to rescale the rate/time units.
     """
 
 
@@ -506,72 +526,56 @@ def _decay_fraction_from_resolution(samples_per_efolding: float) -> float:
     return -float(np.expm1(-1.0 / s))
 
 
-def _evolve(L_super: np.ndarray, rho0: np.ndarray, t_grid: np.ndarray) -> np.ndarray:
-    """Propagate ``rho(t) = expm(L t) rho_0`` and return the trajectory.
+def _propagate(
+    L_super: np.ndarray,
+    rho0: np.ndarray,
+    t_grid: np.ndarray,
+    *,
+    backend: str = BACKEND_AUTO,
+) -> tuple[np.ndarray, str]:
+    """Propagate ``rho(t) = exp(L t) rho_0``; return the trajectory and the backend.
 
-    Fail closed if the requested propagation leaves the representable/numerical
-    range.  A finite input matrix does not imply that scaling-and-squaring can
-    return a finite matrix exponential at an arbitrarily large dimensionless
-    time ``||L t||``.
+    The backend (``"dense_expm"`` reference or ``"expm_action"``, issue #162)
+    is chosen by :func:`liouscope.numerics.propagation.select_trajectory_backend`
+    under ``backend="auto"``. Both fail closed with
+    :class:`UnrepresentableTrajectoryError` instead of returning NaN/inf.
     """
-    rho_vec0 = vec(rho0)
     d = rho0.shape[0]
-    L_super = np.asarray(L_super)
-    # A malformed generator is an argument error, not a float64 limit: check
-    # the shape here so the numerical guard below never relabels it.
-    if L_super.ndim != 2 or L_super.shape != (d * d, d * d):
-        raise ValueError(
-            f"relaxation trajectory: L_super must have shape ({d * d}, {d * d}) "
-            f"for a {d}x{d} state, got {L_super.shape}"
-        )
+    result = propagate_trajectory(L_super, vec(rho0), t_grid, backend=backend)
     traj = np.empty((t_grid.size, d, d), dtype=complex)
-    for k, t in enumerate(t_grid):
-        if t == 0.0:
-            traj[k] = rho0
-            continue
-        with np.errstate(over="ignore", invalid="ignore", under="ignore"):
-            scaled = np.asarray(L_super * t)
-        if not np.all(np.isfinite(scaled)):
-            raise UnrepresentableTrajectoryError(
-                "relaxation trajectory: L*t contains non-finite entries at "
-                f"t={float(t):.6g}; supply a numerically representable grid or "
-                "use a propagation method designed for this extreme regime. "
-                "A pure rate/time unit rescaling does not help because L*t is invariant."
-            )
-        try:
-            # NumPy errstate does not govern warnings emitted by SciPy's
-            # scaling-and-squaring implementation.  Convert those numerical
-            # warnings into the same domain error so pytest's warnings-as-errors
-            # policy and ordinary callers see one deterministic failure mode.
-            with warnings.catch_warnings():
-                warnings.filterwarnings("error", category=RuntimeWarning)
-                with np.errstate(over="ignore", invalid="ignore", under="ignore"):
-                    propagator = sla.expm(scaled)
-        except (RuntimeWarning, OverflowError, ValueError, np.linalg.LinAlgError) as exc:
-            raise UnrepresentableTrajectoryError(
-                "relaxation trajectory: scipy.linalg.expm could not represent "
-                f"a finite propagator at t={float(t):.6g}; use a different "
-                "time window or a structure/action-based propagation method. "
-                "Pure unit rescaling leaves L*t unchanged."
-            ) from exc
-        if not np.all(np.isfinite(propagator)):
-            raise UnrepresentableTrajectoryError(
-                "relaxation trajectory: scipy.linalg.expm returned a non-finite "
-                f"propagator at t={float(t):.6g} although L*t is finite; this "
-                "extreme dynamic range is not representable reliably in the "
-                "current float64 dense-expm path. Use a different time window "
-                "or a structure/action-based propagation method; pure unit "
-                "rescaling leaves L*t unchanged."
-            )
-        with np.errstate(over="ignore", invalid="ignore", under="ignore"):
-            rho_vec_t = propagator @ rho_vec0
-        if not np.all(np.isfinite(rho_vec_t)):
-            raise UnrepresentableTrajectoryError(
-                "relaxation trajectory: the propagated state became non-finite "
-                f"at t={float(t):.6g}; change the numerical propagation/window "
-                "rather than only the rate/time units"
-            )
-        traj[k] = unvec(rho_vec_t, d=d)
+    for k in range(t_grid.size):
+        # ``states`` holds rho_0 exactly at t == 0, already validated in the
+        # complex128 working dtype; vec/unvec is a pure reshape, so this is
+        # rho_0 itself without a second, unchecked narrowing store.
+        traj[k] = unvec(result.states[k], d=d)
+    return traj, result.backend
+
+
+def _trajectory_invariants(traj: np.ndarray) -> tuple[float, float, float]:
+    """Measured physical invariants of a propagated trajectory (issue #162).
+
+    Returns ``(max |tr rho - 1|, max ||rho - rho^dag||_max, min eig(herm(rho)))``;
+    NaN for an empty trajectory. The last value is the positivity drift: a
+    CPTP evolution keeps it >= 0 exactly, round-off pushes it below by a few ulp.
+    """
+    if traj.shape[0] == 0:
+        return float("nan"), float("nan"), float("nan")
+    adjoint = np.conj(np.swapaxes(traj, 1, 2))
+    trace_error = float(np.max(np.abs(np.einsum("kii->k", traj) - 1.0)))
+    hermiticity = float(np.max(np.abs(traj - adjoint)))
+    min_eig = float(np.min(np.linalg.eigvalsh(0.5 * (traj + adjoint))))
+    return trace_error, hermiticity, min_eig
+
+
+def _evolve(
+    L_super: np.ndarray,
+    rho0: np.ndarray,
+    t_grid: np.ndarray,
+    *,
+    backend: str = BACKEND_AUTO,
+) -> np.ndarray:
+    """Propagate ``rho(t) = exp(L t) rho_0`` and return the trajectory."""
+    traj, _backend = _propagate(L_super, rho0, t_grid, backend=backend)
     return traj
 
 
@@ -883,6 +887,7 @@ def compute_relaxation_layer(
     spectrum_resolved: bool | None = None,
     bootstrap_B: int = 200,
     seed: int = 42,
+    trajectory_backend: str = BACKEND_AUTO,
 ) -> RelaxationResult:
     """Run D5-D7b and the M0..M3b fit hierarchy.
 
@@ -928,6 +933,14 @@ def compute_relaxation_layer(
         #154 review, round 3): there is no spectrum the assertion could be
         about, and silently re-solving would be the bare eigensolve this
         contract exists to prevent.
+
+    ``trajectory_backend`` selects how ``rho(t)`` is propagated (issue #162):
+    ``"auto"`` (default, deterministic size/cost rule), ``"dense_expm"``
+    (reference) or ``"expm_action"``. The backend actually used is recorded in
+    :attr:`RelaxationResult.trajectory_backend`, together with the measured
+    trace error, Hermiticity defect and minimum eigenvalue of the propagated
+    states (``trajectory_max_trace_error``, ``trajectory_max_hermiticity_defect``,
+    ``trajectory_min_eigenvalue``).
     """
     L_super = np.asarray(L_super)
     n2 = L_super.shape[0]
@@ -1010,7 +1023,10 @@ def compute_relaxation_layer(
     # after the hierarchy has run (see ``residual_model`` below).
     grid_residual_model = "ar1" if is_uniform_grid(t_grid) else "car1"
 
-    traj = _evolve(L_super, rho_initial, t_grid)
+    traj, used_backend = _propagate(
+        L_super, rho_initial, np.asarray(t_grid, dtype=float), backend=trajectory_backend
+    )
+    trace_error, hermiticity_defect, min_eigenvalue = _trajectory_invariants(traj)
     final_rho = traj[-1]
     rel_entropy = np.array(
         [relative_entropy(traj[k], rho_steady_state) for k in range(traj.shape[0])]
@@ -1129,6 +1145,7 @@ def compute_relaxation_layer(
     # Bootstrap on the winning model for beta_D
     beta_D = _beta_from_params(winner, fits[winner].params) if winner in fits else float("nan")
     bca_lo, bca_hi = beta_D, beta_D
+    jk = None
     if winner in fits and np.isfinite(beta_D):
         winner_fn = {"M0": M0, "M1": M1, "M2": M2, "M3a": M3a, "M3b": M3b}[winner]
         try:
@@ -1136,8 +1153,10 @@ def compute_relaxation_layer(
                 winner_fn, t_grid, rel_entropy, fits[winner].params,
                 B=bootstrap_B, rng=np.random.default_rng(seed),
             )
-            jk = None
-            if t_grid.size <= 60:
+            # Issue #116: on grids longer than JACKKNIFE_MAX_GRID_POINTS (the
+            # default 80-point grid included) no acceleration is estimated and
+            # bca_ci returns the BC interval; ``interval_method`` says so.
+            if t_grid.size <= JACKKNIFE_MAX_GRID_POINTS:
                 jk = _jackknife(winner_fn, t_grid, rel_entropy, theta_hat, None)
             cis = bca_ci(samples, theta_hat, jackknife_estimates=jk)
             beta_idx = _beta_index(winner, fits[winner].params)
@@ -1155,6 +1174,17 @@ def compute_relaxation_layer(
                 RuntimeWarning,
             )
             bca_lo, bca_hi = float("nan"), float("nan")
+
+    # Issue #116: name the estimator that actually produced the interval. A
+    # non-finite endpoint covers every no-interval outcome (bootstrap failure,
+    # non-finite point estimate, degenerate bootstrap distribution, #125), so
+    # an interval is never credited to an estimator that produced no interval.
+    if not (np.isfinite(bca_lo) and np.isfinite(bca_hi)):
+        interval_method = INTERVAL_METHOD_UNAVAILABLE
+    elif jk is not None:
+        interval_method = INTERVAL_METHOD_BCA_DELETE1
+    else:
+        interval_method = INTERVAL_METHOD_BC
 
     try:
         ent_asym = entanglement_asymmetry(final_rho)
@@ -1200,4 +1230,9 @@ def compute_relaxation_layer(
         worst_resolved_blind_interval=float(blind),
         worst_resolved_blind_start=float(blind_start),
         residual_model=residual_model,
+        interval_method=interval_method,
+        trajectory_backend=used_backend,
+        trajectory_max_trace_error=trace_error,
+        trajectory_max_hermiticity_defect=hermiticity_defect,
+        trajectory_min_eigenvalue=min_eigenvalue,
     )

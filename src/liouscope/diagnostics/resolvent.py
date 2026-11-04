@@ -39,7 +39,7 @@ import scipy.linalg as sla
 
 from .._types import ResolventResult
 from ..numerics.pseudospec import pseudospectral_radius, pseudospectrum_extent
-from ..numerics.resolvent import resolvent_norm
+from ..numerics.resolvent import resolvent_norm_evaluator
 from ..numerics.scale import rate_scale
 
 
@@ -53,10 +53,11 @@ def resolvent_peak_curve(
 
     Returns ``(omegas, norms)``.
 
-    Each point delegates to :func:`liouscope.numerics.resolvent.resolvent_norm`,
-    which is exact (dense inverse + SVD) for ``n <= 128`` and switches to the
-    SuperLU shift-and-invert power iteration for larger Liouvillians (where the
-    dense ``O(n^3)`` inverse per frequency would be intractable).
+    For ``n <= 128`` each point is
+    :func:`liouscope.numerics.resolvent.resolvent_norm` (dense inverse + SVD,
+    exact). Larger Liouvillians share one Schur decomposition across the scan
+    (:class:`liouscope.numerics.resolvent.ShiftedSchurResolvent`, issue #178),
+    where the dense ``O(n^3)`` inverse per frequency would be intractable.
     """
     L_super = np.asarray(L_super)
     eigvals = sla.eigvals(L_super)
@@ -64,9 +65,10 @@ def resolvent_peak_curve(
     omegas = np.linspace(-omega_max, omega_max, n_omega)
     re_max = float(np.max(np.real(eigvals)))
     shift = sigma + re_max
+    norm_at = resolvent_norm_evaluator(L_super)
     norms = np.empty(n_omega)
     for i, omega in enumerate(omegas):
-        norms[i] = resolvent_norm(L_super, shift + 1j * omega)
+        norms[i] = norm_at(shift + 1j * omega)
     return omegas, norms
 
 
@@ -123,9 +125,10 @@ def resolvent_peak_curve_scaled(
     omegas = np.linspace(-omega_rel_max * scale, omega_rel_max * scale, n_omega)
     re_max = float(np.max(np.real(eigvals)))
     shift = sigma_rel * scale + re_max
+    norm_at = resolvent_norm_evaluator(L_super)
     norms = np.empty(n_omega)
     for i, omega in enumerate(omegas):
-        norms[i] = resolvent_norm(L_super, shift + 1j * omega)
+        norms[i] = norm_at(shift + 1j * omega)
     return omegas, norms
 
 

@@ -7,12 +7,14 @@ Anchor G: standard iid bootstrap on ODE trajectories violates independence
 2. Resimulate ``nu_t ~ N(0, sigma^2)`` and propagate through
    ``eps_t = rho eps_{t-1} + nu_t``.
 3. Re-fit the model on the resimulated trajectory.
-4. Aggregate fitted parameters and report BCa confidence intervals
-   (Efron 1987).
+4. Aggregate fitted parameters and report bias-corrected bootstrap
+   confidence intervals (Efron 1987): BCa when jackknife estimates supply the
+   acceleration term, plain BC otherwise (see :func:`bca_ci`, issue #116).
 """
 
 from __future__ import annotations
 
+import warnings
 from collections.abc import Callable
 
 import numpy as np
@@ -197,6 +199,23 @@ def bca_ci(
 
     Returns ``(p, 2)`` array of ``(lo, hi)`` per parameter at level
     ``1 - alpha``.
+
+    Without ``jackknife_estimates`` the acceleration is ``a = 0`` and the
+    adjusted quantiles reduce to ``Phi(2 z0 + z_alpha)``: the bias-corrected
+    (BC) percentile interval, **not** BCa (Efron 1987). The "a" of BCa is
+    exactly the acceleration. Callers that publish the interval must say which
+    estimator they got (``RelaxationResult.interval_method``, issue #116). The
+    difference is not conservative by construction: ``a`` corrects for a
+    variance that changes with the parameter and can move both endpoints in
+    either direction.
+
+    A parameter whose bootstrap distribution is degenerate, or whose adjusted
+    quantiles collapse to an exactly zero-width interval, is reported as
+    ``(NaN, NaN)`` with a warning. This follows the fail-closed semantics used
+    by SciPy's BCa implementation for degenerate bootstrap distributions:
+    arithmetic concentration is not promoted to a claim of perfect certainty
+    when the resampling model contains no measurable spread (issue #125).
+    Other non-degenerate parameters in the same fit remain reportable.
     """
     samples = np.asarray(samples, dtype=float)
     theta_hat = np.asarray(theta_hat, dtype=float)
@@ -206,6 +225,16 @@ def bca_ci(
     z_alpha_hi = ndtri(1.0 - alpha / 2.0)
     for j in range(p):
         boot_j = np.sort(samples[:, j])
+        if boot_j.size == 0 or np.all(boot_j == boot_j[0]):
+            warnings.warn(
+                f"bca_ci: bootstrap distribution for parameter {j} is "
+                "degenerate; uncertainty is unavailable rather than a "
+                "zero-width confidence claim (issue #125)",
+                RuntimeWarning,
+                stacklevel=2,
+            )
+            cis[j] = (float("nan"), float("nan"))
+            continue
         # Bias-correction z0 with half-correction for ties (Efron 1987, S3
         # audit 2026-06-04). Using a strict ``<`` only would send the
         # proportion to 0 (hence z0 -> -inf, clamped) whenever many bootstrap
@@ -243,6 +272,16 @@ def bca_ci(
         # continuous-percentile estimator.
         lo = float(np.quantile(boot_j, q_lo, method="linear"))
         hi = float(np.quantile(boot_j, q_hi, method="linear"))
+        if lo == hi:
+            warnings.warn(
+                f"bca_ci: confidence interval for parameter {j} collapsed to "
+                "exactly zero width; uncertainty is unavailable rather than "
+                "perfectly known (issue #125)",
+                RuntimeWarning,
+                stacklevel=2,
+            )
+            cis[j] = (float("nan"), float("nan"))
+            continue
         cis[j] = (lo, hi)
     return cis
 

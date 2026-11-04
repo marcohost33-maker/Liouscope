@@ -8,6 +8,10 @@ restricted to a rectangular grid bracketing the spectrum (for a Liouvillian
 that grid lies in the closed left half-plane). Returns the
 maximal modulus of grid points belonging to the pseudospectrum, which we
 report as the pseudospectral radius for diagnostic D13.
+
+For ``n <= 128`` every grid point is a dense ``svdvals(z I - L)``. Larger
+operators share one Schur decomposition across the sweep
+(:func:`liouscope.numerics.resolvent.sigma_min_evaluator`, issue #178).
 """
 
 from __future__ import annotations
@@ -16,6 +20,7 @@ import numpy as np
 import scipy.linalg as sla
 
 from .linalg import require_finite_square_2d
+from .resolvent import sigma_min_evaluator
 
 
 def pseudospectral_radius(
@@ -56,12 +61,11 @@ def pseudospectral_radius(
     res = np.linspace(*grid_re)
     ims = np.linspace(*grid_im)
     radius = 0.0
-    n = L.shape[0]
-    eye = np.eye(n, dtype=complex)
+    sigma_min_at = sigma_min_evaluator(L)
     for re in res:
         for im in ims:
             z = re + 1j * im
-            sv_min = float(sla.svdvals(z * eye - L)[-1])
+            sv_min = sigma_min_at(z)
             if sv_min <= eps and abs(z) > radius:
                 radius = float(abs(z))
     return radius
@@ -103,12 +107,11 @@ def pseudospectrum_extent(
     radius = float("nan")
     abscissa = float("nan")
     found = False
-    n = L.shape[0]
-    eye = np.eye(n, dtype=complex)
+    sigma_min_at = sigma_min_evaluator(L)
     for re in res:
         for im in ims:
             z = re + 1j * im
-            sv_min = float(sla.svdvals(z * eye - L)[-1])
+            sv_min = sigma_min_at(z)
             if sv_min <= eps:
                 if not found:
                     radius = float(abs(z))

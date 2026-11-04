@@ -41,8 +41,10 @@ LiouScope addresses this with three deliberate choices:
 
 1. **No single number.** Every analysis returns a structured `DiagnosticReport` with the code-backed
    diagnostic set grouped by physical concept, not a scalar.
-2. **Explicit uncertainty.** Bootstrap CIs (BCa), GLS with AR(1) residuals, AICc model selection, and a
-   parametric-bootstrap pipeline are first-class — not optional add-ons.
+2. **Explicit uncertainty.** Parametric-bootstrap CIs, GLS with AR(1) residuals, AICc model selection, and a
+   parametric-bootstrap pipeline are first-class — not optional add-ons. Each run reports which interval
+   estimator it computed (`relaxation.interval_method`): bias-corrected `"BC"` on the default grid,
+   `"BCa-delete1"` only on short grids (issue #116).
 3. **Auditable manifests.** Each run produces a SHA-256-stable JSON manifest (`MANIFEST_SCHEMA v1.5.0`)
    that captures the seed, framework/schema/taxonomy versions, Python/NumPy/SciPy versions,
    platform, solver path, quality label and a run-invariant `input_hash`. Structured ensemble
@@ -72,10 +74,11 @@ rho_0 = np.outer(plus, plus.conj())
 
 report = lp.diagnose(L, rho_initial=rho_0, bootstrap_B=100, seed=42)
 
-# A-class mechanism + 95% BCa CI on the fitted relaxation rate
+# A-class mechanism + 95% bootstrap CI on the fitted relaxation rate
 print(report.classification.a_class)         # one of "A1".."A12"
 print(report.relaxation.beta_D, "in",
       report.relaxation.bca_ci_beta)         # (lo, hi)
+print(report.relaxation.interval_method)     # "BC" here: the estimator behind that CI
 
 # Every mechanism hypothesis that fired -- not just the dominant one
 for h in report.classification.triggered_hypotheses:
@@ -162,7 +165,7 @@ in this repository**; D24 ships as an opt-in module.
 | **N — Non-normality** | D8-D13 (+D8b, D10b, D11b) | Henrici departure (+ dimensionless `henrici_relative`), Petermann factors, Kreiss grid lower bound (+ scale-relative `kreiss_scaled`), Bohr-AP, resolvent peak/FWHM, pseudospectral radius (+ scale-relative radius & abscissa) | `diagnostics/nonnormality.py`, `diagnostics/resolvent.py` |
 | **T — Transient** | D14-D15 | sup-norm transient amplification, numerical-abscissa ratio | `diagnostics/transient.py` |
 | **C — Classification** | D16-D20 | LEP proximity, gap-rate consistency, initial-state sensitivity, Mpemba overlap/scaling; A1-A12 mechanism classifier on top | `diagnostics/lep.py`, `diagnostics/mpemba.py`, `diagnostics/classification.py` |
-| **U/G — Uncertainty & Governance** | U0-U2, D24 | BCa CIs, AICc model selection M0..M3b, GLS+AR(1); manifest export; Zhou mixing-time predictor (opt-in, frozen) | `fitting/`, `diagnostics/uncertainty.py`, `io/manifest.py`, `_zhou.py` |
+| **U/G — Uncertainty & Governance** | U0-U2, D24 | bootstrap CIs (BC / BCa-delete1, estimator reported per run), AICc model selection M0..M3b, GLS+AR(1); manifest export; Zhou mixing-time predictor (opt-in, frozen) | `fitting/`, `diagnostics/uncertainty.py`, `io/manifest.py`, `_zhou.py` |
 
 The Zhou predictor (D24) is opt-in and lives in `liouscope._zhou`; see CHANGELOG.
 Its `claim_status` is **reference-verified-bound-coarser** — the cited reference
@@ -197,7 +200,7 @@ src/liouscope/
   core/             Hamiltonians, jump operators, lattices, Lindblad superoperators
   diagnostics/      Six layers (spectral, nonnormality, relaxation, transient,
                     uncertainty, classification, mpemba, lep, resolvent)
-  fitting/          GLS+AR(1), BCa bootstrap, AICc model selection
+  fitting/          GLS+AR(1), BC/BCa bootstrap intervals, AICc model selection
   io/               Run-manifest export, seed control
   sparse/           Low-level ARPACK shift-invert helpers (not yet wired into diagnose())
   _zhou.py          Zhou universal mixing-time predictor (opt-in, D24)
@@ -236,7 +239,47 @@ LiouScope is built for paper-grade reproducibility:
   `test_manifests_byte_identical_with_source_date_epoch`).
 - **Anchor tests.** `tests/test_anchors.py` locks the numerical anchors that paper figures depend on;
   changes to physics code that move these values are caught in CI.
+- **Zero-mode conditioning evidence (audit only).** Every spectral run attaches
+  `SpectralResult.zero_mode_conditioning`. For a **multi-mode** zero cluster the headline quantity
+  is the reciprocal **2-norm spectral-projector condition** `1 / ||P||_2`, computed from a
+  reordered complex Schur form plus a Sylvester solve; LAPACK `xTRSEN.S` is not treated as the
+  exact value because it is a Frobenius-norm lower bound. A simple zero mode keeps the direct
+  `|y^H x|` scalar condition and the corresponding first-order
+  forward-error estimates. For a multi-mode zero cluster it deliberately returns
+  `verdict="CLUSTER_ONLY"` and withholds those scalar estimates: a defective multiple eigenvalue
+  has no basis-independent scalar first-order condition number, and numerical proximity cannot
+  safely distinguish a Jordan block from a genuinely split pair. The report still carries the
+  cluster condition, residuals, separation and trace-preservation defect. Before a multi-mode
+  projector is reported, the independent Schur spectrum must match the spectrum carried by the
+  report mode-for-mode inside the existing round-off agreement band, or -- where that strict
+  pairing fails -- to the arithmetic's own resolution (issue #183); otherwise the audit returns
+  `UNAVAILABLE` rather than conditioning a numerically different cluster. Which modes form the
+  conditioned group is closed under the arithmetic's own resolution (issue #183): two eigenvalues
+  whose midpoint lies in the pseudospectrum at one unit of round-off,
+  `sigma_min(L - m I) <= eps * ||L||_F`, are kept together, so a defective pair that round-off
+  splits differently in different bases is conditioned whole in all of them; that test is bounded
+  by a fixed SVD budget and ends as `UNAVAILABLE` rather than running long on a pathologically
+  non-normal operator. **Nothing reads this
+  audit** — no filter, gap, certificate, diagnostic or tier — and it is not a detector for stiff
+  eigensolver failure (issues #117/#168). The public entry point is
+  `liouscope.numerics.zero_mode_conditioning(L, zero_tolerance=..., eigenvalues=...)`. Called
+  **without** `zero_tolerance` it returns `verdict="ABSTAIN"`: no cutoff means no zero set, so it
+  reports only the smallest eigenvalue, its magnitude and the trace defect and never `BENIGN`
+  (the spectral layer always passes its certified cutoff and is unaffected).
+  `compute_spectral_layer(..., conditioning_audit=False)` switches the extra work off with no
+  other effect on the result.
 - **Paper-figure pipeline.** `figures/generate_all.py` regenerates Fig 1-3 deterministically.
+- **Relaxation trajectories: dense `expm` or exponential action, recorded.** For `d >= 8`
+  the relaxation layer propagates `exp(tL) rho0` with the Al-Mohy & Higham exponential action
+  (`scipy.sparse.linalg.expm_multiply`) whenever its exact cost bound is within budget and below
+  the dense estimate, instead of materialising `expm(L t)`; stiff generators stay on the dense
+  path, and smaller systems (every anchor fixture) keep the historical dense formula
+  bit-for-bit. The choice is a deterministic function of the generator and the time grid,
+  never of timings, and
+  `RelaxationResult.trajectory_backend` records it together with the measured trace error,
+  Hermiticity defect and minimum eigenvalue along the trajectory (audit values, no silent
+  repair). The action path never touches global random state. Unrepresentable propagation
+  fails closed with `UnrepresentableTrajectoryError`.
 
 ---
 

@@ -68,6 +68,28 @@ class SpectralResult:
     # Optional with a default so the run-manifest contract is unchanged
     # (additive field).
     zero_mode_certificate: dict[str, object] | None = None
+    # Issue #117, AUDIT ONLY -- the deliberate opposite of the field above.
+    # Eigenvalue-conditioning evidence for the stationary mode: the reciprocal
+    # condition number of the zero set, the residuals, and the first-order
+    # forward-error estimates those imply. NOTHING reads it: no filter, no gap,
+    # no verdict, no tier. It exists because a backward error does not bound a
+    # forward eigenvalue displacement for a NON-NORMAL generator (measured on
+    # the PR #127 fixture: 1.4e-14 defect, 1.0e-7 displacement), so a reader of
+    # a report otherwise cannot tell a failed eigensolve from a correctly
+    # located eigenvalue of an approximately trace-preserving operator.
+    #
+    # Deliberately NOT promoted to a gate in this change: on the canonical
+    # stiff #112 network the conditioning of the WRONG spectrum is benign
+    # (measured s = 0.29 for the spurious stationary mode it selects, 0.040 at
+    # worst over that spectrum -- condition numbers between 1 and 25), so
+    # conditioning cannot replace the structural certificate, and no case is yet
+    # known in which the certificate certifies while conditioning would have
+    # withheld. The separate ``0.707`` figure quoted in the changelog is the
+    # worst case over the sixteen PHYSICAL GKSL generators, a different
+    # measurement. See ``numerics.conditioning`` and issue #117 step 4.
+    # Optional with a default so the run-manifest contract is unchanged
+    # (additive field).
+    zero_mode_conditioning: dict[str, object] | None = None
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -221,7 +243,9 @@ class RelaxationResult:
     fits: dict[str, FitResult]
     aicc_model: str                       # winning model
     beta_D: float                         # fitted exponential rate of best model
-    bca_ci_beta: tuple[float, float]      # BCa 95% CI
+    # 95% bootstrap CI on beta_D. Despite the historical field name it is BCa
+    # only when ``interval_method`` says so; on the default grid it is BC.
+    bca_ci_beta: tuple[float, float]
     # F-018 (LIOU-F-018): half trace-norm distance to rho_ss along the
     # trajectory, the observable relaxation metric alongside D5/D6/D7. Optional
     # and defaulted so the field is purely additive (older callers/serialised
@@ -295,6 +319,34 @@ class RelaxationResult:
     # contributes to no label. The per-fit value is
     # ``FitResult.residual_theta_car1``. Additive + defaulted.
     residual_model: str = "ar1"
+    # Issue #162: which propagation backend produced the trajectory the curves
+    # above were computed from -- "dense_expm" (reference, materialised
+    # expm(L t)) or "expm_action" (Al-Mohy & Higham exponential action).
+    # Recorded so a backend switch is auditable, never silent. Defaulted to the
+    # historical dense path so older callers / serialised results stay valid.
+    trajectory_backend: str = "dense_expm"
+    # Issue #162 acceptance: "positivity drift measured, not assumed". Physical
+    # invariants of the propagated states, measured on every run (not only in
+    # tests): max |tr(rho(t)) - 1|, max ||rho - rho^dag||_max and the smallest
+    # eigenvalue of the Hermitian part along the trajectory. Audit measurements
+    # only -- nothing is repaired. NaN for results that carry no trajectory.
+    trajectory_max_trace_error: float = float("nan")
+    # Issue #116: which estimator actually produced ``bca_ci_beta`` -- one of
+    # ``liouscope._consts.INTERVAL_METHODS``:
+    #   "BC"          acceleration a = 0, the bias-corrected percentile interval
+    #                 (the default 80-point grid lands here);
+    #   "BCa-delete1" acceleration from the leave-one-out jackknife (grids of
+    #                 <= JACKKNIFE_MAX_GRID_POINTS points); Efron's iid
+    #                 construction, not calibrated for the serially correlated
+    #                 residuals this fit models;
+    #   "unavailable" no finite interval: bootstrap failure, non-finite point
+    #                 estimate, or a degenerate bootstrap distribution (#125).
+    # Defaulted to "unreported" so pre-#116 constructor calls and deserialised
+    # reports stay valid -- for them the estimator genuinely was not recorded,
+    # and guessing one would be the very defect this field removes.
+    interval_method: str = "unreported"
+    trajectory_max_hermiticity_defect: float = float("nan")
+    trajectory_min_eigenvalue: float = float("nan")
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -362,6 +414,10 @@ class LepResult:
     # LIOU-#69: the LINEAR-metric rate actually fed to D17 (dimension-coherent
     # with the gap). Additive + defaulted so synthetic callers stay valid.
     beta_D_linear: float = float("nan")
+    # Issue #178: D18 may use the block exponential action for larger systems.
+    # Defaulted to the historical dense path for backward-compatible synthetic
+    # callers and older serialised results.
+    initial_state_backend: str = "dense_expm"
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)

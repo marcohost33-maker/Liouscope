@@ -85,6 +85,20 @@ ZERO_MODE_AMBIGUITY_FACTOR: Final[float] = 3.0e1
 # marginal-but-usable and the clearly broken; the failure direction is
 # fail-closed (withhold), never a wrong value.
 VECTOR_RESIDUAL_REL_MAX: Final[float] = 1.0e-1
+# Issue #117, AUDIT ONLY. Headroom on the first-order forward-error estimate
+# ``backward_error / s(lambda)`` before the observed displacement of the
+# stationary eigenvalue is reported as NOT explained by conditioning. The
+# estimate is first order in ``||E||``, so the true displacement carries an
+# O(||E||^2) term and an unknown constant; measured on the non-normal 4x4
+# fixture of the 2026-09-11 PR #127 review the ratio observed/estimated is
+# 2.0 -- ``1.00e-07`` against ``5.00e-08``. (It read 1.41 before the estimate
+# was corrected to divide by the UNIT trace vector's ``||q^H L||`` rather than
+# the raw ``||vec(I)^H L||``; the calibration text kept the pre-normalisation
+# number for two rounds.) A factor of ten keeps 5x headroom above that while
+# still separating it from the 2.25e5x by which the certificate band
+# under-predicts the same displacement. Nothing downstream reads this: it decides one boolean in the
+# report (``displacement_explained``), never a filter, a gap or a verdict.
+CONDITIONING_AGREEMENT_FACTOR: Final[float] = 1.0e1
 EPS_HERMITICITY: Final[float] = 1.0e-9
 EPS_TRACE: Final[float] = 1.0e-10
 # Tight numerical detector for the exact maximally mixed state I/d. It is not a
@@ -105,6 +119,34 @@ VERDICT_UNDEFINED: Final[str] = "UNDEFINED"
 TIER_PUBLICATION: Final[str] = "PUBLICATION_GRADE"
 TIER_CONFIRMATION: Final[str] = "CONFIRMATION"
 TIER_EXPLORATION: Final[str] = "EXPLORATION"
+
+# Issue #116: which interval estimator produced ``RelaxationResult.bca_ci_beta``.
+# With acceleration ``a = 0`` the BCa quantiles ``Phi(z0 + (z0 + z)/(1 - a(z0 + z)))``
+# reduce to ``Phi(2 z0 + z)``: the bias-corrected (BC) percentile interval, not
+# BCa (Efron 1987). The acceleration is estimated only by the leave-one-out
+# jackknife, and only on grids of at most JACKKNIFE_MAX_GRID_POINTS points.
+# That jackknife deletes single points of a SERIALLY CORRELATED series whose
+# bootstrap is parametric AR(1)/CAR(1), so its ``a`` follows Efron's iid
+# construction and is not calibrated for dependent data. Hence the precise
+# label "BCa-delete1" rather than a bare "BCa". A later, calibrated estimator
+# gets its own label instead of silently inheriting this one.
+INTERVAL_METHOD_BC: Final[str] = "BC"
+INTERVAL_METHOD_BCA_DELETE1: Final[str] = "BCa-delete1"
+INTERVAL_METHOD_UNAVAILABLE: Final[str] = "unavailable"
+INTERVAL_METHOD_UNREPORTED: Final[str] = "unreported"
+INTERVAL_METHODS: Final[tuple[str, ...]] = (
+    INTERVAL_METHOD_BC,
+    INTERVAL_METHOD_BCA_DELETE1,
+    INTERVAL_METHOD_UNAVAILABLE,
+    INTERVAL_METHOD_UNREPORTED,
+)
+# Latency guard, not a statistical choice. The jackknife refits the winning
+# model once per grid point, on top of ``bootstrap_B`` refits, so it is skipped
+# on longer grids. The default grid has 80 points, so ``diagnose()`` reports
+# INTERVAL_METHOD_BC by default (issue #116). Raising this value changes
+# reported intervals and needs its own anchor and coverage review; it is
+# deliberately not changed here.
+JACKKNIFE_MAX_GRID_POINTS: Final[int] = 60
 
 QUALITY_STABLE: Final[str] = "stable"
 QUALITY_MODERATE: Final[str] = "moderate"

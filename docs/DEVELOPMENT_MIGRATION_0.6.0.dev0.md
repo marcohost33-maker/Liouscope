@@ -24,6 +24,8 @@ The object is a provenance contract, not proof of organizational independence or
 
 Manual workflow dispatch is build and QA only and receives no OIDC token. The publish job runs only for a published GitHub Release and only when the repository publication flag is enabled. Before upload, both jobs verify source version, built-wheel version, release tag, checked-out commit and release event SHA.
 
+The build job also runs as a dry-run on every pull request and every push to `main`, so the release path is exercised before a release depends on it; it never uploads. The build toolchain (`build`, `twine`, `check-wheel-contents` and the `setuptools` backend) is installed from the hash lock `.github/requirements/release.txt` with `--require-hashes --only-binary :all:`, and the distribution is built with `--no-isolation` so that no unpinned backend is downloaded at build time. Each run builds twice from the same commit with `SOURCE_DATE_EPOCH` set to the commit time and refuses to continue unless the two wheels are byte-identical and the two sdists are content-identical (setuptools does not apply `SOURCE_DATE_EPOCH` to sdists, so only their timestamps and owner fields may differ); the SHA-256 of each artifact is written to the job summary. `.github/scripts/check_release_pins.py`, run by the Quality Contract, keeps the lock and these installs consistent.
+
 ## Compatibility
 
 Calls that omit the former Boolean, or explicitly pass false, preserve single-state behavior. Passing true now fails closed with migration guidance. This intentional change belongs to the next development minor line and does not alter released v0.5.0.
