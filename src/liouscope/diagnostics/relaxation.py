@@ -5,8 +5,10 @@ plus the M0-M3b fit hierarchy orchestrated through AICc with N_eff.
 from __future__ import annotations
 
 import warnings
+from collections.abc import Callable
 
 import numpy as np
+from scipy.optimize import least_squares
 
 from .._consts import (
     EPS_SUPP,
@@ -14,12 +16,14 @@ from .._consts import (
     INTERVAL_METHOD_BCA_DELETE1,
     INTERVAL_METHOD_UNAVAILABLE,
     JACKKNIFE_MAX_GRID_POINTS,
+    MODEL_SELECTION_INDETERMINATE,
 )
 from .._types import FitResult, RelaxationResult
 from ..core.lindblad import steady_state
 from ..fitting.aicc import aicc, choose_model
 from ..fitting.bootstrap import _jackknife, bca_ci, parametric_bootstrap
-from ..fitting.car1 import is_uniform_grid, neff_car1
+from ..fitting.car1 import is_uniform_grid, neff_car1, whiten_car1
+from ..fitting.gls import _whiten as _whiten_ar1
 from ..fitting.gls import fit_gls_ar1
 from ..fitting.models import (
     M0,
@@ -823,7 +827,266 @@ def _beta_from_params(model_name: str, params: np.ndarray) -> float:
     return float("nan")
 
 
-def _dominant_rate(t: np.ndarray, curve: np.ndarray) -> tuple[float, str]:
+_MODEL_FUNCTIONS = {"M0": M0, "M1": M1, "M2": M2, "M3a": M3a, "M3b": M3b}
+# Evaluation budget of the continued optimisation in
+# ``_attainable_residual_norm``. A latency guard, not a statistical choice:
+# measured on V1, V3 and V5 (both curves) the continuation used 2 to 49
+# evaluations except one at 176 (V1) and one runaway at a 2000 cap (V3, M3b
+# with omega ~ 2e6) that cost 17.9 s of a 29 s ``diagnose``. Stopping early
+# only means a smaller widening for that candidate.
+_POLISH_MAX_NFEV: int = 100
+
+
+def _gamma_rounding(m: int) -> float:
+    """Higham's ``gamma_m = m u / (1 - m u)``: the relative forward-error bound
+    of a length-``m`` floating-point inner product (``u`` = unit roundoff).
+    ``inf`` once ``m u >= 1``, where no bound of this form exists."""
+    mu = float(m) * 0.5 * float(np.finfo(float).eps)
+    return mu / (1.0 - mu) if mu < 1.0 else float("inf")
+
+
+def _loglik_rounding_band(
+    n_obs: int,
+    residual_norm: float,
+    data_error_norm: float,
+    attainable_norm: float | None = None,
+) -> tuple[float, float]:
+    """``(up, down)``: how far the profiled Gaussian log-likelihood of a fit
+    can lie above / below the reported value, given an error of norm
+    ``data_error_norm`` in the data and an optimiser that stopped at a
+    residual of norm ``residual_norm`` while ``attainable_norm`` (default:
+    the same) is what a converged step could still reach.
+
+    The profile likelihood depends on the data only through the minimised
+    residual norm, ``ln L_max = c - n ln ||r||``. For data ``y + delta`` the
+    triangle inequality bounds the new minimum by ``||r_min|| +- ||delta||``
+    (for every parameter value, hence also for the minimiser), so with
+    ``q = ||delta|| / ||r||`` and ``a = ||r_attainable|| / ||r||``::
+
+        ln L_max(y + delta) - ln L_reported  in  [-n ln(1 + q), -n ln(a - q)]
+
+    The lower end needs no ``a``: an unconverged optimiser only ever reports
+    a residual that is too LARGE. The upper end is unbounded (``inf``) once
+    ``a <= q``: a residual no larger than the data error says nothing about
+    how small it could become. A bound, not a first-order estimate, for a
+    FIXED whitening ``W`` (pass ``||W r||`` and ``||W||_2 ||delta||``).
+    Approximation: ``W`` is held at the fitted residual model (``rho`` /
+    ``theta``); that model is profiled per candidate and its own response to
+    the data error is not bounded.
+
+    NaN-safe in the fail-toward-tie direction: a NaN or zero residual norm
+    gives an unbounded or NaN band, which :func:`_select_model` treats as
+    "cannot be excluded".
+    """
+    if attainable_norm is None:
+        attainable_norm = residual_norm
+    with np.errstate(divide="ignore", invalid="ignore"):
+        q = float(np.float64(data_error_norm) / np.float64(residual_norm))
+        a = float(np.float64(attainable_norm) / np.float64(residual_norm))
+    n = float(n_obs)
+    up = -n * float(np.log(a - q)) if (a - q) > 0.0 else float("inf")
+    down = n * float(np.log1p(q)) if q >= 0.0 else float("nan")
+    return up, down
+
+
+def _attainable_residual_norm(
+    model: Callable[[np.ndarray, np.ndarray], np.ndarray],
+    t: np.ndarray,
+    y: np.ndarray,
+    params: np.ndarray,
+    whiten: Callable[[np.ndarray], np.ndarray],
+) -> float:
+    """Whitened residual norm the SAME candidate reaches when its optimisation
+    is continued from the reported parameters to float64 tolerances, with the
+    residual model held fixed -- the solver-error term of AGENTS.md (issue
+    #180) for the AICc comparison. The reported fit, its parameters and its
+    AICc are NOT changed; this value only widens the candidate's band.
+
+    Measured on ``0.04 exp(-t)`` plus white noise of 20 u: M0 stopped (default
+    ``least_squares`` tolerances) with an AR(1) residual correlation of 0.88
+    and lost to M1 or M3a by 308 to 721 AICc units in 7 of 8 seeds although M0
+    is the truth -- the comparison measured where the optimiser stopped, not
+    the data. On validation system V3 (trace distance) continuing M0 lowers
+    its residual by a factor 1.7e6. A linear (Gauss-Newton) prediction was
+    tried first and rejected: on the near-degenerate M2 fit of V5
+    (``A1 ~ -A2``, ``beta1 ~ beta2``) it predicted 0.51 of the residual, the
+    continued optimisation reached 0.993, and V5 turned INDETERMINATE for
+    nothing. Not a bound (the problem is non-convex): what this optimiser
+    reaches, which is the quantity the comparison depends on. Never larger
+    than ``||W r||``; an optimiser failure returns 0.0 (unknown -> cannot be
+    excluded)."""
+    p0 = np.asarray(params, dtype=float)
+    y = np.asarray(y, dtype=float)
+
+    def w_residual(p: np.ndarray) -> np.ndarray:
+        with np.errstate(all="ignore"):
+            return np.asarray(whiten(y - model(t, p)), dtype=float)
+
+    current = float(np.linalg.norm(w_residual(p0)))
+    if not (np.all(np.isfinite(p0)) and np.isfinite(current)):
+        return 0.0
+    tol = float(np.finfo(float).eps)
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            res = least_squares(
+                w_residual, p0, x_scale="jac",
+                ftol=tol, xtol=tol, gtol=tol, max_nfev=_POLISH_MAX_NFEV,
+            )
+    except (ValueError, RuntimeError, FloatingPointError, np.linalg.LinAlgError):
+        return 0.0
+    polished = float(np.linalg.norm(res.fun))
+    if not np.isfinite(polished):
+        return 0.0
+    return min(polished, current)
+
+
+def _select_model(
+    fits: dict[str, FitResult],
+    t: np.ndarray,
+    y: np.ndarray,
+    data_error: float,
+) -> tuple[str, tuple[str, ...]]:
+    """Pick the AICc winner among the SUCCEEDED fits, or report that the
+    ranking is not resolved above the rounding level of the data.
+
+    Returns ``(selected, tied)``: ``tied`` lists, in ladder order, every
+    candidate whose AICc cannot be separated from the minimum once each score
+    is widened by :func:`_loglik_rounding_band` for a per-sample data error of
+    ``data_error`` (absolute, in the units of ``y``). Cross-family review of
+    PR #127 (LIO-03): on a curve that is an exact single exponential to
+    float64 precision every candidate fits the same rounding noise, and a
+    1-ulp perturbation of the operator flipped the winner from M0 to M3a in 7
+    of 25 seeds -- the selection was a property of the platform's rounding,
+    not of the data.
+
+    * One candidate left: it is the winner, exactly as ``choose_model``.
+    * Several, and ``M0`` among them: ``M0``. Every other candidate nests it
+      (M1 at ``C = 0``, M2 at ``A2 = 0``, M3a at ``B = 0``, M3b at
+      ``omega = phi = 0``), so the data at their own resolution do not reject
+      the simplest model -- the parsimony rule, not an arbitrary tie-break.
+    * Several without ``M0``: :data:`MODEL_SELECTION_INDETERMINATE`. No
+      member nests the others and the data cannot decide between them.
+
+    The comparison is orientation-safe: a candidate is EXCLUDED only by a
+    true ``lower_j > upper_winner``; a NaN on either side keeps it tied.
+    With every succeeded AICc non-finite the historical fallback is kept
+    (``choose_model``'s "M0", else the first succeeded model in ladder order).
+    """
+    selectable = {n: fr for n, fr in fits.items() if fr.success}
+    if not selectable:
+        return "none", ()
+    finite = {n: fr for n, fr in selectable.items() if np.isfinite(fr.aicc)}
+    if not finite:
+        winner = choose_model({n: fr.aicc for n, fr in selectable.items()})
+        if winner not in selectable:
+            winner = next(iter(selectable))
+        return winner, (winner,)
+    winner = choose_model({n: fr.aicc for n, fr in finite.items()})
+    y = np.asarray(y, dtype=float)
+    n_obs = int(y.size)
+    error_norm = float(data_error) * float(np.sqrt(n_obs))
+
+    def band(name: str, polish: bool) -> tuple[float, float]:
+        fr = finite[name]
+        # The likelihood is that of the WHITENED residuals, so the bound is
+        # taken there too: ``||W r||`` against ``||W||_2 ||delta||``. Measured
+        # on the phantom ladder (seed 9 of the 1-ulp probe): the raw residual
+        # norms of M0 and M3a differ by 10 %, their AICc by 103 -- the AR(1)
+        # whitening removes the smooth common part, so a raw-norm band was
+        # 4x too narrow and the flip survived.
+        theta = float(fr.residual_theta_car1)
+        rho = float(fr.residual_ar1_rho)
+        if np.isfinite(theta):
+            def whiten(v: np.ndarray) -> np.ndarray:
+                return whiten_car1(v, t, theta)
+        elif np.isfinite(rho):
+            def whiten(v: np.ndarray) -> np.ndarray:
+                return _whiten_ar1(v, rho)
+        else:
+            return float("inf"), float("nan")
+        with np.errstate(all="ignore"):
+            resid = y - _MODEL_FUNCTIONS[name](t, fr.params)
+            w_resid = whiten(resid)
+            w_resid_norm = float(np.linalg.norm(w_resid))
+            attainable = (
+                _attainable_residual_norm(_MODEL_FUNCTIONS[name], t, y, fr.params, whiten)
+                if polish
+                else w_resid_norm
+            )
+            w_matrix = np.column_stack([whiten(col) for col in np.eye(n_obs)])
+            # ||W||_2 <= sqrt(||W||_1 ||W||_inf): sums only, no BLAS-dependent
+            # factorisation (AGENTS.md, issue #180), and an upper bound.
+            w_abs = np.abs(w_matrix)
+            w_norm = float(
+                np.sqrt(np.max(np.sum(w_abs, axis=0)) * np.max(np.sum(w_abs, axis=1)))
+            )
+        return _loglik_rounding_band(
+            n_obs, w_resid_norm, w_norm * error_norm, attainable
+        )
+
+    # The winner's upper end uses only ``down`` (an unconverged optimiser
+    # reports too large a residual, never too small), so it is not polished.
+    _up_w, down_w = band(winner, polish=False)
+    upper_winner = float(finite[winner].aicc) + 2.0 * down_w
+    tied = []
+    for name in finite:  # ladder order (dict insertion order)
+        if name == winner:
+            tied.append(name)
+            continue
+        # Polishing can only widen ``up`` (it lowers the attainable residual),
+        # so it is run only for a candidate the data band alone would exclude.
+        up_j, _down_j = band(name, polish=False)
+        lower_j = float(finite[name].aicc) - 2.0 * up_j
+        if lower_j > upper_winner:
+            up_j, _down_j = band(name, polish=True)
+            lower_j = float(finite[name].aicc) - 2.0 * up_j
+        if not (lower_j > upper_winner):
+            tied.append(name)
+    if len(tied) == 1:
+        return winner, tuple(tied)
+    if "M0" in tied:
+        return "M0", tuple(tied)
+    return MODEL_SELECTION_INDETERMINATE, tuple(tied)
+
+
+def _finite_abs_max(values: np.ndarray) -> float:
+    """``max|v|`` over the FINITE samples (0.0 if there are none). A
+    non-finite sample is not a rounding error; the fits deal with it."""
+    vals = np.asarray(values, dtype=float)
+    finite = vals[np.isfinite(vals)]
+    return float(np.max(np.abs(finite))) if finite.size else 0.0
+
+
+def _curve_data_error(
+    values: np.ndarray,
+    *,
+    d: int,
+    formation_scale: float,
+    measured_defects: tuple[float, ...] = (),
+) -> float:
+    """Absolute per-sample rounding level of a curve formed from ``d x d``
+    states: ``gamma_{d^2}`` times the magnitude of the quantities the samples
+    were formed from (``formation_scale``), raised to any measured defect of
+    the same arithmetic (trajectory trace / Hermiticity defect) and to the
+    representation level ``u max|y|`` of the values themselves. A non-finite
+    defect or scale means the level is unknown and returns ``inf``, which
+    makes every candidate "not excludable" -- fail toward M0 / INDETERMINATE,
+    never toward a confident winner."""
+    u = 0.5 * float(np.finfo(float).eps)
+    candidates = [
+        _gamma_rounding(d * d) * float(formation_scale),
+        u * _finite_abs_max(values),
+    ]
+    candidates.extend(float(v) for v in measured_defects)
+    if not all(np.isfinite(c) for c in candidates):
+        return float("inf")
+    return max(candidates)
+
+
+def _dominant_rate(
+    t: np.ndarray, curve: np.ndarray, *, data_error: float | None = None
+) -> tuple[float, str]:
     """Fit the M0..M3b hierarchy (AICc, no bootstrap) to a decay ``curve`` and
     return ``(dominant_rate, winning_model)``.
 
@@ -833,6 +1096,12 @@ def _dominant_rate(t: np.ndarray, curve: np.ndarray) -> tuple[float, str]:
     multiplier), so its dominant rate is dimension-coherent with the spectral
     gap. Returns ``(nan, "none")`` if every model fit fails -- fail-closed, so
     the consistency check reads "unknown" rather than a spurious match.
+
+    ``data_error`` is the absolute per-sample rounding level of ``curve`` (see
+    :func:`_select_model`); omitted, only the representation level
+    ``u max|curve|`` is assumed, the smallest level any float64 curve has.
+    ``(nan, MODEL_SELECTION_INDETERMINATE)`` when the ranking is not resolved
+    above it and no nested model is among the tied candidates.
     """
     curve = np.asarray(curve, dtype=float)
     fits: dict[str, FitResult] = {}
@@ -857,16 +1126,13 @@ def _dominant_rate(t: np.ndarray, curve: np.ndarray) -> tuple[float, str]:
     # small-sample correction. Keying on finiteness withheld D17 on a system
     # where nothing had failed. ``choose_model`` keeps its documented "all
     # entries inf -> M0" fallback; the only thing enforced here is that the
-    # winner must come from the SUCCEEDED set.
-    selectable = {n: fr.aicc for n, fr in fits.items() if fr.success}
-    if not selectable:
-        return float("nan"), "none"
-    winner = choose_model(selectable)
-    if winner not in selectable:
-        # The all-inf fallback named a model outside the succeeded set. Keep
-        # it inside, in ladder order -- deterministic, and identical to the
-        # previous behaviour whenever M0 itself succeeded.
-        winner = next(iter(selectable))
+    # winner must come from the SUCCEEDED set. The all-inf fallback that named
+    # a model outside it is kept inside, in ladder order (``_select_model``).
+    if data_error is None:
+        data_error = _curve_data_error(curve, d=1, formation_scale=0.0)
+    winner, _tied = _select_model(fits, t, curve, data_error)
+    if winner not in fits:  # "none" or MODEL_SELECTION_INDETERMINATE
+        return float("nan"), winner
     return _beta_from_params(winner, fits[winner].params), winner
 
 
@@ -1149,10 +1415,32 @@ def compute_relaxation_layer(
     # where nothing had failed. ``choose_model`` keeps its documented "all
     # entries inf -> M0" fallback; the only thing enforced here is that the
     # winner must come from the SUCCEEDED set.
-    selectable = {name: fr.aicc for name, fr in fits.items() if fr.success}
-    winner = choose_model(selectable) if selectable else "none"
-    if selectable and winner not in selectable:
-        winner = next(iter(selectable))
+    #
+    # Cross-family review (PR #127, LIO-02/LIO-03): the ranking must also be
+    # resolved above the rounding level of the curve, else ``_select_model``
+    # falls back to the nested M0 or reports INDETERMINATE (rate NaN,
+    # interval "unavailable"). The two curves get different levels:
+    #
+    # * trace distance -- formed from O(1) state entries (trace-norm scale 1),
+    #   so the level is absolute: gamma_{d^2} * 1, raised to the measured
+    #   trace / Hermiticity defect of the same trajectory;
+    # * relative entropy -- gamma_{d^2} * max|S| only. This is a LOWER
+    #   estimate (the logarithm's amplification near a rank-deficient pi is
+    #   not included), so on this curve the policy can miss a tie but never
+    #   invents one. Measured on V1-V5, the reference and phantom systems and
+    #   ``_chain(1)``: every relative-entropy residual is >= 1e10 times this
+    #   level, so no relative-entropy selection there changes.
+    d_state = int(traj.shape[1])
+    rel_entropy_error = _curve_data_error(
+        rel_entropy, d=d_state, formation_scale=_finite_abs_max(rel_entropy)
+    )
+    trace_distance_error = _curve_data_error(
+        trace_distance_curve,
+        d=d_state,
+        formation_scale=1.0,
+        measured_defects=(float(trace_error), float(hermiticity_defect)),
+    )
+    winner, _tied = _select_model(fits, t_grid, rel_entropy, rel_entropy_error)
 
     # Bootstrap on the winning model for beta_D
     beta_D = _beta_from_params(winner, fits[winner].params) if winner in fits else float("nan")
@@ -1224,7 +1512,9 @@ def compute_relaxation_layer(
     # check (D17) must use. (_dominant_rate is fail-closed: it returns nan if
     # every model fit fails, so D17 then reads "unknown" rather than a spurious
     # match.)
-    beta_D_linear, linear_fit_model = _dominant_rate(t_grid, trace_distance_curve)
+    beta_D_linear, linear_fit_model = _dominant_rate(
+        t_grid, trace_distance_curve, data_error=trace_distance_error
+    )
 
     return RelaxationResult(
         von_neumann_entropy=von_neumann_entropy(final_rho),

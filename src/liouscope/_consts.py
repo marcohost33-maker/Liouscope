@@ -140,6 +140,12 @@ INTERVAL_METHODS: Final[tuple[str, ...]] = (
     INTERVAL_METHOD_UNAVAILABLE,
     INTERVAL_METHOD_UNREPORTED,
 )
+# PR #127 (cross-family review, LIO-02/LIO-03): reported in
+# ``RelaxationResult.aicc_model`` / ``linear_fit_model`` instead of a winner
+# when the AICc ranking is not resolved above the rounding level of the curve
+# it was fitted to and the candidates that cannot be told apart do not share
+# a common nested model. Rate and interval are then NaN / "unavailable".
+MODEL_SELECTION_INDETERMINATE: Final[str] = "INDETERMINATE"
 # Latency guard, not a statistical choice. The jackknife refits the winning
 # model once per grid point, on top of ``bootstrap_B`` refits, so it is skipped
 # on longer grids. The default grid has 80 points, so ``diagnose()`` reports
