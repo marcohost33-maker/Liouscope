@@ -490,6 +490,17 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `git worktree` of the same commit instead of the first build's tree.
 
 ### Fixed
+- **CAR(1) theta estimation returned NaN when the time UNIT made the smallest
+  step tiny (PR #127 review, `car1.py:254`).** The upper search bound
+  `log(1e3 / dt_min)` overflowed to inf for `dt_min` below ~5.6e-306 and the
+  finiteness guard turned the estimate into NaN, so `fit_gls_ar1` switched to
+  discrete AR(1) for the choice of unit alone, although the optimum (e.g.
+  ~1e305 for a 40-point grid in units of 1e-306) is representable. The bound
+  is now clipped to the largest `u` with finite `exp(u)`; on a clipped range an
+  optimum within `chi2_1(0.95) = 3.84` (`-2 log L`) of that artificial edge is
+  withheld (NaN) instead of reporting the clip as a rate. Wherever the ratio
+  is finite the computation is bit-for-bit unchanged. Tests pin equivariance
+  under a change of unit from 1e-306 to 1e300.
 - **PR #127 against current `main`: one residual family, one likelihood, one count
   on non-uniform grids (four review findings; uniform grids bit-identical).** The
   jackknife holds the base fit's family (`fit_gls_ar1(residual_family=...)`): a
