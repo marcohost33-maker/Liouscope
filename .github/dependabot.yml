@@ -21,7 +21,12 @@ updates:
           - "patch"
       actions-security:
         applies-to: security-updates
-        # security PRs always grouped together so they land as one batch
+        # security PRs always grouped together so they land as one batch.
+        # A group needs a selector: with `applies-to` alone the Dependabot
+        # service rejects the whole file ("did not match one or more of the
+        # required schemas"), and no update of this file runs at all.
+        patterns:
+          - "*"
     commit-message:
       prefix: "ci"
       include: "scope"
@@ -48,6 +53,8 @@ updates:
           - "patch"
       python-security:
         applies-to: security-updates
+        patterns:
+          - "*"
     ignore:
       # NumPy/SciPy major bumps need careful eigensolver re-validation;
       # raise major version bumps manually and run the V1-V5 anchors first.
@@ -83,6 +90,8 @@ updates:
           - "*"
       release-toolchain-security:
         applies-to: security-updates
+        patterns:
+          - "*"
     commit-message:
       prefix: "ci"
       include: "scope"
