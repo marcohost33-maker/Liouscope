@@ -366,6 +366,23 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   on the validation systems: V2 trace distance M1 -> M0 and V3 trace distance
   M3a -> M0. Both are single exponentials, and V3's M3a had won only because
   M0 stopped early. No relative-entropy winner and no anchor changes.
+- **Pre-registered study of the AICc sample size on non-uniform grids (PR
+  #127, cross-family review LIO-02).** `benchmarks/pr127_car1_aicc_identifiability.py`
+  (design and decision rule committed before the run) with result
+  `benchmarks/results/pr127_car1_aicc_identifiability.json`: 40 seeds, CAR(1)
+  noise `sigma = 1e-3`, `theta` in {0.05, 0.5, 2}, truths M0 and two-rate M2,
+  uniform vs two-scale grid. On the two-scale grid the observed count `n_obs`
+  selects the truth at least as often as `N_eff` in 6 of 6 cells, so the
+  method is kept (rule: SUPPORTED). `N_eff` left 29-39 of 40 runs without a
+  finite score. Truth M2 is selected in 40/40 at every `theta`. **Limitation,
+  open:** truth M0 is selected only 8, 20 and 21 times in 40 at `theta` = 0.05,
+  0.5 and 2, losing mostly to M1 and M2. At `theta = 0.05` the CAR(1) rate is
+  not identifiable on this window: it is fitted within a factor 2 in only
+  18/40 and 17/40 runs. The INDETERMINATE outcome above covers rounding- and
+  solver-level ties and fired in 0 of the 480 study runs. A statistical
+  indeterminacy rule is a separate decision and is not made here. On the
+  uniform grid, which this PR leaves on `N_eff` (PR #157), truth M2 at `theta =
+  0.05` is selected in 11/40 with `N_eff` and 40/40 with `n_obs`.
 - **Resolvent and non-normality grid sweeps share one Schur decomposition above
   `n = 128` (issue #178, item 2).** D10, D10b, D11b and D13 evaluate
   `sigma_min(zI - L)`, or its reciprocal, on grids of one operator: 600, 1200,

@@ -788,6 +788,23 @@ def _fit_with_model(
     # ``p+2, n_obs``: 0/40 and M0 selected 29/40. Truth two-rate at theta = 0.05:
     # ``N_eff`` selected M0 40/40, ``n_obs`` M2 40/40. N_eff stays in the report
     # as uncertainty evidence. A uniform grid keeps N_eff, see above.
+    #
+    # Pre-registered study (cross-family review LIO-02):
+    # benchmarks/pr127_car1_aicc_identifiability.py, result in
+    # benchmarks/results/pr127_car1_aicc_identifiability.json (40 seeds,
+    # sigma 1e-3, theta in {0.05, 0.5, 2}). On the two-scale grid ``n_obs``
+    # selects the truth at least as often as ``N_eff`` in 6 of 6 cells (rule:
+    # SUPPORTED). ``N_eff`` leaves 29-39 of 40 runs with no finite score.
+    # Truth M2: ``n_obs`` 40/40 at every theta. Truth M0: ``n_obs`` 8, 20, 21 of
+    # 40 at theta = 0.05, 0.5, 2. The losses go mostly to M1 and M2.
+    # At theta = 0.05 the CAR(1) rate itself is NOT identifiable on this window
+    # (fitted within a factor 2 of the truth in 18/40 and 17/40 runs). A noise
+    # correlation that slow is close to a constant offset, which M1's ``C``
+    # absorbs. This is an open limitation. The INDETERMINATE outcome of
+    # ``_select_model`` covers rounding- and solver-level ties only and fired
+    # in 0 of 480 of these runs. A statistical indeterminacy rule
+    # (near-ties: best two AICc within 2 units in 21/40 of the theta = 0.05, M0
+    # runs) is a separate methodology decision and is not made here.
     aicc_n = n_eff if uniform_grid else float(t.size)
     aic = aicc(fit.log_likelihood, k, aicc_n) if fit.success else float("inf")
     fit_result = FitResult(
