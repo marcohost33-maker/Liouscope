@@ -1,0 +1,345 @@
+{
+ "cells": [
+  {
+   "E1_correct_neff": 19,
+   "E1_correct_nobs": 15,
+   "E1_correct_shipped": 21,
+   "E2_rate_within_factor2": null,
+   "E3_near_tie_lt2": 5,
+   "E4_indeterminate_shipped": 0,
+   "grid": "uniform",
+   "selected_neff": {
+    "M0": 19,
+    "M1": 12,
+    "M2": 6,
+    "M3a": 1,
+    "none": 2
+   },
+   "selected_nobs": {
+    "M0": 15,
+    "M1": 15,
+    "M2": 9,
+    "M3a": 1
+   },
+   "selected_shipped": {
+    "M0": 21,
+    "M1": 12,
+    "M2": 6,
+    "M3a": 1
+   },
+   "theta": 0.05,
+   "truth": "M0"
+  },
+  {
+   "E1_correct_neff": 28,
+   "E1_correct_nobs": 21,
+   "E1_correct_shipped": 28,
+   "E2_rate_within_factor2": null,
+   "E3_near_tie_lt2": 13,
+   "E4_indeterminate_shipped": 0,
+   "grid": "uniform",
+   "selected_neff": {
+    "M0": 28,
+    "M1": 6,
+    "M2": 2,
+    "M3a": 4
+   },
+   "selected_nobs": {
+    "M0": 21,
+    "M1": 9,
+    "M2": 6,
+    "M3a": 4
+   },
+   "selected_shipped": {
+    "M0": 28,
+    "M1": 6,
+    "M2": 2,
+    "M3a": 4
+   },
+   "theta": 0.5,
+   "truth": "M0"
+  },
+  {
+   "E1_correct_neff": 30,
+   "E1_correct_nobs": 22,
+   "E1_correct_shipped": 30,
+   "E2_rate_within_factor2": null,
+   "E3_near_tie_lt2": 21,
+   "E4_indeterminate_shipped": 0,
+   "grid": "uniform",
+   "selected_neff": {
+    "M0": 30,
+    "M1": 5,
+    "M2": 2,
+    "M3a": 3
+   },
+   "selected_nobs": {
+    "M0": 22,
+    "M1": 8,
+    "M2": 6,
+    "M3a": 4
+   },
+   "selected_shipped": {
+    "M0": 30,
+    "M1": 5,
+    "M2": 2,
+    "M3a": 3
+   },
+   "theta": 2.0,
+   "truth": "M0"
+  },
+  {
+   "E1_correct_neff": 11,
+   "E1_correct_nobs": 40,
+   "E1_correct_shipped": 11,
+   "E2_rate_within_factor2": null,
+   "E3_near_tie_lt2": 6,
+   "E4_indeterminate_shipped": 0,
+   "grid": "uniform",
+   "selected_neff": {
+    "M1": 29,
+    "M2": 11
+   },
+   "selected_nobs": {
+    "M2": 40
+   },
+   "selected_shipped": {
+    "M1": 29,
+    "M2": 11
+   },
+   "theta": 0.05,
+   "truth": "M2"
+  },
+  {
+   "E1_correct_neff": 31,
+   "E1_correct_nobs": 40,
+   "E1_correct_shipped": 31,
+   "E2_rate_within_factor2": null,
+   "E3_near_tie_lt2": 4,
+   "E4_indeterminate_shipped": 0,
+   "grid": "uniform",
+   "selected_neff": {
+    "M1": 9,
+    "M2": 31
+   },
+   "selected_nobs": {
+    "M2": 40
+   },
+   "selected_shipped": {
+    "M1": 9,
+    "M2": 31
+   },
+   "theta": 0.5,
+   "truth": "M2"
+  },
+  {
+   "E1_correct_neff": 40,
+   "E1_correct_nobs": 40,
+   "E1_correct_shipped": 40,
+   "E2_rate_within_factor2": null,
+   "E3_near_tie_lt2": 0,
+   "E4_indeterminate_shipped": 0,
+   "grid": "uniform",
+   "selected_neff": {
+    "M2": 40
+   },
+   "selected_nobs": {
+    "M2": 40
+   },
+   "selected_shipped": {
+    "M2": 40
+   },
+   "theta": 2.0,
+   "truth": "M2"
+  },
+  {
+   "E1_correct_neff": 0,
+   "E1_correct_nobs": 8,
+   "E1_correct_shipped": 8,
+   "E2_rate_within_factor2": 18,
+   "E3_near_tie_lt2": 21,
+   "E4_indeterminate_shipped": 0,
+   "grid": "two_scale",
+   "selected_neff": {
+    "M1": 1,
+    "M3b": 1,
+    "none": 38
+   },
+   "selected_nobs": {
+    "M0": 8,
+    "M1": 16,
+    "M2": 13,
+    "M3a": 3
+   },
+   "selected_shipped": {
+    "M0": 8,
+    "M1": 16,
+    "M2": 13,
+    "M3a": 3
+   },
+   "theta": 0.05,
+   "truth": "M0"
+  },
+  {
+   "E1_correct_neff": 0,
+   "E1_correct_nobs": 20,
+   "E1_correct_shipped": 20,
+   "E2_rate_within_factor2": 25,
+   "E3_near_tie_lt2": 29,
+   "E4_indeterminate_shipped": 0,
+   "grid": "two_scale",
+   "selected_neff": {
+    "M1": 1,
+    "none": 39
+   },
+   "selected_nobs": {
+    "M0": 20,
+    "M1": 13,
+    "M2": 5,
+    "M3a": 2
+   },
+   "selected_shipped": {
+    "M0": 20,
+    "M1": 13,
+    "M2": 5,
+    "M3a": 2
+   },
+   "theta": 0.5,
+   "truth": "M0"
+  },
+  {
+   "E1_correct_neff": 11,
+   "E1_correct_nobs": 21,
+   "E1_correct_shipped": 21,
+   "E2_rate_within_factor2": 34,
+   "E3_near_tie_lt2": 28,
+   "E4_indeterminate_shipped": 0,
+   "grid": "two_scale",
+   "selected_neff": {
+    "M0": 11,
+    "none": 29
+   },
+   "selected_nobs": {
+    "M0": 21,
+    "M1": 10,
+    "M2": 6,
+    "M3a": 3
+   },
+   "selected_shipped": {
+    "M0": 21,
+    "M1": 10,
+    "M2": 6,
+    "M3a": 3
+   },
+   "theta": 2.0,
+   "truth": "M0"
+  },
+  {
+   "E1_correct_neff": 0,
+   "E1_correct_nobs": 40,
+   "E1_correct_shipped": 40,
+   "E2_rate_within_factor2": 17,
+   "E3_near_tie_lt2": 0,
+   "E4_indeterminate_shipped": 0,
+   "grid": "two_scale",
+   "selected_neff": {
+    "M0": 7,
+    "none": 33
+   },
+   "selected_nobs": {
+    "M2": 40
+   },
+   "selected_shipped": {
+    "M2": 40
+   },
+   "theta": 0.05,
+   "truth": "M2"
+  },
+  {
+   "E1_correct_neff": 0,
+   "E1_correct_nobs": 40,
+   "E1_correct_shipped": 40,
+   "E2_rate_within_factor2": 27,
+   "E3_near_tie_lt2": 0,
+   "E4_indeterminate_shipped": 0,
+   "grid": "two_scale",
+   "selected_neff": {
+    "M0": 6,
+    "none": 34
+   },
+   "selected_nobs": {
+    "M2": 40
+   },
+   "selected_shipped": {
+    "M2": 40
+   },
+   "theta": 0.5,
+   "truth": "M2"
+  },
+  {
+   "E1_correct_neff": 2,
+   "E1_correct_nobs": 40,
+   "E1_correct_shipped": 40,
+   "E2_rate_within_factor2": 34,
+   "E3_near_tie_lt2": 0,
+   "E4_indeterminate_shipped": 0,
+   "grid": "two_scale",
+   "selected_neff": {
+    "M0": 6,
+    "M2": 2,
+    "none": 32
+   },
+   "selected_nobs": {
+    "M2": 40
+   },
+   "selected_shipped": {
+    "M2": 40
+   },
+   "theta": 2.0,
+   "truth": "M2"
+  }
+ ],
+ "decision": {
+  "car1_rate_not_identifiable_cells": [
+   {
+    "theta": 0.05,
+    "truth": "M0"
+   },
+   {
+    "theta": 0.05,
+    "truth": "M2"
+   }
+  ],
+  "nobs_on_nonuniform": "SUPPORTED",
+  "two_scale_cells_nobs_not_worse": 6,
+  "two_scale_worst_drop_nobs_vs_neff": -8
+ },
+ "liouscope_version": "0.6.0.dev0",
+ "numpy": "2.5.4",
+ "parameters": {
+  "fast_rate": 20.0,
+  "grids": [
+   "uniform",
+   "two_scale"
+  ],
+  "seeds": [
+   0,
+   39
+  ],
+  "sigma": 0.001,
+  "thetas": [
+   0.05,
+   0.5,
+   2.0
+  ],
+  "truths": [
+   "M0",
+   "M2"
+  ]
+ },
+ "platform": "Windows-11-10.0.26200-SP0",
+ "python": "3.12.10",
+ "scipy": "1.18.1",
+ "script_sha256": "7daed8779aa780221f7e6befb3df8bf13404d273d2941dcf4d3e4ae256fc618b",
+ "study": "pr127_car1_aicc_identifiability"
+}

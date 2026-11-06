@@ -327,6 +327,70 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   eigensolver paths use, so one quantity is not measured two different ways.
 
 ### Changed
+- **Migration: without `t_grid`, the relaxation layer now fits a different
+  window, and the selected model and `beta_D` can change (PR #127,
+  cross-family review LIO-04).** The default window is `[0,
+  RELAXATION_HORIZON / gap]` (and the two-scale grid when a fast mode is not
+  resolved), no longer the absolute `linspace(0, 10, 80)`. The two coincide
+  only at `gap = 1`. Reproduction (`tests/test_pr127_default_window_migration.py`,
+  one damped transverse-field site, `gap = 0.35`): the legacy window selects
+  **M0, `beta_D = 0.75552`** on every platform measured; the default now
+  selects **M2** on every platform measured, with `interval_method = "BC"`,
+  but its `beta_D` is platform-dependent at the 0.6 % level. It lands on one
+  of two values: **0.72143**, interval `[0.70829, 0.71997]`, estimate OUTSIDE
+  the interval (Windows x86-64), or **0.71738**, interval `[0.70597, 0.71915]`,
+  estimate inside (Linux x86-64 and arm64); numpy 2.5.4 / scipy 1.18.1 on
+  both. A BC interval is a shifted percentile interval of the parametric
+  bootstrap and need not contain the estimate, so the first case is not by
+  itself a defect, but it is what a caller on that platform sees. Why the
+  value is not reproducible is in `docs/DEVELOPMENT_MIGRATION_0.6.0.dev0.md`
+  ("Reproducibility of the default fit"); it is an open finding about the M2
+  fit (both values are early `xtol` stops), not changed here.
+  **To keep the old numbers, pass `t_grid=np.linspace(0.0, 10.0, 80)`.**
+  Which window produced a result is recorded in `RelaxationResult.t_grid_source`
+  / `t_grid` and the interval estimator in `interval_method` (the "CI method"
+  the review asked for; it already exists, issue #116). No manifest-schema change.
+- **Model selection reports `INDETERMINATE` or falls back to the nested M0 when
+  the AICc ranking is not resolved above the arithmetic (PR #127, cross-family
+  review LIO-02/LIO-03).** The numerics platform probe (arm64) failed
+  `test_d17_gap_coherence.py:271` because the D17 trace-distance curve of the
+  phantom ladder is an exact single exponential to float64 precision, and the
+  M0..M3b winner was decided by rounding: a 1-ulp perturbation of the operator
+  flipped it from M0 to M3a in 7 of 25 seeds. `relaxation._select_model` now
+  widens every candidate's AICc by how far its log-likelihood can move under
+  (a) the rounding level of the data (`gamma_{d^2}` times the state scale,
+  raised to the measured trajectory trace and Hermiticity defects, for the
+  trace-distance curve; `gamma_{d^2} max|S|`, a lower estimate, for relative
+  entropy) and (b) the solver: what the same candidate reaches when its
+  optimisation is continued to float64 tolerances. The default `least_squares`
+  tolerances stopped M0 on V3's trace-distance curve a factor 1.7e6 above what
+  it reaches. Candidates that cannot be separated from the minimum are tied. A
+  tie containing M0 selects M0, because every other candidate nests it. If M0
+  was never a usable candidate (failed fit), the tied candidate with the fewest
+  parameters is selected. If M0 was evaluated and excluded, the tie reports
+  `MODEL_SELECTION_INDETERMINATE` (`"INDETERMINATE"`) in `aicc_model` /
+  `linear_fit_model` with a NaN rate and interval method `"unavailable"`. The reported fits, parameters and AICc values are unchanged.
+  After the change the 1-ulp probe gives M0 in 25 of 25 seeds. Changed winners
+  on the validation systems: V2 trace distance M1 -> M0 and V3 trace distance
+  M3a -> M0. Both are single exponentials, and V3's M3a had won only because
+  M0 stopped early. No relative-entropy winner and no anchor changes.
+- **Pre-registered study of the AICc sample size on non-uniform grids (PR
+  #127, cross-family review LIO-02).** `benchmarks/pr127_car1_aicc_identifiability.py`
+  (design and decision rule committed before the run) with result
+  `benchmarks/results/pr127_car1_aicc_identifiability.json`: 40 seeds, CAR(1)
+  noise `sigma = 1e-3`, `theta` in {0.05, 0.5, 2}, truths M0 and two-rate M2,
+  uniform vs two-scale grid. On the two-scale grid the observed count `n_obs`
+  selects the truth at least as often as `N_eff` in 6 of 6 cells, so the
+  method is kept (rule: SUPPORTED). `N_eff` left 29-39 of 40 runs without a
+  finite score. Truth M2 is selected in 40/40 at every `theta`. **Limitation,
+  open:** truth M0 is selected only 8, 20 and 21 times in 40 at `theta` = 0.05,
+  0.5 and 2, losing mostly to M1 and M2. At `theta = 0.05` the CAR(1) rate is
+  not identifiable on this window: it is fitted within a factor 2 in only
+  18/40 and 17/40 runs. The INDETERMINATE outcome above covers rounding- and
+  solver-level ties and fired in 0 of the 480 study runs. A statistical
+  indeterminacy rule is a separate decision and is not made here. On the
+  uniform grid, which this PR leaves on `N_eff` (PR #157), truth M2 at `theta =
+  0.05` is selected in 11/40 with `N_eff` and 40/40 with `n_obs`.
 - **Resolvent and non-normality grid sweeps share one Schur decomposition above
   `n = 128` (issue #178, item 2).** D10, D10b, D11b and D13 evaluate
   `sigma_min(zI - L)`, or its reciprocal, on grids of one operator: 600, 1200,
@@ -490,6 +554,98 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `git worktree` of the same commit instead of the first build's tree.
 
 ### Fixed
+- **CAR(1) theta estimation returned NaN when the time UNIT made the smallest
+  step tiny (PR #127 review, `car1.py:254`).** The upper search bound
+  `log(1e3 / dt_min)` overflowed to inf for `dt_min` below ~5.6e-306 and the
+  finiteness guard turned the estimate into NaN, so `fit_gls_ar1` switched to
+  discrete AR(1) for the choice of unit alone, although the optimum (e.g.
+  ~1e305 for a 40-point grid in units of 1e-306) is representable. The bound
+  is now clipped to the largest `u` with finite `exp(u)`; on a clipped range an
+  optimum within `chi2_1(0.95) = 3.84` (`-2 log L`) of that artificial edge is
+  withheld (NaN) instead of reporting the clip as a rate. Wherever the ratio
+  is finite the computation is bit-for-bit unchanged. Tests pin equivariance
+  under a change of unit from 1e-306 to 1e300.
+- **PR #127 against current `main`: one residual family, one likelihood, one count
+  on non-uniform grids (four review findings; uniform grids bit-identical).** The
+  jackknife holds the base fit's family (`fit_gls_ar1(residual_family=...)`): a
+  deleted interior point used to switch that replicate to CAR(1), so the BCa
+  acceleration mixed two estimators. `estimate_car1_theta` maximises the stationary
+  likelihood the layer reports, first residual included and without recentering
+  (objective from PR #157). On a non-uniform grid AICc counts correlation and
+  variance for every candidate, the AR(1) fallback included, and uses the observed
+  point count: with `N_eff` the correction was infinite on correlated residuals.
+  Measured with known ground truth (40 seeds, default two-scale grid, CAR(1) noise
+  at theta 2): truth M0, `p+2, N_eff` left 36-40 of 40 runs without any finite
+  score, `p+2, n_obs` 0 of 40 and selected M0 in 29; truth two-rate, `N_eff` selected
+  M0 in 40 of 40, `n_obs` M2 in 40 of 40. This CHANGES selected models and rates on
+  non-uniform grids; `tests/test_anchors.py` is byte-identical to `main` and passes.
+  The same change on uniform grids stays in PR #157.
+- **Extreme relaxation-scale failures are now separated and fail closed (PR #127 review).** When a finite decay rate times a blind interval overflows, `_resolution_detail` legitimately represents the sampling ratio as `0.0` samples per e-folding; the disclosure formatter now maps that representation to its mathematical 100% decay limit instead of dividing by zero. The same review fixture also exposed a separate boundary: `L*t` may remain elementwise finite while `scipy.linalg.expm(L*t)` returns non-finite values at extreme float64 dynamic range. `_evolve` now refuses a non-finite scaled generator, propagator, or propagated state with `UnrepresentableTrajectoryError` instead of passing NaNs into entropy, fitting and uncertainty calculations. Tests isolate the resolution arithmetic from the matrix-exponential failure so neither can mask the other.
+- **`residual_model` claimed a whitening for runs in which no fit succeeded
+  (PR #127, round-21 external review).** `fit_gls_ar1` returns `success=False`
+  from its flat-curve guard before it selects or applies any residual model,
+  and the entry it returns carries `residual_theta_car1 = NaN` like a genuine
+  CAR(1) fallback would. Measured on `rho_initial == rho_steady_state` over the
+  two-scale grid: five unsuccessful fits, label `"car1_fallback_ar1"` —
+  persisted audit metadata asserting an AR(1) whitening that never ran.
+  Availability is now read off `success` first and the family classified only
+  among successful fits; that run reports `"car1_unavailable"`, and a uniform
+  grid on which no fit succeeded reports the new label `"ar1_unavailable"`
+  instead of `"ar1"`. A run whose successful fits all fell back keeps
+  `"car1_fallback_ar1"`.
+- **CAR(1) theta estimation returned NaN for residuals whose raw sum of
+  squares underflows float64, so the residual AMPLITUDE alone switched the
+  whitening (PR #127, round-21 external review).** `estimate_car1_theta`
+  tested degeneracy with `centred . centred <= 0` and `_profile_nll` squared
+  the innovations directly. Measured on one 40-point series: `theta = 0.0885`
+  at unit amplitude, a 4e-7 relative drift at `1e-150`, NaN at `1e-170` — at
+  which point `fit_gls_ar1` fell back to discrete AR(1) and changed the
+  whitening, `N_eff`, AICc and the bootstrap interval. Theta is
+  amplitude-free (the profiled likelihood shifts by `n log c^2` under
+  `r -> c r`), so the series is normalised to unit maximum before anything
+  squares it and degeneracy is read off that maximum. Existing estimates move
+  only at the estimator's own round-off floor: the profiled likelihood is
+  flat near its minimum, so the 1-ulp perturbation the normalisation adds
+  shifts the bounded argmin by ~1e-8 relative (measured 7e-8 on a 40-point
+  series), three decades below the pre-fix amplitude drift. No anchor moves.
+- **The relaxation layer re-solved the spectrum with a bare
+  `np.linalg.eigvals` after the spectral layer had certified one (PR #127,
+  round-21 external review).** `fastest_decay_rate` and the resolution guard
+  each launched their own eigensolve of `L_super` — two per run — so where the
+  primary complex driver had failed and `certified_eigvals` had succeeded only
+  through its real-driver or Schur repair route, that call could repeat the
+  original failure inside the relaxation layer, and where it did not fail it
+  read rates off the rejected primary spectrum rather than the one D1 was
+  certified on. `compute_relaxation_layer` takes `eigenvalues=`;
+  `diagnose()` forwards `SpectralResult.eigenvalues` next to the gap, and a
+  direct caller who omits both gets both from one spectral-layer call. Zero
+  eigensolves now run in the relaxation layer of `diagnose()`. Passing `gap`
+  alone keeps the historical fresh solve. The forwarding is gated on the
+  certificate (PR #154 review): when the zero-mode certificate is applicable
+  but unresolved -- the predicate under which D1/D3/D4 are withheld -- the
+  candidate spectrum is not handed over and `spectrum_resolved=False` tells
+  the layer to derive nothing from it: legacy window, no resolution guard, no
+  eigensolve of its own, and `samples_per_fast_efolding` plus the three
+  `worst_resolved_*` fields NaN. Measured on the stiff four-level network at
+  fast rate `1e8`: before the gate the report named a specific missed mode
+  and interval read off exactly the spectrum D1 had just been withheld for.
+  The gate also covers a caller-supplied `t_grid` (PR #154 review, round 2):
+  that path used to skip the spectral layer entirely, so the resolution guard
+  launched a bare eigensolve and persisted the same `1e8` mode with its
+  warning. Whenever the caller supplies neither `eigenvalues` nor a
+  `spectrum_resolved` verdict, the layer now runs the spectral layer once and
+  reads both from it; passing `eigenvalues` alone counts as the caller's
+  assertion that they are trustworthy, and `spectrum_resolved=True` without
+  `eigenvalues` is refused with `ValueError` (round 3) rather than re-solved.
+- **The persisted report could not say WHICH mode `samples_per_fast_efolding`
+  described (PR #127, round-21 external review).** The value is the minimum
+  over all modes, so on three separated timescales it belongs to the
+  intermediate mode, not the fastest one — the mode the warning names, but
+  the warning is not persisted. `RelaxationResult` now carries
+  `worst_resolved_rate`, `worst_resolved_blind_interval` and
+  `worst_resolved_blind_start`, the three values the warning is built from;
+  the field name `samples_per_fast_efolding` is kept for compatibility and its
+  documentation corrected. Additive, defaulted to NaN.
 - **Four tests no longer assert accuracy below the float64 rounding level (issue #180).**
   Test and CI change only. No library code, reported number, anchor or manifest field changes.
   - `test_stiff_network_keeps_the_known_slow_mode_without_zero_filter[1e12]` used to assert
@@ -1349,6 +1505,453 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   on a second path through `zero_tolerance`. See the corrected entry below.
 
 ### Fixed
+- **The Hermiticity tolerance is relative to the coherent component of the
+  generator, read in the canonical Lindblad gauge, and physical dissipation
+  cannot enlarge it (PR #127, E3 settled by cross-family review 2026-09-12).**
+  The round-18 allowance `d * eps * |gauge_shift|` and the gauge-fixed relative
+  gate on `main` gave the same verdict to two fixtures that review had pinned
+  to opposite ones: `I + 2**-53 e01` with sigma- and `1e308 * I + 1e290 e01`
+  with no jump operators. For `H = c*I + N` with `N` strictly upper triangular,
+  EXACT arithmetic gives `defect / gauge_scale = 1`, and a gauge shift plus a
+  change of units maps both fixtures onto `e01` — so no test that reads `H`
+  alone and respects both symmetries can separate them. An intermediate state
+  of this PR resolved that by comparing the defect against
+  `max(max|H_gauge|, max|sum_k gamma_k L_k^dag L_k| / 2)`, the scale of
+  `H_eff = H - iK/2`, which accepted the first fixture on the strength of its
+  dissipator. The cross-family design review rejected that reference for an
+  API whose parameter is documented as a Hamiltonian: Hermiticity is a
+  property of `H` itself, a dissipator of any strength in any block leaves the
+  distance of `H` from the Hermitian matrices unchanged, and the impossibility
+  result means the two fixtures specify DIFFERENT properties, not that the `H`
+  gate must consult `L_k`. The defect is now compared against the coherent
+  scale alone, `max|H0_gauge|` with `H0` the Hamiltonian after the canonical
+  Lindblad-gauge compensation — still load-bearing, because `(H, L)` and
+  `(H + (c/2i)(L - L^dag), L + c*I)` are one generator and review round 2
+  measured exactly that gauge inflating the coherent scale — while the
+  dissipation scale is computed and reported in the refusal message for
+  diagnostics only. Both fixtures are refused; so are `[[1e308, 1], [0,
+  1e308]]`, a null dissipator `2**20 * I`, the Lindblad gauge with unit and
+  with unequal rates, an overflowing dissipation sum and a malformed jump list.
+  The verdict is invariant under `H -> H + c*I`, under `L -> L + c*I` and
+  under a dissipator-strength sweep from `0` to `1e12`, and covariant under a
+  change of units. Without jump operators it is the gauge-fixed scale of `H`,
+  as on `main` (the gauge shift is formed by `overflow_safe_mean_real`, so it
+  can differ from `main`'s divide-first sum in the last bit); a non-finite
+  gauge-fixed scale is refused as on `main`. A numerically pure-gauge `H` such
+  as `Q @ I @ Q^dag` therefore IS refused: it has no coherent scale to be
+  measured against, and the refusal message now says to pass its Hermitian
+  part. The generator-relative reference never shipped in a release.
+- **`neff_car1` allocated two `n x n` arrays for a scalar (PR #127, round-20
+  external review).** The exact CAR(1) effective sample size formed a full
+  separation matrix and a full exponential of it on every evaluation, and
+  `compute_relaxation_layer` evaluates it once per candidate fit. Measured with
+  `tracemalloc`: n = 2000 peaked at 96.0 MB, n = 4000 at 384 MB, so a
+  20,000-point trajectory needs gigabytes and can be killed by the OS for one
+  float. Because the times can be ordered, the double sum telescopes into a
+  one-pass recurrence `A_k = exp(-theta dt_k) * (A_{k-1} + 1)` with O(1)
+  working storage. Same quantity, not an approximation: n = 4000 now peaks at
+  0.096 MB (36.0 ms against 425.1 ms) and n = 20000 at 0.480 MB / 85.5 ms, and
+  the result matches the closed-form uniform-grid ESS to nine digits at every
+  rho of the docstring's calibration table. The grid is sorted rather than
+  assumed ordered, because `|t_j - t_k|` is symmetric and the old form
+  therefore accepted any order.
+- **An underflowed resolution ratio crashed the relaxation layer (PR #127,
+  round-20 external review).** `_resolution_detail` formed
+  `1 / (r * blind_r)` from a finite positive decay rate and a finite positive
+  grid interval whose PRODUCT underflows to zero below ~5e-324, raising
+  `ZeroDivisionError`. Measured: an amplitude-damping generator scaled by
+  `1e-200` on the valid increasing grid `[0, 1e-200, 2e-200]` killed both
+  `samples_per_fast_efolding()` and `compute_relaxation_layer()` before any fit
+  ran — a crash decided by the choice of rate UNITS, on a quantity that is
+  dimensionless. The limit of the ratio is now returned instead: `inf`, i.e.
+  unbounded sampling resolution, which this function already uses to mean
+  "nothing decays over this grid" and which the warning gate in
+  `compute_relaxation_layer` correctly passes over. NaN would have been wrong —
+  it means "no usable interval", the opposite statement — so the final
+  `not np.isfinite(worst)` test was replaced by an explicit "was anything
+  measured" flag that cannot conflate the two. Unit-scale grids are unchanged
+  (coarse 1.0, fine 100.0, both re-measured).
+- **The Hermiticity gate failed open when the gauge shift overflowed (PR #127,
+  round-20 external review).** `build_liouvillian` removed the identity
+  component with `np.trace(H).real / d`, forming the total before dividing.
+  Finite entries can have a non-representable sum, and an infinite shift makes
+  both the gauge-fixed operator and the round-off allowance derived from it
+  non-finite, after which `defect > EPS * scale + allowance` is False for every
+  defect there is. `build_sparse_liouvillian` carried the identical
+  calculation. The shift now divides before summing
+  (`numerics.linalg.overflow_safe_mean_real`), which cannot overflow for finite
+  input and is bit-for-bit the old value wherever the direct sum was finite —
+  measured over 2000 random complex matrices with zero differing bits.
+  A second route to the same fail-open, which no comment reported, was found by
+  reading the neighbourhood: the shift lies between the smallest and the
+  largest diagonal entry, so `H_ii - shift` can overflow even for a finite
+  shift. Measured on `diag(1.7e308, -1.7e308, 1.7e308)` with an off-diagonal
+  defect: gauge-fixed scale `inf`, accepted. The comparison is now restated at
+  half scale when the direct scale is not finite — exact in binary floating
+  point, hence the same predicate rather than a looser one, and specifically
+  NOT a refusal, so an exactly Hermitian operator of that shape is still
+  accepted. The round-18 concession (`1e9 * I` plus a traceless defect of
+  `1e-6`, still rejected) is unmoved. Residual at the time of this entry:
+  `[[1e308, 1], [0, 1e308]]` remained accepted, because its defect of 1 fell
+  below the round-18 allowance `d * eps * |shift| = 4.4e292` — a different
+  mechanism, since closed by the generator-relative tolerance above.
+- **An unavailable D1 was converted into the strongest gapless evidence (PR
+  #127, round-18 external review).** When the zero-mode certificate withholds
+  D1 as NaN, `_strip_unavailable` removes both `gap` and `gap_to_gns_ratio`
+  from the evidence dict. `gap` was declared OPTIONAL on the F5 reach leg, so
+  `_f5_reach` substituted its documented gapless default `0.0` and returned
+  true unconditionally: any such run with `henrici_eta > 1` was labelled
+  A10/F5 and the hypothesis matrix reported F5 as `SUPPORTED`, on a
+  radius-to-gap ratio that was never measurable — only the closing verdict was
+  floored. `gap` is now a REQUIRED key of that condition and `_f5_reach`
+  indexes it, so the ladder cannot fire the rung and the matrix reports
+  UNEVALUABLE with `gap` in `missing`. A gap that really was MEASURED as `0.0`
+  is present in the evidence and still takes the gapless branch, so the
+  documented #101 blind spot is unchanged rather than quietly closed.
+- **The fail-closed stability reports were the only ones that could not be
+  written (PR #127, round-18 external review).** `build_stability_report`
+  emitted `D1_gap`, `D3_oscillating_gap` and `D9_petermann_max` as bare floats,
+  and `dump_stability_report` calls `json.dumps(..., allow_nan=False)` — so
+  exactly the runs where the certificate withholds D1/D3 or the eigenvector
+  gate withholds D9 raised `ValueError` instead of producing the audit
+  artefact that records the withholding. Non-finite diagnostics are now
+  encoded as `{"value": null, "claim_status": "unavailable", "__nonfinite__":
+  "nan"|"inf"|"-inf"}` — the module's own tagged shape plus the token
+  `liouscope.io.export` already uses, so an infinity (a measurement) stays
+  distinguishable from a NaN (the absence of one). Finite values remain bare
+  floats, so existing consumers are unaffected.
+- **A finite positive gap can still have no representable relaxation window
+  (PR #127, round-18 external review).** `default_relaxation_grid` computed
+  `t_max = horizon / gap` after its finiteness gate; for any positive `gap <
+  horizon / float64.max` (measured: `5.56e-309` at the default horizon) that
+  division overflows and `np.linspace(0.0, inf, n)` yields `[nan, inf, inf,
+  ...]`. The grid was returned verbatim when `fast_rate` was absent or
+  unusable, and the two-scale post-condition degrades to the same invalid
+  `uniform`, so `compute_relaxation_layer` fed `inf`/`nan` times into `expm`
+  and the fits. The derived window is now guarded and the case joins the
+  documented absolute-window fallback with a `RuntimeWarning`; a representable
+  window is untouched.
+- **The fitted CAR(1) rate was missing from the AICc parameter count (PR #127,
+  round-18 external review).** On a non-uniform grid `theta` is estimated
+  separately for every candidate model and enters that model's maximised
+  likelihood through the whitening, but `_fit_with_model` passed only
+  `p0.size` to `aicc`. The small-sample correction `2k(k+1)/(N_eff-k-1)` is
+  nonlinear in `k`, so the omission is not a constant offset: it
+  under-penalises M2/M3b relative to M0/M1 when `N_eff` is small and can move
+  the selected relaxation model and the reported A-class. `k` now includes the
+  nuisance parameter whenever a finite `theta` was actually fitted. The
+  discrete `rho` of the uniform path is deliberately left uncounted — that is
+  the historical convention, it is self-consistent within one comparison
+  (uniformity is a property of the grid), and changing it would re-rank every
+  existing result.
+- **D3, D4 and `has_complex_pairs` were published from the spectrum for which
+  D1 had just been withheld (PR #127, round-17 review, fifth finding).** Where
+  the zero-mode certificate is applicable but not resolved, the spectral layer
+  warns that "D1/D3/D4 are NOT reliable for this system" and replaces D1 with
+  NaN — and then returned `oscillating_gap` (D3), `spectral_spread` (D4) and
+  `has_complex_pairs` as finite values read off that same candidate spectrum.
+  Measured on the issue-#113 stiff fixture (`fast = 1e8`, eight ambiguous
+  in-band modes): `D3 = 0.0`, `D4 = 5.0e7`, `has_complex_pairs = False`.
+  None of the three is a neutral answer. `0.0` is the strongest "no
+  oscillatory separation" verdict D3 can emit, and `False` asserts the
+  *absence* of the oscillation that may be the very reason the spectrum is
+  unresolved — `zero_tol` excludes exactly the ambiguous in-band mode from
+  that test. Withholding D1 alone was not a partial fix but an inconsistent
+  one: it taught consumers that the layer withholds what it cannot stand
+  behind, which made the surviving finite values *more* credible, not less.
+
+  D3 and D4 are now NaN and `has_complex_pairs` is `None` under the same
+  `applicable and not resolved` predicate D1 uses, so the layer withholds on
+  one condition rather than on two. `SpectralResult.has_complex_pairs` is
+  therefore `bool | None`; `_gather_evidence` maps `None` onto the evidence
+  dict's NaN sentinel, which `_strip_unavailable` removes, so the A8
+  oscillatory-transient rung reports UNEVALUABLE rather than NOT_SUPPORTED.
+  D2/D2b are untouched: they are computed from the operator and the steady
+  state, not from the candidate spectrum. Four mutations (one per guard line)
+  are proven to discriminate.
+- **The workflow hardening gate was blind to the commonest way to write a step
+  (PR #129).** `.github/scripts/check_workflow_hardening.py` enforces the
+  SHA-pinning rule of AGENTS.md section 4 on every workflow, and nothing
+  enforced it in turn. It reported green while four classes of unsafe workflow
+  passed:
+  - `USES_RE` was `^\s*uses:`, which does not match the list form `- uses:`.
+    **Seven of 27 action references in this repository were invisible to the
+    gate**, every `actions/checkout` among them. They are correctly pinned
+    today by discipline, not by this check; a PR moving one to `@main` passed.
+  - `docker://` was exempt outright, so a mutable third-party tag
+    (`docker://org/img:latest`) was waved through. The exemption now requires
+    an immutable `@sha256:` digest.
+  - `permissions` was checked for *presence* only, so `permissions: write-all`
+    -- a declaration of total access -- counted as evidence of least privilege.
+  - The `pull_request_target` waiver was a substring test over the raw file, so
+    writing the waiver's *name* inside a `#` comment satisfied it.
+
+  The `github.com/` exemption is removed as dead code: `uses:` does not accept
+  that prefix and a GitHub owner name cannot contain a dot, so no such
+  organisation can exist. It was the subject of a CodeQL
+  incomplete-substring alert -- which is the only reason the file came under
+  scrutiny. CodeQL flagged the harmless line and missed the regex two lines
+  above it that actually broke the gate.
+
+  Closing the `docker://` hole initially rejected *digest-pinned* containers:
+  `_check_uses_pin` splits the reference at `@` before consulting
+  `_is_third_party_uses`, so a digest test there ran on the truncated string
+  and the digest then failed the 40-character git-SHA rule. Container digests
+  and git SHAs are now checked as the different pin shapes they are. That
+  regression was caught by an over-correction control, not by review.
+
+- **Two zizmor audits re-enabled whose suppression reasons no longer hold
+  (PR #129).** `impostor-commit` was disabled because the audit crashed on the
+  private cross-repo pin `coworkerz-ci`; that pin is gone, and the only two
+  occurrences of the name left in the tree are the comments explaining the
+  suppression. It is the one audit that verifies a 40-character SHA actually
+  exists upstream, so the entire pinning strategy was unverified without it.
+  `advanced-security: false` was justified with "private repo without GHAS" --
+  this repository is public, measured rather than assumed, so zizmor findings
+  were never uploaded to Code Scanning: absent there for want of an upload,
+  not for want of findings. (`annotations` is set to `false` alongside it; the
+  action refuses to start with both enabled.)
+
+- **The zero-mode certificate accepted its premise on a coarser scale than its
+  conclusion (PR #127 review).** `certified_eigvals` / `certified_eig` assert
+  that `0` is an *exact* eigenvalue, which follows from exact trace
+  preservation -- but applicability was granted whenever the trace defect
+  stayed below `1e-10 * ||L||_F`, six orders of magnitude above the backward
+  error the conclusion is stated on. A generator whose defect fell in that
+  band (measured: an amplitude-damped qubit plus `1e-11 * I`, defect `1.4e-11`
+  against the old cutoff `7.9e-11`) has its smallest eigenvalue at exactly
+  `1e-11` against a certificate bound of `1.6e-13`: every repair route
+  "failed", the spectral layer warned about an eigensolve that was in fact
+  correct, and the classifier was floored to `UNDEFINED`. The cutoff is now
+  derived rather than tuned -- with `u = vec(I)/sqrt(d)` and `r^H = u^H L` the
+  matrix `L - u r^H` has an exact zero mode and lies at spectral distance
+  `tp_defect / sqrt(d)` from `L`, so `tp_defect <= sqrt(d) * bound` is what the
+  claim can carry. Headroom measured, not assumed: across 205 healthy GKSL
+  generators (the five canonical systems, 160 random ones spanning 16 orders of
+  rate magnitude at `d = 2..5`, 40 stiff four-level jump networks) the largest
+  defect is `0.44 * eps * ||L||_F`. The rule now lives in one helper used by
+  both entry points; it was duplicated, and one-sided repairs of that pair are
+  a defect this repository has shipped twice.
+
+- **D1 was reported from a spectrum the certificate had just declared unusable
+  (PR #127 review).** When `applicable and not certified`, `compute_spectral_layer`
+  warned that D1/D3/D4 are unreliable and then computed D1 anyway. That number
+  did not stay in the report: `diagnose` forwards D1 to
+  `default_relaxation_grid`, so an eigenvalue of a failed solve set the
+  relaxation window and therefore every fitted rate, while only the closing
+  verdict was floored. D1 is now NaN there, for the same reasons as in the
+  ambiguous case -- not `0.0`, which means "gapless" and fires the F5 reach
+  leg, and not the surviving mode, which is a fast one. The other five
+  certificate consumers (`mpemba`, the Petermann factors, D11, and both
+  `_zhou` paths) already withheld on `applicable and not resolved`; the
+  spectral layer was the only site that warned and measured anyway.
+
+- **`residual_model` reported the whitening that should have happened
+  (PR #127 review).** The field was derived from the grid geometry alone, so a
+  non-uniform grid always exported `"car1"`. `fit_gls_ar1` falls back to the
+  discrete AR(1) treatment whenever `estimate_car1_theta` returns NaN --
+  degenerate residuals, e.g. an exactly stationary trajectory with
+  `rho_initial == rho_steady_state` -- and individual fits of one hierarchy can
+  differ from one another, which a single geometry-derived label cannot express
+  at all. It is now read off the fits, with `car1_fallback_ar1`, `car1_mixed`
+  and `car1_unavailable` for the states that were previously reported as plain
+  `"car1"`.
+
+- **The grid-relative Prony fallback seed was a regression on the two-scale
+  grid (PR #127 review).** `prony_seed` derived both `beta` and `omega` from
+  the total time span on any non-uniform grid, i.e. from the slow gap scale --
+  although `default_relaxation_grid` carries a uniform fine head for exactly
+  the purpose of resolving the fast dynamics. Measured on
+  `default_relaxation_grid(1e-4, fast_rate=1)` (80 points, uniform head of 41
+  at `dt = 0.25`, span `1e5`): over 60 random exact curves with `beta` in
+  `[0.05, 2]` and `omega` in `[0.1, 10]` the span seed drove the M3b fit onto a
+  spurious solution twice (true `omega = 1.68` reported as `0.037`) where the
+  historical absolute `(1, 1)` seed recovered all 60; on a slower family
+  (`beta`, `omega` in `[1e-4, 1e-1]`) the span seed failed 41 of 60. The seed
+  is now estimated by Prony on the longest uniform *prefix*, where the method
+  is valid by construction: 0 of 60 in both families. The grid-relative
+  fallback stands where no prefix is long enough for the Hankel system, so the
+  short non-uniform grids keep their documented behaviour. This corrects an
+  earlier report of mine on PR #127 which stated that both seeds were unusable
+  on this grid and that the change was therefore not a regression; the external
+  reviewer's counter-example holds as a class, and the claim was too broad.
+
+### Added
+- **Tests for the hardening gate itself (PR #129).** It had none. Each unsafe
+  workflow is asserted next to a positive control that must still pass --
+  rejection alone would be satisfied by a gate that fails everything, which is
+  exactly as useless as one that passes everything. Includes a digest-pinned
+  container that must remain allowed, and a check that the real tree passes its
+  own gate.
+
+### Known gaps
+- `quality contract` is **not** a required status check on `main`; only
+  `test (3.10-3.14)` and `qutip-cross-check (3.11/3.12)` are. Five security
+  workflows run and none of them blocks a merge, so the comment in
+  `.github/workflows/zizmor.yml` claiming the step "GATET die CI (rot = blockt
+  merge)" is factually wrong. Making it required is the right follow-up, but
+  only after this fix lands -- otherwise a blind gate becomes mandatory.
+- **The multiscale disclosure is now a repair (PR #115, follow-up).** The
+  disclosure below rested on a stated impossibility: that a non-uniform grid
+  cannot be used because the GLS layer "whitens with a single AR(1)
+  coefficient, which presumes a constant sample interval". That premise is
+  false. It describes the *discrete* parametrisation, not the noise process:
+  the stationary continuous-time analogue (Ornstein–Uhlenbeck, equivalently
+  CAR(1)) has `Corr(t, t+d) = exp(−θ·d)`, so on an arbitrary grid one whitens
+  with the per-step `a_k = exp(−θ·dt_k)` and rescales by `sqrt(1 − a_k²)` to
+  keep the result homoskedastic. Measured on a two-scale grid with exact OU
+  noise, the median `|lag-1 autocorrelation|` of the whitened residuals is
+  `0.374` under one constant `ρ` against `0.073` under the per-step coefficient;
+  on a uniform grid both give `0.073`.
+
+  Consequences, carried through the whole chain rather than only the grid call:
+
+  - **New module `liouscope.fitting.car1`** — grid classification, the CAR(1)
+    θ estimator (profiled conditional MLE), the whitening and its log-Jacobian,
+    the exact effective sample size `n² / Σ_jk exp(−θ|t_j − t_k|)`, and an
+    exact-transition resampler.
+  - **`default_relaxation_grid(gap, *, fast_rate=...)`** builds a two-scale
+    window — half the points across `[0, horizon/fast_rate]`, the rest out to
+    `horizon/gap` — but **only** when the uniform grid cannot resolve the fast
+    mode. Below that threshold the uniform grid is returned bit-for-bit, so no
+    system that was already well sampled changes at all. `fast_rate` comes from
+    the spectrum (`fastest_decay_rate`, `max(−Re λ)`) and is fail-closed: no
+    usable rate means the uniform window plus its warning, never a guess.
+  - **`fit_gls_ar1` switches on the grid**, not on the data. `GLSFitOutput`
+    gains `theta_car1`, which also disambiguates `sigma` (innovation sd on the
+    AR(1) path, stationary sd on the CAR(1) one). The parametric bootstrap
+    resamples under whichever model the fit used; feeding CAR(1) parameters to
+    the AR(1) resampler was measured to shrink the interval to `0.46` of an
+    independent Monte-Carlo spread, against `0.80` for the correct one.
+  - **`N_eff` on a non-uniform grid** comes from the CAR(1) form rather than
+    Geyer's lag-indexed IPS estimator, which has no fixed time separation to
+    sum over there. Against the closed-form ESS on a uniform grid, where both
+    are valid, the CAR(1) route sits within `0.97–1.19` across `ρ ∈ [0, 0.99]`
+    while Geyer runs to `3.93×` optimistic at `ρ = 0.99`. The uniform path
+    nevertheless keeps Geyer: switching it would move every existing anchor and
+    is a separate decision.
+  - **`samples_per_fast_efolding` is now the minimum over ALL decay modes**,
+    and counts only intervals that begin while the mode still has amplitude.
+    The old form read `t[1] − t[0]`, which on a fine-then-coarse grid reports
+    the fine step and would wave through a mode lost in the coarse tail — a case
+    the new default grid creates rather than merely permits. On uniform and
+    late-starting grids the value is unchanged.
+  - `RelaxationResult` gains `residual_model` (`"ar1"` / `"car1"`) and
+    `FitResult` gains `residual_theta_car1`; `t_grid_source` gains
+    `"gap_scaled_multiscale"`. All additive and defaulted.
+
+  Measured end to end on two independent damped qubits with rates `1e-6` and
+  `1`: the AICc winner M2 now recovers the fast rate as `1.10` (true `1.0`)
+  where the uniform window reported `2.17e-05` for it — a confident-looking fit
+  of a component that was never sampled — and `beta_D_linear` lands `0.021`
+  relative from the certified gap against `0.58` before (and `3.5e4` for the
+  legacy absolute window).
+
+  **What is NOT fixed.** The two segments resolve the fastest and the slowest
+  mode; an intermediate timescale can still fall between the coarse late
+  samples, so `UnderResolvedTransientWarning` remains — measured `0.0019`
+  samples per e-folding for the middle mode of a `1e-6 / 1e-3 / 1` system,
+  where it correctly fires and names that mode. The AR(1) small-sample bias
+  correction is also not carried over to the CAR(1) path: anchoring it at any
+  single step of a multi-decade grid was measured to pin the estimate at a
+  constant (`1.7158e-05` for every input tested, including true θ of `1e-4`,
+  `1e-2`, `1` and `10`), so it is disclosed rather than applied.
+
+- **Multiscale disclosure + stored time grid (PR #115 review round).** Two
+  findings on the relaxation-window change below.
+
+  *Unsampled fast modes are now disclosed, not silently fitted.* A uniform
+  window scaled to `1/Δ` cannot also resolve a much faster mode: the window must
+  reach `~1/Δ` to see the slowest mode relax, while the step must stay under
+  `~1/r_max` to see the fastest at all, and 80 uniform samples span only about
+  an eightfold separation between them. Verified on two independent damped
+  qubits with rates `1e-6` and `1`: the fast mode decays to exactly `0.0` within
+  one step. This is **not** a regression introduced by the new window — on that
+  same system the previous absolute window put `beta_D_linear` `3.5e4` relative
+  away from the true gap, against `0.58` for the gap-scaled one — but fitting a
+  component that was never sampled is exactly what the project's fail-loud
+  convention exists to prevent. `compute_relaxation_layer` now measures
+  `samples_per_fast_efolding = 1 / (r_max · blind)` and emits an
+  `UnderResolvedTransientWarning` below `MIN_SAMPLES_PER_FAST_EFOLD = 1`,
+  recording the value on the result. `blind = max(dt, t[0])` is the largest
+  interval the grid leaves unsampled, not merely the step: `diagnose` permits
+  any non-negative start, and a late-starting grid leaves a lead-in that no
+  step size compensates for. On `linspace(100, 101, 101)` a rate-1 mode was
+  reported at "100 samples per fast e-folding" with no warning, while its
+  amplitude at the first sample is `e^-100`, the entire relative-entropy curve
+  measures identically zero, and the fit still returned `beta_D = 1.0`. The
+  term is exactly `dt` for any grid starting at zero, so the default path is
+  unchanged. It is a disclosure, not a repair: widening
+  the window is strictly worse for the reported quantity, and a log-spaced grid
+  would invalidate the AR(1) whitening. The measure is itself rate-unit
+  invariant (pinned by test), so it cannot fire on one choice of time unit and
+  not another. V5 (Jaynes-Cummings near the EP, measured `r_max/Δ = 396`)
+  legitimately trips it; those tests acknowledge the disclosure by message
+  filter with the reason stated inline.
+
+  *The report stores the time grid itself, not only its span.* `t_grid_span`
+  alone does not identify the sampling — `[0, 1, 10]` and `[0, 9, 10]` share a
+  span of 10 while describing materially different trajectories — and the
+  report already serialised three 80-point curves whose abscissa was missing, so
+  a consumer could not re-fit, re-plot or audit the rates it reports.
+  `RelaxationResult.t_grid` now carries a snapshot (a copy, so later mutation of
+  the caller's array cannot rewrite the record). Additive and defaulted; no
+  manifest-schema change.
+- **The DEFAULT relaxation time grid is scaled to the system's own relaxation
+  time. CHANGES NUMERICAL RESULTS** for every `diagnose()` call that does not
+  pass an explicit `t_grid` and whose spectral gap is not `Δ = 1`. The
+  relaxation layer fits every rate it reports on a time grid, and a decay rate
+  carries dimension `1/time`, so the absolute default `linspace(0.0, 10.0, 80)`
+  was implicitly a claim about the caller's unit of time. Under the pure
+  rescale `L → cL` (identical physics, different unit of time) on an
+  amplitude-damped qubit this was measured as:
+
+  | `c` | `beta_D / c` | `beta_D_linear / c` | AICc winner | A-class |
+  |---|---|---|---|---|
+  | 1e+02 | 1.025 | 0.254 | M0 | A10 |
+  | 1e+00 | 1.029 | 0.482 | M2 | A5 |
+  | 1e-02 | 1.085 | 0.403 | M0 | A1 |
+  | 1e-04 | 1.167 | 0.965 | M0 | A12 |
+  | 1e-06 | 1.251 | **109.99** | M0 | A12 |
+
+  — a 22 % drift in `beta_D`, a factor ~430 error in the D17 linear rate at
+  `c = 1e-6`, a model-selection flip between M0 and M2, and four different
+  mechanism classes for one system. Since physical rates are MHz or GHz rather
+  than `O(1)`, this was the common regime, not a corner case.
+
+  The default window is now `[0, RELAXATION_HORIZON / Δ]` at
+  `RELAXATION_N_POINTS = 80` uniform samples (`liouscope.diagnostics.relaxation
+  .default_relaxation_grid`), i.e. a fixed number of e-foldings of the slowest
+  mode — the only choice carried along by the rescaling. Measured after the
+  fix: `beta_D / c` and `beta_D_linear / c` invariant to ≤1.2e-3 relative over
+  `c ∈ [1e-6, 1e6]` (twelve decades) on both an amplitude-damped and a driven
+  dephasing qubit, with a stable AICc winner; the A-class is stable over
+  `c ∈ [1e-6, 1]`. The grid is deliberately uniform: the GLS layer whitens with
+  a single AR(1) coefficient, which presumes a constant sample interval, so the
+  transient layer's two-scale grid must not be reused here.
+
+  *Backward compatibility:* `RELAXATION_HORIZON = 10.0` is chosen so the grid is
+  **bit-identical** to the legacy `linspace(0.0, 10.0, 80)` at `Δ = 1`, and
+  `Δ ≤ 0` (no resolved decay scale) still returns the historical absolute
+  window. `compute_relaxation_layer` gains an optional `gap=` argument;
+  `diagnose()` forwards the D1 gap it has already computed, and a direct caller
+  who omits it gets the same value recomputed through the same `liouvillian_gap`
+  routine, so the two entry points cannot drift apart. An explicit `t_grid`
+  remains authoritative.
+
+  *Audit trail:* `RelaxationResult` gains two additive, defaulted fields —
+  `t_grid_source` (`"caller"` / `"gap_scaled"` / `"legacy_fixed"`) and
+  `t_grid_span` — so which window produced a given set of rates is recorded on
+  the report rather than inferred. No manifest-schema change (the run-manifest
+  contract is untouched); older serialised reports remain valid.
+
+  *Scope:* this closes the time-grid unit dependence only. Two independent ones
+  remain open and are neither fixed nor asserted away here — the least-squares
+  solver's own convergence controls (#111) and the rate-dimensioned
+  `henrici_eta` / `resolvent_peak` that the classifier still consumes (#101).
+  The latter is now pinned as a measured boundary: `henrici_eta` equals `c`
+  exactly on the test system and flips A5 → A10 between `c = 1` and `c = 3`
+  independently of the grid.
 - **Prony fallback seeds are grid-relative (round-16 review; the #108 class
   of defect). CHANGES NUMERICAL RESULTS** on grids far from unit span where
   the Prony estimate falls back (non-uniform sampling, short signals,
