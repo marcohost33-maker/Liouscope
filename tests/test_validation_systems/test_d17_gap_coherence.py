@@ -23,6 +23,7 @@ import pytest
 from liouscope import diagnose
 from liouscope.core.hamiltonian import _pauli
 from liouscope.core.lindblad import build_liouvillian, steady_state
+from liouscope.diagnostics.classification import _pick_a_class, triggered_hypotheses
 from liouscope.examples import (
     v1_qutrit,
     v2_dephasing_qubit,
@@ -265,10 +266,29 @@ def test_phantom_with_gap_matched_rho0_is_not_mislabelled_a1():
     """
     L, rho0 = _phantom_ladder()
     rep = diagnose(L, rho_initial=rho0, bootstrap_B=20, seed=42)
-    ev = rep.classification.evidence
+    ev = dict(rep.classification.evidence)
     # Adversarial precondition: the A1 early branch WOULD fire on its own.
     assert rep.lep.gap_rate_consistency < 0.05
-    assert ev["d17_linear_single_exp"] == 1.0
+    # The second A1 condition, ``d17_linear_single_exp``, is NOT read from the
+    # pipeline: on this input it is decided below the float64 rounding level
+    # and is therefore platform-dependent (numerics platform probe, arm64,
+    # run 41940818939: 0.0 instead of 1.0). The trace-distance curve is an
+    # exact single exponential over ten e-foldings; its deviation from
+    # ``y0 * exp(-gap t)`` is at most 1.4e-17 absolute, i.e. rounding of the
+    # O(1) density-matrix entries the distance is formed from. Every candidate
+    # of the linear fit therefore models the same rounding noise, and whether
+    # M0 or M3a wins AICc depends on that noise: perturbing the operator by ONE
+    # ulp per entry flipped the winner to M3a in 7 of 25 seeds (0 of 25 on main
+    # 799ce98, whose shorter window kept the tail further above the noise).
+    # The guard under test is the ladder ORDER (F5 before A1), so the
+    # precondition is injected instead, and the A1 rung is shown to fire on
+    # exactly that evidence -- otherwise the ordering check would be blind.
+    adversarial = {**ev, "d17_linear_single_exp": 1.0}
+    fired = triggered_hypotheses(adversarial, relaxation=rep.relaxation)
+    a1_strong = [h for h in fired if h["rule_id"] == "A1_LINEAR_SINGLE_EXP"]
+    assert a1_strong, "positive control: the A1 early branch must fire here"
+    assert a1_strong[0]["shadowed"]
+    assert _pick_a_class(adversarial, relaxation=rep.relaxation) == ("A10", "F5")
     # The operator is genuinely a strong F5 phantom (operator-intrinsic).
     # issue #70 A8: the F5 rule is now dimension-coherent -- the pseudospectral
     # REACH (radius / gap, dimensionless) exceeds 2 * gap_to_gns_ratio, not the
