@@ -44,8 +44,6 @@ only when the grid actually varies its step.
 
 from __future__ import annotations
 
-import math
-
 import numpy as np
 from scipy.optimize import minimize_scalar
 
@@ -264,24 +262,22 @@ def estimate_car1_theta(t: np.ndarray, residuals: np.ndarray) -> float:
     if span <= 0.0 or dt_min <= 0.0:
         return float("nan")
     lo = float(np.log(_THETA_LO_FRAC / span))
-    # PR #127 review: the ratio ``_THETA_HI_FRAC / dt_min`` overflows to inf
-    # for dt_min below 1e3 / float64.max (~5.6e-306), although the optimum can
-    # be a perfectly representable rate -- the estimate then failed for the
-    # time UNIT alone and ``fit_gls_ar1`` fell back to discrete AR(1). Only
-    # then is the bound formed as a difference of logarithms, finite for every
-    # positive dt_min; wherever the ratio is finite the bound is computed
-    # exactly as before, so ordinary grids stay bit-for-bit unchanged.
-    hi_ratio = _THETA_HI_FRAC / dt_min
-    hi = (
-        float(np.log(hi_ratio))
-        if math.isfinite(hi_ratio)
-        else math.log(_THETA_HI_FRAC) - math.log(dt_min)
-    )
+    # Unchanged expression, so ordinary grids stay bit-for-bit as before. It is
+    # inf when ``_THETA_HI_FRAC / dt_min`` overflows (dt_min below
+    # 1e3 / float64.max, ~5.6e-306); that used to fail the finiteness check
+    # below, so the estimate became NaN for the time UNIT alone and
+    # ``fit_gls_ar1`` fell back to discrete AR(1) (PR #127 review, car1.py:254),
+    # although the optimum can be a perfectly representable rate.
+    hi = float(np.log(_THETA_HI_FRAC / dt_min))
     # The objective evaluates exp(u), so the search must stay among
-    # representable rates. Only the upper bound can leave them: the lower one
-    # is at least log(1e-3 / float64.max) ~ -716.7 for any finite span, inside
-    # exp's range (log(5e-324) ~ -744.4); a span that overflowed to inf gives
-    # lo = -inf and fails closed below.
+    # representable rates: clip the upper bound to the largest u with finite
+    # exp(u). This also absorbs the overflowed bound above -- any dt_min small
+    # enough to overflow the ratio puts the exact log-difference above the
+    # clip, so forming it in log space would change nothing. Only the upper
+    # bound can leave the range: the lower one is at least
+    # log(1e-3 / float64.max) ~ -716.7 for any finite span, inside exp's range
+    # (log(5e-324) ~ -744.4); a span that overflowed to inf gives lo = -inf and
+    # fails closed below.
     hi_clipped = hi > _LOG_THETA_MAX
     hi = min(hi, _LOG_THETA_MAX)
     if not (np.isfinite(lo) and np.isfinite(hi)) or hi <= lo:
