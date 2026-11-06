@@ -20,6 +20,15 @@ The object is a provenance contract, not proof of organizational independence or
 
 `MANIFEST_SCHEMA_VERSION` then moves from 1.4.0 to 1.5.0 because `compute_input_hash` now absorbs each input object as a length-framed, type-tagged field instead of a bare `repr`/byte concatenation. The old encoding was not injective: distinct input tuples could collide when their serialised forms concatenated to the same byte stream (for example `compute_input_hash(12, 3)` and `compute_input_hash(1, 23)`; issue #97 item 4). Within `diagnose()` the fixed arity and types made this practically unreachable, but `compute_input_hash` is public API, so the derivation is hardened. As with every schema step, 1.4.0 run IDs / input hashes do not re-derive under 1.5.0; compare provenance keys only within one schema version.
 
+## Relaxation layer: default time window and model selection
+
+A call to `diagnose()` or `compute_relaxation_layer()` **without `t_grid`** now fits the gap-scaled window `[0, RELAXATION_HORIZON / gap]` (80 points; a two-scale grid when the fastest mode is not resolved) instead of the absolute `linspace(0, 10, 80)` of v0.5.0. The two are identical only at `gap = 1`. Everywhere else the selected model (`aicc_model`), `beta_D` and its interval can change. Measured on one damped transverse-field site (`gap = 0.35`, `tests/test_pr127_default_window_migration.py`): v0.5.0 window M0, `beta_D = 0.75552`; new default M2, `beta_D = 0.72143`, interval `[0.70829, 0.71997]`.
+
+- To reproduce v0.5.0 numbers, pass `t_grid=np.linspace(0.0, 10.0, 80)` explicitly.
+- `RelaxationResult.t_grid_source` (`"caller"`, `"gap_scaled"`, `"gap_scaled_multiscale"`, `"legacy_fixed"`) and `t_grid` record which window produced a result.
+- `RelaxationResult.interval_method` names the interval estimator (`"BC"` on the default 80-point grid, `"BCa-delete1"` on grids of at most 60 points, `"unavailable"`). A BC interval is a shifted percentile interval of the parametric bootstrap. It need not contain the point estimate, and in the example above it does not.
+- `aicc_model` and `linear_fit_model` can now be `"INDETERMINATE"` (`liouscope._consts.MODEL_SELECTION_INDETERMINATE`) when the AICc ranking is not resolved above the rounding and solver level of the curve. In that case the corresponding rate is NaN and `interval_method` is `"unavailable"`. Consumers that switch on the model name must handle this value as they handle `"none"`.
+
 ## PyPI release workflow
 
 Manual workflow dispatch is build and QA only and receives no OIDC token. The publish job runs only for a published GitHub Release and only when the repository publication flag is enabled. Before upload, both jobs verify source version, built-wheel version, release tag, checked-out commit and release event SHA.

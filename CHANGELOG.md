@@ -327,6 +327,45 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   eigensolver paths use, so one quantity is not measured two different ways.
 
 ### Changed
+- **Migration: without `t_grid`, the relaxation layer now fits a different
+  window, and the selected model and `beta_D` can change (PR #127,
+  cross-family review LIO-04).** The default window is `[0,
+  RELAXATION_HORIZON / gap]` (and the two-scale grid when a fast mode is not
+  resolved), no longer the absolute `linspace(0, 10, 80)`. The two coincide
+  only at `gap = 1`. Reproduction (`tests/test_pr127_default_window_migration.py`,
+  one damped transverse-field site, `gap = 0.35`): the default now selects
+  **M2, `beta_D = 0.72143`**, interval `[0.70829, 0.71997]` with
+  `interval_method = "BC"`; the legacy window selects **M0, `beta_D = 0.75552`**.
+  The point estimate lies outside its interval there. A BC interval is a
+  shifted percentile interval of the parametric bootstrap and need not contain
+  the estimate, so that is not by itself a defect, but it is what a caller
+  sees. **To keep the old numbers, pass `t_grid=np.linspace(0.0, 10.0, 80)`.**
+  Which window produced a result is recorded in `RelaxationResult.t_grid_source`
+  / `t_grid` and the interval estimator in `interval_method` (the "CI method"
+  the review asked for; it already exists, issue #116). No manifest-schema change.
+- **Model selection reports `INDETERMINATE` or falls back to the nested M0 when
+  the AICc ranking is not resolved above the arithmetic (PR #127, cross-family
+  review LIO-02/LIO-03).** The numerics platform probe (arm64) failed
+  `test_d17_gap_coherence.py:271` because the D17 trace-distance curve of the
+  phantom ladder is an exact single exponential to float64 precision, and the
+  M0..M3b winner was decided by rounding: a 1-ulp perturbation of the operator
+  flipped it from M0 to M3a in 7 of 25 seeds. `relaxation._select_model` now
+  widens every candidate's AICc by how far its log-likelihood can move under
+  (a) the rounding level of the data (`gamma_{d^2}` times the state scale,
+  raised to the measured trajectory trace and Hermiticity defects, for the
+  trace-distance curve; `gamma_{d^2} max|S|`, a lower estimate, for relative
+  entropy) and (b) the solver: what the same candidate reaches when its
+  optimisation is continued to float64 tolerances. The default `least_squares`
+  tolerances stopped M0 on V3's trace-distance curve a factor 1.7e6 above what
+  it reaches. Candidates that cannot be separated from the minimum are tied. A
+  tie containing M0 selects M0, because every other candidate nests it. Any
+  other tie reports `MODEL_SELECTION_INDETERMINATE` (`"INDETERMINATE"`) in
+  `aicc_model` / `linear_fit_model` with a NaN rate and interval method
+  `"unavailable"`. The reported fits, parameters and AICc values are unchanged.
+  After the change the 1-ulp probe gives M0 in 25 of 25 seeds. Changed winners
+  on the validation systems: V2 trace distance M1 -> M0 and V3 trace distance
+  M3a -> M0. Both are single exponentials, and V3's M3a had won only because
+  M0 stopped early. No relative-entropy winner and no anchor changes.
 - **Resolvent and non-normality grid sweeps share one Schur decomposition above
   `n = 128` (issue #178, item 2).** D10, D10b, D11b and D13 evaluate
   `sigma_min(zI - L)`, or its reciprocal, on grids of one operator: 600, 1200,
