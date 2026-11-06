@@ -982,8 +982,13 @@ def _select_model(
       (M1 at ``C = 0``, M2 at ``A2 = 0``, M3a at ``B = 0``, M3b at
       ``omega = phi = 0``), so the data at their own resolution do not reject
       the simplest model -- the parsimony rule, not an arbitrary tie-break.
-    * Several without ``M0``: :data:`MODEL_SELECTION_INDETERMINATE`. No
-      member nests the others and the data cannot decide between them.
+    * Several without ``M0``, M0 evaluated and excluded by a true comparison:
+      :data:`MODEL_SELECTION_INDETERMINATE`. The data reject the common
+      nested model, no tied member nests the others, and the data cannot
+      decide between them.
+    * Several, M0 not a usable candidate at all (failed fit or infinite
+      AICc): the tied candidate with the fewest parameters, ladder order on
+      equal count.
 
     The comparison is orientation-safe: a candidate is EXCLUDED only by a
     true ``lower_j > upper_winner``; a NaN on either side keeps it tied.
@@ -1064,6 +1069,16 @@ def _select_model(
         return winner, tuple(tied)
     if "M0" in tied:
         return "M0", tuple(tied)
+    if "M0" not in finite:
+        # M0 was never a usable candidate (failed, saturated or infinite
+        # AICc), so the data were not shown to reject the single exponential
+        # every candidate nests. Parsimony without that anchor: fewest
+        # parameters, ladder order on equal count -- deterministic, unlike
+        # the plain argmin of a tie. Pinned by
+        # tests/test_pr121_review_round17.py (a saturated M0 must not cost the
+        # layer its rate).
+        simplest = min(tied, key=lambda n: (int(finite[n].params.size), tied.index(n)))
+        return simplest, tuple(tied)
     return MODEL_SELECTION_INDETERMINATE, tuple(tied)
 
 

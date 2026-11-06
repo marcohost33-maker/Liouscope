@@ -123,13 +123,38 @@ def test_resolved_curve_is_not_widened_into_a_tie() -> None:
     assert plain != "M0"
 
 
-def test_tie_without_the_nested_model_is_indeterminate() -> None:
+def test_tie_after_m0_is_excluded_is_indeterminate(monkeypatch) -> None:
+    """M0 evaluated and REJECTED by a true comparison, two non-nested
+    candidates tied at the rounding level: no model can be named."""
+    t, y, level = _floor_curve(0)
+    fits = _fits(t, y)
+    # M0 with a wrong rate: residual of order the curve itself, so its data
+    # band is negligible. The solver continuation is switched off here only
+    # to isolate the decision branch -- left on, it would (correctly) find
+    # that M0 can still reach the floor and keep it tied.
+    monkeypatch.setattr(
+        rx, "_attainable_residual_norm",
+        lambda model, t_, y_, params, whiten: float(np.linalg.norm(whiten(y_ - model(t_, params)))),
+    )
+    worst = max(f.aicc for f in fits.values() if f.success and np.isfinite(f.aicc))
+    fits["M0"] = dataclasses.replace(
+        fits["M0"], params=np.array([0.04, 2.0]), aicc=worst + 1.0e4
+    )
+    winner, tied = rx._select_model(fits, t, y, level)
+    assert "M0" not in tied and len(tied) >= 2, tied
+    assert winner == MODEL_SELECTION_INDETERMINATE
+
+
+def test_tie_without_a_usable_m0_takes_the_fewest_parameters() -> None:
+    """M0 never became a candidate (failed fit): the data did not reject it,
+    so the tie is resolved by parameter count, ladder order on equal count."""
     t, y, level = _floor_curve(0)
     fits = _fits(t, y)
     fits["M0"] = dataclasses.replace(fits["M0"], success=False)
     winner, tied = rx._select_model(fits, t, y, level)
-    assert winner == MODEL_SELECTION_INDETERMINATE
-    assert len(tied) >= 2 and "M0" not in tied
+    assert "M0" not in tied and len(tied) >= 2, tied
+    expected = min(tied, key=lambda n: (fits[n].params.size, tied.index(n)))
+    assert winner == expected != MODEL_SELECTION_INDETERMINATE
 
 
 def test_nan_band_keeps_the_candidate_tied() -> None:

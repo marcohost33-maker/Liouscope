@@ -142,13 +142,15 @@ abstract: >-
 # Also pending for the next cut, all grids (PR #127 cross-family review
 # LIO-02/LIO-03): the M0..M3b AICc winner must be resolved above the rounding
 # level of the fitted curve and above where the optimiser stopped; otherwise a
-# tie containing M0 selects M0 and any other tie reports "INDETERMINATE" (rate
-# NaN). This CHANGES the selected model on curves fitted at float64 precision
-# (validation systems V2 and V3, trace distance: M1/M3a -> M0) and must be
-# described as a METHODOLOGY correction. It must NOT be described as a
-# statistical indeterminacy rule: ties within ordinary sampling noise are still
-# resolved by plain AICc. The default relaxation window without t_grid is
-# gap-scaled and is not the v0.5.0 window (see CHANGELOG, migration note).
+# tie containing M0 selects M0, a tie after M0 was evaluated and excluded
+# reports "INDETERMINATE" (rate NaN). This CHANGES the selected model on curves
+# fitted at float64 precision (validation systems V2 and V3, trace distance:
+# M1/M3a -> M0) and, through the optimiser term, occasionally on noisy data
+# (2 of 40 runs in one cell of the LIO-02 study). It must be described as a
+# METHODOLOGY correction and NOT as a statistical indeterminacy rule: ties
+# within ordinary sampling noise are not widened. The default relaxation
+# window without t_grid is gap-scaled and is not the v0.5.0 window (see
+# CHANGELOG, migration note).
 # Also pending for the next cut: the Gaussian likelihood behind AICc is
 # evaluated in log-RSS space rather than by forming the residual sum of squares
 # in ordinary units, and an exact-zero RSS is an explicit abstention rather than

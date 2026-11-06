@@ -142,9 +142,10 @@ INTERVAL_METHODS: Final[tuple[str, ...]] = (
 )
 # PR #127 (cross-family review, LIO-02/LIO-03): reported in
 # ``RelaxationResult.aicc_model`` / ``linear_fit_model`` instead of a winner
-# when the AICc ranking is not resolved above the rounding level of the curve
-# it was fitted to and the candidates that cannot be told apart do not share
-# a common nested model. Rate and interval are then NaN / "unavailable".
+# when the AICc ranking is not resolved above the rounding and solver level of
+# the curve it was fitted to, the nested M0 was evaluated and excluded, and the
+# remaining tied candidates do not nest one another. Rate and interval are
+# then NaN / "unavailable" (relaxation._select_model).
 MODEL_SELECTION_INDETERMINATE: Final[str] = "INDETERMINATE"
 # Latency guard, not a statistical choice. The jackknife refits the winning
 # model once per grid point, on top of ``bootstrap_B`` refits, so it is skipped

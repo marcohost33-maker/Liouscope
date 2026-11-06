@@ -358,10 +358,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   optimisation is continued to float64 tolerances. The default `least_squares`
   tolerances stopped M0 on V3's trace-distance curve a factor 1.7e6 above what
   it reaches. Candidates that cannot be separated from the minimum are tied. A
-  tie containing M0 selects M0, because every other candidate nests it. Any
-  other tie reports `MODEL_SELECTION_INDETERMINATE` (`"INDETERMINATE"`) in
-  `aicc_model` / `linear_fit_model` with a NaN rate and interval method
-  `"unavailable"`. The reported fits, parameters and AICc values are unchanged.
+  tie containing M0 selects M0, because every other candidate nests it. If M0
+  was never a usable candidate (failed fit), the tied candidate with the fewest
+  parameters is selected. If M0 was evaluated and excluded, the tie reports
+  `MODEL_SELECTION_INDETERMINATE` (`"INDETERMINATE"`) in `aicc_model` /
+  `linear_fit_model` with a NaN rate and interval method `"unavailable"`. The reported fits, parameters and AICc values are unchanged.
   After the change the 1-ulp probe gives M0 in 25 of 25 seeds. Changed winners
   on the validation systems: V2 trace distance M1 -> M0 and V3 trace distance
   M3a -> M0. Both are single exponentials, and V3's M3a had won only because
