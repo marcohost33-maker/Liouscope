@@ -333,13 +333,20 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   RELAXATION_HORIZON / gap]` (and the two-scale grid when a fast mode is not
   resolved), no longer the absolute `linspace(0, 10, 80)`. The two coincide
   only at `gap = 1`. Reproduction (`tests/test_pr127_default_window_migration.py`,
-  one damped transverse-field site, `gap = 0.35`): the default now selects
-  **M2, `beta_D = 0.72143`**, interval `[0.70829, 0.71997]` with
-  `interval_method = "BC"`; the legacy window selects **M0, `beta_D = 0.75552`**.
-  The point estimate lies outside its interval there. A BC interval is a
-  shifted percentile interval of the parametric bootstrap and need not contain
-  the estimate, so that is not by itself a defect, but it is what a caller
-  sees. **To keep the old numbers, pass `t_grid=np.linspace(0.0, 10.0, 80)`.**
+  one damped transverse-field site, `gap = 0.35`): the legacy window selects
+  **M0, `beta_D = 0.75552`** on every platform measured; the default now
+  selects **M2** on every platform measured, with `interval_method = "BC"`,
+  but its `beta_D` is platform-dependent at the 0.6 % level. It lands on one
+  of two values: **0.72143**, interval `[0.70829, 0.71997]`, estimate OUTSIDE
+  the interval (Windows x86-64), or **0.71738**, interval `[0.70597, 0.71915]`,
+  estimate inside (Linux x86-64 and arm64); numpy 2.5.4 / scipy 1.18.1 on
+  both. A BC interval is a shifted percentile interval of the parametric
+  bootstrap and need not contain the estimate, so the first case is not by
+  itself a defect, but it is what a caller on that platform sees. Why the
+  value is not reproducible is in `docs/DEVELOPMENT_MIGRATION_0.6.0.dev0.md`
+  ("Reproducibility of the default fit"); it is an open finding about the M2
+  fit (both values are early `xtol` stops), not changed here.
+  **To keep the old numbers, pass `t_grid=np.linspace(0.0, 10.0, 80)`.**
   Which window produced a result is recorded in `RelaxationResult.t_grid_source`
   / `t_grid` and the interval estimator in `interval_method` (the "CI method"
   the review asked for; it already exists, issue #116). No manifest-schema change.
