@@ -305,6 +305,54 @@ def test_theta_estimate_fails_closed(t, r):
     assert np.isnan(estimate_car1_theta(t, r))
 
 
+def _forty_point_grid() -> np.ndarray:
+    """Non-uniform, 40 points on [0, 10], smallest step 1/19 (review fixture)."""
+    return np.concatenate([np.linspace(0.0, 1.0, 20), np.linspace(1.0, 10.0, 21)[1:]])
+
+
+@pytest.mark.parametrize("unit", [1.0e-306, 1.0e-300, 1.0e-150, 1.0e150, 1.0e300])
+def test_theta_estimate_is_equivariant_under_a_change_of_time_unit(unit):
+    """PR #127 review (car1.py:254). theta is a rate: expressing the same times
+    in a unit ``c`` times larger must divide it by ``c``. Before the fix the
+    upper search bound ``log(1e3 / dt_min)`` overflowed to inf for dt_min below
+    ~5.6e-306 and the estimate became NaN -- the fit then switched residual
+    family because of the time unit alone. ``1e-306`` puts dt_min = 5.3e-308
+    below that threshold while the optimum (~1e305) stays representable.
+    """
+    t = _forty_point_grid()
+    assert not is_uniform_grid(t)
+    r = car1_resample(np.random.default_rng(20261106), t, 0.66, 1.0)
+    base = estimate_car1_theta(t, r)
+    assert np.isfinite(base) and 0.05 < base < 10.0, base
+    scaled = estimate_car1_theta(t * unit, r)
+    assert np.isfinite(scaled), (unit, scaled)
+    # Error model: the search runs in u = log(theta) with SciPy's bounded
+    # Brent, whose stopping tolerance is sqrt(eps) * |u| + xatol / 3, so the
+    # attainable agreement scales with |u|, which the change of unit itself
+    # moves to ~700. Measured over 4 residual seeds x 7 units: |delta u| <=
+    # 0.36 * sqrt(eps) * max|u|. A unit error the fix must exclude is of size
+    # |log(unit)| >= 23 here, ten orders of magnitude above this bound.
+    u_base, u_scaled = np.log(base), np.log(scaled) + np.log(unit)
+    bound = 2.0 * np.sqrt(np.finfo(float).eps) * max(abs(u_base), abs(np.log(scaled)), 1.0)
+    assert abs(u_scaled - u_base) <= bound, (unit, u_scaled - u_base, bound)
+
+
+def test_theta_estimate_withholds_a_rate_pinned_to_the_float64_edge():
+    """The other side of the same fix: once the upper bound is clipped to the
+    largest representable rate, that bound is a float64 artefact, not the
+    grid's "decorrelated within the smallest step". Independent residuals put
+    the optimum at the upper end of any search, so on the clipped range the
+    estimate would be the clip itself -- it is withheld (NaN) instead.
+
+    Positive control: the SAME residuals in an ordinary unit are not withheld,
+    so the NaN below is caused by the clip and not by the residuals.
+    """
+    t = _forty_point_grid()
+    r = np.random.default_rng(7).standard_normal(t.size)
+    assert np.isfinite(estimate_car1_theta(t, r))
+    assert np.isnan(estimate_car1_theta(t * 1.0e-306, r))
+
+
 # ---------------------------------------------------------------------------
 # The claim the disclosure denied: whitening IS valid on a varying grid
 # ---------------------------------------------------------------------------

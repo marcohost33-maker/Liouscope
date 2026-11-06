@@ -44,6 +44,8 @@ only when the grid actually varies its step.
 
 from __future__ import annotations
 
+import math
+
 import numpy as np
 from scipy.optimize import minimize_scalar
 
@@ -65,6 +67,19 @@ _VAR_FLOOR: float = 1.0e-12
 # parameter.
 _THETA_LO_FRAC: float = 1.0e-3   # / (t[-1] - t[0])
 _THETA_HI_FRAC: float = 1.0e3    # / min(diff(t))
+
+# Largest u with a finite exp(u): the theta search runs in u = log(theta) and
+# evaluates the objective at exp(u), so u may not exceed it. One ulp below
+# log(float64.max) because exp() of the rounded logarithm itself may overflow.
+_LOG_THETA_MAX: float = float(np.nextafter(np.log(np.finfo(float).max), -np.inf))
+
+# Likelihood support an optimum needs, in -2 log L units, to count as separated
+# from a search bound that is a float64 artefact rather than a property of the
+# grid: the 95% quantile of chi^2 with one degree of freedom (likelihood-ratio
+# test for the single parameter theta). -2 log L differences are invariant
+# under r -> c*r (the n*log(c^2) term cancels), so the threshold needs no
+# reference scale.
+_EDGE_SUPPORT_CHI2_1: float = 3.841458820694124
 
 
 def is_uniform_grid(t: np.ndarray, *, rtol: float = GRID_UNIFORM_RTOL) -> bool:
@@ -249,7 +264,26 @@ def estimate_car1_theta(t: np.ndarray, residuals: np.ndarray) -> float:
     if span <= 0.0 or dt_min <= 0.0:
         return float("nan")
     lo = float(np.log(_THETA_LO_FRAC / span))
-    hi = float(np.log(_THETA_HI_FRAC / dt_min))
+    # PR #127 review: the ratio ``_THETA_HI_FRAC / dt_min`` overflows to inf
+    # for dt_min below 1e3 / float64.max (~5.6e-306), although the optimum can
+    # be a perfectly representable rate -- the estimate then failed for the
+    # time UNIT alone and ``fit_gls_ar1`` fell back to discrete AR(1). Only
+    # then is the bound formed as a difference of logarithms, finite for every
+    # positive dt_min; wherever the ratio is finite the bound is computed
+    # exactly as before, so ordinary grids stay bit-for-bit unchanged.
+    hi_ratio = _THETA_HI_FRAC / dt_min
+    hi = (
+        float(np.log(hi_ratio))
+        if math.isfinite(hi_ratio)
+        else math.log(_THETA_HI_FRAC) - math.log(dt_min)
+    )
+    # The objective evaluates exp(u), so the search must stay among
+    # representable rates. Only the upper bound can leave them: the lower one
+    # is at least log(1e-3 / float64.max) ~ -716.7 for any finite span, inside
+    # exp's range (log(5e-324) ~ -744.4); a span that overflowed to inf gives
+    # lo = -inf and fails closed below.
+    hi_clipped = hi > _LOG_THETA_MAX
+    hi = min(hi, _LOG_THETA_MAX)
     if not (np.isfinite(lo) and np.isfinite(hi)) or hi <= lo:
         return float("nan")
 
@@ -260,6 +294,13 @@ def estimate_car1_theta(t: np.ndarray, residuals: np.ndarray) -> float:
     if not np.any(np.isfinite(vals)):
         return float("nan")
     j = int(np.argmin(np.where(np.isfinite(vals), vals, np.inf)))
+    # A clipped upper bound is the end of float64, not the grid's "decorrelated
+    # within the smallest step". An optimum the likelihood cannot separate from
+    # that artificial edge would report the edge as a rate, so it is withheld.
+    # Oriented so that only a TRUE comparison accepts: a non-finite edge value
+    # fails closed.
+    if hi_clipped and not (float(vals[-1]) - float(vals[j]) > _EDGE_SUPPORT_CHI2_1):
+        return float("nan")
     left = float(sweep[max(j - 1, 0)])
     right = float(sweep[min(j + 1, sweep.size - 1)])
     if right <= left:
