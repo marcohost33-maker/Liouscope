@@ -24,7 +24,6 @@ from liouscope.core.lindblad import build_liouvillian
 from liouscope.diagnostics.relaxation import _fit_with_model, compute_relaxation_layer
 from liouscope.fitting.aicc import aicc
 from liouscope.fitting.car1 import car1_resample, estimate_car1_theta, is_uniform_grid
-from liouscope.fitting.gls import fit_gls_ar1
 from liouscope.fitting.models import M0
 
 # Grids of at most 40 points are the point here; their small-n notice is not.
@@ -115,19 +114,19 @@ def test_residual_family_is_honoured_and_validated() -> None:
     assert is_uniform_grid(t)
     y = _noisy_decay(t)
     p0 = np.array([1.0, 1.0])
-    assert not np.isfinite(fit_gls_ar1(M0, t, y, p0).theta_car1)
-    assert np.isfinite(fit_gls_ar1(M0, t, y, p0, residual_family="car1").theta_car1)
+    assert not np.isfinite(gls.fit_gls_ar1(M0, t, y, p0).theta_car1)
+    assert np.isfinite(gls.fit_gls_ar1(M0, t, y, p0, residual_family="car1").theta_car1)
 
     assert not is_uniform_grid(_TWO_SCALE)
     y2 = _noisy_decay(_TWO_SCALE)
-    assert np.isfinite(fit_gls_ar1(M0, _TWO_SCALE, y2, p0).theta_car1)
+    assert np.isfinite(gls.fit_gls_ar1(M0, _TWO_SCALE, y2, p0).theta_car1)
     assert not np.isfinite(
-        fit_gls_ar1(M0, _TWO_SCALE, y2, p0, residual_family="ar1").theta_car1
+        gls.fit_gls_ar1(M0, _TWO_SCALE, y2, p0, residual_family="ar1").theta_car1
     )
 
     for bad in ("", "AR1", "ar(1)", None, 1):
         with pytest.raises(ValueError, match="residual_family"):
-            fit_gls_ar1(M0, t, y, p0, residual_family=bad)  # type: ignore[arg-type]
+            gls.fit_gls_ar1(M0, t, y, p0, residual_family=bad)  # type: ignore[arg-type]
 
 
 def test_uniform_family_on_a_uniform_grid_equals_auto() -> None:
@@ -135,8 +134,8 @@ def test_uniform_family_on_a_uniform_grid_equals_auto() -> None:
     t = np.linspace(0.0, 8.0, 40)
     y = _noisy_decay(t)
     p0 = np.array([1.0, 1.0])
-    auto = fit_gls_ar1(M0, t, y, p0)
-    fixed = fit_gls_ar1(M0, t, y, p0, residual_family="ar1")
+    auto = gls.fit_gls_ar1(M0, t, y, p0)
+    fixed = gls.fit_gls_ar1(M0, t, y, p0, residual_family="ar1")
     np.testing.assert_array_equal(auto.params, fixed.params)
     assert auto.log_likelihood == fixed.log_likelihood
 
@@ -216,9 +215,9 @@ def test_non_uniform_fit_is_amplitude_invariant_under_car1(scale: float) -> None
     y = y / float(np.max(np.abs(y)))
     assert float(np.max(np.abs(y))) == 1.0, "fixture must exercise the raw path"
     p0 = np.array([1.0, 1.0])
-    reference = fit_gls_ar1(M0, _TWO_SCALE, y, p0)
+    reference = gls.fit_gls_ar1(M0, _TWO_SCALE, y, p0)
     assert reference.success and np.isfinite(reference.theta_car1)
-    scaled = fit_gls_ar1(M0, _TWO_SCALE, scale * y, p0 * np.array([scale, 1.0]))
+    scaled = gls.fit_gls_ar1(M0, _TWO_SCALE, scale * y, p0 * np.array([scale, 1.0]))
     assert scaled.success
     assert scaled.params[1] == pytest.approx(reference.params[1], rel=1.0e-5)
     assert scaled.params[0] / scale == pytest.approx(reference.params[0], rel=1.0e-5)
@@ -231,6 +230,6 @@ def test_rescaling_fallback_keeps_the_car1_family() -> None:
     p0 = np.array([1.0, 1.0])
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
-        out = fit_gls_ar1(M0, _TWO_SCALE, 1.0e-310 * y, p0 * np.array([1.0e-310, 1.0]))
+        out = gls.fit_gls_ar1(M0, _TWO_SCALE, 1.0e-310 * y, p0 * np.array([1.0e-310, 1.0]))
     assert out.success
     assert np.isfinite(out.theta_car1)
