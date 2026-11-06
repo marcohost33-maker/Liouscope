@@ -190,7 +190,6 @@ def test_one_ulp_operator_perturbation_no_longer_flips_the_linear_model() -> Non
 
     L, rho0 = _phantom_ladder()
     eps = float(np.finfo(float).eps)
-    plain = []
     for s in _FLIP_SEEDS:
         rng = np.random.default_rng(1000 + s)
         Lp = L + eps * np.abs(L) * (
@@ -198,9 +197,17 @@ def test_one_ulp_operator_perturbation_no_longer_flips_the_linear_model() -> Non
         )
         rel = diagnose(Lp, rho_initial=rho0, bootstrap_B=20, seed=42).relaxation
         assert rel.linear_fit_model == "M0", s
+        # Positive control, per seed: the ranking on this curve is NOT resolved
+        # at the arithmetic level (more than one candidate tied), so "M0" above
+        # is carried by the tie policy, not by a clear AICc margin. Deliberately
+        # not "the plain argmin is M3a here": which seeds flip is itself the
+        # platform-dependent quantity (7 of 25 on x86-64), and a control that
+        # depends on it would fail the arm64 probe for the reason under test.
         t, y = rel.t_grid, rel.trace_distance_curve
-        fits = _fits(t, y)
-        plain.append(choose_model({n: f.aicc for n, f in fits.items() if f.success}))
-    # Positive control: the plain argmin on these very curves is not M0 on at
-    # least one seed, so the assertion above is carried by the tie policy.
-    assert any(w != "M0" for w in plain), plain
+        level = rx._curve_data_error(
+            y, d=rho0.shape[0], formation_scale=1.0,
+            measured_defects=(rel.trajectory_max_trace_error,
+                              rel.trajectory_max_hermiticity_defect),
+        )
+        winner, tied = rx._select_model(_fits(t, y), t, y, level)
+        assert winner == "M0" and len(tied) >= 2, (s, tied)
