@@ -27,5 +27,5 @@ build
 check-wheel-contents
 # Must satisfy [build-system] requires in pyproject.toml; the quality contract
 # checks the locked version against it.
-setuptools>=77.0
+setuptools>=84.1.0
 twine
