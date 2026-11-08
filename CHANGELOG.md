@@ -561,13 +561,20 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     unit of 1e9 the `"jac"` fit returned rates 30 % off as `success=True`.
     Every other model keeps `"jac"`.
   - A converged M2 is a candidate only if both rates lie in the window the
-    grid resolves (`ALPHA_SEED_FLOOR_FRAC / T <= beta <= 1 / (dt_0 *
-    MIN_SAMPLES_PER_FAST_EFOLD)`, repo constants) and its column-equilibrated
+    grid can identify (`ALPHA_SEED_FLOOR_FRAC / T <= beta <= 10 / dt_0`: a
+    faster component is gone after one sample) and its column-equilibrated
     Jacobian has condition `<= eps**-0.5`. Otherwise `FitResult.identifiable`
     is False, `identification_reason` says why, `aicc = inf`, and
     `_select_model` excludes it from every branch including the all-infinite
     and fewest-parameters fallbacks. New `FitResult` fields are additive and
-    defaulted.
+    defaulted. The pre-registered bound `beta * dt_0 <= 1` was measured to
+    refuse real interior optima (V1/V3/V4) and was amended; see the result
+    note next to the prereg. Known limit: a component fitted at the edge of
+    its flat profile (e.g. true rate 500, fitted 48-58 at `dt_0 = 0.127`) is
+    not detected.
+  - On the example the scaled M2 converges to beta2 = 7.67 and loses on its
+    own AICc (`N_eff` 4.7 <= k + 1); the former one-point endpoint (~1e6) is
+    refused by the bound.
 - **CAR(1) theta estimation returned NaN when the time UNIT made the smallest
   step tiny (PR #127 review, `car1.py:254`).** The upper search bound
   `log(1e3 / dt_min)` overflowed to inf for `dt_min` below ~5.6e-306 and the
