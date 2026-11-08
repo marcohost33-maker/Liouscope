@@ -156,3 +156,13 @@ amended, or a profile-likelihood test for the fast rate (dossier option B
 item 2) -- is a methodology decision and is not made here. Note for it: on
 `_chain1` the M2 optimum (slow 0.71731) is closer to the asymptotic
 relative-entropy rate `2 * gap = 0.70` than the reported M0 0.753447.
+
+Proof runs for B5 (code at 1a384ea):
+
+| run | result |
+|---|---|
+| Windows x86-64, Python 3.12.10, numpy 2.5.4, scipy 1.18.1 | ruff, mypy exit 0; 2123 passed, 14 skipped, 2 xfailed, exit 0 |
+| Linux x86-64 (Docker python:3.12-slim, Python 3.12.16, numpy 2.5.4, scipy 1.18.1, qutip), tree of c729ca6 | ruff, mypy clean; anchors 21 passed; 2137 passed, 2 xfailed |
+| B5 wrapper neutralised (mutation), P1-1 test file | 17 failed, 43 passed, 2 xfailed |
+
+The +30 against the e076f2b runs above are the P1-1 tests.
