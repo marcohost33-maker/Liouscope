@@ -29,7 +29,7 @@ from .car1 import (
     whiten_car1,
     whiten_car1_log_jacobian,
 )
-from .models import saturation_watch
+from .models import characteristic_x_scale, saturation_watch
 from .neff import _AR1_SMALL_N, ar1_correlation_corrected
 
 
@@ -341,6 +341,38 @@ def fit_gls_ar1(
     # representable" and sends the iteration to the raw residuals. A finite
     # rescaled result that merely did not converge is NOT retried: that is a
     # genuine failure, and retrying it raw would re-admit the #124 seed.
+    # Optimiser variables (PR #127, option B). For a model with a
+    # characteristic scale (``characteristic_x_scale``, today M2) the solver
+    # works in the DIMENSIONLESS variables ``z = x / scale`` with
+    # ``x_scale=1``, not in ``x`` with ``x_scale=scale``. The two give the same
+    # trust-region steps, but SciPy evaluates its ``xtol`` test and its
+    # finite-difference steps in the variables it is handed (trf.py: ``xtol *
+    # (xtol + |x|)``, unscaled). In ``x`` a rate of 5e-10 next to an
+    # amplitude of 1 has "converged" after the first step. Measured on a
+    # resolved two-rate curve (seed 11): with ``x_scale="jac"`` the M2 rates
+    # moved by 2.4e-5 relative under a time unit x 1e6 and by 0.30 under
+    # x 1e9 -- reported as ``success=True``; in ``z`` by <= 1.3e-9 for time
+    # units 1e-9..1e9 and amplitudes 1e-150..1e40. Every other model keeps
+    # ``x_scale="jac"`` exactly as before.
+    char_scale = characteristic_x_scale(model, t, y_scale)
+
+    def _least_squares(
+        fun: Callable[[np.ndarray], np.ndarray], x0: np.ndarray, **kw: Any
+    ) -> OptimizeResult:
+        if char_scale is None:
+            return least_squares(fun, x0, x_scale="jac", **kw)
+        scale = char_scale
+
+        def fun_z(z: np.ndarray) -> np.ndarray:
+            return fun(z * scale)
+
+        if "bounds" in kw:
+            lo, hi = kw["bounds"]
+            kw = {**kw, "bounds": (np.asarray(lo, float) / scale, np.asarray(hi, float) / scale)}
+        res = least_squares(fun_z, np.asarray(x0, dtype=float) / scale, x_scale=1.0, **kw)
+        res.x = res.x * scale
+        return res
+
     def _solve_rescaled(
         rho_local: float, theta_local: float, x0: np.ndarray, **kw: object
     ) -> OptimizeResult:
@@ -355,7 +387,7 @@ def fit_gls_ar1(
             over="call", divide="call", invalid="call", under="ignore", call=_record
         ):
             try:
-                res = least_squares(
+                res = _least_squares(
                     _rescaled_residual_fn(
                         rho_local, theta_local, fit_scale, caller_err, caller_call
                     ),
@@ -389,13 +421,21 @@ def fit_gls_ar1(
         # scaled problem identical under ``y -> c*y, A -> c*A``. Measured on
         # ``_fit_with_model("M0")`` with 1e-3 noise: rate 1.2993514737..55 at
         # every scale from 1e-150 to 1e100 (seed 1.3245, returned before).
-        ls_kwargs: dict[str, object] = {"max_nfev": max_nfev, "x_scale": "jac"}
+        #
+        # Exception (PR #127, option B): a model listed by
+        # ``characteristic_x_scale`` (M2) is solved in its characteristic
+        # variables instead (``_least_squares``). Its second rate can decouple
+        # from the data, and the column norm of a decoupled rate is ~0 --
+        # ``"jac"`` then sends the solver to beta ~ 1e6. The characteristic
+        # scale is carried along by ``y -> c*y`` like ``"jac"``, so the
+        # invariance above still holds.
+        ls_kwargs: dict[str, object] = {"max_nfev": max_nfev}
         if bounds is not None:
             ls_kwargs["bounds"] = bounds
         try:
             try:
                 if fit_scale == 1.0:
-                    result = least_squares(_raw_residual_fn(rho, theta), p, **ls_kwargs)
+                    result = _least_squares(_raw_residual_fn(rho, theta), p, **ls_kwargs)
                 else:
                     result = _solve_rescaled(rho, theta, p, **ls_kwargs)
             except _ScaledResidualOverflowError:
@@ -409,7 +449,7 @@ def fit_gls_ar1(
                     stacklevel=2,
                 )
                 fit_scale = 1.0
-                result = least_squares(_raw_residual_fn(rho, theta), p, **ls_kwargs)
+                result = _least_squares(_raw_residual_fn(rho, theta), p, **ls_kwargs)
             p = result.x
             success = result.success
         except (ValueError, RuntimeError):

@@ -26,6 +26,7 @@ from ..fitting.car1 import is_uniform_grid, neff_car1, whiten_car1
 from ..fitting.gls import _whiten as _whiten_ar1
 from ..fitting.gls import fit_gls_ar1
 from ..fitting.models import (
+    ALPHA_SEED_FLOOR_FRAC,
     M0,
     M1,
     M2,
@@ -710,6 +711,86 @@ def entanglement_asymmetry(rho: np.ndarray) -> float:
     return float(max(von_neumann_entropy(rho_q) - von_neumann_entropy(rho), 0.0))
 
 
+# Largest condition number of the column-equilibrated M2 Jacobian at which the
+# four parameters still count as determined by the data. Above
+# ``eps**-0.5`` (~6.7e7) the Gauss-Newton matrix ``J^T J`` has a condition
+# number above ``1/eps``: singular in float64, so at least one parameter
+# combination is set by rounding, not by the curve. A float64 property, not a
+# tuned number (prereg docs/prereg/2026-11-08_m2_identifiability.md).
+_M2_MAX_EQ_CONDITION: float = float(np.finfo(float).eps) ** -0.5
+
+
+def _m2_identification(t: np.ndarray, params: np.ndarray) -> tuple[bool, str]:
+    """``(identified, reason)`` for a CONVERGED M2 fit on grid ``t``.
+
+    PR #127, option B. On ``_chain1``'s default window M2 won AICc by ~290
+    units with a second rate of ~1e6: a component that decays inside the
+    first grid step and only explains the point ``t = 0``. Convergence of the
+    optimiser says nothing about that; this does. M2 is identified only if
+
+    1. all four parameters are finite;
+    2. both rates lie in the window the grid resolves,
+       ``ALPHA_SEED_FLOOR_FRAC / T <= beta <= 1 / (MIN_SAMPLES_PER_FAST_EFOLD
+       * dt_0)``. The lower end is the rate that decays by ~0.5 % over the
+       whole window (indistinguishable from a constant, see
+       :data:`~liouscope.fitting.models.ALPHA_SEED_FLOOR_FRAC`), the upper end
+       the repo's definition of a mode that was stepped over rather than
+       measured (:data:`MIN_SAMPLES_PER_FAST_EFOLD`), taken at the first
+       grid step ``dt_0`` because a fast component lives at the window start.
+       A negative rate (a growing component) is outside by construction;
+    3. the model Jacobian, each column scaled to unit norm, has no zero or
+       non-finite column and a condition number ``<= _M2_MAX_EQ_CONDITION``.
+       Column equilibration is near-optimal among diagonal scalings (van der
+       Sluis 1969) and makes the number independent of the units of time and
+       amplitude, like conditions 1-2.
+
+    Fail-closed: anything that cannot be evaluated is "not identified".
+    """
+    p = np.asarray(params, dtype=float)
+    t = np.asarray(t, dtype=float)
+    if p.shape != (4,) or not np.all(np.isfinite(p)):
+        return False, "M2 parameters are not all finite"
+    if t.ndim != 1 or t.size < 2 or not np.all(np.isfinite(t)):
+        return False, "grid has fewer than two finite points"
+    ts = np.sort(t)
+    span = float(ts[-1] - ts[0])
+    steps = np.diff(ts)
+    positive = steps[steps > 0.0]
+    if not (np.isfinite(span) and span > 0.0 and positive.size):
+        return False, "grid has no positive span"
+    dt0 = float(positive[0])
+    lo = ALPHA_SEED_FLOOR_FRAC / span
+    hi = 1.0 / (MIN_SAMPLES_PER_FAST_EFOLD * dt0)
+    for beta in (float(p[1]), float(p[3])):
+        if not (lo <= beta <= hi):
+            return False, (
+                f"M2 rate {beta:.6g} outside the window the grid resolves "
+                f"[{lo:.6g}, {hi:.6g}] (beta*T = {beta * span:.3g}, "
+                f"beta*dt_0 = {beta * dt0:.3g})"
+            )
+    a1, b1, a2, b2 = (float(v) for v in p)
+    with np.errstate(all="ignore"):
+        e1 = np.exp(-b1 * t)
+        e2 = np.exp(-b2 * t)
+        jac = np.column_stack([e1, -a1 * t * e1, e2, -a2 * t * e2])
+        norms = np.linalg.norm(jac, axis=0)
+    if not (np.all(np.isfinite(norms)) and np.all(norms > 0.0)):
+        return False, "M2 Jacobian has a zero or non-finite column"
+    try:
+        sv = np.linalg.svd(jac / norms, compute_uv=False)
+    except np.linalg.LinAlgError:
+        return False, "M2 Jacobian SVD did not converge"
+    if not (np.all(np.isfinite(sv)) and sv[-1] > 0.0):
+        return False, "M2 Jacobian is singular"
+    cond = float(sv[0] / sv[-1])
+    if not cond <= _M2_MAX_EQ_CONDITION:
+        return False, (
+            f"M2 Jacobian is singular in float64: equilibrated condition "
+            f"{cond:.3g} > {_M2_MAX_EQ_CONDITION:.3g}"
+        )
+    return True, ""
+
+
 def _fit_with_model(
     model_name: str,
     t: np.ndarray,
@@ -806,7 +887,18 @@ def _fit_with_model(
     # (near-ties: best two AICc within 2 units in 21/40 of the theta = 0.05, M0
     # runs) is a separate methodology decision and is not made here.
     aicc_n = n_eff if uniform_grid else float(t.size)
-    aic = aicc(fit.log_likelihood, k, aicc_n) if fit.success else float("inf")
+    # PR #127, option B: a converged M2 whose parameters the data do not
+    # identify is not a candidate (see ``_m2_identification``). Same
+    # vocabulary as a failed fit -- ``inf`` -- plus an explicit flag, because
+    # ``_select_model`` has fallbacks that consider infinite scores too.
+    identifiable, identification_reason = True, ""
+    if model_name == "M2" and fit.success:
+        identifiable, identification_reason = _m2_identification(t, fit.params)
+    aic = (
+        aicc(fit.log_likelihood, k, aicc_n)
+        if fit.success and identifiable
+        else float("inf")
+    )
     fit_result = FitResult(
         model=model_name,
         params=fit.params,
@@ -826,6 +918,8 @@ def _fit_with_model(
         # failure or a non-converged resample produces. The reason lived only
         # in a RuntimeWarning, which a persisted artefact does not keep.
         scale_unavailable=fit.scale_unavailable,
+        identifiable=identifiable,
+        identification_reason=identification_reason,
     )
     return fit_result, fit.params
 
@@ -994,8 +1088,15 @@ def _select_model(
     true ``lower_j > upper_winner``; a NaN on either side keeps it tied.
     With every succeeded AICc non-finite the historical fallback is kept
     (``choose_model``'s "M0", else the first succeeded model in ladder order).
+
+    A fit with ``identifiable=False`` (PR #127, option B) is not a candidate
+    in ANY branch, including that fallback and the fewest-parameters rule:
+    both read infinite scores, so ``aicc = inf`` alone would not keep a
+    non-identified M2 out.
     """
-    selectable = {n: fr for n, fr in fits.items() if fr.success}
+    selectable = {
+        n: fr for n, fr in fits.items() if fr.success and fr.identifiable
+    }
     if not selectable:
         return "none", ()
     finite = {n: fr for n, fr in selectable.items() if np.isfinite(fr.aicc)}

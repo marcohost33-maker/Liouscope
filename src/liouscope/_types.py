@@ -230,6 +230,14 @@ class FitResult:
     #: jackknife failure produces: once the warning stream is gone, the reason
     #: the interval is missing was unrecoverable from the artefact.
     scale_unavailable: bool = False
+    #: False when the fit converged but its parameters are not identified by
+    #: the data (PR #127, option B; today only M2 is checked: a rate outside
+    #: the window the grid resolves, or a singular column-equilibrated
+    #: Jacobian). Such a fit has ``aicc = inf`` and is excluded from every
+    #: branch of model selection; it stays in the report so the reader sees
+    #: that it was tried and why it was refused (``identification_reason``).
+    identifiable: bool = True
+    identification_reason: str = ""
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)

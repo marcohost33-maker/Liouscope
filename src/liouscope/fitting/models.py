@@ -241,6 +241,45 @@ def initial_guess_m1(t: np.ndarray, y: np.ndarray) -> np.ndarray:
     return np.array([A, alpha, 0.0])
 
 
+def characteristic_x_scale(
+    model: ModelFunc, t: np.ndarray, y_scale: float
+) -> np.ndarray | None:
+    """Fixed optimiser scale for models whose Jacobian scaling is unsafe, or
+    ``None`` for the default (``x_scale="jac"``).
+
+    Only M2 is listed. Its second component can decouple from the data: a
+    rate that decays inside the first grid step has a Jacobian column of
+    (almost) zero, and ``x_scale="jac"`` divides by that column norm, so the
+    trust region becomes huge in exactly the direction the data do not
+    constrain. Measured on ``_chain1`` (PR #127, option B; prereg
+    ``docs/prereg/2026-11-08_m2_identifiability.md``): from beta2 = 48.8 the
+    solver jumped to beta2 ~ 1e6 and stopped on ``xtol`` (status 3) at a
+    platform-dependent point, logL 472.29; with this scale it converges
+    (status 1) to beta2 = 7.67, logL 484.79.
+
+    The scale is each variable's characteristic size (More 1978, the
+    ``x_scale`` semantics of SciPy): amplitudes in units of the curve
+    (``y_scale = max|y|``), rates in units of the inverse window ``1/T``. Both
+    are carried along exactly by ``y -> c y`` and ``t -> c t``, so the scaled
+    problem is the same dimensionless problem under either change -- the
+    amplitude invariance ``x_scale="jac"`` was introduced for (PR #134) is
+    kept, which ``x_scale=1.0`` is not (measured: wrong optimum at 1e+-40).
+
+    Returns ``None`` (fall back to ``"jac"``) whenever a scale is not a
+    finite positive number: a zero-length window or a zero curve.
+    """
+    if model is not M2:
+        return None
+    span = _time_span(t)
+    amp = float(y_scale)
+    if not (span > 0.0 and np.isfinite(amp) and amp > 0.0):
+        return None
+    rate = 1.0 / span
+    if not np.isfinite(rate):
+        return None
+    return np.array([amp, rate, amp, rate])
+
+
 def initial_guess_m2(t: np.ndarray, y: np.ndarray) -> np.ndarray:
     """Seed M2 with two well-separated rates."""
     A, alpha = initial_guess_m0(t, y)
