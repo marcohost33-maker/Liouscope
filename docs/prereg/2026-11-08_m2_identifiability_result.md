@@ -102,3 +102,20 @@ C2 (beta2 = 50, descriptive): identical pattern, 7/10 M2 at 0.4994-0.5009,
 a correct slow rate into a 20 % biased one on these curves; admitting it is
 what produced the platform-dependent `_chain1` model choice. Which to prefer
 is a methodology decision, not made here.
+
+## S8 after amendment A1 (code at e076f2b)
+
+| run | result |
+|---|---|
+| Windows x86-64, Python 3.12.10, numpy 2.5.4, scipy 1.18.1, baseline 6b1cd93 | 2063 passed, 14 skipped, exit 0 |
+| same, e076f2b | 2093 passed, 14 skipped, 2 xfailed, exit 0 |
+| Linux x86-64 (Docker python:3.12-slim, Python 3.12.16, numpy 2.5.4, scipy 1.18.1, qutip), e076f2b | ruff, mypy, anchors (21) exit 0; 2107 passed, 2 xfailed, exit 0 |
+
+The +30 are the new tests; the 2 xfailed are the S4' limit above. S8: PASS
+under A1 (no new failure; the two fixture tests were rewritten as foreseen).
+
+Side check, not pre-registered: `benchmarks/pr127_car1_aicc_identifiability.py`
+(unchanged script) rerun on this branch, Windows: decision unchanged
+(`nobs_on_nonuniform` SUPPORTED, 6/6 cells); every truth-M2 cell unchanged;
+truth M0 loses 1-2 false M2 selections in 5 of 6 cells. The committed result
+file was left as produced by its own commit.
