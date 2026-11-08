@@ -560,10 +560,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     amplitudes 1e-150..1e40), and now also time-unit invariant: at a time
     unit of 1e9 the `"jac"` fit returned rates 30 % off as `success=True`.
     Every other model keeps `"jac"`.
-  - A converged M2 is a candidate only if both rates lie in the window the
-    grid can identify (`ALPHA_SEED_FLOOR_FRAC / T <= beta <= 10 / dt_0`: a
-    faster component is gone after one sample) and its column-equilibrated
-    Jacobian has condition `<= eps**-0.5`. Otherwise `FitResult.identifiable`
+  - A converged M2 is a candidate only if both rates lie in the window
+    `ALPHA_SEED_FLOOR_FRAC / T <= beta <= 10 / dt_0` and its
+    column-equilibrated Jacobian has condition `<= eps**-0.5`. (The upper
+    bound is a grid-resolution limit, not a statement that the component is
+    gone: on a noise-free curve a component at `beta * dt_0 = 12.7` is fitted
+    to 2e-4.) Otherwise `FitResult.identifiable`
     is False, `identification_reason` says why, `aicc = inf`, and
     `_select_model` excludes it from every branch including the all-infinite
     and fewest-parameters fallbacks. New `FitResult` fields are additive and
@@ -575,6 +577,18 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   - On the example the scaled M2 converges to beta2 = 7.67 and loses on its
     own AICc (`N_eff` 4.7 <= k + 1); the former one-point endpoint (~1e6) is
     refused by the bound.
+  - A refusal never silently moves the selection (review finding P1-1,
+    option B5 of the 2026-11-07 dossier). The bound also refuses M2 fits
+    whose SLOW rate is right; ranking without them fell back to M0/M1 and
+    reported `beta_D` / `beta_D_linear` 20 % to 2.5x off (e.g. a driven,
+    dephased qubit: `beta_D_linear` 1.93 against its Liouvillian gap 1.207).
+    `_select_model` now reranks with each refused fit admitted at its
+    would-be score (new defaulted field `FitResult.refused_aicc`); if the
+    winner changes, the selection is `INDETERMINATE` (rate NaN), as for an
+    unresolved tie. Dropping the bound instead was measured to let 4/50
+    multistarts on the example reach an identified M2 that beats M0; that
+    choice, and a profile-likelihood test, are left as methodology
+    decisions.
 - **CAR(1) theta estimation returned NaN when the time UNIT made the smallest
   step tiny (PR #127 review, `car1.py:254`).** The upper search bound
   `log(1e3 / dt_min)` overflowed to inf for `dt_min` below ~5.6e-306 and the

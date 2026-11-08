@@ -119,3 +119,40 @@ Side check, not pre-registered: `benchmarks/pr127_car1_aicc_identifiability.py`
 (`nobs_on_nonuniform` SUPPORTED, 6/6 cells); every truth-M2 cell unchanged;
 truth M0 loses 1-2 false M2 selections in 5 of 6 cells. The committed result
 file was left as produced by its own commit.
+
+## Review finding P1-1 (after 744da3d): refusal must not move the selection
+
+Independent review: the A1 bound also refuses M2 fits whose SLOW rate is
+right, and `_select_model` then fell back to M0/M1 without a signal. The
+premise "a faster component is gone after one sample" does not hold on a
+noise-free curve. Reproduced on Windows (Python 3.12.10, numpy 2.5.4,
+scipy 1.18.1) at 744da3d:
+
+| case | 744da3d | 6b1cd93 / bound dropped | oracle |
+|---|---|---|---|
+| noise-free `exp(-0.5t)+a2 exp(-100t)`, `linspace(0,10,80)` (`beta2*dt_0` 12.7) | M1 0.603309 (a2 0.5), M0 1.009265 (a2 2.0) | M2 0.5 | 0.5 |
+| driven dephased qubit (`H = sigma_x`, `sigma_-`, `sqrt(gphi/2) sigma_z`, `|+>`, `linspace(0,20,80)`), `beta_D_linear` | 1.93006 / 1.71351 (gphi 20 / 30) | 1.20733 / 1.13622 | Liouvillian gap 1.20733 / 1.13622 |
+| same, `beta_D` | M0 5.03697 / 4.05635 | M2 2.04259 / 1.86908 (6b1cd93) | -- |
+| noise 1e-3, seeds 0-9, wrong slow rate (M1 0.602-0.604) | 2/10 (beta2 50), 7/10 (beta2 500) | 0/10, 0/10 | 0.5 |
+
+Two remedies were built and measured:
+
+* **Drop the upper bound** (the zero-column clause still refuses the
+  ~1e6 endpoint, whose beta2 column underflows to exactly 0 beyond
+  `beta*dt_0 ~ 745`). All cases above come out right, but
+  `test_multistart_chain1_never_finds_an_identified_m2_beating_m0` (S7,
+  `slow`, run by CI) turns red: 4/50 starts reach an identified M2 (fast
+  rate 65-280, slow 0.71731) that beats M0 by ~260 AICc units. That is the
+  start dependence #127 removed. Not adopted.
+* **Option B5 (adopted):** `_select_model` reranks with each refused fit
+  admitted at its would-be score (`FitResult.refused_aicc`); if the winner
+  changes, the result is `INDETERMINATE` (rate NaN). All wrong values above
+  become NaN; S7 stays green (0/50 identified M2 beat M0; the 4 are refused
+  and would yield INDETERMINATE if reached from the default start).
+
+B5 withholds rates that the bound-free variant gets right (noise-free case,
+qubit case). Which to prefer -- withholding, dropping the bound with S7
+amended, or a profile-likelihood test for the fast rate (dossier option B
+item 2) -- is a methodology decision and is not made here. Note for it: on
+`_chain1` the M2 optimum (slow 0.71731) is closer to the asymptotic
+relative-entropy rate `2 * gap = 0.70` than the reported M0 0.753447.
