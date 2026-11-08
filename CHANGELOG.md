@@ -334,18 +334,12 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   resolved), no longer the absolute `linspace(0, 10, 80)`. The two coincide
   only at `gap = 1`. Reproduction (`tests/test_pr127_default_window_migration.py`,
   one damped transverse-field site, `gap = 0.35`): the legacy window selects
-  **M0, `beta_D = 0.75552`** on every platform measured; the default now
-  selects **M2** on every platform measured, with `interval_method = "BC"`,
-  but its `beta_D` is platform-dependent at the 0.6 % level. It lands on one
-  of two values: **0.72143**, interval `[0.70829, 0.71997]`, estimate OUTSIDE
-  the interval (Windows x86-64), or **0.71738**, interval `[0.70597, 0.71915]`,
-  estimate inside (Linux x86-64 and arm64); numpy 2.5.4 / scipy 1.18.1 on
-  both. A BC interval is a shifted percentile interval of the parametric
-  bootstrap and need not contain the estimate, so the first case is not by
-  itself a defect, but it is what a caller on that platform sees. Why the
-  value is not reproducible is in `docs/DEVELOPMENT_MIGRATION_0.6.0.dev0.md`
-  ("Reproducibility of the default fit"); it is an open finding about the M2
-  fit (both values are early `xtol` stops), not changed here.
+  **M0, `beta_D = 0.75552`**; the default selects **M0, `beta_D = 0.753447`**,
+  interval `[0.74726, 0.75827]` (`interval_method = "BC"`), the same on
+  Windows x86-64 and Linux x86-64 to ~2e-10 relative (numpy 2.5.4 /
+  scipy 1.18.1). Before the M2 identifiability fix below, this default
+  selected an artefactual M2 at a platform-dependent `beta_D` (0.72143 /
+  0.71738).
   **To keep the old numbers, pass `t_grid=np.linspace(0.0, 10.0, 80)`.**
   Which window produced a result is recorded in `RelaxationResult.t_grid_source`
   / `t_grid` and the interval estimator in `interval_method` (the "CI method"
@@ -554,6 +548,26 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `git worktree` of the same commit instead of the first build's tree.
 
 ### Fixed
+- **An M2 fit that the data do not identify no longer wins model selection
+  (PR #127 option B; prereg `docs/prereg/2026-11-08_m2_identifiability.md`).**
+  On the default window of one damped transverse-field site the second M2
+  rate ran off to ~1e6 under `x_scale="jac"` (its Jacobian column is ~0
+  there), explained only the point `t = 0`, stopped on `xtol` (status 3) at a
+  platform-dependent point, and beat M0 by ~290 AICc units. Two changes:
+  - M2 is optimised in its characteristic variables, amplitudes in units of
+    `max|y|` and rates in units of `1/T` (`models.characteristic_x_scale`).
+    Same amplitude invariance as `"jac"` (rates agree to <= 1.3e-9 for
+    amplitudes 1e-150..1e40), and now also time-unit invariant: at a time
+    unit of 1e9 the `"jac"` fit returned rates 30 % off as `success=True`.
+    Every other model keeps `"jac"`.
+  - A converged M2 is a candidate only if both rates lie in the window the
+    grid resolves (`ALPHA_SEED_FLOOR_FRAC / T <= beta <= 1 / (dt_0 *
+    MIN_SAMPLES_PER_FAST_EFOLD)`, repo constants) and its column-equilibrated
+    Jacobian has condition `<= eps**-0.5`. Otherwise `FitResult.identifiable`
+    is False, `identification_reason` says why, `aicc = inf`, and
+    `_select_model` excludes it from every branch including the all-infinite
+    and fewest-parameters fallbacks. New `FitResult` fields are additive and
+    defaulted.
 - **CAR(1) theta estimation returned NaN when the time UNIT made the smallest
   step tiny (PR #127 review, `car1.py:254`).** The upper search bound
   `log(1e3 / dt_min)` overflowed to inf for `dt_min` below ~5.6e-306 and the

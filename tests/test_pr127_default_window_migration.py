@@ -2,43 +2,29 @@
 
 A caller who does not pass ``t_grid`` now gets the gap-scaled window
 ``[0, RELAXATION_HORIZON / gap]`` instead of the absolute legacy
-``linspace(0, 10, 80)``. The two coincide only at ``gap = 1``. Elsewhere the
-selected model and ``beta_D`` change. The cross-family review's example was
-measured on ``_chain(1)`` of ``tests/test_trajectory_propagation.py``
-(re-built here so this file has no cross-test import): one transverse-field
-site with amplitude damping, ``gap ~ 0.35``.
+``linspace(0, 10, 80)``. The two coincide only at ``gap = 1``. The
+cross-family review's example was measured on ``_chain(1)`` of
+``tests/test_trajectory_propagation.py`` (re-built here so this file has no
+cross-test import): one transverse-field site with amplitude damping,
+``gap ~ 0.35``.
 
-* Legacy window (explicit ``t_grid``): M0, ``beta_D = 0.75552``, inside its
-  interval -- on every platform measured.
-* Gap-scaled default: M2 on every platform measured, but ``beta_D`` is NOT
-  reproducible to better than ~0.6 %. It lands on one of two values:
+* Legacy window (explicit ``t_grid``): M0, ``beta_D = 0.75552``.
+* Gap-scaled default: M0, ``beta_D = 0.753447`` -- the same model, a rate
+  0.27 % lower because the window is different. Reproducible across
+  platforms to ~2e-10 relative.
 
-  ========  ===========================  =================  ==================
-  beta_D    BC interval                  estimate           measured on
-  ========  ===========================  =================  ==================
-  0.72143   ``[0.70829, 0.71997]``       above, OUTSIDE     Windows x86-64
-  0.71738   ``[0.70597, 0.71915]``       inside             Linux x86-64/arm64
-  ========  ===========================  =================  ==================
-
-  Why (measured at 2f3b7e3, numpy 2.5.4 / scipy 1.18.1): the second M2
-  component runs off to ``beta2 ~ 1e6``; it decays inside the first grid step,
-  so its Jacobian column is exactly zero. ``least_squares``' ``xtol`` test is
-  relative to ``|x|``, which ``beta2`` then dominates, so the solver stops as
-  soon as a ``beta1`` step falls below ~``1e-2`` -- and where that happens is
-  decided by a 5e-8 relative difference in the propagated curve. The same
-  Windows solver run on the Linux curve returns the Linux value; 25 one-ulp
-  shifts of the field amplitude on ONE platform hit both values. With
-  ``xtol = 1e-12`` both curves converge to ``beta1 = 0.71731`` at a higher
-  likelihood: both reported values are early stops. That is an open finding
-  about the fit, not changed here; this file pins what a caller sees today.
+History. Until the M2 identifiability fix (PR #127 option B, prereg
+``docs/prereg/2026-11-08_m2_identifiability.md``) this file pinned M2 at one
+of two platform-dependent values (0.72143 Windows / 0.71738 Linux). Both
+were artefacts: the second M2 rate ran off to ~1e6 under
+``x_scale="jac"``, explained only the point ``t = 0``, and the solver stopped
+on ``xtol`` where rounding decided. With the M2 fit in characteristic
+variables the second rate converges to 7.67 -- still outside the window the
+grid resolves (``beta2 * dt = 2.77 > 1``), so M2 is "not identified" and
+leaves the comparison; M0 wins.
 
 The interval is labelled ``interval_method = "BC"``: a bias-corrected
-percentile interval of the parametric bootstrap, not BCa (issue #116). Its
-endpoints are quantiles of the bootstrap distribution shifted by the
-bias-correction ``z0``, so it is centred on that distribution, not on the
-point estimate, and nothing forces it to contain the estimate. Whether the
-default estimate sits outside its interval is therefore platform-dependent,
-and the tests below assert it per attractor, never unconditionally.
+percentile interval of the parametric bootstrap, not BCa (issue #116).
 """
 
 from __future__ import annotations
@@ -81,45 +67,17 @@ def legacy_window():
 
 
 # Tolerances come from the measured spread, not from one platform (AGENTS.md,
-# issue #180). Rates are compared relative to their own scale. Measured at
-# 2f3b7e3 on Windows x86-64 (numpy 2.5.4 / scipy 1.18.1), Linux x86-64
-# (Python 3.12 and 3.14 with 2.5.4 / 1.18.1, Python 3.12 with the floors
-# 2.0.2 / 1.13.1), each of three configurations also over 25 one-ulp shifts of
-# the field amplitude (79 runs), plus the Linux arm64 CI value: within one
-# attractor ``beta_D`` spreads by <= 6e-6 relative, the bootstrap endpoints by
-# <= 2.5e-5, the legacy ``beta_D`` by <= 7e-10.
-# _RTOL_BETA (2e-5) must stay below the distance to the converged optimum
-# 0.71731 (9e-5 from the lower attractor): a fit that stops converging early
-# changes the reported number, and that must turn this file red so the
-# migration note gets rewritten. The two attractors are 5.6e-3 apart.
-_RTOL_BETA = 2.0e-5
-_RTOL_CI = 1.0e-4
+# issue #180). Measured at fad0f55, numpy 2.5.4 / scipy 1.18.1, Windows x86-64
+# and Linux x86-64 (Docker, python:3.12-slim), each over 5 one-ulp shifts of
+# the field amplitude: default ``beta_D`` in [0.75344699988, 0.75344700003],
+# interval endpoints within 3e-10 of the values below, legacy ``beta_D``
+# 0.75551515130 / 0.75551515159. Every tolerance is >= 1000x that spread.
+_BETA_DEFAULT = 0.753447
+_CI_DEFAULT = (0.7472639, 0.7582746)
+_RTOL_BETA = 1.0e-6
+_RTOL_CI = 1.0e-6
 _RTOL_LEGACY = 1.0e-6
-
-# (beta_D, lo, hi, estimate_outside_interval) per measured attractor.
-_ATTRACTORS = (
-    (0.721430, 0.708295, 0.719968, True),
-    (0.717376, 0.705967, 0.719150, False),
-)
 _LEGACY_BETA = 0.7555151515
-
-
-def _attractor(beta: float) -> tuple[float, float, float, bool]:
-    hits = [a for a in _ATTRACTORS if math.isclose(beta, a[0], rel_tol=_RTOL_BETA)]
-    assert len(hits) == 1, (
-        f"default-window beta_D = {beta!r} matches no measured attractor "
-        f"{[a[0] for a in _ATTRACTORS]} at rel_tol={_RTOL_BETA}; the fit changed, "
-        "update this fixture AND the migration note (CHANGELOG.md, "
-        "docs/DEVELOPMENT_MIGRATION_0.6.0.dev0.md)"
-    )
-    return hits[0]
-
-
-def test_attractor_table_is_resolvable() -> None:
-    """The tolerance must separate the two attractors, or the per-attractor
-    assertions below would compare against the wrong row."""
-    (b1, *_), (b2, *_) = _ATTRACTORS
-    assert not math.isclose(b1, b2, rel_tol=100.0 * _RTOL_BETA)
 
 
 def test_default_window_is_gap_scaled_and_not_the_legacy_window(default_window) -> None:
@@ -130,37 +88,41 @@ def test_default_window_is_gap_scaled_and_not_the_legacy_window(default_window) 
     assert math.isclose(rel.t_grid_span, RELAXATION_HORIZON / 0.35, rel_tol=0.01)
 
 
-def test_default_window_changes_model_and_beta(default_window, legacy_window) -> None:
-    assert default_window.aicc_model == "M2"
-    _attractor(default_window.beta_D)
+def test_default_window_keeps_the_model_and_moves_beta(default_window, legacy_window) -> None:
+    beta = float(default_window.beta_D)
+    assert math.isfinite(beta), beta  # NaN fails closed, not via isclose
+    assert default_window.aicc_model == "M0"
+    assert math.isclose(beta, _BETA_DEFAULT, rel_tol=_RTOL_BETA), beta
     assert legacy_window.t_grid_source == "caller"
     assert legacy_window.aicc_model == "M0"
     assert math.isclose(legacy_window.beta_D, _LEGACY_BETA, rel_tol=_RTOL_LEGACY)
-    # The migration itself, platform-independent: the default rate is lower
-    # than the legacy one by >= 4 % of the legacy rate. Measured 4.5 % (upper
-    # attractor) and 5.0 % (lower); 4 % keeps 0.5 percentage points of margin,
-    # ~1000x the within-attractor spread.
-    shift = (legacy_window.beta_D - default_window.beta_D) / legacy_window.beta_D
-    assert shift >= 0.04
+    # The migration itself: the default rate is 0.274 % below the legacy one
+    # (measured 2.737e-3). The band is +-0.3e-3 around it, ~100x the
+    # uncertainty the two rel 1e-6 tolerances above leave on the difference,
+    # and excludes both "no change" and the former M2 artefact (4.5-5 %).
+    shift = (legacy_window.beta_D - beta) / legacy_window.beta_D
+    assert 2.4e-3 < shift < 3.0e-3, shift
 
 
-def test_interval_containment_follows_the_fit_attractor(default_window) -> None:
+def test_default_window_m2_is_tried_and_refused(default_window) -> None:
+    fr = default_window.fits["M2"]
+    assert fr.success
+    assert fr.identifiable is False
+    assert "outside the window the grid resolves" in fr.identification_reason
+    assert not math.isfinite(fr.aicc)
+
+
+def test_default_window_interval_contains_its_estimate(default_window) -> None:
     rel = default_window
     lo, hi = rel.bca_ci_beta
-    # The interval says which estimator produced it (the review's CI_method).
     assert rel.interval_method == INTERVAL_METHOD_BC
     assert math.isfinite(lo) and math.isfinite(hi) and lo < hi
-    _beta, lo_ref, hi_ref, outside = _attractor(rel.beta_D)
-    assert math.isclose(lo, lo_ref, rel_tol=_RTOL_CI)
-    assert math.isclose(hi, hi_ref, rel_tol=_RTOL_CI)
-    # Containment, with a margin far above the endpoint tolerance: measured
-    # (beta_D - hi) / beta_D >= 2.0e-3 on the upper attractor and
-    # min(hi - beta_D, beta_D - lo) / beta_D >= 2.4e-3 on the lower one.
-    if outside:
-        assert (rel.beta_D - hi) / rel.beta_D > 10.0 * _RTOL_CI
-    else:
-        assert (hi - rel.beta_D) / rel.beta_D > 10.0 * _RTOL_CI
-        assert (rel.beta_D - lo) / rel.beta_D > 10.0 * _RTOL_CI
+    assert math.isclose(lo, _CI_DEFAULT[0], rel_tol=_RTOL_CI)
+    assert math.isclose(hi, _CI_DEFAULT[1], rel_tol=_RTOL_CI)
+    # Containment with margin: measured (beta - lo)/beta = 8.2e-3 and
+    # (hi - beta)/beta = 6.4e-3, far above the endpoint tolerance.
+    assert (hi - rel.beta_D) / rel.beta_D > 1.0e-3
+    assert (rel.beta_D - lo) / rel.beta_D > 1.0e-3
 
 
 def test_legacy_window_interval_contains_its_estimate(legacy_window) -> None:
