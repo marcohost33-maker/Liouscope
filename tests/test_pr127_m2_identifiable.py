@@ -173,8 +173,8 @@ def test_stepped_over_second_rate_never_wins_with_a_wrong_slow_rate(seed: int) -
     strict=False,
     reason=(
         "Open limit (prereg result, run 2, S4'): with noise 1e-3 a component "
-        "at beta2 = 500 is fitted at the plateau edge, beta2 ~ 48-53 "
-        "(beta2*dt_0 ~ 6 < 10); window and conditioning cannot see a flat "
+        "at beta2 = 500 is fitted at the plateau edge, beta2 = 48.1-58.1 "
+        "(beta2*dt_0 6.1-7.4 < 10); window and conditioning cannot see a flat "
         "rate profile there. Measured 6/10 seeds identified. Needs a "
         "profile-likelihood test (decision dossier 2026-11-07, option B item 2)."
     ),

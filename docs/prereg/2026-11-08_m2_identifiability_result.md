@@ -89,7 +89,7 @@ fix and the `N_eff` correction, not on the gate. The gate removes only the
 `"jac"`-style one-point endpoint.
 
 S4': with noise 1e-3 a component at beta2 = 500 is fitted at the plateau
-edge, beta2 ~ 48-53 (`beta*dt_0` ~ 6), in 6/10 seeds; its SLOW rate is then
+edge, beta2 = 48.1-58.1 (`beta*dt_0` = 6.1-7.4), in 6/10 seeds; its SLOW rate is then
 right (0.50001-0.50086). The 4 refused seeds run to beta2 ~ 307-319 and the
 selection falls to M1 with rate 0.6014-0.6024, 20 % off. The bound cannot
 see a flat rate profile at the plateau edge; a profile-likelihood interval
