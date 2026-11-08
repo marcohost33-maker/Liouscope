@@ -719,6 +719,18 @@ def entanglement_asymmetry(rho: np.ndarray) -> float:
 # tuned number (prereg docs/prereg/2026-11-08_m2_identifiability.md).
 _M2_MAX_EQ_CONDITION: float = float(np.finfo(float).eps) ** -0.5
 
+# Largest ``beta * dt_0`` at which a fitted M2 rate still counts as identified.
+# Beyond 10 the component keeps less than e^-10 = 4.5e-5 of its amplitude at
+# the second sample: it is a one-point component, and its rate profile is flat
+# (decision dossier 2026-11-07, item M4). Deliberately NOT
+# ``MIN_SAMPLES_PER_FAST_EFOLD`` (= a bound of 1), which the prereg used first:
+# measured on V1/V3/V4 it refused interior M2 optima at 1.2-1.8 x 1/dt_0,
+# flipped their golden A-class and pushed the relative-entropy multiplier past
+# its physical ceiling (docs/prereg/2026-11-08_m2_identifiability_result.md,
+# run 1 and amendment A1). That constant answers "does the grid resolve this
+# mode", not "is this fitted rate determined by the data".
+_M2_MAX_RATE_STEPS: float = 10.0
+
 
 def _m2_identification(t: np.ndarray, params: np.ndarray) -> tuple[bool, str]:
     """``(identified, reason)`` for a CONVERGED M2 fit on grid ``t``.
@@ -729,15 +741,15 @@ def _m2_identification(t: np.ndarray, params: np.ndarray) -> tuple[bool, str]:
     optimiser says nothing about that; this does. M2 is identified only if
 
     1. all four parameters are finite;
-    2. both rates lie in the window the grid resolves,
-       ``ALPHA_SEED_FLOOR_FRAC / T <= beta <= 1 / (MIN_SAMPLES_PER_FAST_EFOLD
-       * dt_0)``. The lower end is the rate that decays by ~0.5 % over the
-       whole window (indistinguishable from a constant, see
+    2. both rates lie in the window the grid can identify,
+       ``ALPHA_SEED_FLOOR_FRAC / T <= beta <= _M2_MAX_RATE_STEPS / dt_0``.
+       The lower end is the rate that decays by ~0.5 % over the whole window
+       (indistinguishable from a constant, see
        :data:`~liouscope.fitting.models.ALPHA_SEED_FLOOR_FRAC`), the upper end
-       the repo's definition of a mode that was stepped over rather than
-       measured (:data:`MIN_SAMPLES_PER_FAST_EFOLD`), taken at the first
-       grid step ``dt_0`` because a fast component lives at the window start.
-       A negative rate (a growing component) is outside by construction;
+       a component that is gone after one sample (see
+       :data:`_M2_MAX_RATE_STEPS`), taken at the first grid step ``dt_0``
+       because a fast component lives at the window start. A negative rate (a
+       growing component) is outside by construction;
     3. the model Jacobian, each column scaled to unit norm, has no zero or
        non-finite column and a condition number ``<= _M2_MAX_EQ_CONDITION``.
        Column equilibration is near-optimal among diagonal scalings (van der
@@ -760,11 +772,11 @@ def _m2_identification(t: np.ndarray, params: np.ndarray) -> tuple[bool, str]:
         return False, "grid has no positive span"
     dt0 = float(positive[0])
     lo = ALPHA_SEED_FLOOR_FRAC / span
-    hi = 1.0 / (MIN_SAMPLES_PER_FAST_EFOLD * dt0)
+    hi = _M2_MAX_RATE_STEPS / dt0
     for beta in (float(p[1]), float(p[3])):
         if not (lo <= beta <= hi):
             return False, (
-                f"M2 rate {beta:.6g} outside the window the grid resolves "
+                f"M2 rate {beta:.6g} outside the window the grid identifies "
                 f"[{lo:.6g}, {hi:.6g}] (beta*T = {beta * span:.3g}, "
                 f"beta*dt_0 = {beta * dt0:.3g})"
             )

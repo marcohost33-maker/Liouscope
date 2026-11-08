@@ -17,8 +17,10 @@ Two changes, tested here:
 * M2 is optimised with the characteristic scale of its variables
   (amplitudes in units of the curve, rates in units of the inverse window)
   instead of the Jacobian column norms (``models.characteristic_x_scale``);
-* an M2 fit whose rates lie outside the window the grid resolves, or whose
-  column-equilibrated Jacobian is singular, is "not identified": infinite
+* an M2 fit whose rates lie outside the window the grid can identify
+  (``ALPHA_SEED_FLOOR_FRAC / T <= beta <= 10 / dt_0``, amendment A1 of the
+  prereg), or whose column-equilibrated Jacobian is singular, is "not
+  identified": infinite
   AICc and excluded from EVERY branch of ``_select_model``.
 """
 
@@ -87,12 +89,30 @@ def test_chain1_default_window_selects_m0_at_its_rate(chain1) -> None:
     assert math.isclose(beta, _BETA_M0, rel_tol=_RTOL_BETA_M0), beta
 
 
-def test_chain1_m2_is_reported_as_not_identified(chain1) -> None:
+def test_chain1_m2_converges_inside_the_window_and_loses_on_its_own_score(chain1) -> None:
+    """With the scaling fix the second rate converges to 7.67
+    (``beta2 * dt_0 = 2.77``, inside the identifiable window of amendment A1).
+    M2 then leaves the comparison through its own AICc: on this uniform grid
+    the sample size is ``N_eff`` = 4.7 < k + 1 = 5, so the small-sample
+    correction is infinite (decision dossier 2026-11-07, A.1 item 4)."""
     fr = chain1.fits["M2"]
-    assert fr.success, "the M2 fit itself converged; only its candidacy is refused"
-    assert fr.identifiable is False
-    assert "rate" in fr.identification_reason
+    assert fr.success
+    dt0 = float(chain1.t_grid[1] - chain1.t_grid[0])
+    fast = max(float(fr.params[1]), float(fr.params[3]))
+    assert 1.0 < fast * dt0 < 10.0, fr.params
+    assert fr.identifiable, fr.identification_reason
+    assert fr.n_eff <= 4 + 1
     assert not np.isfinite(fr.aicc)
+
+
+def test_gate_refuses_the_former_chain1_endpoint(chain1) -> None:
+    """The ``x_scale="jac"`` endpoint measured at 6b1cd93 (Windows): the
+    one-point component the artefact was made of."""
+    t = np.asarray(chain1.t_grid, dtype=float)
+    jac_endpoint = np.array([1.14268627, 0.721428703, 0.0697351193, 1.05517695e6])
+    ok, reason = rel._m2_identification(t, jac_endpoint)
+    assert ok is False
+    assert "rate" in reason, reason
 
 
 def test_m2_fit_on_chain1_reaches_an_interior_optimum(chain1) -> None:
@@ -132,17 +152,38 @@ def test_resolved_two_rate_curve_still_selects_m2(seed: int) -> None:
 
 
 @pytest.mark.parametrize("seed", [11, 12, 13])
-def test_stepped_over_second_rate_is_not_identified(seed: int) -> None:
-    """beta2 dt = 6.3: the component is gone after one step; whatever rate
-    the fit reports for it is not a measurement."""
-    t, y = _two_rate(seed, 50.0)
+def test_stepped_over_second_rate_never_wins_with_a_wrong_slow_rate(seed: int) -> None:
+    """beta2 dt = 63 (case C2' of amendment A1). What the gate guarantees:
+    M2 is selected only as an identified fit, and then its slow rate is the
+    true 0.5 -- the fast rate it reports is not a measurement either way."""
+    t, y = _two_rate(seed, 500.0)
     fr, _ = rel._fit_with_model("M2", t, y)
-    assert fr.identifiable is False
-    assert "rate" in fr.identification_reason
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
-        _rate, model = rel._dominant_rate(t, y)
-    assert model != "M2"
+        rate, model = rel._dominant_rate(t, y)
+    if model == "M2":
+        assert fr.identifiable
+        assert math.isclose(rate, 0.5, rel_tol=1.0e-2), rate
+    else:
+        assert fr.identifiable is False
+        assert "rate" in fr.identification_reason
+
+
+@pytest.mark.xfail(
+    strict=False,
+    reason=(
+        "Open limit (prereg result, run 2, S4'): with noise 1e-3 a component "
+        "at beta2 = 500 is fitted at the plateau edge, beta2 ~ 48-53 "
+        "(beta2*dt_0 ~ 6 < 10); window and conditioning cannot see a flat "
+        "rate profile there. Measured 6/10 seeds identified. Needs a "
+        "profile-likelihood test (decision dossier 2026-11-07, option B item 2)."
+    ),
+)
+@pytest.mark.parametrize("seed", [11, 12])
+def test_stepped_over_second_rate_is_not_identified(seed: int) -> None:
+    t, y = _two_rate(seed, 500.0)
+    fr, _ = rel._fit_with_model("M2", t, y)
+    assert fr.identifiable is False
 
 
 # --------------------------------------------------------------------------

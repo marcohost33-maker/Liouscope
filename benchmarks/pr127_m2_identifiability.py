@@ -101,16 +101,19 @@ def main() -> None:
                  "pass": c0.aicc_model == "M0"
                  and math.isclose(float(c0.beta_D), 0.753447, rel_tol=1e-6)}
     m2 = c0.fits["M2"]
+    jac_gate = rel._m2_identification(
+        t0, np.array([1.14268627, 0.721428703, 0.0697351193, 1.05517695e6]))
+    # Amendment A1: S2 = the gate refuses the "jac" endpoint of _chain1.
     res["S2"] = {"params": [float(v) for v in m2.params], "identifiable": bool(m2.identifiable),
-                 "reason": m2.identification_reason,
-                 "gate_on_jac_endpoint": list(rel._m2_identification(
-                     t0, np.array([1.14268627, 0.721428703, 0.0697351193, 1.05517695e6]))),
-                 "pass": (not m2.identifiable) and "rate" in m2.identification_reason}
-    cases = {"C1": (3.0, 0.5), "C2": (50.0, 0.5), "C3": (3.0, 0.0)}
+                 "reason": m2.identification_reason, "aicc": float(m2.aicc),
+                 "n_eff": float(m2.n_eff), "gate_on_jac_endpoint": list(jac_gate),
+                 "pass": (not jac_gate[0]) and "rate" in jac_gate[1]}
+    # Amendment A1: C2 (beta2 = 50) descriptive, C2p (beta2 = 500) carries S4.
+    cases = {"C1": (3.0, 0.5), "C2": (50.0, 0.5), "C2p": (500.0, 0.5), "C3": (3.0, 0.0)}
     for name, (b2, a2) in cases.items():
         res[name] = {str(s): _m2_record(*_curve(s, b2, a2)) for s in SEEDS}
     c1 = res["C1"].values()  # type: ignore[union-attr]
-    c2 = res["C2"].values()  # type: ignore[union-attr]
+    c2 = res["C2p"].values()  # type: ignore[union-attr]
     c3 = res["C3"].values()  # type: ignore[union-attr]
     n_c1 = sum(1 for r in c1 if r["identifiable"] and r["selected_model"] == "M2")
     res["S3"] = {"identified_and_selected": n_c1, "of": len(SEEDS), "pass": n_c1 >= 9}

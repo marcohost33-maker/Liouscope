@@ -19,9 +19,10 @@ of two platform-dependent values (0.72143 Windows / 0.71738 Linux). Both
 were artefacts: the second M2 rate ran off to ~1e6 under
 ``x_scale="jac"``, explained only the point ``t = 0``, and the solver stopped
 on ``xtol`` where rounding decided. With the M2 fit in characteristic
-variables the second rate converges to 7.67 -- still outside the window the
-grid resolves (``beta2 * dt = 2.77 > 1``), so M2 is "not identified" and
-leaves the comparison; M0 wins.
+variables the second rate converges to 7.67 (``beta2 * dt = 2.77``) at a
+higher likelihood; on this uniform grid its ``N_eff`` is 4.7 <= k + 1, so its
+AICc is infinite and M0 wins. The one-point endpoint at ~1e6 is in addition
+refused by the identifiability gate (``beta * dt_0 > 10``).
 
 The interval is labelled ``interval_method = "BC"``: a bias-corrected
 percentile interval of the parametric bootstrap, not BCa (issue #116).
@@ -104,12 +105,11 @@ def test_default_window_keeps_the_model_and_moves_beta(default_window, legacy_wi
     assert 2.4e-3 < shift < 3.0e-3, shift
 
 
-def test_default_window_m2_is_tried_and_refused(default_window) -> None:
+def test_default_window_m2_is_tried_and_loses(default_window) -> None:
     fr = default_window.fits["M2"]
     assert fr.success
-    assert fr.identifiable is False
-    assert "outside the window the grid resolves" in fr.identification_reason
-    assert not math.isfinite(fr.aicc)
+    assert fr.identifiable, fr.identification_reason
+    assert not math.isfinite(fr.aicc)  # N_eff 4.7 <= k + 1
 
 
 def test_default_window_interval_contains_its_estimate(default_window) -> None:
