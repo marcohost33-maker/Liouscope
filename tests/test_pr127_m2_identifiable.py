@@ -17,11 +17,17 @@ Two changes, tested here:
 * M2 is optimised with the characteristic scale of its variables
   (amplitudes in units of the curve, rates in units of the inverse window)
   instead of the Jacobian column norms (``models.characteristic_x_scale``);
-* an M2 fit whose rates lie outside the window the grid can identify
-  (``ALPHA_SEED_FLOOR_FRAC / T <= beta <= 10 / dt_0``, amendment A1 of the
-  prereg), or whose column-equilibrated Jacobian is singular, is "not
-  identified": infinite
-  AICc and excluded from EVERY branch of ``_select_model``.
+* an M2 fit with a rate below ``ALPHA_SEED_FLOOR_FRAC / T`` (indistinguishable
+  from a constant, or growing), or whose Jacobian has a zero column or a
+  singular column-equilibrated form, is "not identified": infinite AICc and
+  excluded from EVERY branch of ``_select_model``.
+
+Amendment A2 (review finding P1-1) removed the upper rate bound
+``beta * dt_0 <= 10`` of amendment A1. It refused M2 fits whose SLOW rate was
+right and made ``_select_model`` fall back to M0/M1, so ``beta_D`` and
+``beta_D_linear`` came out wrong by a factor 1.2-6 without a warning. The
+``"jac"`` endpoint it was meant for is refused by the zero-column clause
+(its beta2 column underflows to exactly 0 beyond ``beta * dt_0 ~ 745``).
 """
 
 from __future__ import annotations
@@ -107,12 +113,14 @@ def test_chain1_m2_converges_inside_the_window_and_loses_on_its_own_score(chain1
 
 def test_gate_refuses_the_former_chain1_endpoint(chain1) -> None:
     """The ``x_scale="jac"`` endpoint measured at 6b1cd93 (Windows): the
-    one-point component the artefact was made of."""
+    one-point component the artefact was made of. Its beta2 column
+    ``-A2 t exp(-beta2 t)`` is 0 at ``t = 0`` and underflows to exactly 0 on
+    every later sample, so the data carry no information on beta2 at all."""
     t = np.asarray(chain1.t_grid, dtype=float)
     jac_endpoint = np.array([1.14268627, 0.721428703, 0.0697351193, 1.05517695e6])
     ok, reason = rel._m2_identification(t, jac_endpoint)
     assert ok is False
-    assert "rate" in reason, reason
+    assert "zero or non-finite column" in reason, reason
 
 
 def test_m2_fit_on_chain1_reaches_an_interior_optimum(chain1) -> None:
@@ -151,39 +159,84 @@ def test_resolved_two_rate_curve_still_selects_m2(seed: int) -> None:
     assert math.isclose(rate, 0.5, rel_tol=1.0e-2)
 
 
-@pytest.mark.parametrize("seed", [11, 12, 13])
-def test_stepped_over_second_rate_never_wins_with_a_wrong_slow_rate(seed: int) -> None:
-    """beta2 dt = 63 (case C2' of amendment A1). What the gate guarantees:
-    M2 is selected only as an identified fit, and then its slow rate is the
-    true 0.5 -- the fast rate it reports is not a measurement either way."""
-    t, y = _two_rate(seed, 500.0)
-    fr, _ = rel._fit_with_model("M2", t, y)
+@pytest.mark.parametrize("beta2", [50.0, 500.0])
+@pytest.mark.parametrize("seed", range(10))
+def test_fast_second_rate_keeps_the_slow_rate(seed: int, beta2: float) -> None:
+    """Review finding P1-1 (case c). ``beta2 * dt_0`` = 6.3 and 63: a fast
+    component sampled by one or two points. Its fitted fast rate is not a
+    measurement (with noise 1e-3 it runs to 48-58 or ~310 for a true 500),
+    but the slow rate is: the reported rate must be the true 0.5. Under the
+    A1 bound ``beta * dt_0 <= 10`` the refused M2 fell back to M1 at
+    0.602-0.604 (20 % off) in 2/10 (beta2 = 50) and 7/10 (beta2 = 500) of
+    these seeds; without it 20/20 are within 1 %."""
+    t, y = _two_rate(seed, beta2)
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
         rate, model = rel._dominant_rate(t, y)
-    if model == "M2":
-        assert fr.identifiable
-        assert math.isclose(rate, 0.5, rel_tol=1.0e-2), rate
-    else:
-        assert fr.identifiable is False
-        assert "rate" in fr.identification_reason
+    assert model == "M2", (model, rate)
+    assert math.isclose(rate, 0.5, rel_tol=1.0e-2), rate
 
 
-@pytest.mark.xfail(
-    strict=False,
-    reason=(
-        "Open limit (prereg result, run 2, S4'): with noise 1e-3 a component "
-        "at beta2 = 500 is fitted at the plateau edge, beta2 = 48.1-58.1 "
-        "(beta2*dt_0 6.1-7.4 < 10); window and conditioning cannot see a flat "
-        "rate profile there. Measured 6/10 seeds identified. Needs a "
-        "profile-likelihood test (decision dossier 2026-11-07, option B item 2)."
-    ),
-)
-@pytest.mark.parametrize("seed", [11, 12])
-def test_stepped_over_second_rate_is_not_identified(seed: int) -> None:
-    t, y = _two_rate(seed, 500.0)
+@pytest.mark.parametrize("a2", [0.5, 2.0])
+def test_noise_free_fast_component_is_identified_and_rate_exact(a2: float) -> None:
+    """Review finding P1-1 (case a). Noise-free ``exp(-0.5 t) +
+    a2 exp(-100 t)`` on ``linspace(0, 10, 80)``: ``beta2 * dt_0 = 12.7``,
+    so the fast component keeps 3e-6 of its amplitude at the second sample --
+    far above float64 rounding, and the fit recovers the fast rate to 2e-4.
+    The A1 bound called this "gone after one sample", refused it and reported
+    M1 0.603309 (a2 = 0.5) or M0 1.009265 (a2 = 2.0)."""
+    t = np.linspace(0.0, 10.0, 80)
+    y = np.exp(-0.5 * t) + a2 * np.exp(-100.0 * t)
     fr, _ = rel._fit_with_model("M2", t, y)
-    assert fr.identifiable is False
+    assert fr.identifiable, fr.identification_reason
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        rate, model = rel._dominant_rate(t, y)
+    assert model == "M2", (model, rate)
+    assert math.isclose(rate, 0.5, rel_tol=1.0e-9), rate
+
+
+def _dephased_qubit_layer(gphi: float):
+    """Driven qubit, ``H = sigma_x``, decay ``sigma_-`` at rate 1 and pure
+    dephasing ``sqrt(gphi / 2) sigma_z``, from ``|+>`` on ``linspace(0, 20, 80)``
+    (review finding P1-1, case b)."""
+    L = build_liouvillian(_SX, [_SM, math.sqrt(gphi / 2.0) * np.diag([1.0, -1.0]).astype(complex)])
+    psi = np.ones(2, dtype=complex) / math.sqrt(2.0)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        layer = rel.compute_relaxation_layer(
+            L, rho_initial=np.outer(psi, psi.conj()), bootstrap_B=0,
+            t_grid=np.linspace(0.0, 20.0, 80),
+        )
+    return L, layer
+
+
+@pytest.mark.parametrize("gphi", [20.0, 30.0])
+def test_linear_rate_matches_the_liouvillian_gap(gphi: float) -> None:
+    """Independent oracle: a LINEAR distance metric decays at the bare gap
+    (``_dominant_rate`` docstring), so ``beta_D_linear`` must equal the
+    smallest non-zero ``-Re lambda`` of the Liouvillian. Measured 1.20733 /
+    1.13622 for gphi = 20 / 30 (both the spectrum and the fit, rel < 1e-5).
+    Under the A1 bound the fast coherence component of the fit was refused and
+    the fallback reported 1.93006 / 1.71351 (+60 % / +51 %)."""
+    L, layer = _dephased_qubit_layer(gphi)
+    decay = np.sort(-np.linalg.eigvals(np.asarray(L)).real)
+    gap = float(decay[1])
+    assert decay[0] < 1.0e-9 * gap and gap > 1.0, decay
+    assert math.isclose(float(layer.beta_D_linear), gap, rel_tol=1.0e-3), (
+        float(layer.beta_D_linear), gap
+    )
+
+
+def test_relative_entropy_rate_is_not_a_fallback_artefact() -> None:
+    """Golden (differential) value, case b of P1-1 at gphi = 20: 6b1cd93
+    (before option B) reported M2 with ``beta_D = 2.04259``, this branch
+    without the A1 bound 2.04271 (rel 6e-5). Under the A1 bound the M2 fit
+    (slow rate 2.0427, fast 170.9, ``beta2 * dt_0 = 43``) was refused and M0
+    reported 5.03697, 2.5x the value of both reference runs."""
+    _L, layer = _dephased_qubit_layer(20.0)
+    assert layer.aicc_model == "M2", layer.aicc_model
+    assert math.isclose(float(layer.beta_D), 2.0427, rel_tol=1.0e-3), float(layer.beta_D)
 
 
 # --------------------------------------------------------------------------
@@ -199,7 +252,8 @@ _T = np.linspace(0.0, 10.0, 80)
     [
         ([1.0, 0.5, 0.5, float("nan")], "finite"),
         ([1.0, float("inf"), 0.5, 3.0], "finite"),
-        ([1.0, 0.5, 0.5, 1.0e6], "rate"),       # stepped over
+        ([1.0, 0.5, 0.5, 1.0e6], "zero or non-finite column"),  # stepped over
+        ([1.0, 0.5, 0.5, 6.0e3], "zero or non-finite column"),  # beta*dt_0 = 759
         ([1.0, 0.5, 0.5, -0.3], "rate"),        # growing component
         ([1.0, 0.5, 0.5, 1.0e-5], "rate"),      # indistinguishable from C
         ([1.0, 0.5, 0.0, 3.0], "Jacobian"),     # A2 = 0: beta2 column zero
@@ -216,6 +270,15 @@ def test_identification_accepts_a_resolved_pair() -> None:
     ok, reason = rel._m2_identification(_T, np.array([1.0, 0.5, 0.5, 3.0]))
     assert ok is True, reason
     assert reason == ""
+
+
+@pytest.mark.parametrize("beta2", [100.0, 500.0])
+def test_identification_has_no_upper_rate_bound_below_underflow(beta2: float) -> None:
+    """P1-1: ``beta2 * dt_0`` = 12.7 and 63 are refused by no clause any more.
+    The only upper limit left is the float64 underflow of the beta2 column
+    (see the 6e3 case of ``test_identification_refuses``)."""
+    ok, reason = rel._m2_identification(_T, np.array([1.0, 0.5, 0.5, beta2]))
+    assert ok is True, reason
 
 
 def test_identification_is_invariant_under_a_change_of_time_unit() -> None:
