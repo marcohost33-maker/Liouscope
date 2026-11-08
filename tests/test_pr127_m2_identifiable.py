@@ -304,8 +304,11 @@ def test_refusal_that_would_not_change_the_winner_keeps_it() -> None:
 
 
 def test_refusal_that_would_change_the_winner_is_indeterminate() -> None:
+    """On a genuine two-rate curve, which M0 cannot reach even after the
+    rounding-band polish (on ``exp(-t)`` both reach it: a true tie, M0)."""
+    y = np.exp(-0.5 * _T) + 0.5 * np.exp(-3.0 * _T)
     fits = {"M0": _fr("M0", -10.0), "M2": _refused("M2", float("inf"), -500.0)}
-    winner, tied = rel._select_model(fits, _T, np.exp(-_T), 1.0e-16)
+    winner, tied = rel._select_model(fits, _T, y, 1.0e-16)
     assert winner == rel.MODEL_SELECTION_INDETERMINATE
     assert tied == ("M0", "M2")
 

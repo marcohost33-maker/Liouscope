@@ -4,6 +4,7 @@ plus the M0-M3b fit hierarchy orchestrated through AICc with N_eff.
 
 from __future__ import annotations
 
+import dataclasses
 import warnings
 from collections.abc import Callable
 
@@ -911,6 +912,11 @@ def _fit_with_model(
         if fit.success and identifiable
         else float("inf")
     )
+    refused_aicc = (
+        aicc(fit.log_likelihood, k, aicc_n)
+        if fit.success and not identifiable
+        else float("nan")
+    )
     fit_result = FitResult(
         model=model_name,
         params=fit.params,
@@ -932,6 +938,7 @@ def _fit_with_model(
         scale_unavailable=fit.scale_unavailable,
         identifiable=identifiable,
         identification_reason=identification_reason,
+        refused_aicc=refused_aicc,
     )
     return fit_result, fit.params
 
@@ -1065,6 +1072,53 @@ def _attainable_residual_norm(
 
 
 def _select_model(
+    fits: dict[str, FitResult],
+    t: np.ndarray,
+    y: np.ndarray,
+    data_error: float,
+) -> tuple[str, tuple[str, ...]]:
+    """:func:`_rank_candidates`, plus: a refusal must not move the selection.
+
+    Review finding P1-1 of PR #127. The identification gate refuses M2 fits
+    whose fast rate the grid cannot vouch for, and some of those carry a
+    correct SLOW rate (a component sampled by one or two points). Ranking
+    without them fell back to M0 or M1, which absorb the early transient and
+    reported ``beta_D`` / ``beta_D_linear`` 20 % to 2.5x off, with nothing
+    in the result to tell. So the ranking is repeated with each refused fit
+    admitted at its would-be score (``FitResult.refused_aicc``); if any of
+    those reruns names a different winner, the data prefer a model this
+    ladder will not vouch for, and the result is
+    :data:`MODEL_SELECTION_INDETERMINATE` (rate NaN) with ``tied`` = the
+    winner without and the models that would have won with the refused fits,
+    in ladder order. A refusal that would not change the winner leaves it.
+
+    Option B5 of the 2026-11-07 decision dossier. NOT chosen here: dropping
+    the rate bound (fixes the same cases, but then 4/50 multistarts on
+    ``_chain1`` reach an identified M2 that beats M0 -- the start dependence
+    #127 removed) and a profile-likelihood interval for the fast rate
+    (option B item 2). Both are methodology decisions.
+    """
+    winner, tied = _rank_candidates(fits, t, y, data_error)
+    changed: set[str] = set()
+    for name, fr in fits.items():
+        if fr.identifiable or not fr.success or not np.isfinite(fr.refused_aicc):
+            continue
+        admitted = dict(fits)
+        admitted[name] = dataclasses.replace(
+            fr, aicc=float(fr.refused_aicc), identifiable=True
+        )
+        alt_winner, _alt_tied = _rank_candidates(admitted, t, y, data_error)
+        if alt_winner != winner:
+            # ``alt_winner`` may itself be INDETERMINATE (admitting the fit
+            # creates an unresolved tie); only model names reach ``tied``.
+            changed.update({alt_winner, name})
+    if not changed:
+        return winner, tied
+    involved = changed | ({winner} if winner in fits else set())
+    return MODEL_SELECTION_INDETERMINATE, tuple(n for n in fits if n in involved)
+
+
+def _rank_candidates(
     fits: dict[str, FitResult],
     t: np.ndarray,
     y: np.ndarray,

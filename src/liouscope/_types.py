@@ -238,6 +238,12 @@ class FitResult:
     #: that it was tried and why it was refused (``identification_reason``).
     identifiable: bool = True
     identification_reason: str = ""
+    #: AICc the fit WOULD have had if it had not been refused (``nan`` for a
+    #: fit that is identifiable or did not converge). ``_select_model`` reads
+    #: it to tell whether the refusal changed the selection; if it did, the
+    #: result is INDETERMINATE instead of the next-best model (review finding
+    #: P1-1 of PR #127, option B5 of the 2026-11-07 decision dossier).
+    refused_aicc: float = float("nan")
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
