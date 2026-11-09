@@ -86,7 +86,8 @@ jobs:
     # required matrix runs on one CPU architecture and one BLAS family, so that
     # class of fragility only surfaces elsewhere. This probe runs the FULL
     # suite (anchors first) on two other BLAS stacks:
-    #   * macos-14: NumPy and SciPy wheels link Apple Accelerate (verified in
+    #   * macos-15 (macos-14 until 2026-11: GitHub retired that image, the job
+    #     was cancelled before any step): NumPy and SciPy wheels link Apple Accelerate (verified in
     #     this job's own show_config output), which uses FMA and multiple
     #     partial sums in its dot products;
     #   * ubuntu-24.04-arm: OpenBLAS with its arm64 kernels instead of x86-64.
@@ -102,7 +103,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-14, ubuntu-24.04-arm]
+        os: [macos-15, ubuntu-24.04-arm]
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803  # v6.1.0
         with:
