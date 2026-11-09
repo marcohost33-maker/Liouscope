@@ -20,6 +20,7 @@ from collections.abc import Callable
 import numpy as np
 from scipy.special import ndtr, ndtri
 
+from .car1 import car1_resample, is_uniform_grid
 from .gls import fit_gls_ar1
 
 
@@ -88,9 +89,20 @@ def parametric_bootstrap(
         )
     theta_hat = base.params
     samples = np.empty((B, theta_hat.size))
+    # The resampler must match the residual model the fit actually used. On a
+    # non-uniform grid ``base.sigma`` is the STATIONARY sd of a CAR(1) process
+    # (see :class:`liouscope.fitting.gls.GLSFitOutput`), not an innovation sd,
+    # and feeding it to the constant-rho AR(1) resampler would generate
+    # surrogate noise with the wrong correlation AND the wrong amplitude --
+    # i.e. confidence intervals for a different experiment than the one fitted.
+    car1_theta = float(base.theta_car1)
+    use_car1 = bool(np.isfinite(car1_theta))
     failed = 0
     for b in range(B):
-        eps_b = _ar1_resample(rng, t.size, base.rho_ar1, base.sigma)
+        if use_car1:
+            eps_b = car1_resample(rng, t, car1_theta, base.sigma)
+        else:
+            eps_b = _ar1_resample(rng, t.size, base.rho_ar1, base.sigma)
         y_b = model(t, theta_hat) + eps_b
         fit_b = fit_gls_ar1(model, t, y_b, theta_hat, bounds=bounds)
         failed += not fit_b.success
@@ -131,8 +143,17 @@ def _jackknife(
     y: np.ndarray,
     theta_hat: np.ndarray,
     bounds: tuple[np.ndarray, np.ndarray] | None,
+    *,
+    residual_family: str | None = None,
 ) -> np.ndarray:
     """Leave-one-out jackknife on the time grid.
+
+    ``residual_family`` is the family of the BASE fit and is held fixed across
+    every refit (PR #127 review): deleting an interior point of a uniform grid
+    leaves one doubled step, and re-detecting the family there would fit those
+    replicates with CAR(1) and the endpoint deletions with AR(1), so the
+    acceleration would be a moment of two different estimators. ``None`` reads
+    it off the full grid: ``"ar1"`` when uniform, ``"car1"`` otherwise.
 
     Raises
     ------
@@ -157,12 +178,17 @@ def _jackknife(
         ``bca_ci_beta = (nan, nan)`` -- "fit uncertainty UNKNOWN".
     """
     n = t.size
+    family = residual_family
+    if family is None:
+        family = "ar1" if is_uniform_grid(t) else "car1"
     out = np.empty((n, theta_hat.size))
     failed = 0
     for i in range(n):
         t_i = np.delete(t, i)
         y_i = np.delete(y, i)
-        fit_i = fit_gls_ar1(model, t_i, y_i, theta_hat, bounds=bounds)
+        fit_i = fit_gls_ar1(
+            model, t_i, y_i, theta_hat, bounds=bounds, residual_family=family
+        )
         failed += not fit_i.success
         out[i] = fit_i.params
     if failed:
