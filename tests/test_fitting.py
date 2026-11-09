@@ -337,3 +337,78 @@ def test_m3b_fit_is_unit_invariant_on_a_non_uniform_grid():
         assert fit.success
         assert fit.params[1] == pytest.approx(0.05 * c, rel=1e-3)
         assert abs(fit.params[2]) == pytest.approx(2.0 * c, rel=1e-3)
+
+
+# --------------------------------------------------------------------------
+# PR #127 external review, finding 4: on the two-scale relaxation grid the
+# span-derived fallback seed sits on the SLOW gap scale, and the M3b fit
+# converges onto a spurious solution that the historical (1, 1) seed did not
+# produce. The grid carries a uniform fine head precisely to resolve the fast
+# dynamics; the seed must be estimated there.
+# --------------------------------------------------------------------------
+
+# The measured regression case. On ``default_relaxation_grid(1e-4,
+# fast_rate=1.0)`` (80 points, uniform head of 41 at dt = 0.25, span 1e5) the
+# span seed 5e-5 drove the M3b fit to |omega| = 0.0366 for this exact curve,
+# while the historical (1, 1) seed recovered it. Over 60 random curves from
+# the same family the span seed failed twice and (1, 1) never; over 60 slower
+# curves (beta, omega in [1e-4, 1e-1]) the span seed failed 41 times.
+_REGRESSION_BETA = 0.09044
+_REGRESSION_OMEGA = 1.679
+_REGRESSION_PHI = 0.138
+
+
+def _two_scale_grid():
+    from liouscope.diagnostics.relaxation import default_relaxation_grid
+
+    t = default_relaxation_grid(1.0e-4, fast_rate=1.0)
+    assert not np.allclose(np.diff(t), t[1] - t[0]), "fixture must be non-uniform"
+    return t
+
+
+def test_prony_seed_uses_the_uniform_head_of_a_two_scale_grid():
+    """A non-uniform grid with a usable uniform prefix is estimated, not guessed."""
+    from liouscope.fitting.prony import _FALLBACK_RATE_FRAC
+
+    t = _two_scale_grid()
+    y = np.exp(-_REGRESSION_BETA * t) * np.cos(_REGRESSION_OMEGA * t + _REGRESSION_PHI)
+    _amp, beta, omega, _phi = prony_seed(t, y)
+
+    span_rate = _FALLBACK_RATE_FRAC / float(t[-1] - t[0])
+    assert beta != pytest.approx(span_rate), "still seeding off the total span"
+    assert omega != pytest.approx(span_rate)
+    # The head resolves the fast scale, so the seeded omega must be within an
+    # order of magnitude of the truth rather than four below it.
+    assert 0.1 * _REGRESSION_OMEGA < omega < 10.0 * _REGRESSION_OMEGA
+
+
+def test_m3b_recovers_the_case_the_span_seed_lost():
+    """End to end: the seed change must move the FIT, not just the seed."""
+    from liouscope.fitting.models import M3b
+
+    t = _two_scale_grid()
+    y = np.exp(-_REGRESSION_BETA * t) * np.cos(_REGRESSION_OMEGA * t + _REGRESSION_PHI)
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        fit = fit_gls_ar1(M3b, t, y, np.asarray(prony_seed(t, y)))
+    assert fit.params[1] == pytest.approx(_REGRESSION_BETA, rel=1.0e-2)
+    assert abs(fit.params[2]) == pytest.approx(_REGRESSION_OMEGA, rel=1.0e-2)
+
+
+def test_prony_seed_head_estimate_does_not_disturb_a_uniform_grid():
+    """Over-correction control: the uniform path is untouched."""
+    t = np.linspace(0.0, 5.0, 60)
+    y = np.exp(-0.4 * t) * np.cos(2.0 * t)
+    _amp, beta, omega, _phi = prony_seed(t, y)
+    assert beta == pytest.approx(0.4, rel=1.0e-6)
+    assert omega == pytest.approx(2.0, rel=1.0e-6)
+
+
+def test_prony_seed_keeps_the_grid_relative_fallback_on_a_short_prefix():
+    """No uniform prefix worth a Hankel system -> documented fallback stands."""
+    t = np.array([0.0, 0.1, 0.3, 0.6, 1.0, 1.5, 2.1])
+    y = np.exp(-0.5 * t) * np.cos(2.0 * t)
+    _amp, beta, omega, _phi = prony_seed(t, y)
+    assert beta == pytest.approx(5.0 / 2.1)
+    assert omega == pytest.approx(5.0 / 2.1)

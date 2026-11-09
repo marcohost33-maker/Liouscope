@@ -23,18 +23,43 @@ from scipy.optimize import OptimizeResult, least_squares
 
 from ..numerics.norms import scaled_log_sum_squares
 from .aicc import gaussian_log_likelihood
-from .models import saturation_watch
+from .car1 import (
+    estimate_car1_theta,
+    is_uniform_grid,
+    whiten_car1,
+    whiten_car1_log_jacobian,
+)
+from .models import characteristic_x_scale, saturation_watch
 from .neff import _AR1_SMALL_N, ar1_correlation_corrected
 
 
 @dataclass(frozen=True, slots=True)
 class GLSFitOutput:
+    """Result of :func:`fit_gls_ar1`.
+
+    ``theta_car1`` disambiguates the two residual parametrisations, and with
+    them the meaning of ``sigma``:
+
+    * ``nan`` -- discrete AR(1) on a uniform grid (the historical path).
+      ``rho_ar1`` is the fitted lag-1 correlation and ``sigma`` is the
+      INNOVATION standard deviation.
+    * finite -- continuous-time CAR(1) on a non-uniform grid. ``sigma`` is the
+      STATIONARY standard deviation of the residual process (there is no single
+      innovation variance when ``dt`` varies), and ``rho_ar1`` is the
+      correlation over the MEAN step, reported for continuity of the field's
+      meaning only -- the whitening uses the per-step ``exp(-theta dt_k)``.
+
+    Consumers that resample or re-whiten (the parametric bootstrap) MUST branch
+    on ``theta_car1``; reading ``sigma`` without it mixes the two conventions.
+    """
+
     params: np.ndarray
     residuals: np.ndarray
     rho_ar1: float
     sigma: float
     log_likelihood: float
     success: bool
+    theta_car1: float = float("nan")
     #: Magnitude guards that fired on the FINAL model evaluation, if any
     #: (``"exponent"`` / ``"magnitude"``). Non-empty implies ``success`` is
     #: False -- see the note at the final evaluation below.
@@ -100,6 +125,7 @@ def fit_gls_ar1(
     bounds: tuple[np.ndarray, np.ndarray] | None = None,
     n_iters: int = 3,
     max_nfev: int = 2000,
+    residual_family: str = "auto",
 ) -> GLSFitOutput:
     """Fit ``y = model(t, theta) + eps`` with AR(1) residuals.
 
@@ -117,7 +143,20 @@ def fit_gls_ar1(
         Number of Cochrane-Orcutt-style iterations.
     max_nfev
         Max function evaluations per inner least-squares solve.
+    residual_family
+        ``"auto"`` picks the residual model from the grid: discrete AR(1) on a
+        uniform grid, CAR(1) otherwise. ``"ar1"`` / ``"car1"`` fix it, for a
+        refit that has to estimate the same quantity as a base fit on a grid
+        of its own: a leave-one-out replicate of a uniform grid is not uniform,
+        and re-detecting would mix two estimators in one jackknife (PR #127
+        review). ``"car1"`` keeps the documented AR(1) fallback if ``theta``
+        cannot be estimated.
     """
+    if residual_family not in ("auto", "ar1", "car1"):
+        raise ValueError(
+            "fit_gls_ar1: residual_family must be 'auto', 'ar1' or 'car1'; got "
+            f"{residual_family!r}"
+        )
     t = np.asarray(t, dtype=float)
     y = np.asarray(y, dtype=float)
     p = np.asarray(p0, dtype=float).copy()
@@ -204,6 +243,16 @@ def fit_gls_ar1(
             degenerate=True,
         )
 
+    # Which residual model applies is a property of the GRID, decided once.
+    # A uniform grid keeps the historical discrete AR(1) path bit-for-bit; a
+    # grid whose step varies gets the continuous-time CAR(1) model, whose
+    # per-step correlation exp(-theta dt_k) is the only whitening that is
+    # actually valid there (see :mod:`liouscope.fitting.car1`). A caller may fix
+    # the family instead, see ``residual_family``.
+    discrete_ar1 = (
+        is_uniform_grid(t) if residual_family == "auto" else residual_family == "ar1"
+    )
+
     # Issue #124: the mathematical least-squares optimum is unchanged when an
     # observable is multiplied by a positive constant, but SciPy's numerical
     # termination is not. In particular, TRF declares success when its scaled
@@ -230,19 +279,38 @@ def fit_gls_ar1(
     # silent. A raw residual that is itself non-finite still fails closed.
     fit_scale = y_scale
 
-    def _raw_residual_fn(rho_local: float) -> Callable[[np.ndarray], np.ndarray]:
+    def _whiten_current(
+        r: np.ndarray, rho_local: float, theta_local: float
+    ) -> np.ndarray:
+        # One whitening for both problems below, so the raw and the rescaled
+        # objective can never disagree about the residual model (merge of
+        # PR #127 with #124/#134).
+        if discrete_ar1:
+            return _whiten(r, rho_local)
+        if not np.isfinite(theta_local):
+            # First pass (and any pass after a failed estimate): plain least
+            # squares, exactly as ``_whiten(r, 0.0)`` is on the uniform path.
+            return r
+        return whiten_car1(r, t, theta_local)
+
+    def _raw_residual_fn(
+        rho_local: float, theta_local: float
+    ) -> Callable[[np.ndarray], np.ndarray]:
         # The unscaled problem, verbatim as before #124: no detection, no
         # errstate. A non-finite raw residual reaches ``least_squares``, which
         # raises ``ValueError`` and the fit fails closed (PR #134 review: the
         # detector used to run here too and leaked a private exception from
         # the public API for ``max|y| >= ~1e155``).
         def residual(params: np.ndarray) -> np.ndarray:
-            return _whiten(y - model(t, params), rho_local)
+            return _whiten_current(
+                np.asarray(y - model(t, params), dtype=float), rho_local, theta_local
+            )
 
         return residual
 
     def _rescaled_residual_fn(
         rho_local: float,
+        theta_local: float,
         scale: float,
         caller_err: dict[str, Any],
         caller_call: Any,
@@ -255,10 +323,10 @@ def fit_gls_ar1(
         # and returned the seed rate as a converged fit at 1e-40).
         def residual(params: np.ndarray) -> np.ndarray:
             with np.errstate(call=caller_call, **caller_err):
-                r_raw = y - model(t, params)
+                r_raw = np.asarray(y - model(t, params), dtype=float)
             # Counted: an overflow of the division or the whitening IS the
             # rescaled problem leaving float64.
-            return _whiten(r_raw / scale, rho_local)
+            return _whiten_current(r_raw / scale, rho_local, theta_local)
 
         return residual
 
@@ -273,8 +341,40 @@ def fit_gls_ar1(
     # representable" and sends the iteration to the raw residuals. A finite
     # rescaled result that merely did not converge is NOT retried: that is a
     # genuine failure, and retrying it raw would re-admit the #124 seed.
+    # Optimiser variables (PR #127, option B). For a model with a
+    # characteristic scale (``characteristic_x_scale``, today M2) the solver
+    # works in the DIMENSIONLESS variables ``z = x / scale`` with
+    # ``x_scale=1``, not in ``x`` with ``x_scale=scale``. The two give the same
+    # trust-region steps, but SciPy evaluates its ``xtol`` test and its
+    # finite-difference steps in the variables it is handed (trf.py: ``xtol *
+    # (xtol + |x|)``, unscaled). In ``x`` a rate of 5e-10 next to an
+    # amplitude of 1 has "converged" after the first step. Measured on a
+    # resolved two-rate curve (seed 11): with ``x_scale="jac"`` the M2 rates
+    # moved by 2.4e-5 relative under a time unit x 1e6 and by 0.30 under
+    # x 1e9 -- reported as ``success=True``; in ``z`` by <= 1.3e-9 for time
+    # units 1e-9..1e9 and amplitudes 1e-150..1e40. Every other model keeps
+    # ``x_scale="jac"`` exactly as before.
+    char_scale = characteristic_x_scale(model, t, y_scale)
+
+    def _least_squares(
+        fun: Callable[[np.ndarray], np.ndarray], x0: np.ndarray, **kw: Any
+    ) -> OptimizeResult:
+        if char_scale is None:
+            return least_squares(fun, x0, x_scale="jac", **kw)
+        scale = char_scale
+
+        def fun_z(z: np.ndarray) -> np.ndarray:
+            return fun(z * scale)
+
+        if "bounds" in kw:
+            lo, hi = kw["bounds"]
+            kw = {**kw, "bounds": (np.asarray(lo, float) / scale, np.asarray(hi, float) / scale)}
+        res = least_squares(fun_z, np.asarray(x0, dtype=float) / scale, x_scale=1.0, **kw)
+        res.x = res.x * scale
+        return res
+
     def _solve_rescaled(
-        rho_local: float, x0: np.ndarray, **kw: object
+        rho_local: float, theta_local: float, x0: np.ndarray, **kw: object
     ) -> OptimizeResult:
         events: list[str] = []
 
@@ -287,8 +387,10 @@ def fit_gls_ar1(
             over="call", divide="call", invalid="call", under="ignore", call=_record
         ):
             try:
-                res = least_squares(
-                    _rescaled_residual_fn(rho_local, fit_scale, caller_err, caller_call),
+                res = _least_squares(
+                    _rescaled_residual_fn(
+                        rho_local, theta_local, fit_scale, caller_err, caller_call
+                    ),
                     x0,
                     **kw,
                 )
@@ -305,6 +407,7 @@ def fit_gls_ar1(
         return res
 
     rho = 0.0
+    theta = float("nan")
     success = True
     for _ in range(n_iters):
         # ``x_scale="jac"``: rescaling the RESIDUALS makes the problem
@@ -318,15 +421,23 @@ def fit_gls_ar1(
         # scaled problem identical under ``y -> c*y, A -> c*A``. Measured on
         # ``_fit_with_model("M0")`` with 1e-3 noise: rate 1.2993514737..55 at
         # every scale from 1e-150 to 1e100 (seed 1.3245, returned before).
-        ls_kwargs: dict[str, object] = {"max_nfev": max_nfev, "x_scale": "jac"}
+        #
+        # Exception (PR #127, option B): a model listed by
+        # ``characteristic_x_scale`` (M2) is solved in its characteristic
+        # variables instead (``_least_squares``). Its second rate can decouple
+        # from the data, and the column norm of a decoupled rate is ~0 --
+        # ``"jac"`` then sends the solver to beta ~ 1e6. The characteristic
+        # scale is carried along by ``y -> c*y`` like ``"jac"``, so the
+        # invariance above still holds.
+        ls_kwargs: dict[str, object] = {"max_nfev": max_nfev}
         if bounds is not None:
             ls_kwargs["bounds"] = bounds
         try:
             try:
                 if fit_scale == 1.0:
-                    result = least_squares(_raw_residual_fn(rho), p, **ls_kwargs)
+                    result = _least_squares(_raw_residual_fn(rho, theta), p, **ls_kwargs)
                 else:
-                    result = _solve_rescaled(rho, p, **ls_kwargs)
+                    result = _solve_rescaled(rho, theta, p, **ls_kwargs)
             except _ScaledResidualOverflowError:
                 warnings.warn(
                     "fit_gls_ar1: residuals rescaled by the curve's own scale "
@@ -338,7 +449,7 @@ def fit_gls_ar1(
                     stacklevel=2,
                 )
                 fit_scale = 1.0
-                result = least_squares(_raw_residual_fn(rho), p, **ls_kwargs)
+                result = _least_squares(_raw_residual_fn(rho, theta), p, **ls_kwargs)
             p = result.x
             success = result.success
         except (ValueError, RuntimeError):
@@ -351,7 +462,10 @@ def fit_gls_ar1(
         # small n, which makes AR(1)-whitened CIs too narrow. Suppress the
         # per-iteration small-n warning here; we emit it once below so a
         # B-fold bootstrap does not raise B identical warnings.
-        rho = ar1_correlation_corrected(residuals_raw, warn_small_n=False)
+        if discrete_ar1:
+            rho = ar1_correlation_corrected(residuals_raw, warn_small_n=False)
+        else:
+            theta = estimate_car1_theta(t, residuals_raw)
 
     # Fail closed on a fit that ENDED inside the model's magnitude guards. The
     # guards keep an out-of-range probe finite so the optimiser can step away
@@ -375,7 +489,29 @@ def fit_gls_ar1(
             RuntimeWarning,
             stacklevel=2,
         )
-    whitened = _whiten(residuals_raw, rho)
+    if not discrete_ar1 and not np.isfinite(theta):
+        # CAR(1) estimation is fail-closed (NaN on a degenerate series). Fall
+        # back to the historical AR(1) treatment rather than shipping
+        # unwhitened residuals as if they were white -- the fallback is
+        # imperfect on a varying grid, but it is the documented status quo,
+        # whereas rho = 0 would silently claim independence.
+        rho = ar1_correlation_corrected(residuals_raw, warn_small_n=False)
+
+    if np.isfinite(theta):
+        whitened = whiten_car1(residuals_raw, t, theta)
+        jac = whiten_car1_log_jacobian(t, theta)
+        rho = float(np.exp(-theta * float(np.mean(np.diff(t)))))
+    else:
+        whitened = _whiten(residuals_raw, rho)
+        # Prais-Winsten exact AR(1) likelihood: _whiten keeps observation 0
+        # (scaled by sqrt(1-rho^2)), so the transform has log-Jacobian
+        # 0.5*log(1-rho^2). Omitting it makes the reported value a hybrid of
+        # the exact and conditional likelihoods and biases cross-model AICc
+        # (each model fits its own rho) toward under-fitting high-rho models.
+        jac = 0.5 * float(np.log(max(1.0 - rho * rho, 1.0e-12)))
+    # ``estimate_car1_theta`` maximises the stationary likelihood reported
+    # below, first residual included (PR #127 review, route taken from PR #157),
+    # so the rate AICc counts was fitted to the likelihood AICc consumes.
     n = whitened.size
     log_rss = scaled_log_sum_squares(whitened)
     if log_rss == float("-inf") or not math.isfinite(log_rss):
@@ -395,6 +531,7 @@ def fit_gls_ar1(
             success=False,
             saturated=tuple(sorted(fired)),
             likelihood_degenerate=True,
+            theta_car1=theta,
         )
 
     log_sigma = 0.5 * (log_rss - math.log(n))
@@ -441,11 +578,11 @@ def fit_gls_ar1(
             stacklevel=2,
         )
 
-    # Prais-Winsten exact AR(1) likelihood: _whiten keeps observation 0
-    # (scaled by sqrt(1-rho^2)), so the transform has log-Jacobian
-    # 0.5*log(1-rho^2). The profile likelihood is evaluated directly from
-    # log(RSS), not by squaring ``sigma`` or materialising RSS.
-    jac = 0.5 * float(np.log(max(1.0 - rho * rho, 1.0e-12)))
+    # ``jac`` is the log-Jacobian of whichever whitening ran above -- the
+    # CAR(1) per-step transform on a non-uniform grid, Prais-Winsten AR(1)
+    # on a uniform one (merge of PR #127 with issue #135). The profile
+    # likelihood is evaluated directly from log(RSS), not by squaring
+    # ``sigma`` or materialising RSS.
     log_lik = gaussian_log_likelihood(whitened) + jac
     return GLSFitOutput(
         params=p,
@@ -454,6 +591,7 @@ def fit_gls_ar1(
         sigma=float("nan") if scale_unavailable else sigma,
         log_likelihood=log_lik,
         success=success,
+        theta_car1=theta,
         saturated=tuple(sorted(fired)),
         scale_unavailable=scale_unavailable,
     )
