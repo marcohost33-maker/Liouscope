@@ -327,7 +327,11 @@ def test_bootstrap_refuses_an_interval_containing_failed_replicates(monkeypatch)
     from liouscope.fitting.models import M0
 
     t = np.linspace(0.0, 5.0, 48)
-    y = np.exp(-1.3 * t)
+    # Noise is required since finding 2026-11-15. A noise-free curve is now
+    # refused one step earlier, by the polished base fit that finds no
+    # residual scale to resample (issue #125), and never reaches the replicate
+    # loop whose rule this test pins.
+    y = np.exp(-1.3 * t) + np.random.default_rng(3).normal(0.0, 1.0e-3, t.size)
     p0 = np.array([1.0, 1.2])
     real_fit = bs.fit_gls_ar1
     calls = {"n": 0}

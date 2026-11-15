@@ -100,6 +100,7 @@ def fit_gls_ar1(
     bounds: tuple[np.ndarray, np.ndarray] | None = None,
     n_iters: int = 3,
     max_nfev: int = 2000,
+    gtol: float | None = 1.0e-8,
 ) -> GLSFitOutput:
     """Fit ``y = model(t, theta) + eps`` with AR(1) residuals.
 
@@ -117,6 +118,16 @@ def fit_gls_ar1(
         Number of Cochrane-Orcutt-style iterations.
     max_nfev
         Max function evaluations per inner least-squares solve.
+    gtol
+        ``least_squares`` gradient tolerance; ``None`` disables that stopping
+        rule, leaving the relative ``ftol``/``xtol`` tests. The default is
+        SciPy's own default, so callers that do not pass it are unchanged. The
+        rule is ABSOLUTE in ``J^T f`` (SciPy ``trf``: ``g_norm < gtol`` on the
+        unscaled gradient), i.e. in amplitude-normalised residual units times
+        inverse parameter units. A fit whose residuals are small for that
+        reason stops at its starting point with ``success=True``. The
+        parametric bootstrap therefore disables it (finding 2026-11-15, see
+        ``fitting.bootstrap``).
     """
     t = np.asarray(t, dtype=float)
     y = np.asarray(y, dtype=float)
@@ -318,7 +329,9 @@ def fit_gls_ar1(
         # scaled problem identical under ``y -> c*y, A -> c*A``. Measured on
         # ``_fit_with_model("M0")`` with 1e-3 noise: rate 1.2993514737..55 at
         # every scale from 1e-150 to 1e100 (seed 1.3245, returned before).
-        ls_kwargs: dict[str, object] = {"max_nfev": max_nfev, "x_scale": "jac"}
+        ls_kwargs: dict[str, object] = {
+            "max_nfev": max_nfev, "x_scale": "jac", "gtol": gtol,
+        }
         if bounds is not None:
             ls_kwargs["bounds"] = bounds
         try:

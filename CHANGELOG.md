@@ -6,6 +6,42 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+- **Bootstrap replicates no longer stall on SciPy's absolute `gtol`
+  (finding 2026-11-15, `claim_status: pending`).**
+  - **The defect.** `parametric_bootstrap` starts each replicate fit at
+    `theta_hat`. SciPy's `trf` stops when `norm(J^T f, inf) < gtol = 1e-8`.
+    That test is absolute, not relative to the noise. From about 1e-8
+    relative noise, replicates returned `theta_hat` unchanged after one
+    evaluation and counted as converged:
+    - At 1e-8, about 25 % of replicates sat on the centre, and the interval
+      was too narrow (fail-open).
+    - At 1e-9, all of them did, and `bca_ci` refused measurable noise as
+      "degenerate".
+    - The same rule leaves the default-tolerance estimate about 5e-10 from
+      the optimum at every noise level.
+  - **The fix** is scoped to the bootstrap:
+    - `fit_gls_ar1` gains `gtol=` (default `1e-8`, SciPy's own, so every
+      other caller is unchanged).
+    - The bootstrap polishes the base fit with `gtol=None`, refits the
+      replicates the same way, and withholds the interval (fit uncertainty
+      UNKNOWN) in two cases: when the converged fit has no residual scale (a
+      noise-free curve, #125/#135), or when the caller's estimate sits more
+      than 0.1 resampling SD from the optimum.
+    - A noise-free curve is still refused, now for a reason that belongs to
+      the data.
+  - **What changes for results.** Intervals at ordinary noise move only at
+    replicate-convergence level. Curves with relative noise of about 1e-9 or
+    less now report `interval_method = "unavailable"` with a stated reason,
+    instead of a narrowed interval or a mislabelled degeneracy. Anchors are
+    unchanged.
+  - **Not changed, owner decision.** Disabling `gtol` globally fails nine
+    tests through one mechanism. The converged residuals of a noise-free curve
+    are exactly zero, so the likelihood scale has no MLE (#135) and the fit
+    leaves AICc selection. Whether a noise-free curve takes part in model
+    selection therefore depends today on where the solver stops, which bears
+    on #127/#193.
+
 ### Added
 - **The relaxation-rate interval now says which estimator produced it:
   `RelaxationResult.interval_method` (issue #116, stage 1, `claim_status: pending`).**
