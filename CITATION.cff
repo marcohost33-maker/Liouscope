@@ -139,6 +139,12 @@ abstract: >-
 # counts correlation and variance, and AICc uses the observed point count instead
 # of N_eff. This can change the selected model, its rates and the A-class on those
 # grids. Uniform grids are untouched; the same change there is PR #157.
+# Also pending for the next cut, all grids (PR #127 option B): a converged M2
+# fit is a candidate only if both rates lie in [ALPHA_SEED_FLOOR_FRAC/T,
+# 10/dt_0] and its equilibrated Jacobian is well conditioned; a refusal that
+# would change the winner yields "INDETERMINATE" (rate NaN), never a fallback.
+# The bound 10/dt_0 (amendment A1) is a METHODOLOGY change released by owner
+# decision 2026-11-16; see docs/prereg/2026-11-08_m2_identifiability_result.md.
 # Also pending for the next cut, all grids (PR #127 cross-family review
 # LIO-02/LIO-03): the M0..M3b AICc winner must be resolved above the rounding
 # level of the fitted curve and above where the optimiser stopped; otherwise a
