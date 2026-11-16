@@ -392,11 +392,19 @@ def _gather_evidence(
     # admissible backward error, which scales with the rate unit. A gap within
     # it is not resolved, and its SIGN is round-off. Measured: the same
     # coherent-spectator system gives gap = -9e-16 on x86-64 OpenBLAS and a
-    # positive round-off gap on arm64. Absent when no certificate applies.
+    # positive round-off gap on arm64. Absent when no certificate APPLIES. An
+    # inapplicable certificate (no established trace preservation) still
+    # carries a finite operator-norm ``zero_tolerance``, which the spectral
+    # layer itself refuses to use as a cutoff; there it can exceed the whole
+    # spectrum (Codex review PR #196: about 2.2e3 against a resolved gap of 1.0).
     _cert = getattr(spectral, "zero_mode_certificate", None) or {}
     _tol = _cert.get("zero_tolerance")
     ev["gap_resolution"] = (
-        float(_tol) if isinstance(_tol, (int, float)) and math.isfinite(_tol) else float("nan")
+        float(_tol)
+        if _cert.get("applicable") is True
+        and isinstance(_tol, (int, float))
+        and math.isfinite(_tol)
+        else float("nan")
     )
     _blin = float(relaxation.beta_D_linear)
     ev["d17_metric_multiplier"] = (

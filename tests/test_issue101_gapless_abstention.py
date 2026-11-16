@@ -109,3 +109,39 @@ def test_a_round_off_gap_abstains_whatever_its_sign(sign: float) -> None:
     resolved = {**ev, "gap": 1.0}
     ladder = {r[0]: r[3] for r in _hypothesis_ladder(resolved, relaxation=rel)}
     assert ladder["F5_PSEUDOSPECTRAL"] is True
+
+
+def test_an_inapplicable_certificate_supplies_no_gap_resolution() -> None:
+    """Codex review on PR #196 (P2), reproduced and pinned.
+
+    A non-trace-preserving input has an INAPPLICABLE zero-mode certificate,
+    which still carries a finite operator-norm ``zero_tolerance`` (about 2.2e3
+    here). The spectral layer refuses to use that value as a cutoff. Reading it
+    as ``gap_resolution`` made the resolved gap 1.0 count as gapless and
+    suppressed F5. The silent direction is that an applicable certificate still
+    supplies the resolution, which the coherent-spectator tests above pin.
+    """
+    from liouscope.diagnostics.classification import (
+        _gather_evidence,
+        _pseudospectral_reach,
+    )
+    from liouscope.diagnostics.spectral import compute_spectral_layer
+
+    A = np.diag([-1.0, -2.0, -3.0, -4.0]).astype(complex)
+    A[0, 3] = 1.0e16
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        spectral = compute_spectral_layer(A, rho_steady=np.eye(2, dtype=complex) / 2)
+    cert = spectral.zero_mode_certificate
+    assert cert is not None
+    assert cert["applicable"] is False and cert["zero_tolerance"] > spectral.gap
+
+    rep = _driven_qubit_with_coherent_spectator(1.0)
+    ev = _gather_evidence(
+        spectral, rep.nonnorm, rep.relaxation, rep.resolvent,
+        rep.transient, rep.lep, None,
+    )
+    assert np.isnan(ev["gap_resolution"])
+    assert _pseudospectral_reach({**ev, "pseudospectral_radius": 10.0}) == pytest.approx(
+        10.0 / spectral.gap
+    )
