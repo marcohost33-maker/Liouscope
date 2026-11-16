@@ -78,7 +78,7 @@ _CASES = [
     _ev(gap_to_gns_ratio=2.0, gns_certified=1.0),
     _ev(gap_rate_consistency=0.01, d17_linear_single_exp=1.0),
     _ev(gap_rate_consistency=0.15),
-    _ev(gap=0.0, henrici_eta=2.0),  # gapless F5 limit
+    _ev(gap=0.0, henrici_eta=2.0),  # gapless: F5 abstains (#101 addendum)
     _ev(mpemba_is_candidate=1.0, henrici_eta=2.0, pseudospectral_radius=10.0,
         trans_amplitude_ratio=10.0, kappa_trans=5.0, gap_rate_consistency=0.01,
         d17_linear_single_exp=1.0),
@@ -331,13 +331,25 @@ def test_a_missing_gap_makes_the_reach_leg_unevaluable_not_supported():
     assert f5["status"] == HYPOTHESIS_UNEVALUABLE
     assert "gap" in f5["missing"]
 
-    # POSITIVE CONTROL: a gap MEASURED as 0.0 is the documented gapless limit
-    # and must still fire. The repair separates "no gap" from "no measurement".
+    # A gap MEASURED as 0.0 also abstains since the issue #101 addendum. A
+    # vanishing gap is not positive reach evidence. The matrix still keeps the
+    # two cases apart: "no measurement" names ``gap``, while "measured gapless"
+    # names the undefined ``pseudospectral_reach`` and not ``gap``.
     gapless = _ev(pseudospectral_radius=10.0, henrici_eta=2.0, gap=0.0)
     gapless_ladder = {r[0]: r[3] for r in _hypothesis_ladder(gapless, relaxation=rel)}
-    assert gapless_ladder["F5_PSEUDOSPECTRAL"] is True
-    assert _entry(
+    assert gapless_ladder["F5_PSEUDOSPECTRAL"] is False
+    f5_gapless = _entry(
         hypothesis_evidence_matrix(gapless, relaxation=rel), "F5_PSEUDOSPECTRAL"
+    )
+    assert f5_gapless["status"] == HYPOTHESIS_UNEVALUABLE
+    assert f5_gapless["missing"] == ("pseudospectral_reach",)
+
+    # POSITIVE CONTROL: a measured positive gap with large reach still fires.
+    gapped = _ev(pseudospectral_radius=10.0, henrici_eta=2.0, gap=1.0)
+    gapped_ladder = {r[0]: r[3] for r in _hypothesis_ladder(gapped, relaxation=rel)}
+    assert gapped_ladder["F5_PSEUDOSPECTRAL"] is True
+    assert _entry(
+        hypothesis_evidence_matrix(gapped, relaxation=rel), "F5_PSEUDOSPECTRAL"
     )["status"] == HYPOTHESIS_SUPPORTED
 
 
@@ -485,6 +497,7 @@ def test_supported_floor_equals_winner_verdict_for_the_winning_rung():
     """The matrix must not promise more (or less) than the classifier claims."""
     from liouscope.diagnostics.classification import (
         _apply_single_state_maxmix_floor,
+        _apply_unevaluable_winner_floor,
         _confidence,
         _pick_verdict_tier,
     )
@@ -499,9 +512,22 @@ def test_supported_floor_equals_winner_verdict_for_the_winning_rung():
                 maximally_mixed=False, ensemble_confirmation=False,
             )
             matrix = hypothesis_evidence_matrix(ev, relaxation=rel)
+            # The full production chain, as in ``classify_mechanism``. Since the
+            # #101 gapless abstention, ``_CASES`` contains a rung that is
+            # unevaluable on complete evidence, so the A12 winner is floored
+            # here exactly as in production.
+            verdict, _ = _apply_unevaluable_winner_floor(
+                a_class, verdict, "", matrix=tuple(matrix)
+            )
+            # A class can own several rungs. The supported one speaks for the
+            # winner; an unevaluable sibling only counts when nothing of the
+            # class was supported (the floor's own rule).
             winner_entries = [
                 e for e in matrix
                 if e["a_class"] == a_class and e["status"] == HYPOTHESIS_SUPPORTED
+            ] or [
+                e for e in matrix
+                if e["a_class"] == a_class and e["status"] == HYPOTHESIS_UNEVALUABLE
             ]
             assert winner_entries, f"winner {a_class} missing from matrix"
             assert winner_entries[0]["claim_floor"] == verdict
@@ -701,3 +727,40 @@ def test_partial_nan_evidence_does_not_abort_report_generation():
     assert f1["status"] == HYPOTHESIS_UNEVALUABLE
     assert f1["missing"] == ("petermann_max",)
     assert len(f1["supporting"]) == 1  # the measured kreiss support survives
+
+
+def test_unevaluable_sibling_does_not_floor_a_fired_rung_of_the_same_class():
+    """Issue #101 addendum: A10 owns two rungs, F5 and the Jordan M3a route.
+
+    On a gapless operator the F5 reach leg abstains (UNEVALUABLE), while the
+    Jordan rung fires on the relaxation-fit shape. The winner floor used to
+    key on the class alone, so the abstaining sibling dropped the legitimately
+    fired A10 CANDIDATE to UNDEFINED. The firing direction checks that an A12
+    fallback with an unevaluable rung is still floored.
+    """
+    from liouscope.diagnostics.classification import (
+        _apply_unevaluable_winner_floor,
+        _confidence,
+        _pick_verdict_tier,
+    )
+
+    ev = _ev(gap=0.0, henrici_eta=2.0)
+    jordan = _Rel(aicc_model="M3a")
+    a_class, _ = _pick_a_class(ev, relaxation=jordan)
+    assert a_class == "A10"
+    verdict, tier = _pick_verdict_tier(a_class, jordan, _confidence(ev, a_class))
+    matrix = tuple(hypothesis_evidence_matrix(ev, relaxation=jordan))
+    assert _entry(matrix, "F5_PSEUDOSPECTRAL")["status"] == HYPOTHESIS_UNEVALUABLE
+    assert _entry(matrix, "A10_JORDAN_M3A")["status"] == HYPOTHESIS_SUPPORTED
+    assert _apply_unevaluable_winner_floor(a_class, verdict, tier, matrix=matrix) == (
+        verdict, tier,
+    )
+    assert verdict != VERDICT_UNDEFINED
+
+    # Firing direction: nothing supported, one rung unevaluable -> floored.
+    plain = _Rel(aicc_model="M0")
+    a12, _ = _pick_a_class(ev, relaxation=plain)
+    assert a12 == "A12"
+    v12, t12 = _pick_verdict_tier(a12, plain, _confidence(ev, a12))
+    m12 = tuple(hypothesis_evidence_matrix(ev, relaxation=plain))
+    assert _apply_unevaluable_winner_floor(a12, v12, t12, matrix=m12)[0] == VERDICT_UNDEFINED

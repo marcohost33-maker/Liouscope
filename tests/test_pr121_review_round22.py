@@ -661,16 +661,34 @@ def test_an_absent_gap_key_behaves_the_same_as_a_nan_one() -> None:
     )
 
 
-def test_a_measured_zero_gap_still_fires_the_gapless_reach_leg() -> None:
-    """POSITIVE CONTROL, and the over-correction control in one.
+def test_a_measured_zero_gap_abstains_but_stays_distinct_from_no_measurement() -> None:
+    """Superseded by the issue #101 re-audit addendum.
 
-    A gap that was MEASURED as 0.0 is the documented gapless limit and must
-    still count as reach evidence -- the repair distinguishes "no gap" from
-    "no measurement", it does not abolish the gapless branch.
+    A gap MEASURED as 0.0 used to count as reach evidence (the gapless
+    branch). It now abstains as well: a vanishing gap is not positive evidence
+    of phantom relaxation. The round-22 distinction survives in the audit
+    column. "No measurement" lists ``gap`` as missing, "measured gapless" lists
+    the undefined ``pseudospectral_reach``. The over-correction control (a
+    positive gap still decides on the reach ratio) is the next test.
     """
+    from liouscope.diagnostics.classification import hypothesis_evidence_matrix
+
     picked, status = _classify({**_F5_EVIDENCE, "gap": 0.0})
-    assert picked == ("A10", "F5")
-    assert status == "SUPPORTED"
+    assert picked != ("A10", "F5")
+    assert status == "UNEVALUABLE"
+    report, _, _ = _diagnosed()
+    measured = next(
+        e for e in hypothesis_evidence_matrix(
+            {**_F5_EVIDENCE, "gap": 0.0}, relaxation=report.relaxation
+        ) if e["rule_id"] == "F5_PSEUDOSPECTRAL"
+    )
+    unmeasured = next(
+        e for e in hypothesis_evidence_matrix(
+            {**_F5_EVIDENCE, "gap": float("nan")}, relaxation=report.relaxation
+        ) if e["rule_id"] == "F5_PSEUDOSPECTRAL"
+    )
+    assert measured["missing"] == ("pseudospectral_reach",)
+    assert "gap" in unmeasured["missing"]
 
 
 def test_a_measured_positive_gap_still_decides_on_the_reach_ratio() -> None:

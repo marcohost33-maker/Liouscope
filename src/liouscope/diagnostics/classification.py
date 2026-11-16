@@ -226,9 +226,16 @@ def _apply_unevaluable_winner_floor(
     should a future rung become unevaluable-and-winning the floor already
     covers it.
     """
-    for entry in matrix:
-        if entry.get("a_class") == a_class and entry.get("status") == HYPOTHESIS_UNEVALUABLE:
-            return VERDICT_UNDEFINED, TIER_EXPLORATION
+    # Issue #101 addendum. A class can own several rungs (A10: F5 and the Jordan
+    # M3a route). The winner is unsupported only if NONE of its rungs is
+    # SUPPORTED. Keying on one unevaluable sibling would floor a legitimately
+    # fired rung: a gapless operator whose F5 reach leg abstains, but whose
+    # Jordan rung fired, was dropped from A10 CANDIDATE to UNDEFINED.
+    own = [entry for entry in matrix if entry.get("a_class") == a_class]
+    if any(entry.get("status") == HYPOTHESIS_SUPPORTED for entry in own):
+        return verdict, tier
+    if any(entry.get("status") == HYPOTHESIS_UNEVALUABLE for entry in own):
+        return VERDICT_UNDEFINED, TIER_EXPLORATION
     return verdict, tier
 
 
@@ -380,6 +387,25 @@ def _gather_evidence(
     ev["beta_D"] = float(relaxation.beta_D)
     ev["beta_D_linear"] = float(relaxation.beta_D_linear)
     ev["gap"] = float(spectral.gap)
+    # Issue #101 addendum, gap-floor adversary. This is the spectral layer's own
+    # arithmetic resolution for an eigenvalue: the zero-mode certificate's
+    # admissible backward error, which scales with the rate unit. A gap within
+    # it is not resolved, and its SIGN is round-off. Measured: the same
+    # coherent-spectator system gives gap = -9e-16 on x86-64 OpenBLAS and a
+    # positive round-off gap on arm64. Absent when no certificate APPLIES. An
+    # inapplicable certificate (no established trace preservation) still
+    # carries a finite operator-norm ``zero_tolerance``, which the spectral
+    # layer itself refuses to use as a cutoff; there it can exceed the whole
+    # spectrum (Codex review PR #196: about 2.2e3 against a resolved gap of 1.0).
+    _cert = getattr(spectral, "zero_mode_certificate", None) or {}
+    _tol = _cert.get("zero_tolerance")
+    ev["gap_resolution"] = (
+        float(_tol)
+        if _cert.get("applicable") is True
+        and isinstance(_tol, (int, float))
+        and math.isfinite(_tol)
+        else float("nan")
+    )
     _blin = float(relaxation.beta_D_linear)
     ev["d17_metric_multiplier"] = (
         float(relaxation.beta_D / _blin)
@@ -484,9 +510,9 @@ def _f5_reach(ev: dict[str, float], relaxation: RelaxationResult) -> bool:
     # (radius / Delta) -- how far the eps-pseudospectrum extends relative to
     # the asymptotic decay rate -- which is the physically meaningful
     # phantom-relaxation signature (Znidaric 2023) and is scale-invariant to
-    # leading order (both radius and gap scale as c). A vanishing gap (no
-    # spectral gap) is treated as inf reach: a gapless, strongly non-normal
-    # operator is the phantom/critical limit.
+    # leading order (both radius and gap scale as c). A vanishing gap was once
+    # treated as infinite reach; since the #101 addendum it makes the reach
+    # undefined, and the leg abstains (see below).
     # ROUND-22 REVIEW (PR #121). ``ev.get("gap", 0.0)`` read a MISSING
     # measurement as a measured zero. When the certificate is unresolved the
     # spectral layer withholds D1 as NaN, ``_strip_unavailable`` removes the
@@ -499,26 +525,19 @@ def _f5_reach(ev: dict[str, float], relaxation: RelaxationResult) -> bool:
     # survived the floor that was supposed to contain it.
     #
     # ``gap`` is therefore a REQUIRED key of this condition (see the rung
-    # below): absent, the rung is unevaluable and cannot fire. A gap that was
-    # MEASURED as 0.0 still means gapless and still counts as reach evidence --
-    # the distinction is between "no gap" and "no measurement", which is
-    # exactly the distinction the default erased.
-    _gap = ev["gap"]
-    if _gap > 0.0:
-        return bool(
-            ev["pseudospectral_radius"] / _gap > 2.0 * ev.get("gap_to_gns_ratio", 1.0)
-        )
-    # Gapless limit: infinite reach dominates ANY ratio. The former
-    # ``inf > 2*ratio`` comparison silently failed when the GNS gap was
-    # ALSO floored (ratio = inf, and ``inf > inf`` is False) -- i.e. in the
-    # realistic gapless case, since ``gns_certified`` requires gap > 0 and
-    # the sentinel floors there. The documented contract (gapless +
-    # strongly non-normal = phantom/critical limit) now holds
-    # unconditionally on the reach side; henrici still gates in the second
-    # condition. NOTE (#101 addendum): treating a vanishing gap as positive
-    # reach evidence is a known blind spot -- the gapless-abstention rule is
-    # gated on the slice-C calibration study and NOT changed here.
-    return True
+    # below): absent, the rung is unevaluable and cannot fire. A gap MEASURED
+    # as 0.0 is a measurement, but since the #101 addendum it is no longer
+    # reach evidence either: both cases abstain, and the matrix keeps them
+    # apart by listing ``gap`` as missing only when it was not measured.
+    # Issue #101 addendum: the reach is read from the derived
+    # ``pseudospectral_reach`` (:func:`_pseudospectral_reach`). It is
+    # unavailable for a non-positive gap, so a gapless operator ABSTAINS on
+    # this leg instead of supplying infinite reach. The former
+    # ``gap <= 0 -> True`` branch is gone. Its stated contract (gapless +
+    # strongly non-normal = phantom/critical limit) was a hypothesis, not a
+    # measurement, and it labelled conserved normal dynamics as A10/F5 whenever
+    # ``henrici_eta`` exceeded 1.
+    return bool(ev["pseudospectral_reach"] > 2.0 * ev.get("gap_to_gns_ratio", 1.0))
 
 
 def _ladder_spec() -> tuple[_Rung, ...]:
@@ -568,8 +587,8 @@ def _ladder_spec() -> tuple[_Rung, ...]:
         conditions=(
             _Condition(
                 description="pseudospectral reach: radius/gap > 2 * gap_to_gns_ratio "
-                "(gapless => infinite reach; see #101 gapless blind spot)",
-                keys=("pseudospectral_radius", "gap"),
+                "(gap <= 0 => reach undefined, the leg abstains; #101 addendum)",
+                keys=("pseudospectral_reach", "pseudospectral_radius", "gap"),
                 optional_keys=("gap_to_gns_ratio",),
                 fn=_f5_reach,
             ),
@@ -823,7 +842,7 @@ def _hypothesis_ladder(
     carries the audit trail (the rung reports UNEVALUABLE with the missing
     keys, and the A12 fallback inherits the uncertainty).
     """
-    ev = _strip_unavailable(ev)
+    ev = _decision_view(ev)
     return [
         (
             rung.rule_id,
@@ -893,6 +912,62 @@ HYPOTHESIS_NOT_SUPPORTED: Final[str] = "NOT_SUPPORTED"
 HYPOTHESIS_UNEVALUABLE: Final[str] = "UNEVALUABLE"
 HYPOTHESIS_RESERVED: Final[str] = "RESERVED"
 A12_FALLBACK_RULE_ID: Final[str] = "A12_FALLBACK"
+
+
+def _pseudospectral_reach(ev: dict[str, float]) -> float:
+    """Dimensionless F5 reach ``pseudospectral_radius / gap``, or NaN.
+
+    Issue #101 re-audit addendum (2026-08-05). This is the required interim
+    rule. A vanishing or non-positive gap is not positive evidence of phantom
+    relaxation. It equally describes normal conserved dynamics (pure dephasing
+    with conserved populations), a semisimple degenerate stationary manifold,
+    a numerical floor, or a critical system without the F5 mechanism. The
+    reach is therefore UNDEFINED there, not infinite. The same holds for a
+    positive gap within the spectral layer's arithmetic resolution
+    (``gap_resolution``), whose sign is round-off. The unavailable sentinel
+    makes the reach leg ABSTAIN: the ladder cannot fire on it, and the evidence
+    matrix reports the rung UNEVALUABLE instead of SUPPORTED. That holds unless
+    a sibling condition already refutes it, as for every unavailable key.
+    Before this rule, ``gap <= 0`` returned infinite reach, so any operator with
+    ``henrici_eta > 1`` and no gap was labelled A10/F5. Gapless positive
+    evidence still has its own route: the defective Jordan rung
+    ``A10_JORDAN_M3A`` reads the relaxation-fit shape, not the reach.
+
+    A missing or NaN radius or gap also yields NaN (round-22 semantics:
+    absence of a measurement is not evidence). Infinities keep their measured
+    meaning: an infinite radius over a positive gap is an infinite reach.
+    """
+    radius = ev.get("pseudospectral_radius", float("nan"))
+    gap = ev.get("gap", float("nan"))
+    # A gap at or below the spectral layer's arithmetic resolution is gapless
+    # whatever its sign (``gap_resolution``, see ``_gather_evidence``). Without
+    # a certificate the resolution is unknown and the threshold stays at 0.
+    resolution = ev.get("gap_resolution", float("nan"))
+    floor = resolution if not math.isnan(resolution) and resolution > 0.0 else 0.0
+    if math.isnan(radius) or math.isnan(gap) or not gap > floor:
+        return float("nan")
+    with np.errstate(over="ignore", invalid="ignore"):
+        return float(np.float64(radius) / np.float64(gap))
+
+
+# Derived decision keys and the measured keys they are computed from. The
+# evidence matrix uses this to name the measurement that is actually missing,
+# rather than the quantity that could not be derived from it.
+_DERIVED_FROM: Final[dict[str, tuple[str, ...]]] = {
+    "pseudospectral_reach": ("pseudospectral_radius", "gap"),
+}
+
+
+def _decision_view(ev: dict[str, float]) -> dict[str, float]:
+    """The evidence the ladder and the matrix both evaluate.
+
+    Derived decision quantities are added first, so the ladder and the matrix
+    cannot disagree about them. NaN-valued entries are then stripped
+    (:func:`_strip_unavailable`).
+    """
+    derived = dict(ev)
+    derived["pseudospectral_reach"] = _pseudospectral_reach(ev)
+    return _strip_unavailable(derived)
 
 
 def _strip_unavailable(ev: dict[str, float]) -> dict[str, float]:
@@ -1029,7 +1104,7 @@ def hypothesis_evidence_matrix(
     (issue #102 wishlist) need machinery that does not exist yet and are
     deliberately NOT faked here; they remain open in the issue.
     """
-    ev = _strip_unavailable(ev)
+    ev = _decision_view(ev)
     entries: list[dict[str, object]] = []
     any_fired = False
     any_unevaluable = False
@@ -1046,6 +1121,12 @@ def hypothesis_evidence_matrix(
         missing_optional_list: list[str] = []
         for cond in rung.conditions:
             for k in cond.keys:
+                # A derived key is reported only when its own inputs were
+                # measured, i.e. when it is UNDEFINED (gapless reach), not
+                # merely uncomputed. Otherwise the missing measurement itself
+                # is the actionable entry, and it is listed in its own right.
+                if any(_is_unavailable(ev, src) for src in _DERIVED_FROM.get(k, ())):
+                    continue
                 if _is_unavailable(ev, k) and k not in missing_list:
                     missing_list.append(k)
             for k in cond.optional_keys:
