@@ -1019,6 +1019,66 @@ def _loglik_rounding_band(
     return up, down
 
 
+def _bidiagonal_whitening_norm_bound(
+    whiten: Callable[[np.ndarray], np.ndarray], n_obs: int
+) -> float:
+    """``sqrt(||W||_1 ||W||_inf) >= ||W||_2`` for a LOWER-BIDIAGONAL whitening.
+
+    PR #127 review (relaxation.py:1042). The bound used to be formed from the
+    dense matrix ``W = [whiten(e_0), ..., whiten(e_{n-1})]`` -- an identity, the
+    stacked columns and their absolute values, three ``n x n`` arrays for one
+    scalar, per candidate and per fitted curve (reviewer: 64.6 MB at n = 2000,
+    about 6.4 GB at n = 20000). Both whitenings in use, Prais-Winsten AR(1)
+    (``gls._whiten``) and per-step CAR(1) (``car1.whiten_car1``), touch only
+    ``r_k`` and ``r_{k-1}``, so ``W`` is lower bidiagonal and two probes
+    recover it exactly: on the indicator of the even indices an even row
+    returns its diagonal entry and an odd row its sub-diagonal one, and the
+    odd indicator supplies the rest. Every entry is the SAME floating-point
+    expression ``whiten(e_j)`` produced (the other operand is an exact zero),
+    and each row/column sum has at most two non-zero terms, so the bound is
+    bit-identical to the dense form -- with O(n) storage.
+
+    The bidiagonal shape is an assumption about the callable, so it is
+    CHECKED, not trusted: a third probe with period three
+    (``1, 2, 3, 1, 2, 3, ...``) differs between ``i`` and ``i - 2`` and
+    between ``i`` and ``i + 1``, so any entry outside the two diagonals makes
+    the reconstruction disagree with ``whiten`` by that entry times a
+    non-zero difference. On disagreement beyond the rounding of the two
+    expressions (``8 eps`` relative to the per-row magnitude) the bound is
+    NaN, which ``_loglik_rounding_band`` turns into an infinite ``up`` /
+    NaN ``down``: the candidate stays tied, never silently excluded.
+    """
+    n = int(n_obs)
+    if n < 1:
+        return float("nan")
+    idx = np.arange(n)
+    even = (idx % 2 == 0).astype(float)
+    odd = 1.0 - even
+    w_even = np.asarray(whiten(even), dtype=float)
+    w_odd = np.asarray(whiten(odd), dtype=float)
+    diag = np.where(even == 1.0, w_even, w_odd)
+    sub = np.zeros(n)  # sub[i] = W[i, i-1]; row 0 has none
+    sub[1:] = np.where(even[1:] == 1.0, w_odd[1:], w_even[1:])
+    probe = (idx % 3 + 1).astype(float)
+    recon = diag * probe
+    recon[1:] += sub[1:] * probe[:-1]
+    mag = np.abs(diag) * probe
+    mag[1:] += np.abs(sub[1:]) * probe[:-1]
+    w_probe = np.asarray(whiten(probe), dtype=float)
+    eps = float(np.finfo(float).eps)
+    if not (
+        np.all(np.isfinite(recon))
+        and np.all(np.isfinite(w_probe))
+        and np.all(np.abs(w_probe - recon) <= 8.0 * eps * mag)
+    ):
+        return float("nan")
+    a_diag, a_sub = np.abs(diag), np.abs(sub)
+    row_sums = a_diag + a_sub
+    col_sums = a_diag.copy()
+    col_sums[:-1] += a_sub[1:]
+    return float(np.sqrt(np.max(col_sums) * np.max(row_sums)))
+
+
 def _attainable_residual_norm(
     model: Callable[[np.ndarray, np.ndarray], np.ndarray],
     t: np.ndarray,
@@ -1203,13 +1263,7 @@ def _rank_candidates(
                 if polish
                 else w_resid_norm
             )
-            w_matrix = np.column_stack([whiten(col) for col in np.eye(n_obs)])
-            # ||W||_2 <= sqrt(||W||_1 ||W||_inf): sums only, no BLAS-dependent
-            # factorisation (AGENTS.md, issue #180), and an upper bound.
-            w_abs = np.abs(w_matrix)
-            w_norm = float(
-                np.sqrt(np.max(np.sum(w_abs, axis=0)) * np.max(np.sum(w_abs, axis=1)))
-            )
+            w_norm = _bidiagonal_whitening_norm_bound(whiten, n_obs)
         return _loglik_rounding_band(
             n_obs, w_resid_norm, w_norm * error_norm, attainable
         )
