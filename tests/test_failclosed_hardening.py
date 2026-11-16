@@ -224,32 +224,29 @@ def test_finite_matching_kms_gap_still_certifies_a1():
 
 
 # ---------------------------------------------------------------------------
-# 3. F5 gapless phantom limit fires even when the GNS gap is ALSO floored.
+# 3. F5 gapless input abstains, whether or not the GNS gap is floored.
+#    Superseded contract: this section used to pin that gapless inputs FIRE F5
+#    (after the "inf > inf" repair). The issue #101 re-audit addendum replaced
+#    it. A vanishing gap is not positive reach evidence, so the reach leg
+#    abstains. The "inf > inf" path no longer exists, because the reach is never
+#    computed for gap <= 0.
 # ---------------------------------------------------------------------------
 
 
-def test_f5_fires_gapless_with_floored_gns_gap():
-    """FAILS-BEFORE: gap=0 AND gns_gap=0 made both sides inf and 'inf > inf'
-    is False -- the documented gapless phantom/critical limit never fired and
-    the run fell through to A12."""
+@pytest.mark.parametrize("gns_gap,kms_gap", [(0.0, 0.0), (0.5, None)])
+def test_f5_abstains_gapless_with_floored_or_measured_gns_gap(gns_gap, kms_gap):
+    spectral_kw = {"gap": 0.0, "gns_gap": gns_gap}
+    if kms_gap is not None:
+        spectral_kw["kms_gap"] = kms_gap
     res = _classify(
-        spectral=_spectral(gap=0.0, gns_gap=0.0, kms_gap=0.0),
+        spectral=_spectral(**spectral_kw),
         nonnorm=_nonnorm(henrici_eta=2.0),
         lep=_lep(gap_rate_consistency=float("inf")),
         relaxation=_relax(aicc_model="M9", linear_fit_model="M9"),
     )
-    assert (res.a_class, res.f_family) == ("A10", "F5")
-
-
-def test_f5_still_fires_gapless_with_measured_gns_gap():
-    # The previously pinned case (gap=0, gns_gap>0) keeps firing.
-    res = _classify(
-        spectral=_spectral(gap=0.0, gns_gap=0.5),
-        nonnorm=_nonnorm(henrici_eta=2.0),
-        lep=_lep(gap_rate_consistency=float("inf")),
-        relaxation=_relax(aicc_model="M9", linear_fit_model="M9"),
-    )
-    assert (res.a_class, res.f_family) == ("A10", "F5")
+    assert (res.a_class, res.f_family) != ("A10", "F5")
+    f5 = next(e for e in res.hypothesis_matrix if e["rule_id"] == "F5_PSEUDOSPECTRAL")
+    assert f5["status"] == "UNEVALUABLE"
 
 
 # ---------------------------------------------------------------------------
