@@ -345,14 +345,29 @@ def test_unavailable_gap_makes_f5_unevaluable_not_gapless():
             hypothesis_evidence_matrix(ev, relaxation=rel), "A12_FALLBACK"
         )["status"] == HYPOTHESIS_UNEVALUABLE
 
-    # POSITIVE CONTROL on the same predicate: a gap that really WAS measured as
-    # 0.0 is present in the evidence and still takes the gapless branch, so the
-    # documented #101 blind spot is unchanged rather than quietly closed.
+    # A gap that really WAS measured as 0.0 is present in the evidence and is
+    # kept apart from the withheld one: since the issue #101 addendum (#196) it
+    # abstains too, but names the undefined ``pseudospectral_reach``, not
+    # ``gap``. (Before #196 this asserted the documented #101 blind spot,
+    # F5 SUPPORTED; #196 closed that blind spot on purpose.)
     measured_gapless = _ev(henrici_eta=2.0, pseudospectral_radius=10.0, gap=0.0)
     ladder = {r[0]: r[3] for r in _hypothesis_ladder(measured_gapless, relaxation=rel)}
-    assert ladder["F5_PSEUDOSPECTRAL"] is True
+    assert ladder["F5_PSEUDOSPECTRAL"] is False
     f5 = _entry(
         hypothesis_evidence_matrix(measured_gapless, relaxation=rel),
+        "F5_PSEUDOSPECTRAL",
+    )
+    assert f5["status"] == HYPOTHESIS_UNEVALUABLE
+    assert f5["missing"] == ("pseudospectral_reach",)
+
+    # POSITIVE CONTROL on the same predicate: a measured positive gap with a
+    # large reach still fires the rung, so the abstentions above are not the
+    # predicate going blind.
+    measured_gapped = _ev(henrici_eta=2.0, pseudospectral_radius=10.0, gap=1.0)
+    ladder = {r[0]: r[3] for r in _hypothesis_ladder(measured_gapped, relaxation=rel)}
+    assert ladder["F5_PSEUDOSPECTRAL"] is True
+    f5 = _entry(
+        hypothesis_evidence_matrix(measured_gapped, relaxation=rel),
         "F5_PSEUDOSPECTRAL",
     )
     assert f5["status"] == HYPOTHESIS_SUPPORTED
