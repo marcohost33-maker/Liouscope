@@ -268,6 +268,13 @@ abstract: >-
 # noise move only at replicate-convergence level, and anchors are unchanged. It
 # must NOT be described as calibrating coverage: see the coverage numbers in
 # the PR, which concern iid noise on one model only.
+# Also pending for the next cut (issue #101 addendum), a CLASSIFIER correction.
+# A gapless operator (gap <= 0) no longer reaches A10/F5 through the pseudo-
+# spectral reach leg: the reach is undefined there, and the leg abstains. Systems
+# previously labelled A10/F5 only because their gap vanished (for example an
+# undamped coherent spectator) now report another class, or an UNDEFINED floor.
+# Anchors are unchanged. It must NOT be described as calibrating the F5
+# thresholds (slice C, still open).
 keywords:
   - open quantum systems
   - Lindblad

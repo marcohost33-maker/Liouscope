@@ -7,6 +7,29 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Fixed
+- **Gapless operators no longer win A10/F5 on gaplessness alone (issue #101
+  re-audit addendum, "required interim rule"; `claim_status: pending`).**
+  - **The defect.** The F5 reach leg returned infinite reach for `gap <= 0`.
+    Together with the rate-dimensioned `henrici_eta > 1` gate, any strongly
+    non-normal operator with a vanishing gap became A10/F5 "phantom
+    relaxation". Measured end to end: a driven-damped qubit next to an
+    undamped coherent spectator qubit has `gap ≈ -9e-16` (round-off). It was
+    A10/F5 `CANDIDATE` at rate scales 1 and 10, but not at 0.1, so the label
+    also depended on the rate unit.
+  - **The fix.** A derived, dimensionless `pseudospectral_reach =
+    pseudospectral_radius / gap` is undefined (NaN) for `gap <= 0`, so the leg
+    abstains. The ladder cannot fire, and the matrix reports F5 `UNEVALUABLE`
+    with `missing = ("pseudospectral_reach",)`. The "missing" column names a
+    derived key only when its inputs were measured. A missing radius or gap is
+    still reported as itself (round-22 semantics are kept).
+  - **A second defect, found while fixing.** `_apply_unevaluable_winner_floor`
+    keyed on the class. With A10 owning two rungs, an abstaining F5 would have
+    floored a legitimately fired Jordan (`A10_JORDAN_M3A`) winner to
+    `UNDEFINED`. It now floors only when no rung of the winning class is
+    `SUPPORTED`, which is its documented intent.
+  - **Unchanged.** All 21 anchors. Every gapped F5 case, including the V-system
+    phantom control `test_phantom_with_gap_matched_rho0_is_not_mislabelled_a1`.
+    The slice-C threshold calibration stays open.
 - **Bootstrap replicates no longer stall on SciPy's absolute `gtol`
   (finding 2026-11-15, `claim_status: pending`).**
   - **The defect.** `parametric_bootstrap` starts each replicate fit at

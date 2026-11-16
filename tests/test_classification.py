@@ -523,11 +523,27 @@ def test_a8_old_bare_radius_rule_would_have_flipped_under_rescale():
     assert not (ev["pseudospectral_radius"] > 2.0 * ev["gap_to_gns_ratio"])
 
 
-def test_a8_f5_fires_on_gapless_strongly_nonnormal_operator():
-    # issue #70 A8 edge: a vanishing spectral gap with strong non-normality is
-    # the phantom/critical limit -> infinite pseudospectral reach -> F5 fires.
+@pytest.mark.parametrize("gap", [0.0, -1.0e-15])
+def test_a8_f5_abstains_on_gapless_strongly_nonnormal_operator(gap):
+    # Issue #101 re-audit addendum (supersedes the issue #70 A8 edge, which let
+    # a vanishing gap supply infinite reach). A gap of zero, or a round-off
+    # negative one, is not positive evidence of phantom relaxation: conserved
+    # coherent dynamics produce it as well. The reach leg ABSTAINS, so F5 cannot
+    # win on gaplessness plus Henrici alone. Strong non-normality is unchanged
+    # here (henrici_eta=2), so only the gap rule can be responsible.
     cls = _classify(
-        spectral=_spectral(gap=0.0),
+        spectral=_spectral(gap=gap),
+        resolvent=_resolvent(pseudospectral_radius=5.0),
+        nonnorm=_nonnorm(henrici_eta=2.0),
+    )
+    assert (cls.a_class, cls.f_family) != ("A10", "F5")
+
+
+def test_a8_f5_still_fires_on_a_positive_gap_with_large_reach():
+    # Silent direction of the abstention rule: a MEASURED positive gap with
+    # radius/gap = 5 > 2 * gap_to_gns_ratio keeps F5 firing.
+    cls = _classify(
+        spectral=_spectral(gap=1.0),
         resolvent=_resolvent(pseudospectral_radius=5.0),
         nonnorm=_nonnorm(henrici_eta=2.0),
     )

@@ -175,3 +175,17 @@ not influence any verdict yet: the switch requires the preregistered
 calibration study and independent physics review specified in issue #101
 (slice C), including gapless-normal negative controls, before any threshold
 is chosen.
+
+**Gapless inputs abstain on F5 (issue #101 re-audit addendum).** The reach
+leg reads the dimensionless `pseudospectral_reach = pseudospectral_radius /
+gap`. For `gap <= 0` (no decaying non-stationary mode, or a round-off negative
+gap) the reach is **undefined**, not infinite. The F5 rung therefore cannot
+fire, and the hypothesis matrix reports it `UNEVALUABLE` with
+`missing = ("pseudospectral_reach",)`, not `SUPPORTED`. A vanishing gap is
+produced as readily by conserved coherent dynamics, such as an undamped
+spectator rotation, as by a phantom mechanism. Before this rule such a system
+was labelled A10/F5 `CANDIDATE` whenever `henrici_eta > 1`
+(`tests/test_issue101_gapless_abstention.py`). Gapless positive evidence
+keeps its own route: the defective Jordan rung (`A10_JORDAN_M3A`) reads the
+relaxation-fit shape and is unaffected. The threshold calibration of slice C
+remains open.
