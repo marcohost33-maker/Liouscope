@@ -1055,6 +1055,68 @@ def _zero_mode_applicable(
     return bool(tp_defect <= tp_bound)
 
 
+def _zero_mode_displaced_by_premise(L_c: np.ndarray, bound: float) -> bool:
+    """Can the admitted trace defect alone move the zero mode out of the band?
+
+    PR #127 review (linalg.py:1054). :func:`_zero_mode_applicable` admits a
+    trace defect ``||r|| = tp_defect / sqrt(d)`` up to the band, reasoning that
+    the nearest exactly trace-preserving ``L' = L - u r^H`` has a zero mode and
+    ``||L - L'||_2 = ||r||``. That bounds the EIGENVALUE displacement by the
+    same amount only for a well-conditioned zero mode. For a nonnormal one it
+    does not: the reviewer's 4x4 operator with leading block
+    ``[[0, 1e-14], [1, 0]]`` in a basis starting with ``vec(I)/sqrt(2)`` has
+    ``tp_defect = 1.4e-14`` against an admissible ``6.3e-13``, yet its exact
+    eigenvalues nearest zero are ``+-1e-7`` -- every route then "failed", and a
+    CORRECT spectrum was reported as a failed eigensolve (D1 withheld,
+    classification UNDEFINED).
+
+    First-order perturbation theory for the simple zero eigenvalue of ``L'``,
+    whose left null vector is ``u`` by construction, gives the displacement
+    ``|r^H x| / |u^H x| <= ||r|| / |u^H x|`` for its unit right null vector
+    ``x``. ``x`` is taken from an SVD of ``L'``, which is backward stable and
+    independent of the eigensolver whose result is being judged, so a garbage
+    eigensolve cannot talk this check into anything. For a GKSL generator
+    ``x = vec(rho_ss)/||rho_ss||_F`` and ``|u^H x| >= 1/sqrt(d)``, so the
+    estimate stays at the size of ``tp_defect`` itself -- far inside the band
+    (measured healthy defects are ``<= 0.44 eps ||L||_F`` against a band of
+    ``rtol eps ||L||_2``, ``rtol = 1e3``): a genuine eigensolver failure on a
+    real generator keeps ``certified=False``. A defective zero mode has
+    ``u^H x = 0`` and an unbounded estimate, which is the reviewer's case.
+
+    Returns ``True`` only on positive evidence. Every unusable input (not a
+    ``d^2`` operator, ``r = 0``, an SVD that fails or is non-finite) returns
+    ``False``, i.e. the caller keeps the fail-closed ``certified=False``. With
+    two or more singular values inside the band ``L'`` has a multiple zero
+    mode; a rank-one perturbation then leaves at least one zero eigenvalue in
+    place to first order, so a spectrum without one is NOT explained by the
+    premise and the function also returns ``False``.
+    """
+    n = int(L_c.shape[0])
+    d = int(round(np.sqrt(n)))
+    if n == 0 or d * d != n or not (np.isfinite(bound) and bound > 0.0):
+        return False
+    u = np.zeros(n, dtype=complex)
+    u[np.arange(d) * (d + 1)] = 1.0 / np.sqrt(d)
+    with np.errstate(all="ignore"):
+        r = u.conj() @ L_c
+        r_norm = float(np.linalg.norm(r))
+        if not np.isfinite(r_norm) or r_norm == 0.0:
+            return False
+        L_tp = L_c - np.outer(u, r)
+        try:
+            _, s, vh = np.linalg.svd(L_tp)
+        except np.linalg.LinAlgError:
+            return False
+    if not (np.all(np.isfinite(s)) and np.all(np.isfinite(vh))):
+        return False
+    if int(np.count_nonzero(s <= bound)) > 1:
+        return False
+    x = vh[-1].conj()  # right singular vector of the smallest singular value
+    overlap = float(abs(np.vdot(u, x)))
+    displacement = r_norm / overlap if overlap > 0.0 else float("inf")
+    return bool(displacement > bound)
+
+
 def certified_eigvals(
     L_super: np.ndarray,
     *,
@@ -1360,8 +1422,13 @@ def certified_eigvals(
         # Every route raised (only reachable when the primary solve did too).
         assert primary_error is not None
         raise primary_error
+    # PR #127 review (linalg.py:1054): no route found a zero, but the admitted
+    # trace defect can displace a nonnormal zero mode beyond the band -- then
+    # the theorem says nothing about THIS operator, which is "not applicable",
+    # not "the eigensolve failed".
+    applicable = not _zero_mode_displaced_by_premise(L_c, bound)
     return best[1], ZeroModeCertificate(
-        applicable=True,
+        applicable=applicable,
         certified=False,
         solver=best[0],
         residual=best[2],
@@ -1684,8 +1751,11 @@ def certified_eig(
         # Every route raised (only reachable when the primary solve did too).
         assert primary_error is not None
         raise primary_error
+    # Same rule as the sibling ladder in ``certified_eigvals`` (PR #127 review,
+    # linalg.py:1054); kept in both in the same commit.
+    applicable = not _zero_mode_displaced_by_premise(L_c, bound)
     return best[1], ZeroModeCertificate(
-        applicable=True,
+        applicable=applicable,
         certified=False,
         solver=best[0],
         residual=best[2],
