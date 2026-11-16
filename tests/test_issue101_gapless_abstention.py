@@ -77,3 +77,35 @@ def test_coherent_spectator_rotation_is_not_phantom_relaxation(g: float) -> None
     # Abstention, not refutation: the reach is undefined, not small.
     assert f5["status"] == "UNEVALUABLE"
     assert f5["missing"] == ("pseudospectral_reach",)
+
+
+@pytest.mark.parametrize("sign", [1.0, -1.0])
+def test_a_round_off_gap_abstains_whatever_its_sign(sign: float) -> None:
+    """Gap-floor adversary from the #101 addendum, found on the arm64 CI probe.
+
+    The coherent-spectator gap is round-off, and its sign depends on the BLAS
+    stack: negative on x86-64 OpenBLAS, positive on arm64. A positive round-off
+    gap of about 1e-15 gives a reach of about 1e15. Without the resolution rule
+    that reach fires F5 whenever ``gap_to_gns_ratio`` is finite. This test fixes
+    the sign explicitly instead of relying on the platform.
+    """
+    from liouscope.diagnostics.classification import (
+        _hypothesis_ladder,
+        hypothesis_evidence_matrix,
+    )
+
+    rel = _driven_qubit_with_coherent_spectator(1.0).relaxation
+    ev = {
+        "gap": sign * 1.0e-15, "gap_resolution": 2.7e-12,
+        "pseudospectral_radius": 5.0, "gap_to_gns_ratio": 1.0, "henrici_eta": 2.0,
+    }
+    ladder = {r[0]: r[3] for r in _hypothesis_ladder(ev, relaxation=rel)}
+    assert ladder["F5_PSEUDOSPECTRAL"] is False
+    f5 = next(e for e in hypothesis_evidence_matrix(ev, relaxation=rel)
+              if e["rule_id"] == "F5_PSEUDOSPECTRAL")
+    assert f5["status"] == "UNEVALUABLE"
+
+    # Silent direction: a gap resolved above the same resolution still decides.
+    resolved = {**ev, "gap": 1.0}
+    ladder = {r[0]: r[3] for r in _hypothesis_ladder(resolved, relaxation=rel)}
+    assert ladder["F5_PSEUDOSPECTRAL"] is True

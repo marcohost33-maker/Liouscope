@@ -387,6 +387,17 @@ def _gather_evidence(
     ev["beta_D"] = float(relaxation.beta_D)
     ev["beta_D_linear"] = float(relaxation.beta_D_linear)
     ev["gap"] = float(spectral.gap)
+    # Issue #101 addendum, gap-floor adversary. This is the spectral layer's own
+    # arithmetic resolution for an eigenvalue: the zero-mode certificate's
+    # admissible backward error, which scales with the rate unit. A gap within
+    # it is not resolved, and its SIGN is round-off. Measured: the same
+    # coherent-spectator system gives gap = -9e-16 on x86-64 OpenBLAS and a
+    # positive round-off gap on arm64. Absent when no certificate applies.
+    _cert = getattr(spectral, "zero_mode_certificate", None) or {}
+    _tol = _cert.get("zero_tolerance")
+    ev["gap_resolution"] = (
+        float(_tol) if isinstance(_tol, (int, float)) and math.isfinite(_tol) else float("nan")
+    )
     _blin = float(relaxation.beta_D_linear)
     ev["d17_metric_multiplier"] = (
         float(relaxation.beta_D / _blin)
@@ -903,7 +914,9 @@ def _pseudospectral_reach(ev: dict[str, float]) -> float:
     relaxation. It equally describes normal conserved dynamics (pure dephasing
     with conserved populations), a semisimple degenerate stationary manifold,
     a numerical floor, or a critical system without the F5 mechanism. The
-    reach is therefore UNDEFINED there, not infinite. The unavailable sentinel
+    reach is therefore UNDEFINED there, not infinite. The same holds for a
+    positive gap within the spectral layer's arithmetic resolution
+    (``gap_resolution``), whose sign is round-off. The unavailable sentinel
     makes the reach leg ABSTAIN: the ladder cannot fire on it, and the evidence
     matrix reports the rung UNEVALUABLE instead of SUPPORTED. That holds unless
     a sibling condition already refutes it, as for every unavailable key.
@@ -918,7 +931,12 @@ def _pseudospectral_reach(ev: dict[str, float]) -> float:
     """
     radius = ev.get("pseudospectral_radius", float("nan"))
     gap = ev.get("gap", float("nan"))
-    if math.isnan(radius) or math.isnan(gap) or not gap > 0.0:
+    # A gap at or below the spectral layer's arithmetic resolution is gapless
+    # whatever its sign (``gap_resolution``, see ``_gather_evidence``). Without
+    # a certificate the resolution is unknown and the threshold stays at 0.
+    resolution = ev.get("gap_resolution", float("nan"))
+    floor = resolution if not math.isnan(resolution) and resolution > 0.0 else 0.0
+    if math.isnan(radius) or math.isnan(gap) or not gap > floor:
         return float("nan")
     with np.errstate(over="ignore", invalid="ignore"):
         return float(np.float64(radius) / np.float64(gap))

@@ -22,6 +22,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     with `missing = ("pseudospectral_reach",)`. The "missing" column names a
     derived key only when its inputs were measured. A missing radius or gap is
     still reported as itself (round-22 semantics are kept).
+  - **Round-off gaps count as gapless, whatever their sign.** A gap at or
+    below the zero-mode certificate's admissible backward error
+    (`gap_resolution`, which scales with the rate unit) is also undefined
+    reach. The arm64 CI probe found the same system's round-off gap POSITIVE
+    (it is -9e-16 on x86-64), which would give a reach of about 1e15 and fire
+    F5 whenever `gap_to_gns_ratio` is finite. Without a certificate the
+    threshold stays 0.
   - **A second defect, found while fixing.** `_apply_unevaluable_winner_floor`
     keyed on the class. With A10 owning two rungs, an abstaining F5 would have
     floored a legitimately fired Jordan (`A10_JORDAN_M3A`) winner to
