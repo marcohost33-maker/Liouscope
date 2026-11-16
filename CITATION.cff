@@ -260,6 +260,14 @@ abstract: >-
 # NO NUMBER CHANGES. It must NOT be described as making the interval BCa, or as
 # calibrating its coverage under the serially correlated residuals the fit
 # models: that is a separate, open coverage study (issue #116, stages 2-4).
+# Also pending for the next cut (finding 2026-11-15), a CORRECTNESS fix of the
+# same interval. Bootstrap replicates no longer stop on SciPy's absolute gtol at
+# their starting point. Below about 1e-8 relative noise they used to: the
+# interval was too narrow at about 1e-8, and refused as "degenerate" at 1e-9.
+# Such curves now report "unavailable" with the reason. Intervals at ordinary
+# noise move only at replicate-convergence level, and anchors are unchanged. It
+# must NOT be described as calibrating coverage: see the coverage numbers in
+# the PR, which concern iid noise on one model only.
 keywords:
   - open quantum systems
   - Lindblad
