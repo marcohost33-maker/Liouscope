@@ -166,3 +166,37 @@ Proof runs for B5 (code at 1a384ea):
 | B5 wrapper neutralised (mutation), P1-1 test file | 17 failed, 43 passed, 2 xfailed |
 
 The +30 against the e076f2b runs above are the P1-1 tests.
+
+## Owner decision 2026-11-16: amendment A1 released
+
+Amendment A1 (`beta * dt_0 <= 10`) was a post-hoc methodology change and was
+held for the owner. It was **released on 2026-11-16 (decision E1116-11)**.
+
+Boundary check supporting that decision,
+`benchmarks/pr127_m2_a1_boundary_scan.py` (Windows x86-64, Python 3.12.10,
+numpy 2.5.5, scipy 1.18.1; code of branch `wt/liou-stack`; deterministic).
+Curve `exp(-0.5 t) + 0.5 exp(-b t)` on `linspace(0, 10, 80)`,
+`b * dt_0` in {4 .. 15}, noise 0..1e-3, 190 cases:
+
+| question | result |
+|---|---|
+| correct M2 (slow 2 %, fast 5 %) refused inside the bound | 0 |
+| correct M2 refused above the bound | 31 (all `INDETERMINATE`) |
+| selection fell back to M0/M1/M3a/M3b | 0 |
+| `INDETERMINATE` in total | 90 / 190 |
+| slow rate of every selected M2 | 0.49981 .. 0.50082 (truth 0.5) |
+| gate verdict changed under `t -> 1e6 t` | 0 / 190 |
+
+The bound is dimensionally right (rate times the first grid step) and does
+not refuse a correct fit below it. Its cost is withholding: above the bound,
+and at the noise-limited plateau edge below it, B5 returns `INDETERMINATE`
+rather than a rate. Profile likelihood (dossier option B item 2) remains the
+open route to recover those cases.
+
+Environment note (2026-11-16): with scipy 1.17.1 / numpy 2.4.6 / Python
+3.14.4, S7 (`test_multistart_chain1_never_finds_an_identified_m2_beating_m0`)
+is red. One of 50 starts reaches an identified M2 `[1.1348, 0.7095, 0.0798,
+7.958]` that beats M0, and this also happens on 29a4626 and 7c368dd. With
+scipy 1.18.1 the test is green on both Windows (Python 3.12.10) and Linux
+(Docker, Python 3.12.16). S7 therefore depends on the solver version, not on
+this branch.

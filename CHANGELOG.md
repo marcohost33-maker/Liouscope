@@ -640,6 +640,15 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     note next to the prereg. Known limit: a component fitted at the edge of
     its flat profile (e.g. true rate 500, fitted 48-58 at `dt_0 = 0.127`) is
     not detected.
+    **Amendment A1 (the bound `10 / dt_0`) was released by owner decision on
+    2026-11-16 (E1116-11)**; it was a post-hoc methodology change of the
+    prereg and had been held until then. Boundary check for that decision
+    (two-rate curve `exp(-0.5 t) + 0.5 exp(-b t)`, `dt_0 = 0.127`,
+    `b * dt_0` from 4 to 15, noise 0..1e-3, 190 cases): no correct M2 fit was
+    refused inside the bound; above it 31 correct fits are withheld as
+    `INDETERMINATE`; no case fell back to M0/M1/M3a/M3b; every selected M2
+    reported the slow rate within 0.2 %; the gate verdict was identical in a
+    time unit 1e6 larger in 190/190 cases.
   - On the example the scaled M2 converges to beta2 = 7.67 and loses on its
     own AICc (`N_eff` 4.7 <= k + 1); the former one-point endpoint (~1e6) is
     refused by the bound.
