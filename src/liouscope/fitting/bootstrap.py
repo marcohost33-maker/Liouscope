@@ -3,10 +3,12 @@
 Anchor G: standard iid bootstrap on ODE trajectories violates independence
 (neighbouring time samples are heavily correlated). We instead:
 
-1. Fit the model once (GLS+AR(1)).
+1. Fit the model once (GLS+AR(1)), then polish that fit to the optimum the
+   data define, with SciPy's absolute ``gtol`` stopping rule disabled
+   (finding 2026-11-15).
 2. Resimulate ``nu_t ~ N(0, sigma^2)`` and propagate through
    ``eps_t = rho eps_{t-1} + nu_t``.
-3. Re-fit the model on the resimulated trajectory.
+3. Re-fit the model on the resimulated trajectory, again without ``gtol``.
 4. Aggregate fitted parameters and report bias-corrected bootstrap
    confidence intervals (Efron 1987): BCa when jackknife estimates supply the
    acceleration term, plain BC otherwise (see :func:`bca_ci`, issue #116).
@@ -22,6 +24,11 @@ from scipy.special import ndtr, ndtri
 
 from .car1 import car1_resample, is_uniform_grid
 from .gls import fit_gls_ar1
+
+# Largest admissible distance, in resampling standard deviations, between the
+# caller's estimate and the fully converged optimum the interval is built
+# around. See step 3 in ``parametric_bootstrap``.
+_MAX_OFFSET_IN_SD = 0.1
 
 
 def _ar1_resample(
@@ -87,24 +94,55 @@ def parametric_bootstrap(
                if base.likelihood_degenerate else "")
             + "; a bootstrap around a non-estimate has no meaning"
         )
-    theta_hat = base.params
+    # Finding 2026-11-15: SciPy's ``gtol`` is an ABSOLUTE test on ``J^T f``.
+    # A replicate that starts at ``theta_hat`` has a gradient proportional to
+    # its own noise. At about 1e-8 relative noise the test therefore holds
+    # before the first step: the replicate came back as ``theta_hat``,
+    # unchanged and "converged". At 1e-8 about a quarter of the replicates
+    # stalled (the interval narrowed, the fail-open direction). At 1e-9 all of
+    # them stalled, and ``bca_ci`` refused a measurable uncertainty as
+    # "degenerate". The same rule leaves the base estimate about 5e-10 away
+    # from the optimum at every noise level. Below about 1e-10 noise that
+    # offset is many standard errors.
+    #
+    # Hence three steps, all with ``gtol`` disabled, so that only the relative
+    # ``ftol``/``xtol`` tests stop the solver:
+    #   1. Polish the base estimate to the optimum the data define. If the
+    #      converged residuals carry no representable scale (an exactly
+    #      described, noise-free curve: issue #135's path), there is nothing
+    #      to resample. The refusal of issue #125 then rests on that fact, not
+    #      on the stall it used to come from.
+    #   2. Simulate and refit the replicates around the polished optimum.
+    #   3. Refuse when the caller's estimate is not converged at the
+    #      resolution of its own uncertainty (``_MAX_OFFSET_IN_SD`` below).
+    polished = fit_gls_ar1(model, t, y, base.params, bounds=bounds, gtol=None)
+    if polished.scale_unavailable or not polished.success:
+        raise RuntimeError(
+            "parametric_bootstrap: the fully converged fit leaves no "
+            "representable residual scale (the model describes the curve to "
+            "the arithmetic's resolution), so there is no noise to resample "
+            "and the uncertainty is unavailable, not zero (issues #125, #135)"
+        )
+    theta_hat = polished.params
     samples = np.empty((B, theta_hat.size))
     # The resampler must match the residual model the fit actually used. On a
-    # non-uniform grid ``base.sigma`` is the STATIONARY sd of a CAR(1) process
+    # non-uniform grid ``sigma`` is the STATIONARY sd of a CAR(1) process
     # (see :class:`liouscope.fitting.gls.GLSFitOutput`), not an innovation sd,
     # and feeding it to the constant-rho AR(1) resampler would generate
     # surrogate noise with the wrong correlation AND the wrong amplitude --
     # i.e. confidence intervals for a different experiment than the one fitted.
-    car1_theta = float(base.theta_car1)
+    # Both noise parameters come from the SAME (polished, #195) fit, so the
+    # correlation and the amplitude describe one residual process.
+    car1_theta = float(polished.theta_car1)
     use_car1 = bool(np.isfinite(car1_theta))
     failed = 0
     for b in range(B):
         if use_car1:
-            eps_b = car1_resample(rng, t, car1_theta, base.sigma)
+            eps_b = car1_resample(rng, t, car1_theta, polished.sigma)
         else:
-            eps_b = _ar1_resample(rng, t.size, base.rho_ar1, base.sigma)
+            eps_b = _ar1_resample(rng, t.size, polished.rho_ar1, polished.sigma)
         y_b = model(t, theta_hat) + eps_b
-        fit_b = fit_gls_ar1(model, t, y_b, theta_hat, bounds=bounds)
+        fit_b = fit_gls_ar1(model, t, y_b, theta_hat, bounds=bounds, gtol=None)
         failed += not fit_b.success
         samples[b] = fit_b.params
     if failed:
@@ -133,6 +171,24 @@ def parametric_bootstrap(
             "retaining them narrows the BCa interval instead of widening it, "
             "and dropping them biases the endpoints; neither has a validated "
             "rule. No confidence interval is reported from this resample"
+        )
+    # Step 3. The interval describes the polished optimum. The caller reports
+    # its own, default-tolerance estimate ``base.params``. The interval
+    # describes that estimate only if the two differ by a small fraction of
+    # the resampling spread. An offset of ``k`` SD moves a normal-theory 95 %
+    # endpoint by ``k`` SD, which is ``k/1.96`` of the half-width.
+    # ``_MAX_OFFSET_IN_SD = 0.1`` bounds that at about 5 % of the half-width.
+    # Measured (M0, 48 points): the offset is about 0.04 SD at 1e-8 relative
+    # noise, 0.5 SD at 1e-9 and 59 SD at 1e-11. The guard therefore withholds
+    # the interval exactly where it could not contain the reported value.
+    spread = samples.std(axis=0)
+    offset = np.abs(base.params - theta_hat)
+    if np.any(offset > _MAX_OFFSET_IN_SD * spread):
+        raise RuntimeError(
+            "parametric_bootstrap: the reported estimate is not converged at "
+            "the resolution of its own uncertainty (offset from the optimum "
+            f"{offset.tolist()} vs resampling SD {spread.tolist()}); an interval "
+            "around the optimum would not describe it (finding 2026-11-15)"
         )
     return samples, theta_hat
 

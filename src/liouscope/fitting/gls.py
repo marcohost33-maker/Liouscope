@@ -126,6 +126,7 @@ def fit_gls_ar1(
     n_iters: int = 3,
     max_nfev: int = 2000,
     residual_family: str = "auto",
+    gtol: float | None = 1.0e-8,
 ) -> GLSFitOutput:
     """Fit ``y = model(t, theta) + eps`` with AR(1) residuals.
 
@@ -151,6 +152,16 @@ def fit_gls_ar1(
         and re-detecting would mix two estimators in one jackknife (PR #127
         review). ``"car1"`` keeps the documented AR(1) fallback if ``theta``
         cannot be estimated.
+    gtol
+        ``least_squares`` gradient tolerance; ``None`` disables that stopping
+        rule, leaving the relative ``ftol``/``xtol`` tests. The default is
+        SciPy's own default, so callers that do not pass it are unchanged. The
+        rule is ABSOLUTE in ``J^T f`` (SciPy ``trf``: ``g_norm < gtol`` on the
+        unscaled gradient), i.e. in amplitude-normalised residual units times
+        inverse parameter units. A fit whose residuals are small for that
+        reason stops at its starting point with ``success=True``. The
+        parametric bootstrap therefore disables it (finding 2026-11-15, see
+        ``fitting.bootstrap``).
     """
     if residual_family not in ("auto", "ar1", "car1"):
         raise ValueError(
@@ -428,8 +439,10 @@ def fit_gls_ar1(
         # from the data, and the column norm of a decoupled rate is ~0 --
         # ``"jac"`` then sends the solver to beta ~ 1e6. The characteristic
         # scale is carried along by ``y -> c*y`` like ``"jac"``, so the
-        # invariance above still holds.
-        ls_kwargs: dict[str, object] = {"max_nfev": max_nfev}
+        # invariance above still holds. ``x_scale`` is therefore chosen in
+        # ``_least_squares``, not here; ``gtol`` (#195) passes through to
+        # both paths unchanged.
+        ls_kwargs: dict[str, object] = {"max_nfev": max_nfev, "gtol": gtol}
         if bounds is not None:
             ls_kwargs["bounds"] = bounds
         try:

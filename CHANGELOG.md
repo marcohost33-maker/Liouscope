@@ -6,6 +6,72 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+- **Gapless operators no longer win A10/F5 on gaplessness alone (issue #101
+  re-audit addendum, "required interim rule"; `claim_status: pending`).**
+  - **The defect.** The F5 reach leg returned infinite reach for `gap <= 0`.
+    Together with the rate-dimensioned `henrici_eta > 1` gate, any strongly
+    non-normal operator with a vanishing gap became A10/F5 "phantom
+    relaxation". Measured end to end: a driven-damped qubit next to an
+    undamped coherent spectator qubit has `gap ≈ -9e-16` (round-off). It was
+    A10/F5 `CANDIDATE` at rate scales 1 and 10, but not at 0.1, so the label
+    also depended on the rate unit.
+  - **The fix.** A derived, dimensionless `pseudospectral_reach =
+    pseudospectral_radius / gap` is undefined (NaN) for `gap <= 0`, so the leg
+    abstains. The ladder cannot fire, and the matrix reports F5 `UNEVALUABLE`
+    with `missing = ("pseudospectral_reach",)`. The "missing" column names a
+    derived key only when its inputs were measured. A missing radius or gap is
+    still reported as itself (round-22 semantics are kept).
+  - **Round-off gaps count as gapless, whatever their sign.** A gap at or
+    below the zero-mode certificate's admissible backward error
+    (`gap_resolution`, which scales with the rate unit) is also undefined
+    reach. The arm64 CI probe found the same system's round-off gap POSITIVE
+    (it is -9e-16 on x86-64), which would give a reach of about 1e15 and fire
+    F5 whenever `gap_to_gns_ratio` is finite. Without a certificate the
+    threshold stays 0.
+  - **A second defect, found while fixing.** `_apply_unevaluable_winner_floor`
+    keyed on the class. With A10 owning two rungs, an abstaining F5 would have
+    floored a legitimately fired Jordan (`A10_JORDAN_M3A`) winner to
+    `UNDEFINED`. It now floors only when no rung of the winning class is
+    `SUPPORTED`, which is its documented intent.
+  - **Unchanged.** All 21 anchors. Every gapped F5 case, including the V-system
+    phantom control `test_phantom_with_gap_matched_rho0_is_not_mislabelled_a1`.
+    The slice-C threshold calibration stays open.
+- **Bootstrap replicates no longer stall on SciPy's absolute `gtol`
+  (finding 2026-11-15, `claim_status: pending`).**
+  - **The defect.** `parametric_bootstrap` starts each replicate fit at
+    `theta_hat`. SciPy's `trf` stops when `norm(J^T f, inf) < gtol = 1e-8`.
+    That test is absolute, not relative to the noise. From about 1e-8
+    relative noise, replicates returned `theta_hat` unchanged after one
+    evaluation and counted as converged:
+    - At 1e-8, about 25 % of replicates sat on the centre, and the interval
+      was too narrow (fail-open).
+    - At 1e-9, all of them did, and `bca_ci` refused measurable noise as
+      "degenerate".
+    - The same rule leaves the default-tolerance estimate about 5e-10 from
+      the optimum at every noise level.
+  - **The fix** is scoped to the bootstrap:
+    - `fit_gls_ar1` gains `gtol=` (default `1e-8`, SciPy's own, so every
+      other caller is unchanged).
+    - The bootstrap polishes the base fit with `gtol=None`, refits the
+      replicates the same way, and withholds the interval (fit uncertainty
+      UNKNOWN) in two cases: when the converged fit has no residual scale (a
+      noise-free curve, #125/#135), or when the caller's estimate sits more
+      than 0.1 resampling SD from the optimum.
+    - A noise-free curve is still refused, now for a reason that belongs to
+      the data.
+  - **What changes for results.** Intervals at ordinary noise move only at
+    replicate-convergence level. Curves with relative noise of about 1e-9 or
+    less now report `interval_method = "unavailable"` with a stated reason,
+    instead of a narrowed interval or a mislabelled degeneracy. Anchors are
+    unchanged.
+  - **Not changed, owner decision.** Disabling `gtol` globally fails nine
+    tests through one mechanism. The converged residuals of a noise-free curve
+    are exactly zero, so the likelihood scale has no MLE (#135) and the fit
+    leaves AICc selection. Whether a noise-free curve takes part in model
+    selection therefore depends today on where the solver stops, which bears
+    on #127/#193.
+
 ### Added
 - **The relaxation-rate interval now says which estimator produced it:
   `RelaxationResult.interval_method` (issue #116, stage 1, `claim_status: pending`).**
