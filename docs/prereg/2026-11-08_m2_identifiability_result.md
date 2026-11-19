@@ -174,7 +174,7 @@ held for the owner. It was **released on 2026-11-16 (decision E1116-11)**.
 
 Boundary check supporting that decision,
 `benchmarks/pr127_m2_a1_boundary_scan.py` (Windows x86-64, Python 3.12.10,
-numpy 2.5.5, scipy 1.18.1; code of branch `wt/liou-stack`; deterministic).
+numpy 2.5.4, scipy 1.18.1; gate code of 8032ef5, deterministic).
 Curve `exp(-0.5 t) + 0.5 exp(-b t)` on `linspace(0, 10, 80)`,
 `b * dt_0` in {4 .. 15}, noise 0..1e-3, 190 cases:
 
@@ -192,6 +192,27 @@ not refuse a correct fit below it. Its cost is withholding: above the bound,
 and at the noise-limited plateau edge below it, B5 returns `INDETERMINATE`
 rather than a rate. Profile likelihood (dossier option B item 2) remains the
 open route to recover those cases.
+
+**Correction (PR #193 review).** The first version of the scan (numpy 2.5.5,
+code of branch `wt/liou-stack`) passed the simulated noise `sigma` to
+`_select_model` as `data_error`. That argument bounds the numerical formation
+error of the curve; `_dominant_rate` takes it from `_curve_data_error`
+(~1.7e-16 here), so with `sigma = 1e-3` the first scan widened the rounding
+bands by ~13 orders of magnitude and counted a different policy. The scan now
+calls `_curve_data_error` exactly as `_dominant_rate` does
+(`tests/test_pr127_m2_a1_boundary_scan.py` pins this against the production
+path), and the table above is the rerun. Every count is unchanged. Selecting
+on the same fits under both policies: the winner is identical in 190/190
+cases; the set of tied candidates differs in 32, all at `sigma = 1e-3` and all
+`INDETERMINATE` (`{M0, M2}` under `sigma`, `{M1, M2}` under the shipped level).
+
+The same review found that the gate itself was unit-dependent in float64: its
+column norms squared raw Jacobian entries, which under- or overflowed at time
+or amplitude units of 1e-170 / 1e170 and refused a resolved fit as "zero or
+non-finite column". Fixed in 8032ef5 (amplitude factors left out of the
+columns, each column divided by its largest entry before its norm); the
+verdict is now the same at time units 1e-170..1e170, amplitude units
+1e-170..1e300 and both at 1e170 (`tests/test_pr127_m2_identifiable.py`).
 
 Environment note (2026-11-16): with scipy 1.17.1 / numpy 2.4.6 / Python
 3.14.4, S7 (`test_multistart_chain1_never_finds_an_identified_m2_beating_m0`)

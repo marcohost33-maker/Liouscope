@@ -51,7 +51,13 @@ def _case(t: np.ndarray, b2: float, sigma: float, seed: int) -> dict[str, object
                 fits[name], _ = rx._fit_with_model(name, t, y)
             except (ValueError, RuntimeError):
                 continue
-        winner, _tied = rx._select_model(fits, t, y, max(sigma, 1.0e-16))
+        # The SHIPPED rounding policy (PR #193 review): ``data_error`` bounds
+        # the numerical formation error of the curve, not its stochastic
+        # noise. ``_dominant_rate`` takes it from ``_curve_data_error``; the
+        # first version of this scan passed ``sigma`` and so widened every
+        # likelihood band by 10-13 orders of magnitude.
+        data_error = rx._curve_data_error(y, d=1, formation_scale=0.0)
+        winner, _tied = rx._select_model(fits, t, y, data_error)
     m2 = fits.get("M2")
     p = m2.params if m2 is not None else np.full(4, np.nan)
     rates = sorted([float(p[1]), float(p[3])])

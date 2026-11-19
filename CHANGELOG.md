@@ -648,7 +648,17 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     refused inside the bound; above it 31 correct fits are withheld as
     `INDETERMINATE`; no case fell back to M0/M1/M3a/M3b; every selected M2
     reported the slow rate within 0.2 %; the gate verdict was identical in a
-    time unit 1e6 larger in 190/190 cases.
+    time unit 1e6 larger in 190/190 cases. These counts are from a rerun with
+    the shipped rounding level (`_curve_data_error`, as in `_dominant_rate`);
+    the first scan passed the noise `sigma` as `data_error` (PR #193 review).
+    Same counts; the winner is identical in 190/190 cases, the set of tied
+    candidates differs in 32 (all at noise 1e-3, all `INDETERMINATE`).
+  - The gate's column equilibration no longer squares raw Jacobian entries
+    and leaves out the amplitude factors, which equilibration removes
+    exactly (PR #193 review). Before, a resolved fit was refused as "zero or
+    non-finite column" at time or amplitude units of 1e-170 or 1e170; the
+    verdict is now the same for time units 1e-170..1e170, amplitude units
+    1e-170..1e300 and both at 1e170.
   - On the example the scaled M2 converges to beta2 = 7.67 and loses on its
     own AICc (`N_eff` 4.7 <= k + 1); the former one-point endpoint (~1e6) is
     refused by the bound.
