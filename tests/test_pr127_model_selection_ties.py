@@ -23,7 +23,7 @@ import pytest
 from liouscope import diagnose
 from liouscope._consts import INTERVAL_METHOD_UNAVAILABLE, MODEL_SELECTION_INDETERMINATE
 from liouscope.diagnostics import relaxation as rx
-from liouscope.fitting.aicc import choose_model
+from liouscope.fitting.aicc import aicc, choose_model
 
 U = 0.5 * float(np.finfo(float).eps)
 
@@ -123,19 +123,54 @@ def test_resolved_curve_is_not_widened_into_a_tie() -> None:
     assert plain != "M0"
 
 
-def test_tie_after_m0_is_excluded_is_indeterminate(monkeypatch) -> None:
+@pytest.mark.parametrize("m3a_floor_n_eff", [None, 3.9], ids=["as_fitted", "m3a_neff_le_k1"])
+def test_tie_after_m0_is_excluded_is_indeterminate(monkeypatch, m3a_floor_n_eff) -> None:
     """M0 evaluated and REJECTED by a true comparison, two non-nested
-    candidates tied at the rounding level: no model can be named."""
+    candidates tied at the rounding level: no model can be named.
+
+    The tie must not depend on where each candidate's solver happened to
+    stop. It did (PR #193, macOS-15 / Accelerate probe, jobs 133576359899 and
+    135255327421: tied ``('M1',)``). Two inputs of the old set-up were
+    solver-stop artefacts, measured on two Windows stacks:
+
+    * the AICc sample size. On a uniform grid it is the Geyer N_eff of the
+      residuals, which on this curve are rounding-level noise plus whatever
+      smooth misfit the solver left. For the SAME M3a candidate it was 5.11
+      (scipy 1.17.1) and 68.85 (scipy 1.18.0); at or below k + 1 = 4 the AICc
+      is infinite and M3a drops out of the tie -- the second parametrisation
+      reproduces exactly the macOS outcome ``('M1',)`` under the old set-up.
+      The noise of ``_floor_curve`` is iid by construction, so its sample
+      size is ``n``; that is used here;
+    * the continuation was switched off for EVERY candidate, so a candidate
+      was tied only if its raw stop was already below the data error (M3a on
+      Windows: 2.6e-14 / 2.0e-14; M2: 2.4e-11 / 5.2e-11, excluded). It is now
+      switched off for M0 only, the one candidate this test mis-specifies.
+    """
     t, y, level = _floor_curve(0)
     fits = _fits(t, y)
+    if m3a_floor_n_eff is not None:
+        f3 = fits["M3a"]
+        fits["M3a"] = dataclasses.replace(
+            f3, n_eff=m3a_floor_n_eff,
+            aicc=aicc(f3.log_likelihood, f3.params.size, m3a_floor_n_eff),
+        )
+    for name, f in fits.items():
+        if name != "M0" and f.success and f.identifiable:
+            fits[name] = dataclasses.replace(
+                f, aicc=aicc(f.log_likelihood, f.params.size, float(t.size))
+            )
     # M0 with a wrong rate: residual of order the curve itself, so its data
-    # band is negligible. The solver continuation is switched off here only
+    # band is negligible. The solver continuation is switched off for M0 only
     # to isolate the decision branch -- left on, it would (correctly) find
     # that M0 can still reach the floor and keep it tied.
-    monkeypatch.setattr(
-        rx, "_attainable_residual_norm",
-        lambda model, t_, y_, params, whiten: float(np.linalg.norm(whiten(y_ - model(t_, params)))),
-    )
+    attainable = rx._attainable_residual_norm
+
+    def no_continuation_for_m0(model, t_, y_, params, whiten):
+        if model is rx.M0:
+            return float(np.linalg.norm(whiten(y_ - model(t_, params))))
+        return attainable(model, t_, y_, params, whiten)
+
+    monkeypatch.setattr(rx, "_attainable_residual_norm", no_continuation_for_m0)
     worst = max(f.aicc for f in fits.values() if f.success and np.isfinite(f.aicc))
     fits["M0"] = dataclasses.replace(
         fits["M0"], params=np.array([0.04, 2.0]), aicc=worst + 1.0e4
