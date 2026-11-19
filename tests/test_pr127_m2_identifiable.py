@@ -1,0 +1,688 @@
+"""M2 is a model-selection candidate only when it is fitted identifiably.
+
+Follow-up to PR #127 (option B), pre-registered in
+``docs/prereg/2026-11-08_m2_identifiability.md``.
+
+Root cause (measured at 6b1cd93, Windows numpy 2.5.4 / scipy 1.18.1): on the
+gap-scaled default window of ``_chain1`` the M2 fit starts from beta2 ~ 48.8,
+where the Jacobian column of beta2 is almost zero. ``x_scale="jac"`` divides
+by that column norm, the solver jumps to beta2 ~ 1e6 -- a component that
+decays inside the first grid step and explains the single point t = 0 --
+and stops on ``xtol`` (status 3) at a point decided by rounding. AICc then
+preferred that M2 over M0 by ~290 units, on every platform, at one of two
+platform-dependent ``beta_D`` values.
+
+Two changes, tested here:
+
+* M2 is optimised with the characteristic scale of its variables
+  (amplitudes in units of the curve, rates in units of the inverse window)
+  instead of the Jacobian column norms (``models.characteristic_x_scale``);
+* an M2 fit whose rates lie outside the window the grid can identify
+  (``ALPHA_SEED_FLOOR_FRAC / T <= beta <= 10 / dt_0``, amendment A1 of the
+  prereg), or whose column-equilibrated Jacobian is singular, is "not
+  identified": infinite
+  AICc and excluded from EVERY branch of ``_select_model``.
+"""
+
+from __future__ import annotations
+
+import math
+import warnings
+
+import numpy as np
+import pytest
+from scipy.optimize import least_squares
+
+from liouscope._types import FitResult
+from liouscope.core.lindblad import build_liouvillian
+from liouscope.diagnostics import relaxation as rel
+from liouscope.fitting.car1 import whiten_car1
+from liouscope.fitting.gls import _whiten as _whiten_ar1
+from liouscope.fitting.gls import fit_gls_ar1
+from liouscope.fitting.models import M2, characteristic_x_scale, initial_guess_m2
+from liouscope.fitting.neff import estimate_neff_geyer
+
+_SX = np.array([[0.0, 1.0], [1.0, 0.0]], dtype=complex)
+_SM = np.array([[0.0, 1.0], [0.0, 0.0]], dtype=complex)
+
+# M0 rate of ``_chain1`` on the default window. Measured 0.75344700 with a
+# spread of +-5e-10 (Windows) / +-1e-10 (Linux) over 1-ulp shifts of the field
+# amplitude (decision dossier 2026-11-07, A.1 item 5) and 0.753447 on the
+# legacy-style M0 fit of this branch. rel 1e-6 is >= 1000x that spread and
+# 4 orders of magnitude below the distance to either former M2 value
+# (0.71738 / 0.72143, 4-5 % away), so it separates "M0 fitted" from "M2
+# artefact" on every platform while failing on any real change of the fit.
+_BETA_M0 = 0.753447
+_RTOL_BETA_M0 = 1.0e-6
+
+
+def _chain1_layer(**kw):
+    L = build_liouvillian(0.3 * _SX, [math.sqrt(0.7) * _SM])
+    psi = np.ones(2, dtype=complex) / math.sqrt(2.0)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        return rel.compute_relaxation_layer(
+            L, rho_initial=np.outer(psi, psi.conj()), bootstrap_B=0, **kw
+        )
+
+
+@pytest.fixture(scope="module")
+def chain1():
+    return _chain1_layer()
+
+
+def _two_rate(seed: int, beta2: float, a2: float = 0.5) -> tuple[np.ndarray, np.ndarray]:
+    rng = np.random.default_rng(seed)
+    t = np.linspace(0.0, 10.0, 80)
+    y = np.exp(-0.5 * t) + a2 * np.exp(-beta2 * t) + 1.0e-3 * rng.standard_normal(t.size)
+    return t, y
+
+
+# --------------------------------------------------------------------------
+# The reported case
+# --------------------------------------------------------------------------
+
+
+def test_chain1_default_window_selects_m0_at_its_rate(chain1) -> None:
+    assert chain1.t_grid_source == "gap_scaled"
+    beta = float(chain1.beta_D)
+    # NaN must fail closed: isclose(nan, x) is False, and the explicit check
+    # names the failure instead of a bare comparison.
+    assert math.isfinite(beta), f"beta_D is not finite: {beta!r}"
+    assert chain1.aicc_model == "M0"
+    assert math.isclose(beta, _BETA_M0, rel_tol=_RTOL_BETA_M0), beta
+
+
+def test_chain1_m2_converges_inside_the_window_and_loses_on_its_own_score(chain1) -> None:
+    """With the scaling fix the second rate converges to 7.67
+    (``beta2 * dt_0 = 2.77``, inside the identifiable window of amendment A1).
+    M2 then leaves the comparison through its own AICc: on this uniform grid
+    the sample size is ``N_eff`` = 4.7 < k + 1 = 5, so the small-sample
+    correction is infinite (decision dossier 2026-11-07, A.1 item 4)."""
+    fr = chain1.fits["M2"]
+    assert fr.success
+    dt0 = float(chain1.t_grid[1] - chain1.t_grid[0])
+    fast = max(float(fr.params[1]), float(fr.params[3]))
+    assert 1.0 < fast * dt0 < 10.0, fr.params
+    assert fr.identifiable, fr.identification_reason
+    assert fr.n_eff <= 4 + 1
+    assert not np.isfinite(fr.aicc)
+
+
+def test_gate_refuses_the_former_chain1_endpoint(chain1) -> None:
+    """The ``x_scale="jac"`` endpoint measured at 6b1cd93 (Windows): the
+    one-point component the artefact was made of."""
+    t = np.asarray(chain1.t_grid, dtype=float)
+    jac_endpoint = np.array([1.14268627, 0.721428703, 0.0697351193, 1.05517695e6])
+    ok, reason = rel._m2_identification(t, jac_endpoint)
+    assert ok is False
+    assert "rate" in reason, reason
+
+
+def test_m2_fit_on_chain1_reaches_an_interior_optimum(chain1) -> None:
+    """The scaling fix on its own, without the gate: the fast rate stays on
+    the grid's scale (measured 7.67, beta2*dt = 2.77) instead of running to
+    ~1e6, and the likelihood is higher there (484.79 vs 472.29)."""
+    t = np.asarray(chain1.t_grid, dtype=float)
+    y = np.asarray(chain1.relative_entropy_curve, dtype=float)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        out = fit_gls_ar1(M2, t, y, initial_guess_m2(t, y))
+    dt = float(t[1] - t[0])
+    fast = max(float(out.params[1]), float(out.params[3]))
+    assert out.success
+    assert fast * dt < 10.0, out.params
+    assert out.log_likelihood > 480.0, out.log_likelihood
+
+
+# --------------------------------------------------------------------------
+# Positive and negative controls on simulated curves
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("seed", [11, 12, 13])
+def test_resolved_two_rate_curve_still_selects_m2(seed: int) -> None:
+    """Positive control: the gate must not remove a genuine, resolved
+    second rate (beta2 dt = 0.38)."""
+    t, y = _two_rate(seed, 3.0)
+    fr, _ = rel._fit_with_model("M2", t, y)
+    assert fr.identifiable, fr.identification_reason
+    assert np.isfinite(fr.aicc)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        rate, model = rel._dominant_rate(t, y)
+    assert model == "M2"
+    assert math.isclose(rate, 0.5, rel_tol=1.0e-2)
+
+
+@pytest.mark.parametrize("seed", [11, 12, 13])
+def test_stepped_over_second_rate_never_wins_with_a_wrong_slow_rate(seed: int) -> None:
+    """beta2 dt = 63 (case C2' of amendment A1). What the gate guarantees:
+    M2 is selected only as an identified fit, and then its slow rate is the
+    true 0.5 -- the fast rate it reports is not a measurement either way."""
+    t, y = _two_rate(seed, 500.0)
+    fr, _ = rel._fit_with_model("M2", t, y)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        rate, model = rel._dominant_rate(t, y)
+    if model == "M2":
+        assert fr.identifiable
+        assert math.isclose(rate, 0.5, rel_tol=1.0e-2), rate
+    else:
+        assert fr.identifiable is False
+        assert "rate" in fr.identification_reason
+
+
+@pytest.mark.xfail(
+    strict=False,
+    reason=(
+        "Open limit (prereg result, run 2, S4'): with noise 1e-3 a component "
+        "at beta2 = 500 is fitted at the plateau edge, beta2 = 48.1-58.1 "
+        "(beta2*dt_0 6.1-7.4 < 10); window and conditioning cannot see a flat "
+        "rate profile there. Measured 6/10 seeds identified. Needs a "
+        "profile-likelihood test (decision dossier 2026-11-07, option B item 2)."
+    ),
+)
+@pytest.mark.parametrize("seed", [11, 12])
+def test_stepped_over_second_rate_is_not_identified(seed: int) -> None:
+    t, y = _two_rate(seed, 500.0)
+    fr, _ = rel._fit_with_model("M2", t, y)
+    assert fr.identifiable is False
+
+
+# --------------------------------------------------------------------------
+# Review finding P1-1: a refusal must not silently move the selection
+# --------------------------------------------------------------------------
+#
+# The rate bound ``beta * dt_0 <= 10`` also refuses M2 fits whose SLOW rate
+# is right (one- or two-point fast components). Falling back to M0/M1 then
+# reported a rate 20 % to 2.5x off with no signal. Option B5 of the decision
+# dossier: when the refused M2 would have changed the winner, the selection
+# is INDETERMINATE (rate NaN), never the fallback. Removing the bound instead
+# (option "drop the bound") fixes these cases too, but turns
+# ``test_multistart_chain1_never_finds_an_identified_m2_beating_m0`` red:
+# 4/50 starts then reach an identified M2 (fast rate ~82, slow 0.7173) that
+# beats M0 on ``_chain1`` -- the start dependence #127 was about. That choice
+# is a methodology decision and is not made here.
+
+
+def _rate_is_right_or_withheld(rate: float, model: str, truth: float, rtol: float) -> None:
+    if math.isfinite(rate):
+        assert math.isclose(rate, truth, rel_tol=rtol), (model, rate, truth)
+    else:
+        assert model == rel.MODEL_SELECTION_INDETERMINATE, (model, rate)
+
+
+@pytest.mark.parametrize("beta2", [50.0, 500.0])
+@pytest.mark.parametrize("seed", range(10))
+def test_fast_second_rate_never_yields_a_wrong_slow_rate(seed: int, beta2: float) -> None:
+    """Case (c) of P1-1. Measured at 744da3d on these seeds: M1 at
+    0.602-0.604 (20 % off) in 2/10 (beta2 = 50) and 7/10 (beta2 = 500)."""
+    t, y = _two_rate(seed, beta2)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        rate, model = rel._dominant_rate(t, y)
+    _rate_is_right_or_withheld(rate, model, 0.5, 1.0e-2)
+
+
+@pytest.mark.parametrize("a2", [0.5, 2.0])
+def test_noise_free_refused_fast_component_withholds_the_rate(a2: float) -> None:
+    """Case (a) of P1-1: noise-free ``exp(-0.5 t) + a2 exp(-100 t)``,
+    ``beta2 * dt_0 = 12.7``. The fit finds the fast rate to 2e-4 (99.98); the
+    bound refuses it. 744da3d then reported M1 0.603309 (a2 = 0.5) and
+    M0 1.009265 (a2 = 2.0). The refused fit keeps its would-be score."""
+    t = np.linspace(0.0, 10.0, 80)
+    y = np.exp(-0.5 * t) + a2 * np.exp(-100.0 * t)
+    fr, _ = rel._fit_with_model("M2", t, y)
+    assert fr.identifiable is False
+    assert math.isfinite(fr.refused_aicc)
+    assert not math.isfinite(fr.aicc)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        rate, model = rel._dominant_rate(t, y)
+    assert model == rel.MODEL_SELECTION_INDETERMINATE, (model, rate)
+    assert math.isnan(rate)
+
+
+def _dephased_qubit_layer(gphi: float):
+    """Case (b) of P1-1: driven qubit ``H = sigma_x``, decay ``sigma_-`` at
+    rate 1, pure dephasing ``sqrt(gphi / 2) sigma_z``, from ``|+>`` on
+    ``linspace(0, 20, 80)``, through the public layer."""
+    sz = np.diag([1.0, -1.0]).astype(complex)
+    L = build_liouvillian(_SX, [_SM, math.sqrt(gphi / 2.0) * sz])
+    psi = np.ones(2, dtype=complex) / math.sqrt(2.0)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        layer = rel.compute_relaxation_layer(
+            L, rho_initial=np.outer(psi, psi.conj()), bootstrap_B=0,
+            t_grid=np.linspace(0.0, 20.0, 80),
+        )
+    return L, layer
+
+
+@pytest.mark.parametrize("gphi", [20.0, 30.0])
+def test_linear_rate_is_the_gap_or_withheld(gphi: float) -> None:
+    """Independent oracle: a LINEAR distance metric decays at the bare gap
+    (``_dominant_rate`` docstring), the smallest non-zero ``-Re lambda`` of
+    the Liouvillian (1.20733 / 1.13622). 744da3d reported 1.93006 / 1.71351
+    (+60 % / +51 %) after refusing the fit's fast component."""
+    L, layer = _dephased_qubit_layer(gphi)
+    decay = np.sort(-np.linalg.eigvals(np.asarray(L)).real)
+    gap = float(decay[1])
+    assert abs(decay[0]) < 1.0e-9 * gap and gap > 1.0, decay
+    beta_lin = float(layer.beta_D_linear)
+    if math.isfinite(beta_lin):
+        assert math.isclose(beta_lin, gap, rel_tol=1.0e-3), (beta_lin, gap)
+
+
+@pytest.mark.parametrize("gphi", [20.0, 30.0])
+def test_relative_entropy_rate_is_not_a_fallback_artefact(gphi: float) -> None:
+    """Differential reference, case (b): 6b1cd93 (before option B) reported M2
+    with ``beta_D`` 2.04259 / 1.86908; the M2 fit of this branch has the slow
+    rate 2.0427 / 1.8482 and a fast one at ``beta2 * dt_0`` = 43. 744da3d
+    refused it and reported M0 5.03697 / 4.05635 (2.5x / 2.2x)."""
+    _L, layer = _dephased_qubit_layer(gphi)
+    beta = float(layer.beta_D)
+    if math.isfinite(beta):
+        assert layer.aicc_model == "M2", (layer.aicc_model, beta)
+        p = layer.fits["M2"].params
+        assert math.isclose(beta, min(float(p[1]), float(p[3])), rel_tol=1.0e-9)
+        assert math.isclose(beta, {20.0: 2.0427, 30.0: 1.8482}[gphi], rel_tol=1.0e-3)
+    else:
+        assert layer.aicc_model == rel.MODEL_SELECTION_INDETERMINATE
+
+
+def _refused(name: str, aicc: float, refused_aicc: float, n_params: int = 4) -> FitResult:
+    return FitResult(
+        model=name, params=np.ones(n_params), log_likelihood=0.0, aicc=float("inf"),
+        n_eff=80.0, residual_ar1_rho=0.0, success=True, identifiable=False,
+        identification_reason="rate outside window", refused_aicc=refused_aicc,
+    )
+
+
+def test_refusal_that_would_not_change_the_winner_keeps_it() -> None:
+    """Positive control: a refused M2 that would have LOST leaves the winner."""
+    fits = {"M0": _fr("M0", -10.0), "M2": _refused("M2", float("inf"), 50.0)}
+    winner, _ = rel._select_model(fits, _T, np.exp(-_T), 1.0e-16)
+    assert winner == "M0"
+
+
+def test_refusal_that_would_change_the_winner_is_indeterminate() -> None:
+    """On a genuine two-rate curve, which M0 cannot reach even after the
+    rounding-band polish (on ``exp(-t)`` both reach it: a true tie, M0)."""
+    y = np.exp(-0.5 * _T) + 0.5 * np.exp(-3.0 * _T)
+    fits = {"M0": _fr("M0", -10.0), "M2": _refused("M2", float("inf"), -500.0)}
+    winner, tied = rel._select_model(fits, _T, y, 1.0e-16)
+    assert winner == rel.MODEL_SELECTION_INDETERMINATE
+    assert tied == ("M0", "M2")
+
+
+def test_refusal_with_no_other_candidate_is_indeterminate() -> None:
+    """A refused M2 that would have been the ONLY candidate: the data favour
+    something the ladder cannot report -- not "none" (no fit converged)."""
+    fits = {
+        "M0": _fr("M0", float("inf"), success=False),
+        "M2": _refused("M2", float("inf"), -500.0),
+    }
+    winner, tied = rel._select_model(fits, _T, np.exp(-_T), 1.0e-16)
+    assert winner == rel.MODEL_SELECTION_INDETERMINATE
+    assert tied == ("M2",)
+
+
+def test_refusal_without_a_finite_would_be_score_is_ignored() -> None:
+    """NaN / inf would-be scores (e.g. ``N_eff <= k + 1``) cannot outrank."""
+    for bad in (float("nan"), float("inf")):
+        fits = {"M0": _fr("M0", -10.0), "M2": _refused("M2", float("inf"), bad)}
+        winner, _ = rel._select_model(fits, _T, np.exp(-_T), 1.0e-16)
+        assert winner == "M0"
+
+
+# --------------------------------------------------------------------------
+# The gate itself: fail-closed edges
+# --------------------------------------------------------------------------
+
+
+_T = np.linspace(0.0, 10.0, 80)
+
+
+@pytest.mark.parametrize(
+    ("params", "fragment"),
+    [
+        ([1.0, 0.5, 0.5, float("nan")], "finite"),
+        ([1.0, float("inf"), 0.5, 3.0], "finite"),
+        ([1.0, 0.5, 0.5, 1.0e6], "rate"),       # stepped over
+        ([1.0, 0.5, 0.5, -0.3], "rate"),        # growing component
+        ([1.0, 0.5, 0.5, 1.0e-5], "rate"),      # indistinguishable from C
+        ([1.0, 0.5, 0.0, 3.0], "Jacobian"),     # A2 = 0: beta2 column zero
+        ([1.0, 0.5, 0.5, 0.5], "Jacobian"),     # equal rates: rank 3
+    ],
+)
+def test_identification_refuses(params: list[float], fragment: str) -> None:
+    ok, reason = rel._m2_identification(_T, np.array(params))
+    assert ok is False
+    assert fragment in reason, reason
+
+
+def test_identification_accepts_a_resolved_pair() -> None:
+    ok, reason = rel._m2_identification(_T, np.array([1.0, 0.5, 0.5, 3.0]))
+    assert ok is True, reason
+    assert reason == ""
+
+
+def test_identification_is_invariant_under_a_change_of_time_unit() -> None:
+    p = np.array([1.0, 0.5, 0.5, 3.0])
+    for c in (1.0e-9, 1.0e9):
+        q = p.copy()
+        q[[1, 3]] /= c
+        assert rel._m2_identification(_T * c, q) == (True, "")
+    bad = np.array([1.0, 0.5, 0.5, 1.0e6])
+    for c in (1.0e-9, 1.0e9):
+        q = bad.copy()
+        q[[1, 3]] /= c
+        assert rel._m2_identification(_T * c, q)[0] is False
+
+
+# PR #193 review (relaxation.py:791): at extreme but finite units the squares
+# of the raw Jacobian columns under- or overflowed, and the resolved pair
+# below was refused as "zero or non-finite column" for its units alone
+# (measured at 5c72e2c for every rescaling listed here except the identity).
+# A rescaling is ``t -> c t`` with rates ``-> beta / c`` and amplitudes
+# ``-> s A``; the dimensionless problem, hence the verdict, is unchanged.
+_EXTREME_UNITS = [
+    pytest.param(1.0, 1.0, id="identity"),
+    pytest.param(1.0e-170, 1.0, id="time-1e-170"),
+    pytest.param(1.0e170, 1.0, id="time-1e170"),
+    pytest.param(1.0, 1.0e-170, id="amplitude-1e-170"),
+    pytest.param(1.0, 1.0e170, id="amplitude-1e170"),
+    pytest.param(1.0, 1.0e300, id="amplitude-1e300"),
+    pytest.param(1.0e170, 1.0e170, id="time-and-amplitude-1e170"),
+]
+
+
+def _in_units(params: list[float], c: float, s: float) -> tuple[np.ndarray, np.ndarray]:
+    q = np.array(params, dtype=float)
+    q[[0, 2]] *= s
+    q[[1, 3]] /= c
+    return _T * c, q
+
+
+@pytest.mark.parametrize(("c", "s"), _EXTREME_UNITS)
+def test_identification_of_a_resolved_pair_survives_extreme_units(c: float, s: float) -> None:
+    """Positive control: identified in natural units, and in every unit."""
+    assert rel._m2_identification(_T, np.array([1.0, 0.5, 0.5, 3.0])) == (True, "")
+    t, q = _in_units([1.0, 0.5, 0.5, 3.0], c, s)
+    assert rel._m2_identification(t, q) == (True, "")
+
+
+@pytest.mark.parametrize(("c", "s"), _EXTREME_UNITS)
+@pytest.mark.parametrize(
+    ("params", "fragment"),
+    [
+        # rates 0.5 and 0.5005: equilibrated condition 5.2e10 > 6.7e7 in every
+        # unit -- refused by the CONDITION, not by a non-finite column
+        ([1.0, 0.5, 0.5, 0.5005], "equilibrated condition"),
+        ([1.0, 0.5, 0.5, 0.5], "singular"),     # equal rates: rank 3
+        ([1.0, 0.5, 0.0, 3.0], "Jacobian"),     # A2 = 0: beta2 unidentified
+    ],
+)
+def test_identification_of_an_unidentified_pair_survives_extreme_units(
+    c: float, s: float, params: list[float], fragment: str
+) -> None:
+    """Negative control: not identified in natural units, nor in any unit --
+    the fix must not buy invariance by accepting everything."""
+    ok1, reason1 = rel._m2_identification(_T, np.array(params))
+    assert ok1 is False and fragment in reason1, reason1
+    t, q = _in_units(params, c, s)
+    ok, reason = rel._m2_identification(t, q)
+    assert ok is False
+    assert fragment in reason, reason
+
+
+def test_identification_refuses_a_degenerate_grid() -> None:
+    ok, reason = rel._m2_identification(np.zeros(5), np.array([1.0, 0.5, 0.5, 3.0]))
+    assert ok is False
+    assert "grid" in reason
+
+
+def _fr(name: str, aicc: float, *, success: bool = True, identifiable: bool = True,
+        n_params: int = 2) -> FitResult:
+    return FitResult(
+        model=name, params=np.ones(n_params), log_likelihood=0.0, aicc=aicc,
+        n_eff=80.0, residual_ar1_rho=0.0, success=success,
+        identifiable=identifiable,
+        identification_reason="" if identifiable else "rate outside window",
+    )
+
+
+def test_unidentified_m2_is_never_the_all_infinite_fallback() -> None:
+    """With every AICc infinite ``_select_model`` keeps a historical fallback
+    to the first succeeded fit. A non-identified M2 must not be it."""
+    fits = {
+        "M0": _fr("M0", float("inf"), success=False),
+        "M2": _fr("M2", float("inf"), identifiable=False, n_params=4),
+    }
+    y = np.exp(-_T)
+    winner, tied = rel._select_model(fits, _T, y, 1.0e-16)
+    assert winner == "none"
+    assert tied == ()
+
+
+def test_unidentified_m2_with_a_finite_score_is_still_excluded() -> None:
+    """Defence in depth: even a caller-built FitResult that carries a finite
+    AICc but ``identifiable=False`` does not win."""
+    fits = {
+        "M0": _fr("M0", -10.0),
+        "M2": _fr("M2", -1.0e6, identifiable=False, n_params=4),
+    }
+    y = np.exp(-_T)
+    winner, _ = rel._select_model(fits, _T, y, 1.0e-16)
+    assert winner == "M0"
+
+
+# --------------------------------------------------------------------------
+# Amplitude and time-unit invariance of the new scaling
+# --------------------------------------------------------------------------
+
+
+# Invariance tolerance. The solver stops at ``ftol = 1e-8`` on the cost, so
+# two runs that differ only by the rounding of ``c*y`` stop at slightly
+# different points. Measured on seed 11, c in {1e-150 .. 1e40}: rates agree to
+# <= 1.23e-9 relative (6b1cd93 with ``x_scale="jac"``: <= 2.66e-9). The
+# pre-registered 1e-9 (S6) was below that stopping level -- reported as a
+# miss in docs/prereg/2026-11-08_m2_identifiability_result.md, not re-tuned
+# there. 1e-7 is ~100x the measured spread and 3e6x below the failures it
+# separates: ``x_scale=1.0`` at 1e+-40 (rel 0.49) and ``"jac"`` at a time
+# unit of 1e9 (rel 0.30, reported as success).
+_RTOL_INVARIANT = 1.0e-7
+
+
+@pytest.mark.parametrize("scale", [1.0e-150, 1.0e-40, 1.0e40])
+def test_m2_rates_are_amplitude_invariant(scale: float) -> None:
+    t, y = _two_rate(11, 3.0)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        ref = fit_gls_ar1(M2, t, y, initial_guess_m2(t, y))
+        out = fit_gls_ar1(M2, t, scale * y, initial_guess_m2(t, scale * y))
+    assert out.success
+    for i in (1, 3):
+        assert math.isclose(out.params[i], ref.params[i], rel_tol=_RTOL_INVARIANT)
+
+
+@pytest.mark.parametrize("c", [1.0e-9, 1.0e6, 1.0e9])
+def test_m2_rates_follow_a_change_of_time_unit(c: float) -> None:
+    """At c = 1e9 the ``"jac"`` fit of 6b1cd93 returned rates 30 % off with
+    ``success=True``: SciPy's ``xtol`` is tested in unscaled variables, where
+    a rate of 5e-10 next to an amplitude of 1 has "converged" at once."""
+    t, y = _two_rate(11, 3.0)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        ref = fit_gls_ar1(M2, t, y, initial_guess_m2(t, y))
+        out = fit_gls_ar1(M2, t * c, y, initial_guess_m2(t * c, y))
+    assert out.success
+    for i in (1, 3):
+        assert math.isclose(out.params[i] * c, ref.params[i], rel_tol=_RTOL_INVARIANT)
+
+
+# --------------------------------------------------------------------------
+# Multistart (pre-registered, item 4)
+# --------------------------------------------------------------------------
+
+
+def _fit_m2_from(t: np.ndarray, y: np.ndarray, start: np.ndarray) -> FitResult:
+    """The production M2 fit (``_fit_with_model``) started at ``start``."""
+    original = rel.initial_guess_m2
+    seed = np.array(start, dtype=float)
+    rel.initial_guess_m2 = lambda _t, _y: seed.copy()
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            fr, _ = rel._fit_with_model("M2", t, y)
+    finally:
+        rel.initial_guess_m2 = original
+    return fr
+
+
+def _multistart(t: np.ndarray, y: np.ndarray, n: int = 50) -> list[FitResult]:
+    rng = np.random.default_rng(20261108)
+    span = float(t[-1] - t[0])
+    dt0 = float(t[1] - t[0])
+    lo, hi = math.log(5.0e-3 / span), math.log(10.0 / dt0)
+    amp = 0.5 * float(np.max(np.abs(y)))
+    out: list[FitResult] = []
+    for _ in range(n):
+        b1, b2 = np.exp(rng.uniform(lo, hi, size=2))
+        out.append(_fit_m2_from(t, y, np.array([amp, b1, amp, b2])))
+    return out
+
+
+# S7, restated 2026-11-19 (docs/prereg/2026-11-08_m2_identifiability_result.md,
+# amendment A2). The pre-registered form -- "no start yields an identified M2
+# with lower AICc than M0" -- is FALSE on two of the stacks it was run on and
+# flips under rounding noise on the third, so it was not a property of the
+# method. Measured (seed 20261108, 50 starts):
+#
+# * macOS-15 arm64 / Accelerate / scipy 1.18.1 (CI probe, jobs 133576359899
+#   and 135255327421) and Windows x86-64 / OpenBLAS / scipy 1.17.1: start 29
+#   ends at _P_STOPPED_SHORT, log-likelihood 482.446, N_eff 5.399, AICc -856.7
+#   against M0 -639.1;
+# * Windows / scipy 1.18.0: start 29 reaches the optimum -- but a 2-ulp
+#   relative perturbation of y (one of three tried) sends it to the same
+#   endpoint again.
+#
+# That endpoint is NOT a second optimum, and no GLS endpoint is the minimum.
+# Continued with its residual model held fixed (the solver continuation of
+# ``_attainable_residual_norm``, run to float64 tolerances), EVERY identified
+# endpoint -- the 44 the other starts reach (log-likelihood 484.790-484.791)
+# and the stopped-short one (482.446) -- arrives at one and the same minimum:
+# whitened residual 4.789072e-3 (the endpoints sit 1.5 % and 4.5 % above it),
+# N_eff 4.461, identical on both Windows stacks. The production fit started at
+# the stopped-short point is NOT a usable check of this: from the 8-digit
+# macOS value it returns to the 484.79 endpoint, from the full-precision
+# Windows value it runs to a rate of 59.9 (outside the window) -- the restart
+# of the three-step iteration (rho = 0 first) is itself rounding-sensitive.
+#
+# The stopped-short endpoint beats M0 only because the AICc sample size on a
+# uniform grid is the Geyer N_eff of the residuals (relaxation.py ``aicc_n``):
+# 5.399 there, 4.707 at the common endpoint, 4.461 at the minimum, around
+# k + 1 = 5 where the correction becomes infinite. Along the segment from the
+# common endpoint to it N_eff grows smoothly and crosses 5 near the middle:
+# the verdict of a single fit is decided by WHERE the three-step GLS iteration
+# stopped, which rounding moves.
+#
+# Platform-invariant statement, tested below: all identified multistart
+# endpoints continue to one M2 minimum, and that minimum is not an identified
+# M2 that beats M0 -- its N_eff is below k + 1 by a margin, so its AICc is
+# infinite. The start dependence of a single fit is kept visible by the
+# fixed-point control, not removed (open methodology point, see the note).
+_P_STOPPED_SHORT = np.array([0.07976843, 7.95754774, 1.13475147, 0.70954489])
+_M2_K = 4
+# N_eff margin around k + 1. Measured at the common minimum: 4.46098 (0.539
+# below k + 1) for every endpoint of 8 multistart runs (2 Windows stacks x
+# {y as is, three 2-ulp perturbations of y}); at the stopped-short endpoint
+# 5.399 (0.399 above). 0.1 keeps a quarter of the smaller margin.
+_NEFF_MARGIN = 0.1
+# "Same minimum": relative agreement of the continued whitened residual norms.
+# Measured over the same 8 runs (44-47 endpoints each): <= 1.35e-13. 1e-9 is
+# ~7000x that, and 1.5e7x below the 1.5 % / 4.5 % by which the GLS endpoints
+# themselves sit above the minimum.
+_RTOL_SAME_MINIMUM = 1.0e-9
+
+
+def _whitener(t: np.ndarray, theta: float, rho: float):
+    if np.isfinite(theta):
+        return lambda v: whiten_car1(v, t, theta)
+    return lambda v: _whiten_ar1(v, rho)
+
+
+def _continue_m2(
+    t: np.ndarray, y: np.ndarray, params: np.ndarray, theta: float, rho: float
+) -> tuple[np.ndarray, float]:
+    """Continue an M2 fit with its residual model (``theta`` / ``rho``) held
+    fixed, to float64 tolerances (the continuation of
+    ``rel._attainable_residual_norm``, with M2's production ``x_scale``), and
+    return ``(params, ||W r||)``."""
+    whiten = _whitener(t, theta, rho)
+    x_scale = characteristic_x_scale(M2, t, float(np.max(np.abs(y))))
+    tol = float(np.finfo(float).eps)
+    res = least_squares(
+        lambda p: whiten(y - M2(t, p)), np.asarray(params, dtype=float),
+        x_scale=x_scale, ftol=tol, xtol=tol, gtol=tol, max_nfev=20000,
+    )
+    return res.x, float(np.linalg.norm(res.fun))
+
+
+@pytest.mark.slow
+def test_multistart_chain1_m2_minimum_never_beats_m0(chain1) -> None:
+    t = np.asarray(chain1.t_grid, dtype=float)
+    y = np.asarray(chain1.relative_entropy_curve, dtype=float)
+    fits = _multistart(t, y)
+    identified = [fr for fr in fits if fr.success and fr.identifiable]
+    # Most starts end identified (measured 44-47/50), not a lucky few.
+    assert len(identified) > len(fits) // 2, len(identified)
+    continued = [
+        _continue_m2(t, y, fr.params, fr.residual_theta_car1, fr.residual_ar1_rho)
+        for fr in identified
+    ]
+    w_min = min(w for _p, w in continued)
+    for (p, w), fr in zip(continued, identified):
+        assert math.isclose(w, w_min, rel_tol=_RTOL_SAME_MINIMUM), (fr.params, w, w_min)
+        assert rel._m2_identification(t, p)[0], p
+        n_eff = estimate_neff_geyer(y - M2(t, p))
+        assert n_eff < _M2_K + 1 - _NEFF_MARGIN, (p, n_eff)
+
+
+@pytest.mark.slow
+def test_chain1_stopped_short_m2_endpoint_beats_m0_only_through_n_eff(chain1) -> None:
+    """Fixed-point control, independent of whether a start stops short on
+    this platform. _P_STOPPED_SHORT (macOS-15 / Accelerate, and Windows /
+    scipy 1.17.1) has residual N_eff above k + 1, so it gets a finite AICc that
+    beats M0; continued with its residual model fixed it reaches the common
+    minimum, whose N_eff is below k + 1."""
+    t = np.asarray(chain1.t_grid, dtype=float)
+    y = np.asarray(chain1.relative_entropy_curve, dtype=float)
+    assert estimate_neff_geyer(y - M2(t, _P_STOPPED_SHORT)) > _M2_K + 1 + _NEFF_MARGIN
+    # Residual model of that endpoint as fitted: AR(1), rho at its clip 0.999.
+    theta, rho = float("nan"), 0.999
+    p, w = _continue_m2(t, y, _P_STOPPED_SHORT, theta, rho)
+    w_stopped = float(np.linalg.norm(_whitener(t, theta, rho)(y - M2(t, _P_STOPPED_SHORT))))
+    assert w < w_stopped * (1.0 - 0.01), (w, w_stopped)  # measured 4.3 % lower
+    assert rel._m2_identification(t, p)[0], p
+    assert estimate_neff_geyer(y - M2(t, p)) < _M2_K + 1 - _NEFF_MARGIN
+
+
+@pytest.mark.slow
+def test_multistart_resolved_two_rate_curve_is_start_independent() -> None:
+    t, y = _two_rate(11, 3.0)
+    fits = _multistart(t, y)
+
+    def cost(fr: FitResult) -> float:
+        r = y - M2(t, fr.params)
+        return 0.5 * float(r @ r)
+
+    best = min(cost(fr) for fr in fits if fr.success)
+    good = [
+        fr for fr in fits
+        if fr.success and fr.identifiable
+        and math.isclose(cost(fr), best, rel_tol=1.0e-6)
+    ]
+    assert len(good) >= 45, len(good)

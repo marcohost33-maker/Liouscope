@@ -998,6 +998,125 @@ def refine_zero_band(
     return in_band, float(np.sqrt(lo) * np.sqrt(hi))
 
 
+
+def _zero_mode_applicable(
+    tp_defect: float,
+    fro: float,
+    bound: float,
+    dim: int,
+    tp_rtol: float,
+) -> bool:
+    """Is the exact-zero-mode theorem usable for this operator at all?
+
+    Round-17 review (external, PR #127). The certificate asserts that ``0``
+    is an EXACT eigenvalue, which follows from ``vec(I)^H L = 0`` -- and that
+    premise was accepted on a scale six orders of magnitude coarser than the
+    conclusion. With the previous cutoff ``tp_defect <= 1e-10 * ||L||_F`` a
+    defect anywhere between the eigensolver backward error and ``1e-10``
+    made the certificate "applicable" although no zero eigenvalue need
+    exist. Measured: an amplitude-damped qubit plus ``1e-11 * I`` (defect
+    ``1.4e-11``, cutoff ``7.9e-11``) has its smallest eigenvalue at exactly
+    ``1e-11`` against a certificate bound of ``1.6e-13``; every repair route
+    then "fails", the spectral layer warns about an eigensolve that was in
+    fact correct, and the classifier is floored to ``UNDEFINED``.
+
+    The premise must therefore be checked on the SAME backward-error scale as
+    the conclusion, and the scale follows from the geometry rather than from
+    taste. With ``u = vec(I)/sqrt(d)`` (unit) and ``r^H = u^H L``, the matrix
+    ``L' = L - u r^H`` satisfies ``u^H L' = 0`` exactly, so ``L'`` HAS a zero
+    mode and ``||L - L'||_2 = ||r|| = tp_defect / sqrt(d)``. The defect can
+    thus displace the would-be zero eigenvalue by ``tp_defect / sqrt(d)``,
+    and requiring that displacement to stay inside the certificate's own
+    admissible band ``bound = rtol * eps * ||L||_2`` gives
+
+        tp_defect <= sqrt(d) * bound.
+
+    Headroom against real generators, measured rather than assumed: across
+    205 healthy GKSL generators (the five canonical systems, 160 random ones
+    spanning 16 orders of rate magnitude at ``d = 2..5``, and 40 stiff
+    four-level classical jump networks) the largest observed defect is
+    ``0.44 * eps * ||L||_F``, median ``0.13`` -- roughly three orders of
+    magnitude below the cutoff at the default ``rtol``. Tightening therefore
+    costs no legitimate certificate.
+
+    ``tp_rtol`` is retained as an additional, caller-supplied relative cutoff:
+    it can only tighten the requirement further, never loosen it past the
+    backward-error scale on which the theorem is stated.
+    """
+    if not np.isfinite(tp_defect) or tp_defect < 0.0:
+        return False
+    d = int(round(np.sqrt(dim)))
+    tp_bound = min(
+        # No ``tiny`` floor (round 23, PR #121): it stopped the test being
+        # relative for subnormal operators.
+        tp_rtol * fro,
+        np.sqrt(max(d, 1)) * bound,
+    )
+    return bool(tp_defect <= tp_bound)
+
+
+def _zero_mode_displaced_by_premise(L_c: np.ndarray, bound: float) -> bool:
+    """Can the admitted trace defect alone move the zero mode out of the band?
+
+    PR #127 review (linalg.py:1054). :func:`_zero_mode_applicable` admits a
+    trace defect ``||r|| = tp_defect / sqrt(d)`` up to the band, reasoning that
+    the nearest exactly trace-preserving ``L' = L - u r^H`` has a zero mode and
+    ``||L - L'||_2 = ||r||``. That bounds the EIGENVALUE displacement by the
+    same amount only for a well-conditioned zero mode. For a nonnormal one it
+    does not: the reviewer's 4x4 operator with leading block
+    ``[[0, 1e-14], [1, 0]]`` in a basis starting with ``vec(I)/sqrt(2)`` has
+    ``tp_defect = 1.4e-14`` against an admissible ``6.3e-13``, yet its exact
+    eigenvalues nearest zero are ``+-1e-7`` -- every route then "failed", and a
+    CORRECT spectrum was reported as a failed eigensolve (D1 withheld,
+    classification UNDEFINED).
+
+    First-order perturbation theory for the simple zero eigenvalue of ``L'``,
+    whose left null vector is ``u`` by construction, gives the displacement
+    ``|r^H x| / |u^H x| <= ||r|| / |u^H x|`` for its unit right null vector
+    ``x``. ``x`` is taken from an SVD of ``L'``, which is backward stable and
+    independent of the eigensolver whose result is being judged, so a garbage
+    eigensolve cannot talk this check into anything. For a GKSL generator
+    ``x = vec(rho_ss)/||rho_ss||_F`` and ``|u^H x| >= 1/sqrt(d)``, so the
+    estimate stays at the size of ``tp_defect`` itself -- far inside the band
+    (measured healthy defects are ``<= 0.44 eps ||L||_F`` against a band of
+    ``rtol eps ||L||_2``, ``rtol = 1e3``): a genuine eigensolver failure on a
+    real generator keeps ``certified=False``. A defective zero mode has
+    ``u^H x = 0`` and an unbounded estimate, which is the reviewer's case.
+
+    Returns ``True`` only on positive evidence. Every unusable input (not a
+    ``d^2`` operator, ``r = 0``, an SVD that fails or is non-finite) returns
+    ``False``, i.e. the caller keeps the fail-closed ``certified=False``. With
+    two or more singular values inside the band ``L'`` has a multiple zero
+    mode; a rank-one perturbation then leaves at least one zero eigenvalue in
+    place to first order, so a spectrum without one is NOT explained by the
+    premise and the function also returns ``False``.
+    """
+    n = int(L_c.shape[0])
+    d = int(round(np.sqrt(n)))
+    if n == 0 or d * d != n or not (np.isfinite(bound) and bound > 0.0):
+        return False
+    u = np.zeros(n, dtype=complex)
+    u[np.arange(d) * (d + 1)] = 1.0 / np.sqrt(d)
+    with np.errstate(all="ignore"):
+        r = u.conj() @ L_c
+        r_norm = float(np.linalg.norm(r))
+        if not np.isfinite(r_norm) or r_norm == 0.0:
+            return False
+        L_tp = L_c - np.outer(u, r)
+        try:
+            _, s, vh = np.linalg.svd(L_tp)
+        except np.linalg.LinAlgError:
+            return False
+    if not (np.all(np.isfinite(s)) and np.all(np.isfinite(vh))):
+        return False
+    if int(np.count_nonzero(s <= bound)) > 1:
+        return False
+    x = vh[-1].conj()  # right singular vector of the smallest singular value
+    overlap = float(abs(np.vdot(u, x)))
+    displacement = r_norm / overlap if overlap > 0.0 else float("inf")
+    return bool(displacement > bound)
+
+
 def certified_eigvals(
     L_super: np.ndarray,
     *,
@@ -1066,10 +1185,14 @@ def certified_eigvals(
         Multiplier on the backward error ``eps * ||L||_2``, shared with
         :func:`liouscope.numerics.scale.spectral_zero_tolerance`.
     tp_rtol
-        Relative tolerance deciding whether ``L`` is trace preserving at all.
-        A non-trace-preserving operator has no guaranteed zero mode, so the
-        certificate is reported as ``applicable=False`` and the incumbent
-        spectrum is returned untouched.
+        Additional relative cutoff deciding whether ``L`` is trace preserving
+        at all. A non-trace-preserving operator has no guaranteed zero mode,
+        so the certificate is reported as ``applicable=False`` and the
+        incumbent spectrum is returned untouched. It can only TIGHTEN the
+        requirement: applicability is capped at the backward-error scale the
+        certificate itself claims on (see :func:`_zero_mode_applicable`), so
+        raising this value does not buy a certificate for an operator whose
+        trace defect exceeds ``sqrt(d) * rtol * eps * ||L||_2``.
 
     Returns
     -------
@@ -1146,6 +1269,10 @@ def certified_eigvals(
         # ``fro == 0`` forces ``defect == 0`` and the comparison ``0 > 0`` is
         # False either way -- the exactly-zero generator stays applicable.
         or tp_defect > tp_rtol * fro
+        # PR #127 (merged with the above): the premise must also hold on the
+        # backward-error scale the conclusion is stated on,
+        # ``tp_defect <= sqrt(d) * bound`` -- see _zero_mode_applicable.
+        or not _zero_mode_applicable(tp_defect, fro, bound, L_c.shape[0], tp_rtol)
     ):
         # No certificate applies without trace preservation, so there is
         # nothing to repair TOWARDS and the ladder is not run: the primary
@@ -1295,8 +1422,13 @@ def certified_eigvals(
         # Every route raised (only reachable when the primary solve did too).
         assert primary_error is not None
         raise primary_error
+    # PR #127 review (linalg.py:1054): no route found a zero, but the admitted
+    # trace defect can displace a nonnormal zero mode beyond the band -- then
+    # the theorem says nothing about THIS operator, which is "not applicable",
+    # not "the eigensolve failed".
+    applicable = not _zero_mode_displaced_by_premise(L_c, bound)
     return best[1], ZeroModeCertificate(
-        applicable=True,
+        applicable=applicable,
         certified=False,
         solver=best[0],
         residual=best[2],
@@ -1422,6 +1554,10 @@ def certified_eig(
         # ``fro == 0`` forces ``defect == 0`` and the comparison ``0 > 0`` is
         # False either way -- the exactly-zero generator stays applicable.
         or tp_defect > tp_rtol * fro
+        # PR #127 (merged with the above): the premise must also hold on the
+        # backward-error scale the conclusion is stated on,
+        # ``tp_defect <= sqrt(d) * bound`` -- see _zero_mode_applicable.
+        or not _zero_mode_applicable(tp_defect, fro, bound, L_c.shape[0], tp_rtol)
     ):
         if primary is None:
             assert primary_error is not None
@@ -1615,8 +1751,11 @@ def certified_eig(
         # Every route raised (only reachable when the primary solve did too).
         assert primary_error is not None
         raise primary_error
+    # Same rule as the sibling ladder in ``certified_eigvals`` (PR #127 review,
+    # linalg.py:1054); kept in both in the same commit.
+    applicable = not _zero_mode_displaced_by_premise(L_c, bound)
     return best[1], ZeroModeCertificate(
-        applicable=True,
+        applicable=applicable,
         certified=False,
         solver=best[0],
         residual=best[2],
@@ -1657,6 +1796,47 @@ def require_finite_square_2d(A: np.ndarray, *, name: str = "matrix") -> np.ndarr
             f"({n_nan} NaN, {n_inf} inf); diagnostics require a finite operator"
         )
     return arr
+
+
+def overflow_safe_mean_real(values: np.ndarray) -> float:
+    """Mean of ``Re(values)``, formed so that the SUM cannot overflow.
+
+    ROUND-19 REVIEW (external, PR #127). The gauge shift of a Hamiltonian was
+    ``np.trace(H).real / d``, which forms the total FIRST. Every entry can be
+    finite while their sum is not: for ``H = [[1e308, 1], [0, 1e308]]`` the
+    trace overflows to ``inf``, the shift and the round-off allowance derived
+    from it become ``inf``, and ``defect > EPS * scale + allowance`` is then
+    False for EVERY defect. That matrix has an off-diagonal defect of exactly
+    1 and was accepted, so ``build_liouvillian`` returned a generator that does
+    not preserve Hermiticity -- a fail-open on the gate whose entire purpose is
+    to refuse non-GKSL input.
+
+    Dividing before summing removes the failure by construction rather than by
+    threshold: each term is bounded by ``max|v| / n``, so no partial sum of the
+    pairwise tree can exceed ``max|v|`` and a finite input has a finite mean.
+    The scaled form is used ONLY when the direct sum is not finite, so every
+    healthy call keeps its old value bit for bit; measured over 2000 random
+    complex matrices, ``np.trace(H).real`` and ``np.sum(np.diagonal(H)).real``
+    agree in all bits in every case.
+
+    Returns 0.0 for an empty input, matching :func:`hermiticity_defect` on an
+    empty operator.
+    """
+    v = np.asarray(values)
+    if v.size == 0:
+        return 0.0
+    n = float(v.size)
+    # The direct sum is EXPECTED to overflow on exactly the inputs this helper
+    # exists for, and the non-finite result is handled one line below. Letting
+    # NumPy warn about it made the helper itself trip ``filterwarnings =
+    # ["error"]`` -- measured when PR #127 met main's no-overflow-warning
+    # tests (PR #121 rounds 19/22) in the merge: four reds, all
+    # ``RuntimeWarning: overflow encountered in reduce`` raised from here.
+    with np.errstate(over="ignore", invalid="ignore"):
+        total = float(np.asarray(np.sum(v)).real)
+    if np.isfinite(total):
+        return total / n
+    return float(np.sum(np.real(v) / n))
 
 
 def hermiticity_defect(A: np.ndarray) -> tuple[float, float]:

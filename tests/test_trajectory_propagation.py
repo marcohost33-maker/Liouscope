@@ -380,6 +380,14 @@ def test_action_rejects_a_non_finite_returned_state(monkeypatch: pytest.MonkeyPa
 # --------------------------------------------------------------------------
 
 
+# On the gap-scaled window of PR #127 the M2 fit puts its second rate near 1e6, on
+# the plateau the grid cannot see, so all replicates agree on that one parameter
+# and #125 reports it, correctly, as having no interval. These two tests are about
+# the backend audit field, not about that fit.
+_M2_PLATEAU_NOTICE = "ignore:bca_ci.*parameter 3 is degenerate"
+
+
+@pytest.mark.filterwarnings(_M2_PLATEAU_NOTICE)
 def test_relaxation_layer_records_the_backend_it_used() -> None:
     small = compute_relaxation_layer(_chain(1), rho_initial=_plus_state(2), bootstrap_B=20)
     assert small.trajectory_backend == BACKEND_DENSE
@@ -613,6 +621,7 @@ def test_benign_grid_steps_are_not_split() -> None:
     assert all(propagation._substep_count(tau * a) == 1.0 for tau in np.diff(grid))
 
 
+@pytest.mark.filterwarnings(_M2_PLATEAU_NOTICE)
 def test_report_json_records_the_trajectory_backend(tmp_path) -> None:  # type: ignore[no-untyped-def]
     """The audit field must survive serialisation, not only live in memory."""
     import json
