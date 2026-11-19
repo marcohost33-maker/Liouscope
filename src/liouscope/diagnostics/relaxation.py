@@ -755,7 +755,9 @@ def _m2_identification(t: np.ndarray, params: np.ndarray) -> tuple[bool, str]:
        non-finite column and a condition number ``<= _M2_MAX_EQ_CONDITION``.
        Column equilibration is near-optimal among diagonal scalings (van der
        Sluis 1969) and makes the number independent of the units of time and
-       amplitude, like conditions 1-2.
+       amplitude, like conditions 1-2. The scaling is formed so that this
+       also holds in float64 at extreme units (PR #193 review): amplitudes
+       enter only as "nonzero", and no column entry is squared unscaled.
 
     Fail-closed: anything that cannot be evaluated is "not identified".
     """
@@ -782,15 +784,43 @@ def _m2_identification(t: np.ndarray, params: np.ndarray) -> tuple[bool, str]:
                 f"beta*dt_0 = {beta * dt0:.3g})"
             )
     a1, b1, a2, b2 = (float(v) for v in p)
+    # PR #193 review (relaxation.py:791): the gate must not depend on the
+    # units of time or amplitude, and it did. The columns of the M2 Jacobian
+    # are ``e1, -a1 t e1, e2, -a2 t e2``; their Euclidean norms were formed
+    # from the RAW entries, whose squares under- or overflow at extreme but
+    # finite units. Measured with the resolved pair ``[1, 0.5, 0.5, 3]`` on
+    # ``linspace(0, 10, 80)``: ``t -> 1e-170 t`` (rates ``-> 1e170 beta``)
+    # gave rate-column squares ~1e-338 -> 0, ``t -> 1e170 t`` or amplitudes
+    # ``x 1e170`` gave squares ~1e342 -> inf, and the fit was refused as
+    # "zero or non-finite column" for its units alone. Two changes:
+    #
+    # * the amplitudes are left out of the columns. ``-a_i`` multiplies a
+    #   whole column, and column equilibration removes any nonzero column
+    #   factor exactly (sign included: a sign flip is an orthogonal factor and
+    #   leaves the singular values unchanged). Keeping it only added the
+    #   product ``a_i t``, which overflows when both units are extreme. A ZERO
+    #   amplitude still makes its rate unidentifiable and is refused here;
+    # * each column is divided by its largest entry BEFORE its norm is
+    #   formed, so the squares lie in [0, 1] and the norm in [1, sqrt(n)].
+    #   ``max|col|`` is representable whenever the column is.
+    if a1 == 0.0 or a2 == 0.0:
+        return False, "M2 Jacobian has a zero or non-finite column (zero amplitude)"
     with np.errstate(all="ignore"):
         e1 = np.exp(-b1 * t)
         e2 = np.exp(-b2 * t)
-        jac = np.column_stack([e1, -a1 * t * e1, e2, -a2 * t * e2])
-        norms = np.linalg.norm(jac, axis=0)
-    if not (np.all(np.isfinite(norms)) and np.all(norms > 0.0)):
+        jac = np.column_stack([e1, t * e1, e2, t * e2])
+        col_max = np.max(np.abs(jac), axis=0)
+        scaled = jac / col_max
+        norms = np.linalg.norm(scaled, axis=0)
+    # Acceptance bound to a TRUE comparison: NaN (0/0, inf/inf) fails every
+    # predicate below, so a column that cannot be scaled is refused.
+    if not (
+        np.all(np.isfinite(col_max)) and np.all(col_max > 0.0)
+        and np.all(np.isfinite(norms)) and np.all(norms > 0.0)
+    ):
         return False, "M2 Jacobian has a zero or non-finite column"
     try:
-        sv = np.linalg.svd(jac / norms, compute_uv=False)
+        sv = np.linalg.svd(scaled / norms, compute_uv=False)
     except np.linalg.LinAlgError:
         return False, "M2 Jacobian SVD did not converge"
     if not (np.all(np.isfinite(sv)) and sv[-1] > 0.0):

@@ -378,6 +378,62 @@ def test_identification_is_invariant_under_a_change_of_time_unit() -> None:
         assert rel._m2_identification(_T * c, q)[0] is False
 
 
+# PR #193 review (relaxation.py:791): at extreme but finite units the squares
+# of the raw Jacobian columns under- or overflowed, and the resolved pair
+# below was refused as "zero or non-finite column" for its units alone
+# (measured at 5c72e2c for every rescaling listed here except the identity).
+# A rescaling is ``t -> c t`` with rates ``-> beta / c`` and amplitudes
+# ``-> s A``; the dimensionless problem, hence the verdict, is unchanged.
+_EXTREME_UNITS = [
+    pytest.param(1.0, 1.0, id="identity"),
+    pytest.param(1.0e-170, 1.0, id="time-1e-170"),
+    pytest.param(1.0e170, 1.0, id="time-1e170"),
+    pytest.param(1.0, 1.0e-170, id="amplitude-1e-170"),
+    pytest.param(1.0, 1.0e170, id="amplitude-1e170"),
+    pytest.param(1.0, 1.0e300, id="amplitude-1e300"),
+    pytest.param(1.0e170, 1.0e170, id="time-and-amplitude-1e170"),
+]
+
+
+def _in_units(params: list[float], c: float, s: float) -> tuple[np.ndarray, np.ndarray]:
+    q = np.array(params, dtype=float)
+    q[[0, 2]] *= s
+    q[[1, 3]] /= c
+    return _T * c, q
+
+
+@pytest.mark.parametrize(("c", "s"), _EXTREME_UNITS)
+def test_identification_of_a_resolved_pair_survives_extreme_units(c: float, s: float) -> None:
+    """Positive control: identified in natural units, and in every unit."""
+    assert rel._m2_identification(_T, np.array([1.0, 0.5, 0.5, 3.0])) == (True, "")
+    t, q = _in_units([1.0, 0.5, 0.5, 3.0], c, s)
+    assert rel._m2_identification(t, q) == (True, "")
+
+
+@pytest.mark.parametrize(("c", "s"), _EXTREME_UNITS)
+@pytest.mark.parametrize(
+    ("params", "fragment"),
+    [
+        # rates 0.5 and 0.5005: equilibrated condition 5.2e10 > 6.7e7 in every
+        # unit -- refused by the CONDITION, not by a non-finite column
+        ([1.0, 0.5, 0.5, 0.5005], "equilibrated condition"),
+        ([1.0, 0.5, 0.5, 0.5], "singular"),     # equal rates: rank 3
+        ([1.0, 0.5, 0.0, 3.0], "Jacobian"),     # A2 = 0: beta2 unidentified
+    ],
+)
+def test_identification_of_an_unidentified_pair_survives_extreme_units(
+    c: float, s: float, params: list[float], fragment: str
+) -> None:
+    """Negative control: not identified in natural units, nor in any unit --
+    the fix must not buy invariance by accepting everything."""
+    ok1, reason1 = rel._m2_identification(_T, np.array(params))
+    assert ok1 is False and fragment in reason1, reason1
+    t, q = _in_units(params, c, s)
+    ok, reason = rel._m2_identification(t, q)
+    assert ok is False
+    assert fragment in reason, reason
+
+
 def test_identification_refuses_a_degenerate_grid() -> None:
     ok, reason = rel._m2_identification(np.zeros(5), np.array([1.0, 0.5, 0.5, 3.0]))
     assert ok is False
