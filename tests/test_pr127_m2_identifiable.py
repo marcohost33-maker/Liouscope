@@ -31,12 +31,16 @@ import warnings
 
 import numpy as np
 import pytest
+from scipy.optimize import least_squares
 
 from liouscope._types import FitResult
 from liouscope.core.lindblad import build_liouvillian
 from liouscope.diagnostics import relaxation as rel
+from liouscope.fitting.car1 import whiten_car1
+from liouscope.fitting.gls import _whiten as _whiten_ar1
 from liouscope.fitting.gls import fit_gls_ar1
-from liouscope.fitting.models import M2, initial_guess_m2
+from liouscope.fitting.models import M2, characteristic_x_scale, initial_guess_m2
+from liouscope.fitting.neff import estimate_neff_geyer
 
 _SX = np.array([[0.0, 1.0], [1.0, 0.0]], dtype=complex)
 _SM = np.array([[0.0, 1.0], [0.0, 0.0]], dtype=complex)
@@ -524,6 +528,20 @@ def test_m2_rates_follow_a_change_of_time_unit(c: float) -> None:
 # --------------------------------------------------------------------------
 
 
+def _fit_m2_from(t: np.ndarray, y: np.ndarray, start: np.ndarray) -> FitResult:
+    """The production M2 fit (``_fit_with_model``) started at ``start``."""
+    original = rel.initial_guess_m2
+    seed = np.array(start, dtype=float)
+    rel.initial_guess_m2 = lambda _t, _y: seed.copy()
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            fr, _ = rel._fit_with_model("M2", t, y)
+    finally:
+        rel.initial_guess_m2 = original
+    return fr
+
+
 def _multistart(t: np.ndarray, y: np.ndarray, n: int = 50) -> list[FitResult]:
     rng = np.random.default_rng(20261108)
     span = float(t[-1] - t[0])
@@ -531,29 +549,125 @@ def _multistart(t: np.ndarray, y: np.ndarray, n: int = 50) -> list[FitResult]:
     lo, hi = math.log(5.0e-3 / span), math.log(10.0 / dt0)
     amp = 0.5 * float(np.max(np.abs(y)))
     out: list[FitResult] = []
-    original = rel.initial_guess_m2
-    try:
-        for _ in range(n):
-            b1, b2 = np.exp(rng.uniform(lo, hi, size=2))
-            start = np.array([amp, b1, amp, b2])
-            rel.initial_guess_m2 = lambda _t, _y, s=start: s.copy()
-            with warnings.catch_warnings():
-                warnings.simplefilter("ignore")
-                fr, _ = rel._fit_with_model("M2", t, y)
-            out.append(fr)
-    finally:
-        rel.initial_guess_m2 = original
+    for _ in range(n):
+        b1, b2 = np.exp(rng.uniform(lo, hi, size=2))
+        out.append(_fit_m2_from(t, y, np.array([amp, b1, amp, b2])))
     return out
 
 
+# S7, restated 2026-11-19 (docs/prereg/2026-11-08_m2_identifiability_result.md,
+# amendment A2). The pre-registered form -- "no start yields an identified M2
+# with lower AICc than M0" -- is FALSE on two of the stacks it was run on and
+# flips under rounding noise on the third, so it was not a property of the
+# method. Measured (seed 20261108, 50 starts):
+#
+# * macOS-15 arm64 / Accelerate / scipy 1.18.1 (CI probe, jobs 133576359899
+#   and 135255327421) and Windows x86-64 / OpenBLAS / scipy 1.17.1: start 29
+#   ends at _P_STOPPED_SHORT, log-likelihood 482.446, N_eff 5.399, AICc -856.7
+#   against M0 -639.1;
+# * Windows / scipy 1.18.0: start 29 reaches the optimum -- but a 2-ulp
+#   relative perturbation of y (one of three tried) sends it to the same
+#   endpoint again.
+#
+# That endpoint is NOT a second optimum, and no GLS endpoint is the minimum.
+# Continued with its residual model held fixed (the solver continuation of
+# ``_attainable_residual_norm``, run to float64 tolerances), EVERY identified
+# endpoint -- the 44 the other starts reach (log-likelihood 484.790-484.791)
+# and the stopped-short one (482.446) -- arrives at one and the same minimum:
+# whitened residual 4.789072e-3 (the endpoints sit 1.5 % and 4.5 % above it),
+# N_eff 4.461, identical on both Windows stacks. The production fit started at
+# the stopped-short point is NOT a usable check of this: from the 8-digit
+# macOS value it returns to the 484.79 endpoint, from the full-precision
+# Windows value it runs to a rate of 59.9 (outside the window) -- the restart
+# of the three-step iteration (rho = 0 first) is itself rounding-sensitive.
+#
+# The stopped-short endpoint beats M0 only because the AICc sample size on a
+# uniform grid is the Geyer N_eff of the residuals (relaxation.py ``aicc_n``):
+# 5.399 there, 4.707 at the common endpoint, 4.461 at the minimum, around
+# k + 1 = 5 where the correction becomes infinite. Along the segment from the
+# common endpoint to it N_eff grows smoothly and crosses 5 near the middle:
+# the verdict of a single fit is decided by WHERE the three-step GLS iteration
+# stopped, which rounding moves.
+#
+# Platform-invariant statement, tested below: all identified multistart
+# endpoints continue to one M2 minimum, and that minimum is not an identified
+# M2 that beats M0 -- its N_eff is below k + 1 by a margin, so its AICc is
+# infinite. The start dependence of a single fit is kept visible by the
+# fixed-point control, not removed (open methodology point, see the note).
+_P_STOPPED_SHORT = np.array([0.07976843, 7.95754774, 1.13475147, 0.70954489])
+_M2_K = 4
+# N_eff margin around k + 1. Measured at the common minimum: 4.46098 (0.539
+# below k + 1) for every endpoint of 8 multistart runs (2 Windows stacks x
+# {y as is, three 2-ulp perturbations of y}); at the stopped-short endpoint
+# 5.399 (0.399 above). 0.1 keeps a quarter of the smaller margin.
+_NEFF_MARGIN = 0.1
+# "Same minimum": relative agreement of the continued whitened residual norms.
+# Measured over the same 8 runs (44-47 endpoints each): <= 1.35e-13. 1e-9 is
+# ~7000x that, and 1.5e7x below the 1.5 % / 4.5 % by which the GLS endpoints
+# themselves sit above the minimum.
+_RTOL_SAME_MINIMUM = 1.0e-9
+
+
+def _whitener(t: np.ndarray, theta: float, rho: float):
+    if np.isfinite(theta):
+        return lambda v: whiten_car1(v, t, theta)
+    return lambda v: _whiten_ar1(v, rho)
+
+
+def _continue_m2(
+    t: np.ndarray, y: np.ndarray, params: np.ndarray, theta: float, rho: float
+) -> tuple[np.ndarray, float]:
+    """Continue an M2 fit with its residual model (``theta`` / ``rho``) held
+    fixed, to float64 tolerances (the continuation of
+    ``rel._attainable_residual_norm``, with M2's production ``x_scale``), and
+    return ``(params, ||W r||)``."""
+    whiten = _whitener(t, theta, rho)
+    x_scale = characteristic_x_scale(M2, t, float(np.max(np.abs(y))))
+    tol = float(np.finfo(float).eps)
+    res = least_squares(
+        lambda p: whiten(y - M2(t, p)), np.asarray(params, dtype=float),
+        x_scale=x_scale, ftol=tol, xtol=tol, gtol=tol, max_nfev=20000,
+    )
+    return res.x, float(np.linalg.norm(res.fun))
+
+
 @pytest.mark.slow
-def test_multistart_chain1_never_finds_an_identified_m2_beating_m0(chain1) -> None:
+def test_multistart_chain1_m2_minimum_never_beats_m0(chain1) -> None:
     t = np.asarray(chain1.t_grid, dtype=float)
     y = np.asarray(chain1.relative_entropy_curve, dtype=float)
-    m0_aicc = float(chain1.fits["M0"].aicc)
     fits = _multistart(t, y)
-    beating = [fr.params for fr in fits if fr.identifiable and fr.aicc < m0_aicc]
-    assert beating == []
+    identified = [fr for fr in fits if fr.success and fr.identifiable]
+    # Most starts end identified (measured 44-47/50), not a lucky few.
+    assert len(identified) > len(fits) // 2, len(identified)
+    continued = [
+        _continue_m2(t, y, fr.params, fr.residual_theta_car1, fr.residual_ar1_rho)
+        for fr in identified
+    ]
+    w_min = min(w for _p, w in continued)
+    for (p, w), fr in zip(continued, identified):
+        assert math.isclose(w, w_min, rel_tol=_RTOL_SAME_MINIMUM), (fr.params, w, w_min)
+        assert rel._m2_identification(t, p)[0], p
+        n_eff = estimate_neff_geyer(y - M2(t, p))
+        assert n_eff < _M2_K + 1 - _NEFF_MARGIN, (p, n_eff)
+
+
+@pytest.mark.slow
+def test_chain1_stopped_short_m2_endpoint_beats_m0_only_through_n_eff(chain1) -> None:
+    """Fixed-point control, independent of whether a start stops short on
+    this platform. _P_STOPPED_SHORT (macOS-15 / Accelerate, and Windows /
+    scipy 1.17.1) has residual N_eff above k + 1, so it gets a finite AICc that
+    beats M0; continued with its residual model fixed it reaches the common
+    minimum, whose N_eff is below k + 1."""
+    t = np.asarray(chain1.t_grid, dtype=float)
+    y = np.asarray(chain1.relative_entropy_curve, dtype=float)
+    assert estimate_neff_geyer(y - M2(t, _P_STOPPED_SHORT)) > _M2_K + 1 + _NEFF_MARGIN
+    # Residual model of that endpoint as fitted: AR(1), rho at its clip 0.999.
+    theta, rho = float("nan"), 0.999
+    p, w = _continue_m2(t, y, _P_STOPPED_SHORT, theta, rho)
+    w_stopped = float(np.linalg.norm(_whitener(t, theta, rho)(y - M2(t, _P_STOPPED_SHORT))))
+    assert w < w_stopped * (1.0 - 0.01), (w, w_stopped)  # measured 4.3 % lower
+    assert rel._m2_identification(t, p)[0], p
+    assert estimate_neff_geyer(y - M2(t, p)) < _M2_K + 1 - _NEFF_MARGIN
 
 
 @pytest.mark.slow
