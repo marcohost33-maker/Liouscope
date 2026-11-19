@@ -674,6 +674,20 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     multistarts on the example reach an identified M2 that beats M0; that
     choice, and a profile-likelihood test, are left as methodology
     decisions.
+  - The pre-registered multistart claim S7 ("no start yields an identified
+    M2 that beats M0") is withdrawn: it was red on the macOS/Accelerate
+    probe and on scipy 1.17.1, and a 2-ulp perturbation of the curve flips
+    it on scipy 1.18.0. One start stops 2.345 log-likelihood units short of
+    the common endpoint, where the residual `N_eff` is 5.399 instead of 4.707,
+    i.e. above k + 1, so its AICc is finite and beats M0 by 217.6. The test
+    now asserts what holds on every stack measured: all identified endpoints
+    continue (residual model fixed) to one minimum whose `N_eff` is 4.461,
+    below k + 1 with margin (amendment A2 of the prereg result). That a single
+    fit's verdict depends on where the GLS iteration stopped is recorded as an
+    open methodology point. The rounding-tie test no longer takes the AICc of
+    rounding-level fits at their Geyer `N_eff` (5.11 vs 68.85 for the same
+    candidate on two SciPy versions), which had made its tied set
+    platform-dependent.
 - **CAR(1) theta estimation returned NaN when the time UNIT made the smallest
   step tiny (PR #127 review, `car1.py:254`).** The upper search bound
   `log(1e3 / dt_min)` overflowed to inf for `dt_min` below ~5.6e-306 and the

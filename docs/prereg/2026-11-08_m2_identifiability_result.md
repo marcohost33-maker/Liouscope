@@ -221,3 +221,64 @@ is red. One of 50 starts reaches an identified M2 `[1.1348, 0.7095, 0.0798,
 scipy 1.18.1 the test is green on both Windows (Python 3.12.10) and Linux
 (Docker, Python 3.12.16). S7 therefore depends on the solver version, not on
 this branch.
+
+## Amendment A2 (2026-11-19): S7 was not a property of the method
+
+Correction of the environment note above: S7 does not depend on the solver
+VERSION, it depends on rounding. The numerics platform probe (macOS-15 arm64,
+Apple Accelerate, numpy 2.5.5, scipy 1.18.1; jobs 133576359899 at 5c72e2c and
+135255327421 at dbf636d) is red with the same endpoint
+`[0.07976843, 7.95754774, 1.13475147, 0.70954489]`, and on Windows /
+scipy 1.18.0 one of three 2-ulp relative perturbations of `y` sends start 29
+there as well. Measured on Windows x86-64 (Python 3.14.4 / numpy 2.4.6 /
+scipy 1.17.1 and Python 3.12.10 / numpy 2.5.1 / scipy 1.18.0), seed 20261108:
+
+| quantity | common endpoint (44 starts) | stopped-short endpoint (start 29) |
+|---|---|---|
+| log-likelihood | 484.790-484.791 | 482.446 (2.345 lower) |
+| residual N_eff (Geyer) | 4.70673-4.70700 | 5.399 |
+| AICc (k = 4, uniform grid: sample size = N_eff) | inf (N_eff <= k + 1) | -856.7 < M0 -639.1 |
+| continued with the residual model fixed | minimum, `||W r||` 4.789072e-3 (endpoint 1.5 % above) | same minimum (endpoint 4.5 % above) |
+| N_eff at that minimum | 4.46098 | 4.46098 |
+
+Along the segment from the common endpoint to the stopped-short one N_eff
+grows smoothly (4.71 -> 5.40) and crosses k + 1 = 5 near its middle. So a
+single M2 fit beats M0 or not depending on WHERE the three-step GLS iteration
+stopped, which rounding moves; the stopped-short endpoint is not a second
+optimum. Restarting the production fit from it is not a usable check: from the
+8-digit macOS value it returns to the common endpoint, from the full-precision
+Windows value it runs to a rate of 59.9 (outside the window).
+
+S7 as pre-registered ("no start yields an identified M2 with lower AICc than
+M0") is therefore withdrawn as a claim about the method, not re-tuned. The
+claim that holds on every stack measured, with the continuation of
+`_attainable_residual_norm` (residual model fixed, float64 tolerances):
+
+* **S7'**: every identified multistart endpoint continues to one M2 minimum
+  (relative spread <= 1.35e-13 over 8 runs: 2 stacks x {y, three 2-ulp
+  perturbations}; tested at 1e-9), that minimum passes the identification
+  gate, and its N_eff is below k + 1 by at least 0.1 (measured 0.539), so it
+  never beats M0.
+
+`tests/test_pr127_m2_identifiable.py::test_multistart_chain1_m2_minimum_never_beats_m0`
+replaces `test_multistart_chain1_never_finds_an_identified_m2_beating_m0`;
+`test_chain1_stopped_short_m2_endpoint_beats_m0_only_through_n_eff` keeps the
+stopped-short endpoint as a fixed-point control on every platform.
+
+**Open methodology point, not decided here.** The selection on `_chain1`
+rests on the N_eff of noise-free residuals, 4.7068 (0.293 below k + 1) at the
+endpoint production reaches from its default start on both stacks; the
+stopped-short fit wins by 217.6 AICc units. Options: iterate the GLS to a fixed point (or continue
+the final fit as the band already does), multistart in production, or treat
+`N_eff` within a band of `k + 1` like a rounding tie. Each changes reported
+results and needs its own prereg.
+
+The same probe found `tests/test_pr127_model_selection_ties.py::
+test_tie_after_m0_is_excluded_is_indeterminate` red (tied `('M1',)`). Same
+class: its set-up took the AICc of rounding-level fits at their Geyer N_eff
+(5.11 vs 68.85 for the same M3a candidate on the two Windows stacks; at or
+below k + 1 = 4 M3a leaves the tie, which reproduces `('M1',)` exactly) and
+switched the solver continuation off for every candidate. The test now uses
+the sample size of its iid floor noise (`n`) and switches the continuation
+off for M0 only; it is parametrised with M3a at N_eff 3.9. Its assertions are
+unchanged.
