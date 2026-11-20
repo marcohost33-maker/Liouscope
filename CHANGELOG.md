@@ -150,6 +150,37 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     on #127/#193.
 
 ### Added
+- **Rate-unit census and preregistration for the F5 calibration study (issue
+  #101 slice C, phase 0; `claim_status: pending`). No threshold and no verdict
+  changes.**
+  - **What it is.** `benchmarks/issue101_rate_unit_census.py` runs the full
+    pipeline on `c * L` for seven rate factors from 1e-3 to 1e3, with the
+    relaxation time grid rescaled to `t_ref / c`, on five declared control
+    families (four F5-negative, one F5-positive). A change of rate unit is the
+    same physics, so the class must not depend on `c`.
+    `docs/explanation/f5-calibration-preregistration.md` declares the
+    families, the calibration/holdout split, the metrics and the acceptance
+    criteria before any threshold is fitted.
+  - **Baseline, calibration split** (12 systems per family, x86-64, NumPy
+    2.5.3, SciPy 1.18.1, at the head of PR #197):
+    - The class is the same at all seven rate factors for 35 of 60 systems,
+      the verdict for 31.
+    - The F5-positive control fires in 12 of 12 cases at `c >= 1` and in 0 of
+      12 at `c < 1`.
+    - Thermal detailed-balance systems are never F5 at `c <= 1` and are F5 in
+      6, 6 and 7 of 12 cases at `c = 10, 100, 1000`.
+    - The four scale-relative slice A diagnostics are invariant on all five
+      families: largest relative range 4.5e-13.
+    - With the library default time grid (an absolute `linspace(0, 10, 80)`)
+      the class is stable for 6 of 60 systems. The F5 counts are the same.
+  - **What it is not.** Not a gate and not a calibration. The holdout split
+    is not evaluated. Four control families that the design requires (zero
+    operator, Jordan block at zero, skin-effect chain and a non-phantom
+    non-normal family, the last two at three system sizes) are not in the
+    harness yet.
+  - `tests/test_issue101_rate_unit_census.py` pins the harness: family
+    premises, disjoint splits, exact application of the rescaling, and a
+    reproducible result digest.
 - **The relaxation-rate interval now says which estimator produced it:
   `RelaxationResult.interval_method` (issue #116, stage 1, `claim_status: pending`).**
   - **The defect.** The default pipeline computed a bias-corrected (BC)
