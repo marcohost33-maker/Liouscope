@@ -275,6 +275,12 @@ abstract: >-
 # undamped coherent spectator) now report another class, or an UNDEFINED floor.
 # Anchors are unchanged. It must NOT be described as calibrating the F5
 # thresholds (slice C, still open).
+# Follow-up to that correction (post-merge review of PR #196): the same leg now
+# also abstains on a round-off gap when the zero-mode certificate is
+# inapplicable, by reading the cutoff the spectral layer applied
+# (SpectralResult.zero_cutoff). Classes and verdicts of the measured cases and
+# all anchors are unchanged; only the F5 audit status changes, from
+# NOT_SUPPORTED to UNEVALUABLE, where it had followed the sign of round-off.
 keywords:
   - open quantum systems
   - Lindblad

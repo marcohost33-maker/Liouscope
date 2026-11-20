@@ -90,6 +90,22 @@ class SpectralResult:
     # Optional with a default so the run-manifest contract is unchanged
     # (additive field).
     zero_mode_conditioning: dict[str, object] | None = None
+    # Issue #101 addendum, follow-up to PR #196. The zero-mode cutoff that the
+    # D1/D3/D4 filters of THIS result actually applied, as returned by
+    # ``ZeroModeCertificate.zero_set_tolerance``: the certificate's applied
+    # tolerance when the certificate is applicable, the radius-based proxy
+    # ``ZERO_MODE_EPS_FACTOR * eps * max|lambda|`` when it is not. It is the
+    # spectral layer's arithmetic resolution for an eigenvalue in either
+    # state, and it scales with the rate unit.
+    #
+    # It differs from ``zero_mode_certificate["zero_tolerance"]`` exactly when
+    # the certificate is inapplicable: that entry is the operator-norm band,
+    # which the layer refuses to filter by. Consumers that need "what could
+    # this spectrum resolve" read this field, so they cannot re-derive the
+    # applicability branch differently from the layer (round-17 rule: one
+    # decision, one site). NaN means no cutoff was recorded (a hand-built or
+    # pre-existing result). Optional with a default (additive field).
+    zero_cutoff: float = float("nan")
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)

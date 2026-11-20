@@ -239,6 +239,52 @@ def _apply_unevaluable_winner_floor(
     return verdict, tier
 
 
+def _gap_resolution(spectral: SpectralResult) -> float:
+    """The spectral layer's arithmetic resolution for the gap, in rate units.
+
+    Follow-up to PR #196 (cross-family post-merge review, 2026-11-16/17). The
+    resolution is the zero-mode cutoff the layer APPLIED to this spectrum
+    (``SpectralResult.zero_cutoff``). It is read, not re-derived.
+
+    PR #196 derived it here from the certificate and had no value when the
+    certificate was inapplicable, because the certificate's operator-norm band
+    is not a valid cutoff there (Codex review: about 2.2e3 against a resolved
+    gap of 1.0). The threshold then fell back to 0, and the sign of a round-off
+    gap decided again. Measured on a spectrum-preserving, non-trace-preserving
+    similarity of the coherent-spectator system: gap = +1.3e-17, reach about
+    9e17, and the matrix reported F5 as refuted or unevaluable depending on
+    that sign. The layer does apply a cutoff in that state, the radius-based
+    proxy, and that is the value this function returns.
+
+    States:
+
+    * recorded finite cutoff ``>= 0`` -> that cutoff (every layer-built result);
+    * no recorded cutoff, applicable certificate -> its ``zero_tolerance``
+      (results that predate ``zero_cutoff``);
+    * an applicable certificate that RECORDS a tolerance which is unusable, or
+      a recorded cutoff that is not a finite non-negative number -> ``inf``.
+      The layer claims a resolution and cannot state it, so no gap counts as
+      resolved and the reach leg abstains. ``ZeroModeCertificate.as_dict``
+      always writes the ``zero_tolerance`` key, as ``None`` when the value is
+      not finite, so a layer-built certificate lands here, not below;
+    * nothing recorded -> NaN, the unavailable sentinel, and the threshold
+      stays 0: no cutoff, and no applicable certificate or one without a
+      ``zero_tolerance`` entry. This is a hand-built result with no spectral
+      layer behind it, where there is no arithmetic whose resolution could be
+      stated. A missing certificate already floors the verdict to UNDEFINED.
+    """
+    cert = getattr(spectral, "zero_mode_certificate", None) or {}
+    cutoff = getattr(spectral, "zero_cutoff", float("nan"))
+    if isinstance(cutoff, (int, float)) and not math.isnan(cutoff):
+        return float(cutoff) if math.isfinite(cutoff) and cutoff >= 0.0 else float("inf")
+    if cert.get("applicable") is True and "zero_tolerance" in cert:
+        tol = cert["zero_tolerance"]
+        if isinstance(tol, (int, float)) and math.isfinite(tol) and tol >= 0.0:
+            return float(tol)
+        return float("inf")
+    return float("nan")
+
+
 def _is_maximally_mixed(rho_steady_state: np.ndarray, *, atol: float = EPS_MAXMIX) -> bool:
     """Is ``rho_ss`` the maximally mixed state ``I/d`` (to ``atol``)?
 
@@ -388,24 +434,11 @@ def _gather_evidence(
     ev["beta_D_linear"] = float(relaxation.beta_D_linear)
     ev["gap"] = float(spectral.gap)
     # Issue #101 addendum, gap-floor adversary. This is the spectral layer's own
-    # arithmetic resolution for an eigenvalue: the zero-mode certificate's
-    # admissible backward error, which scales with the rate unit. A gap within
-    # it is not resolved, and its SIGN is round-off. Measured: the same
-    # coherent-spectator system gives gap = -9e-16 on x86-64 OpenBLAS and a
-    # positive round-off gap on arm64. Absent when no certificate APPLIES. An
-    # inapplicable certificate (no established trace preservation) still
-    # carries a finite operator-norm ``zero_tolerance``, which the spectral
-    # layer itself refuses to use as a cutoff; there it can exceed the whole
-    # spectrum (Codex review PR #196: about 2.2e3 against a resolved gap of 1.0).
-    _cert = getattr(spectral, "zero_mode_certificate", None) or {}
-    _tol = _cert.get("zero_tolerance")
-    ev["gap_resolution"] = (
-        float(_tol)
-        if _cert.get("applicable") is True
-        and isinstance(_tol, (int, float))
-        and math.isfinite(_tol)
-        else float("nan")
-    )
+    # arithmetic resolution for an eigenvalue. A gap within it is not resolved,
+    # and its SIGN is round-off. Measured: the same coherent-spectator system
+    # gives gap = -9e-16 on x86-64 OpenBLAS and a positive round-off gap on
+    # arm64.
+    ev["gap_resolution"] = _gap_resolution(spectral)
     _blin = float(relaxation.beta_D_linear)
     ev["d17_metric_multiplier"] = (
         float(relaxation.beta_D / _blin)
@@ -940,8 +973,9 @@ def _pseudospectral_reach(ev: dict[str, float]) -> float:
     radius = ev.get("pseudospectral_radius", float("nan"))
     gap = ev.get("gap", float("nan"))
     # A gap at or below the spectral layer's arithmetic resolution is gapless
-    # whatever its sign (``gap_resolution``, see ``_gather_evidence``). Without
-    # a certificate the resolution is unknown and the threshold stays at 0.
+    # whatever its sign (``gap_resolution``, see :func:`_gap_resolution`). The
+    # threshold stays at 0 only when no resolution is recorded at all. An
+    # infinite resolution (claimed but unusable) resolves no gap.
     resolution = ev.get("gap_resolution", float("nan"))
     floor = resolution if not math.isnan(resolution) and resolution > 0.0 else 0.0
     if math.isnan(radius) or math.isnan(gap) or not gap > floor:
