@@ -347,6 +347,13 @@ def _gather_evidence(
     mpemba: MpembaResult | None,
 ) -> dict[str, float]:
     ev: dict[str, float] = {}
+    # Issue #101 addendum. Positive certificates below require a RESOLVED gap,
+    # not merely a positive one. ``gap > 0`` let a round-off gap of 1e-15 next
+    # to a round-off KMS gap of 3e-15 grant ``sym_gap_corroborated`` (measured
+    # on 4 of 400 randomly drawn coherent-spectator systems).
+    _resolution = _gap_resolution(spectral)
+    _gap_floor = _resolution if _resolution > 0.0 else 0.0
+    gap_resolved = bool(np.isfinite(spectral.gap) and spectral.gap > _gap_floor)
     ev["gap_to_gns_ratio"] = (
         float(spectral.gap / spectral.gns_gap) if spectral.gns_gap > 0 else float("inf")
     )
@@ -369,9 +376,8 @@ def _gather_evidence(
     # certificate below. Non-finite input must fail closed, not upgrade.
     ev["gns_certified"] = (
         1.0
-        if np.isfinite(spectral.gap)
+        if gap_resolved
         and np.isfinite(spectral.gns_gap)
-        and spectral.gap > 0.0
         and spectral.gns_gap >= GNS_CERTIFIED_RTOL * spectral.gap
         else 0.0
     )
@@ -400,8 +406,7 @@ def _gather_evidence(
     # non-finite gap is not a measurement and certifies nothing (#80).
     ev["sym_gap_corroborated"] = (
         1.0
-        if np.isfinite(spectral.gap)
-        and spectral.gap > 0.0
+        if gap_resolved
         and (
             (ev["gns_certified"] > 0.5 and ev["gap_to_gns_ratio"] <= 1.2)
             or (np.isfinite(spectral.kms_gap) and ev["gap_to_kms_ratio"] <= 1.2)
@@ -438,7 +443,7 @@ def _gather_evidence(
     # and its SIGN is round-off. Measured: the same coherent-spectator system
     # gives gap = -9e-16 on x86-64 OpenBLAS and a positive round-off gap on
     # arm64.
-    ev["gap_resolution"] = _gap_resolution(spectral)
+    ev["gap_resolution"] = _resolution
     _blin = float(relaxation.beta_D_linear)
     ev["d17_metric_multiplier"] = (
         float(relaxation.beta_D / _blin)

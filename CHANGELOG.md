@@ -7,48 +7,80 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Fixed
-- **The F5 reach leg reads the cutoff the spectral layer applied, in every
-  certificate state (follow-up to PR #196, cross-family post-merge review
-  2026-11-16/17; `claim_status: pending`).**
-  - **The defect.** PR #196 derived `gap_resolution` in the classifier from the
-    zero-mode certificate. It had no value when the certificate was
-    inapplicable (a non-trace-preserving input), because the certificate's
-    operator-norm band is not a valid cutoff there. The threshold then fell
-    back to 0, so the sign of a round-off gap decided again. Measured on
-    `main@10be56a` (x86-64, NumPy 2.5.3, SciPy 1.18.1) on a
-    spectrum-preserving, non-trace-preserving similarity of the
-    coherent-spectator system, nine cases (three similarities, rate scales
-    0.1, 1, 10):
-    - Two cases had a positive round-off gap (`+1.3e-17`, `+3.2e-16`), a reach
-      of about 1e17 to 1e18, and F5 reported `NOT_SUPPORTED` with nothing
-      missing.
-    - Seven cases had a negative round-off gap and F5 `UNEVALUABLE`.
-    - F5 did not fire in the two positive cases only because
-      `gap_to_gns_ratio` was infinite. With a finite ratio it fires.
-  - **The fix.** The spectral layer does apply a cutoff in that state: the
-    radius-based proxy from `ZeroModeCertificate.zero_set_tolerance`. It now
-    publishes the cutoff it applied as `SpectralResult.zero_cutoff`, and the
-    classifier reads that value (`_gap_resolution`) and no longer repeats the
-    applicability branch. All nine cases now report F5 `UNEVALUABLE` with
-    `missing = ("pseudospectral_reach",)`.
+- **The sign of a round-off gap no longer decides a diagnostic, a certificate
+  or a class (follow-up to PR #196, cross-family post-merge review
+  2026-11-16/17; `claim_status: pending`).** One rule, three consumers: a gap
+  at or below the cutoff the spectral layer applied is gapless, whatever its
+  sign. The spectral layer publishes that cutoff as `SpectralResult.zero_cutoff`.
+  - **Transient layer (D14, D15): the most severe defect.**
+    - **The defect.** `compute_transient_layer` scaled the D14 time window to
+      `horizon / gap` for any positive gap, and took the gapless window for
+      `gap <= 0`. A round-off gap of 1e-15 gives a window of about 1e16 time
+      units, where `expm` returns its own error.
+    - **Controlled measurement.** One trace-preserving generator (the
+      coherent-spectator system at unit rates), varying only the gap handed
+      in: `trans_amplitude_ratio` is 1.038 for a gap of -1e-15 or 0, and
+      2.26e3, 1.90e5 and 2.40e216 for +1e-15, +3e-16 and +1e-17. A CPTP
+      semigroup is a trace-norm contraction, so these are not growth.
+    - **Consequence.** Both F2 legs held (`trans_amplitude_ratio > 5`,
+      `kappa_trans > 2`). Census on 187 randomly drawn trace-preserving
+      spectator systems with a round-off gap (x86-64, NumPy 2.5.3, SciPy
+      1.18.1): of the 59 with a positive gap, 45 were A4/F2 `CONFIRMED` at
+      `PUBLICATION_GRADE`, and 32 had a ratio above 100. Of the 128 with a
+      negative gap, none was A4 and none had a ratio above 100.
+    - **The fix.** `compute_transient_layer` takes `gap_resolution`
+      (`diagnose` passes `SpectralResult.zero_cutoff`). A finite gap at or
+      below it is treated as `gap = 0`: the documented gapless window, and
+      `kappa_trans = inf`. After the fix no positive-gap system is A4 or has a
+      ratio above 100, and the 128 negative-gap systems are unchanged one by
+      one. A NaN gap (D1 withheld) is passed through as before.
+  - **Positive gap certificates.** `gns_certified` and `sym_gap_corroborated`
+    required `gap > 0`. Measured: `gap = 3.5e-15` next to `kms_gap = 1.1e-14`
+    granted `sym_gap_corroborated = 1.0` (4 of 400 draws, all four trace
+    preserving). Both now require a gap above the resolution. No class
+    changed through this in the measured cases; the published evidence value
+    did.
+  - **F5 reach leg with an inapplicable certificate.** PR #196 derived
+    `gap_resolution` in the classifier from the zero-mode certificate and had
+    no value when the certificate was inapplicable (a non-trace-preserving
+    input). The threshold fell back to 0. Measured on a spectrum-preserving,
+    non-trace-preserving similarity of the coherent-spectator system, nine
+    cases: the two with a positive gap (`+1.3e-17`, `+3.2e-16`) reported F5
+    `NOT_SUPPORTED` with a reach of about 1e17 to 1e18, the seven with a
+    negative gap `UNEVALUABLE`. The classifier now reads the cutoff the layer
+    applied (`_gap_resolution`), which is the radius-based proxy in that
+    state. All nine report `UNEVALUABLE`.
   - **Unusable resolution abstains.** An applicable certificate that records
     a tolerance which is not a finite non-negative number, or a recorded
     cutoff that is not, gives an infinite resolution: no gap counts as
     resolved. Before, this degraded to the threshold 0.
-  - **Unchanged.** `gap_resolution` for an applicable certificate (same
-    value), all 21 anchors, every class and verdict in the nine measured
-    cases, and the Codex case from PR #196: the resolved gap 1.0 of an
-    inapplicable certificate is still decided, now against a resolution of
-    about 9e-13 and no longer against none.
-  - **Additive field.** `SpectralResult.zero_cutoff` (default NaN) appears in
-    exported reports. The run-manifest contract is unchanged.
+  - **What changes for results.** Only systems whose gap is at or below the
+    spectral cutoff (about `1e3 * eps` times the spectral radius or operator
+    norm). There, positive-gap results now equal what the same system gets
+    with a negative round-off gap. In the nine non-trace-preserving cases the
+    two positive-gap ones change from A4/F2 `CONFIRMED` to A10/F5 `CANDIDATE`
+    (Jordan rung) and A4/F2 `NOT_EXCLUDED`, matching their negative-gap
+    siblings at the other rate units.
+  - **Unchanged.** All 21 anchors. `gap_resolution` for an applicable
+    certificate. Every resolved gap, including the Codex case from PR #196
+    (gap 1.0 under an inapplicable certificate). Direct callers of
+    `compute_transient_layer` that pass no resolution.
+  - **Additive.** `SpectralResult.zero_cutoff` (default NaN) appears in
+    exported reports; `compute_transient_layer(..., gap_resolution=0.0)`. The
+    run-manifest contract is unchanged.
   - **Not changed, measured and left open.**
+    - A gapless operator still has `kappa_trans = inf`, which satisfies the
+      F2 leg `kappa_trans > 2`. That is the pattern the #101 addendum removed
+      from F5 (gaplessness as positive evidence). F2 has a second, measured
+      leg, so it does not fire on gaplessness alone. Whether the leg should
+      abstain is an owner decision.
     - The coherent-spectator class still depends on the rate unit (`g = 1`:
       A8, `g = 10`: A12/UNDEFINED). `henrici_eta` measures 0.224, 2.236 and
       22.36 at `g = 0.1, 1, 10`, so the `henrici_eta > 1` gate is
       rate-dimensioned. That is the #101 slice C calibration.
-    - `gns_certified` and `sym_gap_corroborated` also test `gap > 0`. They are
-      the same class of sign dependence and were not measured here.
+    - `gap_rate_consistency` (D17) is `inf` for `gap <= 0` and about 1e21 for
+      a positive round-off gap. Both fail the `< 0.05` test, so no decision
+      depends on it; the reported value still follows the sign.
     - A hand-built `SpectralResult` that records neither a cutoff nor a
       certificate tolerance keeps the threshold 0. No spectral layer ran, so
       there is no resolution to state.

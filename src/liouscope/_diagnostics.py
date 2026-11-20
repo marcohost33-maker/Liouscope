@@ -165,7 +165,11 @@ def diagnose(
         bootstrap_B=bootstrap_B,
         seed=resolved_seed,
     )
-    transient = compute_transient_layer(L_super, spectral.gap)
+    # The spectral layer's own resolution travels with the gap: a round-off
+    # gap must not set the D14 time window or D15 (issue #101 addendum).
+    transient = compute_transient_layer(
+        L_super, spectral.gap, gap_resolution=spectral.zero_cutoff
+    )
     # ROUND-23 REVIEW (PR #121). The certificate's verdict has to travel with
     # the spectrum it describes. ``spectral.eigenvalues`` were passed on
     # unconditionally, so on an applicable-but-unresolved certificate D16 was
