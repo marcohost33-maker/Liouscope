@@ -189,3 +189,19 @@ was labelled A10/F5 `CANDIDATE` whenever `henrici_eta > 1`
 keeps its own route: the defective Jordan rung (`A10_JORDAN_M3A`) reads the
 relaxation-fit shape and is unaffected. The threshold calibration of slice C
 remains open.
+
+**A gap inside the spectral resolution is gapless, whatever its sign.** The
+resolution is `gap_resolution`: the zero-mode cutoff the spectral layer applied
+to the spectrum, published as `SpectralResult.zero_cutoff`. For an applicable
+zero-mode certificate that is the certificate's applied tolerance. For an
+inapplicable one (no established trace preservation) it is the radius-based
+proxy `1e3 * eps * max|lambda|`, not the certificate's operator-norm band,
+which the layer does not filter by. Both scale with the rate unit. A resolution
+that is claimed but cannot be stated resolves no gap, and the leg abstains.
+
+The same rule holds wherever the gap is read as a scale or as a certificate.
+The transient layer takes the gapless D14 time window and `kappa_trans = inf`
+for an unresolved gap; it does not scale the window to `horizon / gap`, which
+for a round-off gap of 1e-15 is about 1e16 time units. `gns_certified` and
+`sym_gap_corroborated` require a resolved gap, not a positive one
+(`tests/test_issue101_round_off_gap_sign.py`).

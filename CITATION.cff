@@ -275,6 +275,16 @@ abstract: >-
 # undamped coherent spectator) now report another class, or an UNDEFINED floor.
 # Anchors are unchanged. It must NOT be described as calibrating the F5
 # thresholds (slice C, still open).
+# Follow-up to that correction (post-merge review of PR #196), also pending: a
+# gap at or below the cutoff the spectral layer applied
+# (SpectralResult.zero_cutoff) is treated as gapless whatever its sign, in the
+# F5 reach leg, in the transient layer (D14 time window, D15) and in the
+# gns_certified / sym_gap_corroborated certificates. RESULT-AFFECTING for
+# systems with a round-off gap (for example an undamped coherent subsystem):
+# where that gap came out positive, D14 was evaluated on a time window of
+# about 1e16 time units and such systems could be classified A4/F2 CONFIRMED.
+# They now get the result of the same system with a negative round-off gap.
+# Anchors and every resolved gap are unchanged.
 keywords:
   - open quantum systems
   - Lindblad
