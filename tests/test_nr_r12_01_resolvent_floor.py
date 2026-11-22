@@ -12,6 +12,10 @@ Before the fix a valid GKSL generator (n = 144) at the stationary shift
 
 from __future__ import annotations
 
+import contextlib
+from collections.abc import Callable, Iterator
+from typing import TypeVar
+
 import numpy as np
 import pytest
 import scipy.linalg as sla
@@ -24,6 +28,7 @@ from liouscope.diagnostics.resolvent import (
     ridge_fwhm,
 )
 
+T = TypeVar("T")
 EPS = float(np.finfo(float).eps)
 # Positive control tolerance. Measured relative deviation from the dense SVD
 # reference: ~1e-14 (dense, SuperLU), ~2e-14 (Schur, Lanczos rtol 1e-10 on the
@@ -64,6 +69,35 @@ PATHS = [
 ]
 
 
+@contextlib.contextmanager
+def _refuses() -> Iterator[None]:
+    """Expect the LinAlgError refusal; ANY other outcome is an assertion.
+
+    Unlike ``pytest.raises``, a wrong exception type (ZeroDivisionError,
+    ValueError, a warning turned error) fails as an assertion instead of
+    escaping as a crash, so a mutant is caught by the claim, not by accident.
+    """
+    try:
+        yield
+    except np.linalg.LinAlgError:
+        return
+    except Exception as exc:
+        raise AssertionError(
+            f"expected a LinAlgError refusal, got {type(exc).__name__}: {exc}"
+        ) from exc
+    raise AssertionError("expected a LinAlgError refusal, got a value")
+
+
+def _value(fn: Callable[..., T], *args: object) -> T:
+    """Call ``fn``; an exception (a refusal included) is an assertion failure."""
+    try:
+        return fn(*args)
+    except Exception as exc:
+        raise AssertionError(
+            f"expected a value, got {type(exc).__name__}: {exc}"
+        ) from exc
+
+
 def _reference(L: np.ndarray, z: complex) -> tuple[float, float]:
     A = z * np.eye(L.shape[0]) - L
     return float(sla.svdvals(A)[-1]), resolvent._resolution_floor(A)
@@ -76,7 +110,7 @@ def test_stationary_shift_of_gksl_generator_is_refused(d, norm):
     L = _gksl(d)
     sigma_min, floor = _reference(L, 0.0)
     assert sigma_min < 1.0e-3 * floor  # the case is far below the floor
-    with pytest.raises(np.linalg.LinAlgError):
+    with _refuses():
         norm(L, 0.0)
 
 
@@ -86,7 +120,7 @@ def test_positive_control_matches_dense_svd(d, norm):
     z = 0.02 + 0.01j
     sigma_min, floor = _reference(L, z)
     assert sigma_min > 1.0e6 * floor
-    assert norm(L, z) == pytest.approx(1.0 / sigma_min, rel=RTOL)
+    assert _value(norm, L, z) == pytest.approx(1.0 / sigma_min, rel=RTOL)
 
 
 @pytest.mark.filterwarnings("ignore::scipy.linalg.LinAlgWarning")
@@ -98,7 +132,7 @@ def test_small_dense_numerically_singular_matrix_is_refused():
     Q, _ = np.linalg.qr(rng.standard_normal((4, 4)) + 1j * rng.standard_normal((4, 4)))
     L = Q @ np.diag([-1.0, -2.0, -3.0, 0.0]) @ Q.conj().T
     assert float(sla.svdvals(L)[-1]) != 0.0
-    with pytest.raises(np.linalg.LinAlgError):
+    with _refuses():
         resolvent.resolvent_norm(L, 0.0)
 
 
@@ -123,7 +157,7 @@ def test_threshold_is_pinned_on_both_sides(norm, factor):
     if factor > 1.0:
         assert norm(L, 0.0) == pytest.approx(1.0 / s, rel=RTOL)
     else:
-        with pytest.raises(np.linalg.LinAlgError):
+        with _refuses():
             norm(L, 0.0)
 
 
@@ -135,7 +169,7 @@ def test_unit_rescale_keeps_the_decision(d, norm, c):
     L = _gksl(d)
     z = 0.02 + 0.01j
     assert c * norm(c * L, c * z) == pytest.approx(norm(L, z), rel=RTOL)
-    with pytest.raises(np.linalg.LinAlgError):
+    with _refuses():
         norm(c * L, 0.0)
 
 
@@ -153,7 +187,7 @@ def test_floor_survives_extreme_scales(c):
     assert c * resolvent.resolvent_norm(c * L, c * z) == pytest.approx(
         resolvent.resolvent_norm(L, z), rel=RTOL
     )
-    with pytest.raises(np.linalg.LinAlgError):
+    with _refuses():
         resolvent.resolvent_norm(c * L, 0.0)
 
 
@@ -169,7 +203,7 @@ def test_permutation_and_unitary_similarity_keep_the_decision(d, norm):
     expected = norm(L, z)
     for M in (P @ L @ P.T, Q @ L @ Q.conj().T):
         assert norm(M, z) == pytest.approx(expected, rel=RTOL)
-        with pytest.raises(np.linalg.LinAlgError):
+        with _refuses():
             norm(M, 0.0)
 
 
@@ -194,7 +228,7 @@ def test_strict_caller_fp_policy_on_a_tiny_operator():
     ],
 )
 def test_acceptance_is_fail_closed(norm_inv, floor):
-    with pytest.raises(np.linalg.LinAlgError):
+    with _refuses():
         resolvent._accepted_norm(norm_inv, floor, 0.0)
 
 
@@ -202,23 +236,23 @@ def test_schur_norm_refuses_non_finite_and_on_the_floor(monkeypatch):
     L = _gksl(12)
     engine = resolvent.ShiftedSchurResolvent(L)
     monkeypatch.setattr(engine, "sigma_min", lambda z: float("inf"))
-    with pytest.raises(np.linalg.LinAlgError):
+    with _refuses():
         engine.norm(0.5)
     # The zero operator at z = 0: sigma_min == floor == 0.0 -- refused, not 1/0.
     zero = resolvent.ShiftedSchurResolvent(np.zeros((130, 130), dtype=complex))
-    with pytest.raises(np.linalg.LinAlgError):
+    with _refuses():
         zero.norm(0.0)
 
 
 @pytest.mark.filterwarnings("ignore::scipy.linalg.LinAlgWarning")
 def test_overflowing_dense_inverse_is_a_linalg_error():
     L = -np.diag([1.0e-310, 1.0]).astype(complex)
-    with pytest.raises(np.linalg.LinAlgError):
+    with _refuses():
         resolvent.resolvent_norm(L, 0.0)
 
 
 def test_exactly_singular_superlu_factor_is_a_linalg_error():
-    with pytest.raises(np.linalg.LinAlgError):
+    with _refuses():
         resolvent.resolvent_norm(np.zeros((130, 130), dtype=complex), 0.0)
 
 
@@ -230,7 +264,7 @@ def test_power_iteration_zero_estimate_is_refused(monkeypatch):
             return np.zeros_like(b)
 
     monkeypatch.setattr(resolvent.spla, "splu", lambda A: _ZeroLU())
-    with pytest.raises(np.linalg.LinAlgError):
+    with _refuses():
         resolvent.resolvent_norm(-np.eye(130, dtype=complex), 0.5)
 
 
@@ -244,9 +278,9 @@ def test_resolvent_layer_reports_unresolved_cells_as_nan(pauli):
     are unknown (NaN) instead of a number made of rounding noise.
     """
     L = 1.0e12 * build_liouvillian(0.5 * pauli["X"], [pauli["Z"]], [0.3])
-    _, norms = resolvent_peak_curve(L)
+    _, norms = _value(resolvent_peak_curve, L)
     assert np.isnan(norms).any()
-    res = compute_resolvent_layer(L)
+    res = _value(compute_resolvent_layer, L)
     assert np.isnan(res.resolvent_peak)
     assert np.isnan(res.ridge_fwhm)
     # The scale-relative scan (sigma = 1e-3 ||L||_F) stays resolved.
@@ -271,7 +305,8 @@ def test_exact_diagonal_with_extreme_dynamic_range_is_resolved(n, big):
     test_issue178_schur_resolvent.py::test_a_shift_that_underflows_...)
     """
     L = np.diag(np.r_[0.0, -big, -np.ones(n - 2)]).astype(complex)
-    assert resolvent.resolvent_norm(L, 1.0 / big) == pytest.approx(big, rel=1e-12)
+    value = _value(resolvent.resolvent_norm, L, 1.0 / big)
+    assert value == pytest.approx(big, rel=1e-12)
 
 
 def test_superlu_norm_beyond_the_squared_range_is_refused_documented_limit():
@@ -284,7 +319,7 @@ def test_superlu_norm_beyond_the_squared_range_is_refused_documented_limit():
     on inf / NaN.
     """
     L = np.diag(np.r_[0.0, -1.0e200, -np.ones(128)]).astype(complex)
-    with pytest.raises(np.linalg.LinAlgError):
+    with _refuses():
         resolvent.resolvent_norm(L, 1.0e-200)
 
 
@@ -296,5 +331,5 @@ def test_one_coupling_entry_takes_the_normwise_floor_documented_limit():
     is normwise again; a structural method could resolve it, this one does not.
     """
     A = np.array([[1.0e-200, 1.0e-300], [0.0, 1.0e200]], dtype=complex)
-    with pytest.raises(np.linalg.LinAlgError):
+    with _refuses():
         resolvent.resolvent_norm(-A, 0.0)
