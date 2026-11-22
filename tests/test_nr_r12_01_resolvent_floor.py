@@ -333,3 +333,17 @@ def test_one_coupling_entry_takes_the_normwise_floor_documented_limit():
     A = np.array([[1.0e-200, 1.0e-300], [0.0, 1.0e200]], dtype=complex)
     with _refuses():
         resolvent.resolvent_norm(-A, 0.0)
+
+
+def test_floor_stays_finite_when_the_frobenius_norm_leaves_float64() -> None:
+    """Codex P2 on #198 (20b0983): restoring the scale BEFORE the eps factor
+    overflowed. ``1e308 * I_4`` plus one ``1e307`` off-diagonal entry has a
+    representable floor (~1.78e293) and sigma_min ~9.5e307, yet the floor came
+    back as inf and the Schur path refused a well-conditioned operator."""
+    A = 1.0e308 * np.eye(4, dtype=complex)
+    A[0, 1] = 1.0e307
+    floor = resolvent._resolution_floor(A)
+    assert np.isfinite(floor)
+    assert floor == pytest.approx(1.78e293, rel=1e-2)
+    norm = resolvent.ShiftedSchurResolvent(-A).norm(0.0)
+    assert np.isfinite(norm) and norm > 0.0

@@ -275,6 +275,20 @@ abstract: >-
 # undamped coherent spectator) now report another class, or an UNDEFINED floor.
 # Anchors are unchanged. It must NOT be described as calibrating the F5
 # thresholds (slice C, still open).
+# Also pending for the next cut (NR-R12-01, PR #198), a METHODOLOGY correction:
+# the resolvent norm ||(zI - L)^{-1}||_2 now ABSTAINS (LinAlgError) when
+# sigma_min(zI - L) is not resolved above the rounding floor n eps ||zI - L||_F
+# (Higham Thm 9.4), on all three paths (dense, SuperLU power iteration, shared
+# Schur form). Previously a stationary shift returned a finite ~1e15 that was
+# rounding noise (measured: GKSL n=144 at z=0, sigma_min 2.2e-16 against a floor
+# of 1.2e-12). Exactly diagonal operators keep a zero floor. The power iteration's
+# stopping tolerance is now relative to sigma (it stopped 3.7x low for scaled
+# inputs). Consequence for reported numbers: D11b/D12 cells and the legacy
+# `resolvent_peak` / `ridge_fwhm` read NaN ("not available") where they were
+# unresolved noise before; resolved values are unchanged within rtol 1e-9. It must
+# NOT be described as making the resolvent layer exact near singularity: the floor
+# is normwise, so a non-diagonal operator with dynamic range beyond 1/(n eps) is
+# refused rather than resolved. MANIFEST_SCHEMA is unchanged.
 keywords:
   - open quantum systems
   - Lindblad

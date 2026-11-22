@@ -88,8 +88,10 @@ def _resolution_floor(A: np.ndarray) -> float:
             return float("nan")
         exp = int(np.frexp(largest)[1])
         scaled = np.ldexp(A.real, -exp) + 1j * np.ldexp(A.imag, -exp)
-        frobenius = float(np.ldexp(np.linalg.norm(scaled), exp))
-    return float(A.shape[0]) * float(np.finfo(float).eps) * frobenius
+        # n*eps BEFORE the scale is restored (Codex P2 on #198): ||A||_F itself
+        # can exceed float64 (1e308 * I_4) while the floor n eps ||A||_F does not.
+        scaled_floor = float(A.shape[0]) * float(np.finfo(float).eps) * float(np.linalg.norm(scaled))
+        return float(np.ldexp(scaled_floor, exp))
 
 
 def _accepted_norm(norm_inv: float, floor: float, z: complex) -> float:
@@ -185,7 +187,12 @@ def resolvent_norm(L: np.ndarray, z: complex) -> float:
     A = z * eye - L
     floor = _resolution_floor(A)
     if n <= _DENSE_NORM_CUTOFF:
-        Ainv = sla.solve(A, eye)
+        # An overflowing inverse is a refusal, not a warning: with numpy/scipy of
+        # the Python 3.10 CI leg the solve emits "overflow encountered in divide"
+        # (an error under the test suite's filterwarnings) before the finiteness
+        # check below can refuse it (CI on #198 at 20b0983).
+        with np.errstate(over="ignore", divide="ignore", invalid="ignore"):
+            Ainv = sla.solve(A, eye)
         if not np.all(np.isfinite(Ainv)):
             raise np.linalg.LinAlgError(f"zI - L is singular at z={complex(z)!r}")
         return _accepted_norm(float(sla.svdvals(Ainv)[0]), floor, z)
