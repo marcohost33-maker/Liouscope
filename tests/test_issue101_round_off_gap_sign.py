@@ -250,9 +250,9 @@ def test_d17_does_not_compare_a_rate_with_a_round_off_gap(sign: float) -> None:
     assert gap_rate_consistency(rate, 1.0e-15) == 0.0
     assert gap_rate_consistency(rate, -1.0e-15) == float("inf")
     # With the spectral resolution the sign no longer matters.
+    # inf fails the D17 leg of both A1 rungs (< 0.05 and < 0.20).
     d17 = gap_rate_consistency(rate, sign * 1.0e-15, gap_resolution=resolution)
     assert d17 == float("inf")
-    assert not d17 < 0.20 and not d17 < 0.05
 
 
 def test_d17_is_unchanged_for_a_resolved_gap() -> None:

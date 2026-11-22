@@ -36,6 +36,8 @@ system-size families before any classifier threshold consumes these values.
 
 from __future__ import annotations
 
+import math
+
 import numpy as np
 
 from .._consts import ZERO_MODE_EPS_FACTOR
@@ -239,9 +241,9 @@ def gap_resolution_floor(gap_resolution: float) -> float:
       and is not usable, so no gap counts as resolved (fail closed).
     """
     resolution = float(gap_resolution)
-    if resolution != resolution:  # NaN
+    if math.isnan(resolution):
         return 0.0
-    if resolution < 0.0 or resolution == float("inf"):
+    if resolution < 0.0 or math.isinf(resolution):
         return float("inf")
     return resolution
 
