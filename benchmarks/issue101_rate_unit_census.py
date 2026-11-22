@@ -60,7 +60,6 @@ from typing import Any
 
 import numpy as np
 import scipy
-from scipy.linalg import expm
 
 import liouscope as ls
 
@@ -92,9 +91,30 @@ _SX = np.array([[0, 1], [1, 0]], dtype=complex)
 _SZ = np.diag([1.0, -1.0]).astype(complex)
 
 
+# A supplied steady-state reference has to be a fixed point of the generator:
+# ``||L vec(rho)||_2 <= STATIONARITY_TOL * max(1, ||L||_2)``.
+STATIONARITY_TOL: float = 1.0e-11
+
+
+def stationarity_residual(L: np.ndarray, rho: np.ndarray) -> float:
+    """``||L vec(rho)||_2 / max(1, ||L||_2)``: 0 for a stationary state."""
+    return float(
+        np.linalg.norm(L @ rho.reshape(-1, order="F"))
+        / max(1.0, float(np.linalg.norm(L, 2)))
+    )
+
+
 @dataclass(frozen=True)
 class CensusSystem:
-    """One control system at unit rate factor."""
+    """One control system at unit rate factor.
+
+    A supplied ``rho_steady`` is checked on construction: Hermitian, unit
+    trace, positive semidefinite and stationary. A system whose reference is
+    not a fixed point is refused. The first version of the N3 family passed
+    the state after 300 time units as the reference, although the undamped
+    qubit's coherences rotate for ever; the residual of that snapshot was
+    0.75 (cross-family finding LIOU-20261121-B1).
+    """
 
     family: str
     index: int
@@ -102,6 +122,24 @@ class CensusSystem:
     rho_initial: np.ndarray
     rho_steady: np.ndarray | None
     f5_label: str  # "negative" or "positive": the design label
+
+    def __post_init__(self) -> None:
+        rho = self.rho_steady
+        if rho is None:
+            return
+        where = f"{self.family}[{self.index}]"
+        if not np.allclose(rho, rho.conj().T, atol=1.0e-12):
+            raise ValueError(f"{where}: steady-state reference is not Hermitian")
+        if abs(np.trace(rho).real - 1.0) > 1.0e-12:
+            raise ValueError(f"{where}: steady-state reference has trace != 1")
+        if float(np.linalg.eigvalsh((rho + rho.conj().T) / 2).min()) < -1.0e-12:
+            raise ValueError(f"{where}: steady-state reference is not positive")
+        residual = stationarity_residual(self.L, rho)
+        if not residual <= STATIONARITY_TOL:
+            raise ValueError(
+                f"{where}: steady-state reference is not stationary "
+                f"(residual {residual:.3e} > {STATIONARITY_TOL:.1e})"
+            )
 
 
 def _rng(family: str, index: int) -> np.random.Generator:
@@ -117,14 +155,6 @@ def _hermitian(rng: np.random.Generator, n: int) -> np.ndarray:
 def _random_state(rng: np.random.Generator, n: int) -> np.ndarray:
     r = _hermitian(rng, n)
     rho = r @ r.conj().T
-    return rho / np.trace(rho).real
-
-
-def _long_time_state(L: np.ndarray, rho0: np.ndarray, t: float) -> np.ndarray:
-    d = rho0.shape[0]
-    v = expm(L * t) @ rho0.reshape(-1, order="F")
-    rho = v.reshape(d, d, order="F")
-    rho = (rho + rho.conj().T) / 2
     return rho / np.trace(rho).real
 
 
@@ -162,18 +192,56 @@ def pure_dephasing(index: int) -> CensusSystem:
     )
 
 
+def time_averaged_spectator_state(
+    h_b: np.ndarray, generator_a: np.ndarray, rho0: np.ndarray
+) -> np.ndarray:
+    """The stationary state ``rho0`` relaxes to ON TIME AVERAGE.
+
+    Qubit A is damped and has one steady state ``rho_A``. Qubit B is closed:
+    its populations in the eigenbasis of ``h_b`` are conserved and its
+    coherences rotate without decaying. The trajectory therefore does not
+    converge. Its time average does, to the projection of ``rho0`` onto the
+    kernel of the generator:
+
+        rho_A  (x)  sum_k P_k Tr_A(rho0) P_k,    P_k the eigenprojectors of h_b.
+
+    This is a fixed point of the generator. It is the reference, not a claim
+    that the trajectory reaches it.
+    """
+    # rho_A: the null vector of A's generator, as a density matrix.
+    _, _, vh = np.linalg.svd(generator_a)
+    rho_a = vh[-1].conj().reshape(2, 2, order="F")
+    rho_a = rho_a / np.trace(rho_a)
+    rho_a = (rho_a + rho_a.conj().T) / 2
+    # Tr_A(rho0), dephased in the eigenbasis of h_b.
+    rho_b = np.einsum("abac->bc", rho0.reshape(2, 2, 2, 2))
+    _, vectors = np.linalg.eigh(h_b)
+    rho_b_avg = np.zeros((2, 2), dtype=complex)
+    for k in range(2):
+        projector = np.outer(vectors[:, k], vectors[:, k].conj())
+        rho_b_avg += projector @ rho_b @ projector
+    rho = np.kron(rho_a, rho_b_avg)
+    rho = (rho + rho.conj().T) / 2
+    return rho / np.trace(rho).real
+
+
 def coherent_spectator(index: int) -> CensusSystem:
-    """N3: damped qubit A next to an undamped, coherently rotating qubit B."""
+    """N3: damped qubit A next to an undamped, coherently rotating qubit B.
+
+    The operator is gapless: B's coherences are undamped. The steady-state
+    reference is the time-averaged state of :func:`time_averaged_spectator_state`.
+    """
     rng = _rng("N3", index)
     h_a, h_b = _hermitian(rng, 2), _hermitian(rng, 2)
     jump = rng.normal(size=(2, 2)) + 1j * rng.normal(size=(2, 2))
+    rate = abs(float(rng.normal())) + 0.1
     H = np.kron(h_a, _I2) + np.kron(_I2, h_b)
-    L = ls.build_liouvillian(
-        H, [np.kron(jump, _I2)], [abs(float(rng.normal())) + 0.1]
-    )
+    L = ls.build_liouvillian(H, [np.kron(jump, _I2)], [rate])
     rho0 = _random_state(rng, 4)
+    generator_a = ls.build_liouvillian(h_a, [jump], [rate])
     return CensusSystem(
-        "N3", index, L, rho0, _long_time_state(L, rho0, 300.0), "negative"
+        "N3", index, L, rho0,
+        time_averaged_spectator_state(h_b, generator_a, rho0), "negative",
     )
 
 

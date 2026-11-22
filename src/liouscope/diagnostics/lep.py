@@ -19,7 +19,7 @@ from ..numerics.propagation import (
     DEFAULT_ACTION_MATVEC_BUDGET,
     propagate_block_at_time,
 )
-from ..numerics.scale import spectral_zero_tolerance
+from ..numerics.scale import resolved_gap_or_gapless, spectral_zero_tolerance
 
 
 def lep_proximity(
@@ -97,9 +97,21 @@ def lep_proximity(
     return min_sep, pairs_close
 
 
-def gap_rate_consistency(rate: float, gap: float) -> float:
+def gap_rate_consistency(
+    rate: float, gap: float, *, gap_resolution: float = 0.0
+) -> float:
     """D17: ``|rate - Delta| / Delta``. Returns inf if gap is zero or rate is
     non-finite.
+
+    ``gap_resolution`` is the spectral layer's arithmetic resolution for an
+    eigenvalue (``SpectralResult.zero_cutoff``). A finite gap at or below it
+    is the gapless case, whatever its sign, and D17 is ``inf`` as for
+    ``gap <= 0`` (:func:`liouscope.numerics.scale.resolved_gap_or_gapless`).
+    PR #197, cross-family finding L197-NR-01: without it, a round-off gap of
+    ``+1e-15`` next to a fitted rate of ``1e-15`` gave D17 = 0, which
+    satisfies the D17 legs of both A1 rungs (``< 0.05`` and ``< 0.20``), and
+    the same gap with a negative sign gave ``inf``. The default ``0.0`` keeps
+    the behaviour of direct callers that supply no resolution.
 
     ``rate`` must be a LINEAR-metric relaxation rate (LIOU-#69): the spectral
     gap ``Delta = -max Re(lambda != 0)`` is a bare single-mode decay rate, so
@@ -110,6 +122,7 @@ def gap_rate_consistency(rate: float, gap: float) -> float:
     rank-deficient pi) and must NOT be passed here -- doing so inflates D17 by m
     and makes the A1 "gap-controlled" label unreachable (issue #69).
     """
+    gap = resolved_gap_or_gapless(gap, gap_resolution)
     if gap <= 0:
         return float("inf")
     if not np.isfinite(rate):
@@ -203,6 +216,7 @@ def compute_lep_layer(
     spectral_resolved: bool = True,
     d18_backend: str = BACKEND_AUTO,
     d18_max_action_matvecs: float = DEFAULT_ACTION_MATVEC_BUDGET,
+    gap_resolution: float = 0.0,
 ) -> LepResult:
     """Run D16, D17, D18 together.
 
@@ -239,7 +253,9 @@ def compute_lep_layer(
     L_super = np.asarray(L_super)
     if rho_steady_state is None:
         rho_steady_state = steady_state(L_super)
-    consistency = gap_rate_consistency(beta_D_linear, gap)
+    consistency = gap_rate_consistency(
+        beta_D_linear, gap, gap_resolution=gap_resolution
+    )
     sensitivity, sensitivity_backend = _initial_state_sensitivity_with_backend(
         L_super,
         rho_steady_state,

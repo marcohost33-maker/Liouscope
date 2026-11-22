@@ -56,17 +56,31 @@ here.
 |---|---|---|---|
 | N1 | thermal two-level system, detailed balance | negative | yes |
 | N2 | pure dephasing, conserved populations, normal | negative | yes |
-| N3 | damped qubit next to an undamped qubit, gapless | negative | yes |
+| N3 | damped qubit next to an undamped qubit, gapless; reference is the time-averaged state | negative | yes |
 | N4 | resonantly driven, amplitude-damped qubit | negative | yes |
 | P1 | d = 4 directional ladder (the anchor suite's phantom control) | positive | yes |
 | N0 | zero operator | negative | required before freeze |
-| P2 | defective zero mode (Jordan block at zero) | positive | required before freeze |
+| P2 | defective DECAYING mode: exceptional point at a non-zero eigenvalue (for example a three-level cascade with equal rates) | pending adjudication | required before freeze |
 | P3 | Liouvillian skin effect chain, three system sizes | positive | required before freeze |
 | N5 | non-normal but not phantom, three system sizes | negative | required before freeze |
 
 P3 and N5 are the system-size families that expose the dimension bias of a
 Frobenius-norm scale. The skin-effect family follows Haga, Nakagawa, Hamazaki
 and Ueda, Phys. Rev. Lett. 127, 070402 (2021).
+
+P2 is not a Jordan block at zero. The zero eigenvalue of a GKSL generator is
+semisimple: a CPTP semigroup is bounded uniformly in time, and a Jordan block
+at zero would contribute a term growing like `t`. A matrix with such a block
+is not a physical generator and belongs in input-stress tests, outside every
+calibration count. A defective mode at a decaying eigenvalue is physical, but
+whether it is an F5 positive is not established; its label is decided at the
+physics review.
+
+The N3 trajectory does not converge, because the undamped qubit's coherences
+rotate for ever. Its steady-state reference is the time-averaged state, the
+projection of the initial state onto the kernel of the generator. The harness
+refuses any supplied reference whose residual `||L vec(rho)|| / max(1, ||L||)`
+exceeds `1e-11`.
 
 A positive control that is the anchor suite's own example (P1) shows that a
 rule keeps known behaviour. It does not show that the rule detects the
@@ -107,7 +121,7 @@ are confirmed or changed at the physics review, before the holdout is opened.
 |---|---|---|
 | C1 | Class and verdict identical over all seven rate factors | every system, both splits |
 | C2 | F5 fired on a negative system, at any rate factor | none on calibration; none on holdout |
-| C3 | F5 fired on a positive system, at every rate factor | every system of P1 and P2; at least 9 in 10 of P3 |
+| C3 | F5 fired on a positive system, at every rate factor | every system of P1; at least 9 in 10 of P3; P2 once its label is adjudicated |
 | C4 | Decision keys consumed by the rule | relative range `(max - min) / max` over the rate factors at most `1e-9` |
 | C5 | Anchor suite | unchanged, or changed in a dedicated PR |
 
@@ -122,21 +136,22 @@ positives".
 
 ## Baseline, calibration split
 
-Measured 2026-11-20 on x86-64, Python 3.13.18, NumPy 2.5.3, SciPy 1.18.1,
+Measured 2026-11-22 on x86-64, Python 3.13.18, NumPy 2.5.3, SciPy 1.18.1,
 at the head of PR #197, 12 systems per family, time grid `t_ref / c`.
-Result digest `49ae198cf616899865fa448d5469c2dfd467debdebb25243e93a01b85b129bd3`.
+Result digest `7e9ff1e08e5069a218c24eb19329694149c02a3515a96ff16476376e0067dd71`.
+It supersedes the first baseline (deviations log, entry 1).
 
 | Family | Label | n | Class stable | Verdict stable | F5 fired at `c` = 1e-3 … 1e3 |
 |---|---|---|---|---|---|
 | N1 | negative | 12 | 5 | 5 | 0, 0, 0, 0, 6, 6, 7 |
 | N2 | negative | 12 | 7 | 9 | 0, 0, 0, 0, 0, 0, 0 |
-| N3 | negative | 12 | 12 | 6 | 0, 0, 0, 0, 0, 0, 0 |
+| N3 | negative | 12 | 12 | 4 | 0, 0, 0, 0, 0, 0, 0 |
 | N4 | negative | 12 | 11 | 11 | 0, 0, 0, 0, 0, 0, 0 |
 | P1 | positive | 12 | 0 | 0 | 0, 0, 0, 12, 12, 12, 12 |
 
 Against the criteria:
 
-- **C1 fails.** The class is stable for 35 of 60 systems, the verdict for 31.
+- **C1 fails.** The class is stable for 35 of 60 systems, the verdict for 29.
 - **C2 fails.** Thermal systems (N1) are never F5 at `c <= 1` and are F5 in 6,
   6 and 7 of 12 cases at `c = 10, 100, 1000`. The unit alone creates the label.
 - **C3 fails.** The positive control fires in 12 of 12 cases at `c >= 1` and
@@ -171,17 +186,17 @@ particular changes was not isolated here. C1 covers them too.
 
 The same census with the default grid, an absolute `linspace(0, 10, 80)`,
 which is what a caller gets who passes no `t_grid`. Result digest
-`1c55a36f8a5a405ee85ebb2da901e54a3dddda543ed705cf4ab08ff93daf2e87`.
+`8a052f10ebe2a532e4ab6474b6810d6594f9a7e45f13a245935ca0426cfe34f4`.
 
 | Family | n | Class stable | Verdict stable | F5 fired at `c` = 1e-3 … 1e3 |
 |---|---|---|---|---|
 | N1 | 12 | 0 | 4 | 0, 0, 0, 0, 6, 6, 7 |
 | N2 | 12 | 1 | 4 | 0, 0, 0, 0, 0, 0, 0 |
-| N3 | 12 | 5 | 0 | 0, 0, 0, 0, 0, 0, 0 |
+| N3 | 12 | 0 | 2 | 0, 0, 0, 0, 0, 0, 0 |
 | N4 | 12 | 0 | 4 | 0, 0, 0, 0, 0, 0, 0 |
 | P1 | 12 | 0 | 0 | 0, 0, 0, 12, 12, 12, 12 |
 
-The class is stable for 6 of 60 systems, against 35 of 60 with the rescaled
+The class is stable for 1 of 60 systems, against 35 of 60 with the rescaled
 grid. The F5 counts are identical in both runs, which is consistent with an F5
 path that does not read the time grid. The additional instability then comes
 from the fixed observation window: for rates of order one at `c = 1`, the default grid covers
@@ -202,7 +217,22 @@ throughout.
 
 ## Deviations log
 
-None.
+Both entries were made before any threshold was fitted and before the holdout
+split was evaluated.
+
+1. **2026-11-22, N3 reference.** The first harness passed the state after 300
+   time units as the N3 steady-state reference. That snapshot is not a fixed
+   point (residual 0.75 at index 0): the spectator's coherences rotate. Found
+   by the cross-family review (LIOU-20261121-B1). The reference is now the
+   time-averaged state, every supplied reference is checked for stationarity,
+   and the baseline below was measured again. The first baseline (digests
+   `49ae198c…29bd3` and `1c55a36f…f2e87`) is superseded and is not calibration
+   evidence.
+2. **2026-11-22, P2 definition.** P2 was registered as "defective zero mode
+   (Jordan block at zero)", taken from the control list of the #101 re-audit
+   addendum. That is not a GKSL generator (LIOU-20261121-B2). P2 is now a
+   defective decaying mode with its label pending, and C3 no longer counts it
+   until the label is adjudicated.
 
 ## References
 
@@ -212,6 +242,9 @@ None.
 - T. Mitchell, "Computing the Kreiss constant of a matrix", SIAM J. Matrix
   Anal. Appl. (2020), doi:10.1137/19M1275127. A fixed grid gives a lower
   bound, not a certified value.
+- D. Amato, P. Facchi, "Number of steady states of quantum evolutions",
+  Sci. Rep. 14, 14366 (2024), doi:10.1038/s41598-024-64040-5. Fixed-point and
+  asymptotic (peripheral) spaces of Markovian evolutions.
 - U. Kanewala, J. M. Bieman, "Testing scientific software: a systematic
   literature review", arXiv:1804.01954. Metamorphic relations as the test
   oracle where the correct output is unknown.

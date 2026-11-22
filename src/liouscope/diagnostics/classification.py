@@ -83,6 +83,7 @@ from .._types import (
     SpectralResult,
     TransientResult,
 )
+from ..numerics.scale import gap_resolution_floor
 
 # issue #70 B4: evidence keys that are gathered into the ``evidence`` dict (for
 # audit / serialisation) but are, by design, NOT read by any of the decision
@@ -352,8 +353,10 @@ def _gather_evidence(
     # to a round-off KMS gap of 3e-15 grant ``sym_gap_corroborated`` (measured
     # on 4 of 400 randomly drawn coherent-spectator systems).
     _resolution = _gap_resolution(spectral)
-    _gap_floor = _resolution if _resolution > 0.0 else 0.0
-    gap_resolved = bool(np.isfinite(spectral.gap) and spectral.gap > _gap_floor)
+    gap_resolved = bool(
+        np.isfinite(spectral.gap)
+        and spectral.gap > gap_resolution_floor(_resolution)
+    )
     ev["gap_to_gns_ratio"] = (
         float(spectral.gap / spectral.gns_gap) if spectral.gns_gap > 0 else float("inf")
     )
@@ -981,8 +984,7 @@ def _pseudospectral_reach(ev: dict[str, float]) -> float:
     # whatever its sign (``gap_resolution``, see :func:`_gap_resolution`). The
     # threshold stays at 0 only when no resolution is recorded at all. An
     # infinite resolution (claimed but unusable) resolves no gap.
-    resolution = ev.get("gap_resolution", float("nan"))
-    floor = resolution if not math.isnan(resolution) and resolution > 0.0 else 0.0
+    floor = gap_resolution_floor(ev.get("gap_resolution", float("nan")))
     if math.isnan(radius) or math.isnan(gap) or not gap > floor:
         return float("nan")
     with np.errstate(over="ignore", invalid="ignore"):

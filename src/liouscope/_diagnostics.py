@@ -195,6 +195,9 @@ def diagnose(
         rho_steady_state=rho_steady_state,
         seed=resolved_seed,
         spectral_resolved=_spectrum_resolved,
+        # Same resolution as the transient layer above: D17 must not read a
+        # round-off gap as a rate (PR #197, finding L197-NR-01).
+        gap_resolution=spectral.zero_cutoff,
     )
     mpemba: MpembaResult | None = None
     if include_mpemba:

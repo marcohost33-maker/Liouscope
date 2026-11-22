@@ -244,3 +244,81 @@ def test_relative_range_does_not_read_round_off_zeros_as_variation() -> None:
     assert max(values) / min(values) > 6.0
     assert census.relative_range(values) == 0.0
     assert census.relative_range([0.0, 1.0e-13, 0.0]) == 0.0
+
+
+@pytest.mark.parametrize("family", ["N2", "N3"])
+@pytest.mark.parametrize("index", [0, 1, 2, 7, 22])
+def test_a_supplied_steady_state_reference_is_stationary(family: str, index: int) -> None:
+    """Cross-family finding LIOU-20261121-B1, at unit rate and after rescaling.
+
+    The first N3 fixture passed the state after 300 time units as the
+    reference. B's coherences rotate for ever, so that snapshot is not a fixed
+    point (residual 0.75 at index 0). The acceptance criterion of the review
+    is a residual of at most 1e-11, for every reference and every rate factor.
+    """
+    census = _census()
+    system = census.FAMILIES[family](index)
+    assert system.rho_steady is not None
+    for c in (1.0e-3, 1.0, 1.0e3):
+        residual = census.stationarity_residual(c * system.L, system.rho_steady)
+        assert residual <= census.STATIONARITY_TOL
+    rho = system.rho_steady
+    assert np.allclose(rho, rho.conj().T)
+    assert np.trace(rho).real == pytest.approx(1.0)
+    assert np.linalg.eigvalsh(rho).min() >= -1.0e-12
+
+
+def test_the_spectator_reference_is_the_time_average_of_the_trajectory() -> None:
+    """Independent oracle: average the propagated state over a long time.
+
+    The trajectory does not converge, because B's coherences rotate. Its time
+    average over ``[0, T]`` approaches the kernel projection of ``rho0`` at a
+    rate ``1 / T``. With ``T = 2000`` the two agree to a few 1e-4; a snapshot
+    does not (see the next test).
+    """
+    from scipy.linalg import expm
+
+    system = _census().coherent_spectator(0)
+    step = expm(system.L * 1.0)
+    v = system.rho_initial.reshape(-1, order="F")
+    total = np.zeros_like(v)
+    n = 2000
+    for _ in range(n):
+        total += v
+        v = step @ v
+    average = (total / n).reshape(4, 4, order="F")
+    assert np.abs(average - system.rho_steady).max() < 2.0e-3
+
+
+def test_a_finite_time_snapshot_is_refused_as_a_reference() -> None:
+    """The defect itself: the guard rejects the snapshot the fixture used."""
+    from dataclasses import replace
+
+    from scipy.linalg import expm
+
+    census = _census()
+    system = census.coherent_spectator(0)
+    v = expm(system.L * 300.0) @ system.rho_initial.reshape(-1, order="F")
+    snapshot = v.reshape(4, 4, order="F")
+    snapshot = (snapshot + snapshot.conj().T) / 2
+    snapshot /= np.trace(snapshot).real
+    # Premise: the snapshot is far from stationary, the reference is not.
+    assert census.stationarity_residual(system.L, snapshot) > 1.0e-2
+    with pytest.raises(ValueError, match="not stationary"):
+        replace(system, rho_steady=snapshot)
+
+
+@pytest.mark.parametrize(
+    ("mutate", "message"),
+    [
+        (lambda rho: rho + 0.1j * np.triu(np.ones_like(rho), 1), "not Hermitian"),
+        (lambda rho: 2.0 * rho, "trace != 1"),
+        (lambda rho: np.diag([1.5, -0.5, 0.0, 0.0]).astype(complex), "not positive"),
+    ],
+)
+def test_an_unphysical_reference_is_refused(mutate: Any, message: str) -> None:
+    from dataclasses import replace
+
+    system = _census().coherent_spectator(0)
+    with pytest.raises(ValueError, match=message):
+        replace(system, rho_steady=mutate(system.rho_steady))

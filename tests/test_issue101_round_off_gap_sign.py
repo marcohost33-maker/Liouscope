@@ -139,8 +139,9 @@ def test_a_resolved_gap_still_sets_the_transient_time_window() -> None:
         (0.0, 0.0, 0.0),
         (1.0e-15, 0.0, 1.0e-15),        # no resolution supplied: legacy
         (1.0e-15, float("nan"), 1.0e-15),
-        (1.0e-15, -1.0, 1.0e-15),
-        (1.0e300, float("inf"), 0.0),   # unusable resolution resolves nothing
+        (1.0e-15, -1.0, 0.0),           # unusable resolution resolves nothing
+        (1.0e300, -1.0, 0.0),
+        (1.0e300, float("inf"), 0.0),
         (float("inf"), 1.0e-12, float("inf")),
     ],
 )
@@ -183,6 +184,10 @@ def test_round_off_gap_systems_do_not_report_transient_growth(index: int) -> Non
     # D14 is the gapless-window value, whatever the sign of the gap.
     assert rep.transient.trans_amplitude_ratio == gapless.trans_amplitude_ratio
     assert rep.transient.kappa_trans == float("inf")
+    # D17 reads the same resolution: a round-off gap is not a rate to compare
+    # a fitted rate with (finding L197-NR-01). Before, the positive-gap draws
+    # reported a finite D17 of about 1e21 and the negative ones inf.
+    assert rep.lep.gap_rate_consistency == float("inf")
     # A CPTP semigroup does not grow by orders of magnitude. The bound is the
     # F2 threshold: the growth leg of F2 is not satisfied.
     assert ev["trans_amplitude_ratio"] < 5.0
@@ -226,3 +231,95 @@ def test_round_off_gaps_grant_no_symmetrised_gap_certificate(sign: float) -> Non
     ev = evidence(gap=big, kms_gap=big, gns_gap=big)
     assert ev["gns_certified"] == 1.0
     assert ev["sym_gap_corroborated"] == 1.0
+
+
+@pytest.mark.parametrize("sign", [1.0, -1.0])
+def test_d17_does_not_compare_a_rate_with_a_round_off_gap(sign: float) -> None:
+    """Cross-family finding L197-NR-01 (GPT-6, 2026-11-20), reproduced.
+
+    D17 is ``|rate - gap| / gap``. With ``rate = 1e-15`` and ``gap = +1e-15``
+    it was exactly 0, which satisfies the D17 leg of both A1 rungs
+    (``< 0.05`` and ``< 0.20``). With ``gap = -1e-15`` it was ``inf``. The PR
+    text had claimed that no decision depends on D17; two A1 rungs and the
+    confidence do.
+    """
+    from liouscope.diagnostics.lep import gap_rate_consistency
+
+    rate, resolution = 1.0e-15, 1.0e-12
+    # The defect, at the legacy default (no resolution supplied).
+    assert gap_rate_consistency(rate, 1.0e-15) == 0.0
+    assert gap_rate_consistency(rate, -1.0e-15) == float("inf")
+    # With the spectral resolution the sign no longer matters.
+    d17 = gap_rate_consistency(rate, sign * 1.0e-15, gap_resolution=resolution)
+    assert d17 == float("inf")
+    assert not d17 < 0.20 and not d17 < 0.05
+
+
+def test_d17_is_unchanged_for_a_resolved_gap() -> None:
+    from liouscope.diagnostics.lep import gap_rate_consistency
+
+    assert gap_rate_consistency(1.1, 1.0, gap_resolution=1.0e-12) == pytest.approx(0.1)
+    assert gap_rate_consistency(1.1, 1.0, gap_resolution=1.0e-12) == (
+        gap_rate_consistency(1.1, 1.0)
+    )
+    # A non-finite rate is still inconsistent, and an unusable resolution
+    # resolves no gap.
+    assert gap_rate_consistency(float("nan"), 1.0, gap_resolution=1.0e-12) == float("inf")
+    assert gap_rate_consistency(1.0, 1.0, gap_resolution=float("inf")) == float("inf")
+    assert gap_rate_consistency(1.0, 1.0, gap_resolution=-1.0) == float("inf")
+
+
+@pytest.mark.parametrize("sign", [1.0, -1.0])
+def test_the_lep_layer_receives_the_resolution(sign: float) -> None:
+    """The layer entry point forwards ``gap_resolution`` to D17."""
+    from liouscope.diagnostics.lep import compute_lep_layer
+
+    L = _spectator_generator(1.0)
+    eigenvalues = np.linalg.eigvals(L)
+    result = compute_lep_layer(
+        L, eigenvalues, beta_D_linear=1.0e-15, gap=sign * 1.0e-15,
+        rho_steady_state=np.eye(4, dtype=complex) / 4, seed=1,
+        gap_resolution=2.7e-12,
+    )
+    assert result.gap_rate_consistency == float("inf")
+
+
+@pytest.mark.parametrize(
+    ("resolution", "expected"),
+    [
+        (0.0, 0.0),
+        (2.7e-12, 2.7e-12),
+        (float("nan"), 0.0),           # not recorded: legacy threshold
+        (-1.0, float("inf")),          # stated and unusable: fail closed
+        (float("inf"), float("inf")),
+    ],
+)
+def test_gap_resolution_floor_states(resolution: float, expected: float) -> None:
+    """One answer for every consumer (finding L197-NR-04).
+
+    Before, a negative resolution meant threshold 0 in the transient layer
+    and "nothing is resolved" in the classifier.
+    """
+    from liouscope.numerics.scale import gap_resolution_floor
+
+    assert gap_resolution_floor(resolution) == expected
+
+
+def test_the_three_consumers_share_one_resolution_rule() -> None:
+    """Transient layer, D17 and the F5 reach leg agree on an unusable value."""
+    from liouscope.diagnostics.classification import _pseudospectral_reach
+    from liouscope.diagnostics.lep import gap_rate_consistency
+
+    for resolution in (-1.0, float("inf")):
+        assert _resolved_gap_or_gapless(1.0, resolution) == 0.0
+        assert gap_rate_consistency(1.0, 1.0, gap_resolution=resolution) == float("inf")
+        assert np.isnan(_pseudospectral_reach(
+            {"gap": 1.0, "gap_resolution": resolution, "pseudospectral_radius": 5.0}
+        ))
+    # Not recorded: all three keep the legacy threshold 0.
+    nan = float("nan")
+    assert _resolved_gap_or_gapless(1.0e-15, nan) == 1.0e-15
+    assert gap_rate_consistency(1.0e-15, 1.0e-15, gap_resolution=nan) == 0.0
+    assert _pseudospectral_reach(
+        {"gap": 1.0e-15, "gap_resolution": nan, "pseudospectral_radius": 5.0}
+    ) == pytest.approx(5.0e15)

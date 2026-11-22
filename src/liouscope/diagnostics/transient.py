@@ -33,6 +33,7 @@ from .._types import (
     SteadyProjectorResult,
     TransientResult,
 )
+from ..numerics.scale import resolved_gap_or_gapless
 
 
 class TransientGridWarning(UserWarning):
@@ -556,45 +557,27 @@ def kappa_trans(omega_L: float, gap: float) -> float:
     return float(omega_L / gap)
 
 
-def _resolved_gap_or_gapless(gap: float, gap_resolution: float) -> float:
-    """``gap`` if the spectrum resolved it, else ``0.0`` (gapless).
-
-    Issue #101 addendum, follow-up to PR #196. The sign of a round-off gap is
-    not a property of the operator (measured: about -9e-16 on x86-64 OpenBLAS
-    and positive on arm64 for the same generator). This layer branched on that
-    sign twice, and the positive branch scaled the D14 time window to
-    ``horizon / gap``, about 1e16 time units for a gap of 1e-15.
-
-    Measured on ONE trace-preserving GKSL generator (driven-damped qubit with
-    an undamped coherent spectator, unit rates), varying only the gap handed
-    in:
-
-    ==========  ======================  ===========
-    gap         ``trans_amplitude_ratio``  ``kappa_trans``
-    ==========  ======================  ===========
-    -1e-15      1.038                   inf
-    0           1.038                   inf
-    +1e-15      2.26e3                  2.1e14
-    +3e-16      1.90e5                  6.9e14
-    +1e-17      2.40e216                2.1e16
-    ==========  ======================  ===========
-
-    A CPTP semigroup is a contraction in trace norm, so the large values are
-    the error of ``expm`` at ``t ~ 1e16``, not transient growth. They satisfy
-    both F2 legs (``trans_amplitude_ratio > 5``, ``kappa_trans > 2``). Of 59
-    randomly drawn trace-preserving spectator systems with a positive
-    round-off gap, 45 were classified A4/F2 ``CONFIRMED`` at
-    ``PUBLICATION_GRADE``; of 128 with a negative one, none was A4.
-
-    A NaN gap (D1 withheld) is passed through: it already takes the gapless
-    grid, and ``kappa_trans`` stays NaN, the unavailable sentinel. A
-    resolution that is NaN or negative counts as 0; an infinite one resolves
-    no finite gap.
-    """
-    floor = gap_resolution if gap_resolution > 0.0 else 0.0
-    if np.isfinite(gap) and not gap > floor:
-        return 0.0
-    return gap
+# Issue #101 addendum, follow-up to PR #196: why this layer needs the rule of
+# ``numerics.scale.resolved_gap_or_gapless``. The layer branched on the sign of
+# the gap twice, and the positive branch scaled the D14 time window to
+# ``horizon / gap``, about 1e16 time units for a round-off gap of 1e-15.
+#
+# Measured on ONE trace-preserving GKSL generator (driven-damped qubit with an
+# undamped coherent spectator, unit rates), varying only the gap handed in:
+#
+#     gap       trans_amplitude_ratio   kappa_trans
+#     -1e-15    1.038                   inf
+#     0         1.038                   inf
+#     +1e-15    2.26e3                  2.1e14
+#     +3e-16    1.90e5                  6.9e14
+#     +1e-17    2.40e216                2.1e16
+#
+# The large values are the error of ``expm`` at ``t ~ 1e16``, not transient
+# growth. They satisfy both F2 legs (``trans_amplitude_ratio > 5``,
+# ``kappa_trans > 2``). Of 59 randomly drawn trace-preserving spectator systems
+# with a positive round-off gap, 45 were classified A4/F2 ``CONFIRMED`` at
+# ``PUBLICATION_GRADE``; of 128 with a negative one, none was A4.
+_resolved_gap_or_gapless = resolved_gap_or_gapless
 
 
 def compute_transient_layer(
@@ -615,9 +598,11 @@ def compute_transient_layer(
     eigenvalue (``SpectralResult.zero_cutoff``). A finite gap at or below it
     is not a decay scale: it is treated as the gapless case ``gap = 0`` (the
     documented ``gap <= 0`` fallback of :func:`_physics_time_grid`, and
-    ``kappa_trans = inf``), whatever its sign. See
-    :func:`_resolved_gap_or_gapless` for the measured defect. The default
-    ``0.0`` keeps the behaviour of direct callers that supply no resolution.
+    ``kappa_trans = inf``), whatever its sign. The rule is
+    :func:`liouscope.numerics.scale.resolved_gap_or_gapless`, shared with D17
+    and the classifier. The default ``0.0`` keeps the behaviour of direct
+    callers that supply no resolution; a negative or infinite resolution
+    resolves no gap.
     """
     gap = _resolved_gap_or_gapless(gap, gap_resolution)
     omega_L = numerical_abscissa(L_super)

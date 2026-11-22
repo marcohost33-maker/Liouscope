@@ -34,6 +34,21 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
       `kappa_trans = inf`. After the fix no positive-gap system is A4 or has a
       ratio above 100, and the 128 negative-gap systems are unchanged one by
       one. A NaN gap (D1 withheld) is passed through as before.
+  - **D17 (`gap_rate_consistency`), cross-family finding L197-NR-01.** D17 is
+    `|rate - gap| / gap`, and two A1 rungs (`< 0.05`, `< 0.20`) and the
+    confidence consume it. It did not receive the resolution. With a fitted
+    rate of 1e-15, a gap of `+1e-15` gave D17 = 0 and a gap of `-1e-15` gave
+    `inf`. `compute_lep_layer` and `gap_rate_consistency` now take
+    `gap_resolution` (`diagnose` passes `SpectralResult.zero_cutoff`); an
+    unresolved gap gives `inf`, as `gap <= 0` always did. No end-to-end
+    misclassification through this path was found; the claim in an earlier
+    version of this entry that no decision depends on D17 was wrong.
+  - **One rule, one place (finding L197-NR-04).**
+    `numerics.scale.gap_resolution_floor` and `resolved_gap_or_gapless` are
+    shared by the transient layer, D17 and the classifier. A negative or
+    infinite resolution resolves no gap in all three; before, a negative one
+    meant threshold 0 in the transient layer and "nothing resolved" in the
+    classifier. NaN (not recorded) keeps the threshold 0.
   - **Positive gap certificates.** `gns_certified` and `sym_gap_corroborated`
     required `gap > 0`. Measured: `gap = 3.5e-15` next to `kms_gap = 1.1e-14`
     granted `sym_gap_corroborated = 1.0` (4 of 400 draws, all four trace
@@ -78,9 +93,11 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
       A8, `g = 10`: A12/UNDEFINED). `henrici_eta` measures 0.224, 2.236 and
       22.36 at `g = 0.1, 1, 10`, so the `henrici_eta > 1` gate is
       rate-dimensioned. That is the #101 slice C calibration.
-    - `gap_rate_consistency` (D17) is `inf` for `gap <= 0` and about 1e21 for
-      a positive round-off gap. Both fail the `< 0.05` test, so no decision
-      depends on it; the reported value still follows the sign.
+    - Just above the resolution the D14 window is still `horizon / gap`
+      (finding L197-NR-02). Measured on the spectator system for gaps
+      from 1.01 to 1e8 times the cutoff: no growth, `trans_amplitude_ratio`
+      at most 1.038. No cap was added, because a cap can hide a genuine slow
+      mode.
     - A hand-built `SpectralResult` that records neither a cutoff nor a
       certificate tolerance keeps the threshold 0. No spectral layer ran, so
       there is no resolution to state.
@@ -164,7 +181,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   - **Baseline, calibration split** (12 systems per family, x86-64, NumPy
     2.5.3, SciPy 1.18.1, at the head of PR #197):
     - The class is the same at all seven rate factors for 35 of 60 systems,
-      the verdict for 31.
+      the verdict for 29.
     - The F5-positive control fires in 12 of 12 cases at `c >= 1` and in 0 of
       12 at `c < 1`.
     - Thermal detailed-balance systems are never F5 at `c <= 1` and are F5 in
@@ -172,7 +189,16 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
     - The four scale-relative slice A diagnostics are invariant on all five
       families: largest relative range 4.5e-13.
     - With the library default time grid (an absolute `linspace(0, 10, 80)`)
-      the class is stable for 6 of 60 systems. The F5 counts are the same.
+      the class is stable for 1 of 60 systems. The F5 counts are the same.
+  - **Corrected after the cross-family review, before any fitting**
+    (2026-11-22; deviations log in the preregistration).
+    - The N3 steady-state reference was the state after 300 time units, which
+      is not a fixed point: the spectator's coherences rotate (residual 0.75).
+      It is now the time-averaged state, and the harness refuses a supplied
+      reference whose stationarity residual exceeds 1e-11. The baseline above
+      is the re-measured one; N3 changed from 6 to 4 verdict-stable systems.
+    - The required positive family "Jordan block at zero" is not a GKSL
+      generator. It is replaced by a defective decaying mode, label pending.
   - **What it is not.** Not a gate and not a calibration. The holdout split
     is not evaluated. Four control families that the design requires (zero
     operator, Jordan block at zero, skin-effect chain and a non-phantom
