@@ -140,6 +140,24 @@ def test_unit_rescale_keeps_the_decision(d, norm, c):
 
 
 @pytest.mark.filterwarnings("ignore::scipy.linalg.LinAlgWarning")
+@pytest.mark.parametrize("c", [1.0e-170, 1.0e160])
+def test_floor_survives_extreme_scales(c):
+    """||zI - L||_F of a 1e-170 operator must not underflow to a floor of 0.
+
+    A plain sum of squares gives 0.0 there -- every shift, the singular z = 0
+    included, would then be "resolved" (fail-open). At 1e160 it overflows to a
+    floor of inf, which would refuse every shift.
+    """
+    L = _gksl(11)
+    z = 0.02 + 0.01j
+    assert c * resolvent.resolvent_norm(c * L, c * z) == pytest.approx(
+        resolvent.resolvent_norm(L, z), rel=RTOL
+    )
+    with pytest.raises(np.linalg.LinAlgError):
+        resolvent.resolvent_norm(c * L, 0.0)
+
+
+@pytest.mark.filterwarnings("ignore::scipy.linalg.LinAlgWarning")
 @pytest.mark.parametrize(("d", "norm"), PATHS)
 def test_permutation_and_unitary_similarity_keep_the_decision(d, norm):
     L = _gksl(d)
