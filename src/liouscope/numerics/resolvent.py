@@ -83,7 +83,11 @@ def _resolution_floor(A: np.ndarray) -> float:
     # floats at the end: a caller's np.errstate(all="raise") must not turn a
     # tiny-but-valid operator's floor into an exception.
     with np.errstate(all="ignore"):
-        largest = float(np.max(np.abs(A)))
+        # Scale from the largest real/imaginary COMPONENT, not from |a_ij|:
+        # the modulus of a finite entry near the float64 limit overflows
+        # before the rescale (Codex P2 on #198 at 9637dfe). After the rescale
+        # every component is < 1, every modulus < sqrt(2).
+        largest = max(float(np.max(np.abs(A.real))), float(np.max(np.abs(A.imag))))
         if not np.isfinite(largest):
             return float("nan")
         exp = int(np.frexp(largest)[1])

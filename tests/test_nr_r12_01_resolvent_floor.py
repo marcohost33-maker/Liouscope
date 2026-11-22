@@ -347,3 +347,18 @@ def test_floor_stays_finite_when_the_frobenius_norm_leaves_float64() -> None:
     assert floor == pytest.approx(1.78e293, rel=1e-2)
     norm = resolvent.ShiftedSchurResolvent(-A).norm(0.0)
     assert np.isfinite(norm) and norm > 0.0
+
+
+def test_floor_scale_is_chosen_before_complex_magnitudes() -> None:
+    """Codex P2 on #198 (9637dfe): np.abs of a finite complex entry near the
+    float64 limit overflows BEFORE the power-of-two rescale, the floor became
+    NaN and a well-conditioned operator (sigma_min ~9.98e307) was refused."""
+    A = 1.0e308 * np.eye(4, dtype=complex)
+    A[0, 0] = complex(1.3e308, 1.3e308)
+    A[0, 1] = 1.0e307
+    floor = resolvent._resolution_floor(A)
+    assert np.isfinite(floor) and floor > 0.0
+    solver = resolvent.ShiftedSchurResolvent(-A)
+    sigma = solver.sigma_min(0.0)
+    assert sigma > floor
+    assert solver.norm(0.0) == pytest.approx(1.0 / sigma, rel=RTOL)
