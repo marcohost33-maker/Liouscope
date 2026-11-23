@@ -56,6 +56,65 @@ _POWER_ITERS = 200
 _POWER_TOL = 1.0e-9
 
 
+def _resolution_floor(A: np.ndarray) -> float:
+    """Smallest ``sigma_min(A)`` a backward-stable method resolves: ``n eps ||A||_F``.
+
+    A backward-stable LU, SVD or Schur evaluation of ``A = zI - L`` is exact for
+    some ``A + E`` with ``||E||_2 <= p(n) eps ||A||_2`` (Higham, *Accuracy and
+    Stability of Numerical Algorithms*, 2nd ed., Thm 9.4; Golub & Van Loan
+    8.6.2), so a computed ``sigma_min`` is only known to within that much of
+    ``||A||``. The reference is the MATRIX ``A`` the rounding acts on -- not
+    ``sigma_min`` and not the returned resolvent norm. ``||A||_F >= ||A||_2``
+    and ``p(n) = n`` make the floor conservative; ``scipy.linalg.norm`` is the
+    scaled BLAS ``nrm2`` and neither overflows nor underflows. A non-finite
+    ``A`` gives a NaN/inf floor, which every caller treats as "unresolved".
+
+    Exception (PR-R12-04): an EXACTLY diagonal ``A`` has the singular values
+    ``|a_ii|``, each the modulus of one rounded subtraction ``z - l_ii`` and
+    therefore known to a relative ``O(eps)`` whatever the dynamic range. Its
+    floor is ``0.0``: every nonzero, finite ``sigma_min`` is resolved
+    (``diag(0, -1e200)`` at ``z = 1e-200`` has the norm ``1e200``). Any
+    nonzero off-diagonal entry, NaN included, takes the normwise floor.
+    """
+    if np.count_nonzero(A) == np.count_nonzero(np.diagonal(A)):
+        return 0.0
+    # ||A||_F by a power-of-two rescale (exact) so that neither 1e200 entries
+    # overflow nor 1e-200 entries underflow in the sum of squares. Python
+    # floats at the end: a caller's np.errstate(all="raise") must not turn a
+    # tiny-but-valid operator's floor into an exception.
+    with np.errstate(all="ignore"):
+        # Scale from the largest real/imaginary COMPONENT, not from |a_ij|:
+        # the modulus of a finite entry near the float64 limit overflows
+        # before the rescale (Codex P2 on #198 at 9637dfe). After the rescale
+        # every component is < 1, every modulus < sqrt(2).
+        largest = max(float(np.max(np.abs(A.real))), float(np.max(np.abs(A.imag))))
+        if not np.isfinite(largest):
+            return float("nan")
+        exp = int(np.frexp(largest)[1])
+        scaled = np.ldexp(A.real, -exp) + 1j * np.ldexp(A.imag, -exp)
+        # n*eps BEFORE the scale is restored (Codex P2 on #198): ||A||_F itself
+        # can exceed float64 (1e308 * I_4) while the floor n eps ||A||_F does not.
+        scaled_floor = float(A.shape[0]) * float(np.finfo(float).eps) * float(np.linalg.norm(scaled))
+        return float(np.ldexp(scaled_floor, exp))
+
+
+def _accepted_norm(norm_inv: float, floor: float, z: complex) -> float:
+    """Return ``||(zI - L)^{-1}||_2`` only if ``1/norm_inv`` clears ``floor``.
+
+    NR-R12-01: below the floor the computed inverse is rounding noise -- a
+    stationary GKSL generator at ``z = 0`` came back as ``3.2e15`` instead of a
+    refusal. The ACCEPT branch hangs on a comparison that must be TRUE
+    (``1/norm_inv > floor``, written without the division), so NaN, inf, zero
+    and an overflowing product all fall into the ``LinAlgError`` refusal.
+    """
+    if np.isfinite(norm_inv) and norm_inv > 0.0 and norm_inv * floor < 1.0:
+        return float(norm_inv)
+    raise np.linalg.LinAlgError(
+        f"zI - L is singular to working precision at z={complex(z)!r}: "
+        f"sigma_min is not resolved above n*eps*||zI - L||_F = {floor!r}"
+    )
+
+
 class ResolventConvergenceWarning(UserWarning):
     """Emitted when the resolvent-norm power iteration hits its budget.
 
@@ -113,17 +172,40 @@ def resolvent_norm(L: np.ndarray, z: complex) -> float:
     If the power iteration exhausts its budget without meeting the tolerance, a
     :class:`ResolventConvergenceWarning` is emitted and the returned value is a
     lower bound (still typically accurate to ~1e-4 relative).
+
+    Raises ``LinAlgError`` where ``zI - L`` is singular to working precision,
+    i.e. ``sigma_min(zI - L) <= n eps ||zI - L||_F`` (NR-R12-01; see
+    :func:`_resolution_floor`). Such a shift has no resolvable resolvent norm:
+    the inverse is rounding noise, and a large finite number would read as a
+    measurement. An exactly diagonal ``zI - L`` is resolved whenever it is
+    nonsingular, at any dynamic range (PR-R12-04). Known limit: the floor is
+    normwise, so a NON-diagonal operator with a dynamic range beyond
+    ``1/(n eps)`` -- e.g. a block-diagonal one with a single coupled block -- is refused
+    even where a structured method could resolve it. With a non-converged
+    power iteration the norm is a lower bound, so the floor test is then made
+    on an upper bound of ``sigma_min``.
     """
     L = np.asarray(L)
     n = L.shape[0]
     eye = np.eye(n, dtype=complex)
     A = z * eye - L
+    floor = _resolution_floor(A)
     if n <= _DENSE_NORM_CUTOFF:
-        Ainv = sla.solve(A, eye)
-        return float(sla.svdvals(Ainv)[0])
+        # An overflowing inverse is a refusal, not a warning: with numpy/scipy of
+        # the Python 3.10 CI leg the solve emits "overflow encountered in divide"
+        # (an error under the test suite's filterwarnings) before the finiteness
+        # check below can refuse it (CI on #198 at 20b0983).
+        with np.errstate(over="ignore", divide="ignore", invalid="ignore"):
+            Ainv = sla.solve(A, eye)
+        if not np.all(np.isfinite(Ainv)):
+            raise np.linalg.LinAlgError(f"zI - L is singular at z={complex(z)!r}")
+        return _accepted_norm(float(sla.svdvals(Ainv)[0]), floor, z)
 
     A_sp = sp.csc_matrix(A)
-    lu = spla.splu(A_sp)
+    try:
+        lu = spla.splu(A_sp)
+    except RuntimeError as exc:  # SuperLU: "Factor is exactly singular"
+        raise np.linalg.LinAlgError(f"zI - L is singular at z={complex(z)!r}") from exc
     rng = np.random.default_rng(0)
     x: np.ndarray = np.asarray(
         rng.standard_normal(n) + 1j * rng.standard_normal(n), dtype=complex
@@ -139,12 +221,21 @@ def resolvent_norm(L: np.ndarray, z: complex) -> float:
         # equals (A^H)^{-1} y only for symmetric A and is wrong for the
         # non-normal Liouvillians this kernel targets -- use trans="H" instead.
         z_vec = lu.solve(y, trans="H")
-        sigma = float(np.linalg.norm(z_vec))
+        with np.errstate(over="ignore", invalid="ignore"):
+            sigma = float(np.linalg.norm(z_vec))
+        if not np.isfinite(sigma):
+            # ||M^H M x|| overflowed (it is ||(zI - L)^{-1}||^2, and the 2-norm
+            # squares once more, so beyond ~1e77): refuse now instead of
+            # iterating on inf/NaN.
+            return _accepted_norm(sigma, floor, z)
         if sigma == 0.0:
             converged = True
             break
         x = z_vec / sigma
-        if abs(sigma - sigma_prev) < _POWER_TOL * max(1.0, sigma):
+        # Relative to sigma itself: an absolute floor of 1.0 declared every
+        # resolvent below norm 1e-4.5 converged after two steps, so (cL, cz)
+        # at c = 1e30 came back 3.7x too small (NR-R12-01 scale test).
+        if abs(sigma - sigma_prev) < _POWER_TOL * sigma:
             converged = True
             break
         sigma_prev = sigma
@@ -156,7 +247,7 @@ def resolvent_norm(L: np.ndarray, z: complex) -> float:
             ResolventConvergenceWarning,
             stacklevel=2,
         )
-    return float(np.sqrt(sigma))
+    return _accepted_norm(float(np.sqrt(sigma)), floor, z)
 
 
 def _lanczos_top_eigenvalue(
@@ -356,11 +447,21 @@ class ShiftedSchurResolvent:
         return float(np.ldexp(smallest, self._exponent))
 
     def norm(self, z: complex) -> float:
-        """``||(zI - L)^{-1}||_2``; raises ``LinAlgError`` where ``zI - L`` is singular."""
+        """``||(zI - L)^{-1}||_2``; raises ``LinAlgError`` where ``zI - L`` is singular.
+
+        Singular means singular to working precision: ``sigma_min(zI - L)`` at
+        or below :func:`_resolution_floor` of ``zI - L`` (NR-R12-01), the same
+        refusal as :func:`resolvent_norm`. The floor is taken on the unscaled
+        operator, so it does not depend on the internal power-of-two rescale.
+        """
         smallest = self.sigma_min(z)
-        if smallest == 0.0:
-            raise np.linalg.LinAlgError(f"zI - L is singular at z={complex(z)!r}")
-        return float(1.0 / smallest)
+        floor = _resolution_floor(complex(z) * np.eye(self.n) - self._operator)
+        if np.isfinite(smallest) and smallest > floor:
+            return float(1.0 / smallest)
+        raise np.linalg.LinAlgError(
+            f"zI - L is singular to working precision at z={complex(z)!r}: "
+            f"sigma_min = {smallest!r} is not above n*eps*||zI - L||_F = {floor!r}"
+        )
 
 
 def resolvent_norm_evaluator(L: np.ndarray) -> Callable[[complex], float]:

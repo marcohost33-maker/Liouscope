@@ -203,5 +203,9 @@ The same rule holds wherever the gap is read as a scale or as a certificate.
 The transient layer takes the gapless D14 time window and `kappa_trans = inf`
 for an unresolved gap; it does not scale the window to `horizon / gap`, which
 for a round-off gap of 1e-15 is about 1e16 time units. `gns_certified` and
-`sym_gap_corroborated` require a resolved gap, not a positive one
+`sym_gap_corroborated` require a resolved gap, not a positive one. D17
+(`gap_rate_consistency`), which two A1 rungs read, is infinite for an
+unresolved gap, as for `gap <= 0`: a round-off gap is not a rate to compare a
+fitted rate with. All consumers take the rule from
+`liouscope.numerics.scale.resolved_gap_or_gapless`
 (`tests/test_issue101_round_off_gap_sign.py`).
