@@ -7,6 +7,21 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ## [Unreleased]
 
 ### Fixed
+- **The resolvent norm abstains below the rounding floor (NR-R12-01).**
+  A valid GKSL generator (n = 144) at its stationary shift `z = 0` returned
+  `~1e15` from all three `||(zI - L)^{-1}||_2` paths (dense inverse + SVD,
+  SuperLU power iteration, shared Schur form) -- rounding noise read as a
+  measurement. Every path now returns a value only if
+  `sigma_min(zI - L) > n eps ||zI - L||_F` (a comparison that must be TRUE, so
+  NaN/inf/0 refuse) and raises `LinAlgError` otherwise. An exactly diagonal
+  `zI - L` has the floor 0 (its singular values are exact to `O(eps)`;
+  PR-R12-04). The D11b/D12 scans report a refused cell as NaN, so the legacy
+  `resolvent_peak` / `ridge_fwhm` become NaN instead of crashing; D10/D10b
+  already skipped refused cells. The SuperLU power iteration's stopping test
+  is now relative to the iterate (an absolute floor of 1.0 stopped after two
+  steps at a 3.7x too small value for `(cL, cz)`, `c = 1e30`). Limits: the
+  floor is normwise (a non-diagonal operator with dynamic range beyond
+  `1/(n eps)` is refused), and the SuperLU path refuses norms beyond ~1e77.
 - **Gapless operators no longer win A10/F5 on gaplessness alone (issue #101
   re-audit addendum, "required interim rule"; `claim_status: pending`).**
   - **The defect.** The F5 reach leg returned infinite reach for `gap <= 0`.

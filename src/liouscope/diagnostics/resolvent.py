@@ -34,6 +34,8 @@ silent).
 
 from __future__ import annotations
 
+from collections.abc import Callable
+
 import numpy as np
 import scipy.linalg as sla
 
@@ -68,13 +70,33 @@ def resolvent_peak_curve(
     norm_at = resolvent_norm_evaluator(L_super)
     norms = np.empty(n_omega)
     for i, omega in enumerate(omegas):
-        norms[i] = norm_at(shift + 1j * omega)
+        norms[i] = _norm_or_nan(norm_at, shift + 1j * omega)
     return omegas, norms
 
 
+def _norm_or_nan(norm_at: Callable[[complex], float], z: complex) -> float:
+    """One scan cell; NaN where ``zI - L`` is singular to working precision.
+
+    NR-R12-01: the resolvent norm refuses (``LinAlgError``) below its rounding
+    floor instead of returning rounding noise. A scan cell there is UNRESOLVED
+    -- NaN, which ``norms.max()`` propagates into the peak -- not a crash of
+    the whole layer and not a made-up finite value.
+    """
+    try:
+        return norm_at(z)
+    except np.linalg.LinAlgError:
+        return float("nan")
+
+
 def ridge_fwhm(omegas: np.ndarray, norms: np.ndarray) -> float:
-    """Full-width-at-half-maximum of the resolvent ridge."""
+    """Full-width-at-half-maximum of the resolvent ridge.
+
+    NaN when the peak is not finite (an unresolved scan cell): the width of a
+    ridge whose height is unknown is unknown, not ``0.0``.
+    """
     peak = float(norms.max())
+    if not np.isfinite(peak):
+        return float("nan")
     if peak <= 0:
         return 0.0
     half = 0.5 * peak
@@ -128,7 +150,7 @@ def resolvent_peak_curve_scaled(
     norm_at = resolvent_norm_evaluator(L_super)
     norms = np.empty(n_omega)
     for i, omega in enumerate(omegas):
-        norms[i] = norm_at(shift + 1j * omega)
+        norms[i] = _norm_or_nan(norm_at, shift + 1j * omega)
     return omegas, norms
 
 
