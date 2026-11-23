@@ -422,6 +422,7 @@ def compute_spectral_layer(
         has_complex_pairs=has_complex,
         zero_mode_certificate=certificate.as_dict(),
         zero_mode_conditioning=conditioning,
+        zero_cutoff=float(zero_tol),
     )
 
 

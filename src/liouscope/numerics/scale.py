@@ -36,6 +36,8 @@ system-size families before any classifier threshold consumes these values.
 
 from __future__ import annotations
 
+import math
+
 import numpy as np
 
 from .._consts import ZERO_MODE_EPS_FACTOR
@@ -223,4 +225,48 @@ def rate_scale(L: np.ndarray, *, name: str = "L") -> float:
     return float(np.linalg.norm(L, ord="fro"))
 
 
-__all__ = ["rate_scale", "spectral_zero_tolerance"]
+def gap_resolution_floor(gap_resolution: float) -> float:
+    """The threshold a gap has to exceed to count as resolved.
+
+    Issue #101 addendum (PR #197, cross-family finding L197-NR-04). Every
+    consumer of the gap asks the same question, "is this gap a property of the
+    operator or of the arithmetic", and they had answered it in three places
+    with three treatments of an unusable resolution. This is the one answer:
+
+    * a finite resolution ``>= 0`` -> that value;
+    * NaN -> ``0.0``. NaN is the unavailable sentinel: no resolution was
+      recorded (a direct caller, or a hand-built result with no spectral layer
+      behind it), so the documented legacy threshold applies;
+    * a negative or infinite resolution -> ``inf``. A resolution was stated
+      and is not usable, so no gap counts as resolved (fail closed).
+    """
+    resolution = float(gap_resolution)
+    if math.isnan(resolution):
+        return 0.0
+    if resolution < 0.0 or math.isinf(resolution):
+        return float("inf")
+    return resolution
+
+
+def resolved_gap_or_gapless(gap: float, gap_resolution: float) -> float:
+    """``gap`` if the spectrum resolved it, else ``0.0`` (gapless).
+
+    A finite gap at or below :func:`gap_resolution_floor` is not a rate: its
+    sign is round-off (measured: about -9e-16 on x86-64 OpenBLAS and positive
+    on arm64 for the same generator). It is returned as ``0.0``, the gapless
+    case every consumer already documents for ``gap <= 0``. A resolved gap is
+    returned unchanged. A NaN gap (D1 withheld) is passed through: it is
+    unavailable, not measured as gapless. An infinite gap is not finite and is
+    passed through as well.
+    """
+    if np.isfinite(gap) and not gap > gap_resolution_floor(gap_resolution):
+        return 0.0
+    return gap
+
+
+__all__ = [
+    "gap_resolution_floor",
+    "rate_scale",
+    "resolved_gap_or_gapless",
+    "spectral_zero_tolerance",
+]

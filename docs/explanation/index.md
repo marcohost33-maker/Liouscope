@@ -13,6 +13,9 @@ repository.
   mechanism taxonomy and the evidence-graded verdict vocabulary.
 - {doc}`reproducibility` — the audit chain: seeds, SPEC 7, manifests and
   fail-closed defaults.
+- {doc}`f5-calibration-preregistration` — the preregistered design of the
+  study that has to pass before the A10/F5 decision path may change, and the
+  measured rate-unit baseline.
 
 ```{toctree}
 :hidden:
@@ -21,4 +24,5 @@ repository.
 no-single-number
 layers-and-taxonomy
 reproducibility
+f5-calibration-preregistration
 ```
